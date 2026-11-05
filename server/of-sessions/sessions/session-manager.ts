@@ -74,6 +74,7 @@ export class SessionManager {
   private readonly openContexts = new Set<BrowserContext>();
   private background: ManagedBrowser | null = null;
   private readTail: Promise<void> = Promise.resolve();
+  private readonly reading = new Set<string>();
   private closed = false;
   private started = false;
   private readonly options: SessionManagerOptions;
@@ -264,8 +265,28 @@ export class SessionManager {
    * Una cuenta cada vez. No sincroniza si la identidad no coincide.
    * `includeEarnings` lo decide el servidor: un chatter no abre la página de ingresos.
    */
+  readingIds(): string[] {
+    return [...this.reading];
+  }
+
   readCreatorData(accountId: string, includeEarnings: boolean): Promise<CollectedRead> {
-    const job = this.readTail.then(() => this.readCreatorDataNow(accountId, includeEarnings));
+    if (this.reading.has(accountId)) {
+      return Promise.resolve({
+        earnings: [],
+        fans: [],
+        reason: "sincronización en curso",
+        jsonPaths: [],
+        earningsCaptured: false,
+        fansCaptured: false,
+        alreadyRunning: true,
+      });
+    }
+    this.reading.add(accountId);
+    const job = this.readTail
+      .then(() => this.readCreatorDataNow(accountId, includeEarnings))
+      .finally(() => {
+        this.reading.delete(accountId);
+      });
     this.readTail = job.then(
       () => undefined,
       () => undefined,

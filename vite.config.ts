@@ -43,6 +43,10 @@ function pgliteBootstrapPlugin(): Plugin {
         if (typeof mod.ensureDbReady === "function") {
           await mod.ensureDbReady();
         }
+        const sync = (await server.ssrLoadModule("/src/lib/of-sessions-runtime.server.ts")) as {
+          ensureSyncScheduler?: () => void;
+        };
+        sync.ensureSyncScheduler?.();
       } catch (err) {
         console.error("[app-builder] DB bootstrap failed:", err);
         throw err;

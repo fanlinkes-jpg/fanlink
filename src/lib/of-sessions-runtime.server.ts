@@ -16,11 +16,19 @@ import { DbAccountStore } from "../../server/of-sessions/store/db-account-store.
 import { createMirroringStore } from "../../server/of-sessions/store/mirroring-store.ts";
 import type { Account } from "../../server/of-sessions/types.ts";
 import type { CreatorReadList, CreatorReadView, CreatorSessionView } from "./of-sessions.ts";
-import { listCreatorReads, saveCreatorRead } from "../../server/of-sessions/sync/store.ts";
+import { intervalMinFromEnv, startSyncLoop, type ScheduleAccount } from "../../server/of-sessions/sync/schedule.ts";
+import { listCreatorReads, listSyncMeta, readSyncIntervalMin, saveCreatorRead, writeSyncIntervalMin } from "../../server/of-sessions/sync/store.ts";
 
 const globalRef = globalThis as typeof globalThis & {
   __ofSessionManager__?: Promise<SessionManager>;
+  __ofSyncLoop__?: { stop: () => void };
 };
+
+export function ensureSyncScheduler(): void {
+  if (process.env.FANLINK_SYNC_ENABLED === "false") return;
+  if (process.execArgv.includes("--test")) return;
+  void getOfSessionManager();
+}
 
 /**
  * Gestor de sesiones de OnlyFans del proceso. No abre Chromium al arrancar:
@@ -47,7 +55,46 @@ async function createManager(): Promise<SessionManager> {
     browserFactory: createPlaywrightFactory(),
   });
   await runtime.sessions.recoverInterruptedLogins();
+  bootSyncLoop(runtime.sessions);
   return runtime.sessions;
+}
+
+function bootSyncLoop(sessions: SessionManager): void {
+  if (process.env.FANLINK_SYNC_ENABLED === "false") return;
+  if (process.execArgv.includes("--test")) return;
+  if (globalRef.__ofSyncLoop__) return;
+  globalRef.__ofSyncLoop__ = startSyncLoop({
+    intervalMin: async () => readSyncIntervalMin(await getSql(), intervalMinFromEnv(process.env.FANLINK_SYNC_INTERVAL_MIN)),
+    inProgressIds: () => new Set(sessions.readingIds()),
+    accounts: () => scheduleAccounts(sessions),
+    sync: async (accountId) => {
+      const read = await sessions.readCreatorData(accountId, true);
+      if (read.alreadyRunning) return;
+      const account = (await sessions.listAccounts()).find((item) => item.id === accountId);
+      if (!account?.creatorId) return;
+      await saveCreatorRead(await getSql(), account.creatorId, read);
+    },
+  });
+}
+
+async function scheduleAccounts(sessions: SessionManager): Promise<ScheduleAccount[]> {
+  const [accounts, meta] = await Promise.all([sessions.listAccounts(), listSyncMeta(await getSql())]);
+  const byCreator = new Map(meta.map((row) => [row.creatorId, row]));
+  return accounts.flatMap((account) => {
+    if (!account.creatorId) return [];
+    const state = byCreator.get(account.creatorId);
+    return [
+      {
+        accountId: account.id,
+        creatorId: account.creatorId,
+        status: account.status,
+        identityState: account.identityState,
+        hasStorageState: account.hasStorageState,
+        consecutiveFailures: state?.consecutiveFailures ?? 0,
+        lastAttemptAt: state?.lastAttemptAt ?? null,
+      },
+    ];
+  });
 }
 
 async function creatorHandle(creatorId: string): Promise<string> {
@@ -120,7 +167,24 @@ export async function listCreatorReadViews(userId: string): Promise<CreatorReadL
   });
   const sql = await getSql();
   const rows = await listCreatorReads(sql, creatorIds);
-  return { role: access.role, creators: rows.map((row) => presentRead(access.role, row)) };
+  const running = new Set((await getOfSessionManager()).readingIds());
+  return {
+    role: access.role,
+    intervalMin: await readSyncIntervalMin(sql, intervalMinFromEnv(process.env.FANLINK_SYNC_INTERVAL_MIN)),
+    runningCreatorIds: accounts.flatMap((account) =>
+      account.creatorId && running.has(account.id) ? [account.creatorId] : [],
+    ),
+    creators: rows.map((row) => presentRead(access.role, row)),
+  };
+}
+
+export async function setSyncIntervalView(userId: string, minutes: number): Promise<number> {
+  const access = await accessFor(userId);
+  if (access.role !== "owner") {
+    throw new WorkspaceAccessError("Solo la dueña cambia cada cuánto se sincroniza.");
+  }
+  const sql = await getSql();
+  return writeSyncIntervalMin(sql, minutes);
 }
 
 export async function syncCreatorReadView(userId: string, creatorId: string): Promise<CreatorReadView> {
@@ -134,7 +198,7 @@ export async function syncCreatorReadView(userId: string, creatorId: string): Pr
   if (!account) throw new Error("No hay sesión guardada para sincronizar.");
   const read = await sessions.readCreatorData(account.id, access.role === "owner");
   const sql = await getSql();
-  await saveCreatorRead(sql, id, read);
+  if (!read.alreadyRunning) await saveCreatorRead(sql, id, read);
   const [stored] = await listCreatorReads(sql, [id]);
   if (!stored) {
     return {
@@ -142,6 +206,9 @@ export async function syncCreatorReadView(userId: string, creatorId: string): Pr
       earningsSyncedAt: null,
       fansSyncedAt: null,
       lastReason: read.reason,
+      lastAttemptAt: null,
+      consecutiveFailures: 0,
+      lastStatus: read.alreadyRunning ? "idle" : "error",
       earnings: access.role === "owner" ? [] : null,
       fans: [],
     };
@@ -156,6 +223,9 @@ function presentRead(role: "owner" | "member", row: Awaited<ReturnType<typeof li
     earningsSyncedAt: owner ? row.earningsSyncedAt : null,
     fansSyncedAt: row.fansSyncedAt,
     lastReason: row.lastReason,
+    lastAttemptAt: row.lastAttemptAt,
+    consecutiveFailures: row.consecutiveFailures,
+    lastStatus: row.lastStatus,
     earnings: owner
       ? row.earnings.map((item) => ({
           day: item.day,

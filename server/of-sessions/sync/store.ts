@@ -11,10 +11,19 @@ export type StoredCreatorRead = {
   creatorId: string;
   earningsSyncedAt: string | null;
   fansSyncedAt: string | null;
+  lastAttemptAt: string | null;
+  consecutiveFailures: number;
+  lastStatus: "idle" | "ok" | "error";
   lastReason: string | null;
   jsonPaths: string[];
   earnings: StoredEarning[];
   fans: StoredFan[];
+};
+
+export type SyncMeta = {
+  creatorId: string;
+  consecutiveFailures: number;
+  lastAttemptAt: string | null;
 };
 
 const ORIGIN = "onlyfans";
@@ -67,15 +76,26 @@ export async function saveCreatorRead(
         );
       }
     }
+    const previous = await sql.query<{ consecutive_failures: number | string }>(
+      "select consecutive_failures from of_sync_state where creator_id = $1",
+      [creatorId],
+    );
+    const failed = Boolean(cleanReason(read.reason));
+    const failures = failed ? Number(previous[0]?.consecutive_failures ?? 0) + 1 : 0;
     await sql.query(
-      `insert into of_sync_state (creator_id, earnings_synced_at, fans_synced_at, last_reason, json_paths, origin)
-       values ($1, $2, $3, $4, $5, $6)
+      `insert into of_sync_state (
+         creator_id, earnings_synced_at, fans_synced_at, last_reason, json_paths, origin,
+         last_attempt_at, consecutive_failures, last_status
+       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        on conflict (creator_id) do update set
          earnings_synced_at = coalesce(excluded.earnings_synced_at, of_sync_state.earnings_synced_at),
          fans_synced_at = coalesce(excluded.fans_synced_at, of_sync_state.fans_synced_at),
          last_reason = excluded.last_reason,
          json_paths = excluded.json_paths,
-         origin = excluded.origin`,
+         origin = excluded.origin,
+         last_attempt_at = excluded.last_attempt_at,
+         consecutive_failures = excluded.consecutive_failures,
+         last_status = excluded.last_status`,
       [
         creatorId,
         read.earningsCaptured ? syncedAt : null,
@@ -83,6 +103,9 @@ export async function saveCreatorRead(
         cleanReason(read.reason),
         read.jsonPaths.filter((path) => !path.includes("?")).slice(0, 8).join("\n"),
         ORIGIN,
+        syncedAt,
+        failures,
+        failed ? "error" : "ok",
       ],
     );
     await sql.query("commit");
@@ -96,7 +119,8 @@ export async function listCreatorReads(sql: ReadSql, creatorIds: string[]): Prom
   if (!creatorIds.length) return [];
   const filter = creatorIds.map((_, index) => `$${index + 1}`).join(", ");
   const states = await sql.query<StateRow>(
-    `select creator_id, earnings_synced_at, fans_synced_at, last_reason, json_paths
+    `select creator_id, earnings_synced_at, fans_synced_at, last_reason, json_paths,
+            last_attempt_at, consecutive_failures, last_status
      from of_sync_state where creator_id in (${filter})`,
     creatorIds,
   );
@@ -115,6 +139,9 @@ export async function listCreatorReads(sql: ReadSql, creatorIds: string[]): Prom
     earningsSyncedAt: iso(state.earnings_synced_at),
     fansSyncedAt: iso(state.fans_synced_at),
     lastReason: state.last_reason,
+    lastAttemptAt: iso(state.last_attempt_at),
+    consecutiveFailures: Number(state.consecutive_failures ?? 0),
+    lastStatus: state.last_status === "ok" || state.last_status === "error" ? state.last_status : "idle",
     jsonPaths: (state.json_paths ?? "").split("\n").filter(Boolean),
     earnings: earnings
       .filter((row) => row.creator_id === state.creator_id)
@@ -140,12 +167,52 @@ export async function listCreatorReads(sql: ReadSql, creatorIds: string[]): Prom
   }));
 }
 
+export async function listSyncMeta(sql: ReadSql): Promise<SyncMeta[]> {
+  const rows = await sql.query<{
+    creator_id: string;
+    consecutive_failures: number | string | null;
+    last_attempt_at: Date | string | null;
+  }>("select creator_id, consecutive_failures, last_attempt_at from of_sync_state");
+  return rows.map((row) => ({
+    creatorId: row.creator_id,
+    consecutiveFailures: Number(row.consecutive_failures ?? 0),
+    lastAttemptAt: iso(row.last_attempt_at),
+  }));
+}
+
+export async function readSyncIntervalMin(sql: ReadSql, fallback: number): Promise<number> {
+  const rows = await sql.query<{ interval_min: number | string }>(
+    "select interval_min from of_sync_settings where id = 1",
+  );
+  const saved = rows[0]?.interval_min;
+  if (saved == null) return fallback;
+  return clampSaved(Number(saved), fallback);
+}
+
+export async function writeSyncIntervalMin(sql: ReadSql, minutes: number): Promise<number> {
+  const value = clampSaved(minutes, 30);
+  await sql.query(
+    `insert into of_sync_settings (id, interval_min) values (1, $1)
+     on conflict (id) do update set interval_min = excluded.interval_min`,
+    [value],
+  );
+  return value;
+}
+
+function clampSaved(value: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(1440, Math.max(5, Math.round(value)));
+}
+
 type StateRow = {
   creator_id: string;
   earnings_synced_at: Date | string | null;
   fans_synced_at: Date | string | null;
   last_reason: string | null;
   json_paths: string | null;
+  last_attempt_at: Date | string | null;
+  consecutive_failures: number | string | null;
+  last_status: string | null;
 };
 
 type EarningDb = {

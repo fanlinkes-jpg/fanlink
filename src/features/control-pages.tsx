@@ -36,7 +36,7 @@ export function AnalyticsPage() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="font-display text-2xl font-semibold">Analítica</h1>
-          <p className="text-sm text-muted">Ingresos y fans salen de OnlyFans al pulsar Sincronizar. Si no hay lectura, no hay cifra.</p>
+          <p className="text-sm text-muted">Las cifras son las guardadas. Abrir esta pantalla no sincroniza. El servidor lo hace solo, y Sincronizar lo fuerza.</p>
         </div>
         <div className="flex gap-1 rounded-md border border-line p-1">
           {(["creadoras", "equipo", "fans"] as const).map((v) => (
@@ -46,6 +46,7 @@ export function AnalyticsPage() {
           ))}
         </div>
       </div>
+      {owner ? <SyncInterval minutes={reads.intervalMin} onSave={(minutes) => void reads.saveInterval(minutes)} /> : null}
       {reads.error ? <p className="text-sm text-[#8a5a12]">{reads.error}</p> : null}
 
       {view === "creadoras" && owner && (
@@ -79,9 +80,16 @@ export function AnalyticsPage() {
                       <td className="px-3 py-3 tabular-nums">{read?.fansSyncedAt ? read.fans.length : "Sin sincronizar"}</td>
                       <td className="px-3 py-3 tabular-nums">{read?.earningsSyncedAt ? centsLabel(sumCents(moneyRows), moneyRows[0]?.currency ?? "USD") : "Sin sincronizar"}</td>
                       <td className="px-3 py-3 text-xs">{read?.earningsSyncedAt ? kindSummary(moneyRows) : "—"}</td>
-                      <td className="px-3 py-3 text-xs">{read?.earningsSyncedAt ?? read?.fansSyncedAt ?? "Sin sincronizar"}</td>
+                      <td className="px-3 py-3 text-xs">
+                        <div>{syncAge(lastSyncAt(read))}</div>
+                        <div className="text-[#8a5a12]">{syncStateLabel(reads.runningCreatorIds.includes(c.id) || reads.pendingId === c.id, read?.lastStatus, read?.lastReason)}</div>
+                      </td>
                       <td className="px-3 py-3">
-                        <SyncControl creatorId={c.id} pending={reads.pendingId === c.id} onSync={(id) => void reads.sync(id)} reason={read?.lastReason} />
+                        <SyncControl
+                          creatorId={c.id}
+                          pending={reads.pendingId === c.id || reads.runningCreatorIds.includes(c.id)}
+                          onSync={(id) => void reads.sync(id)}
+                        />
                       </td>
                     </tr>
                   );
@@ -397,6 +405,44 @@ function earningsChart(creatorIds: string[], byCreator: Map<string, { earnings: 
     .map(([day, slot]) => ({ day, amountCents: slot.parts > 0 ? slot.parts : slot.total, currency: slot.currency }));
 }
 
+function lastSyncAt(read: { earningsSyncedAt: string | null; fansSyncedAt: string | null } | undefined): string | null {
+  const times = [read?.earningsSyncedAt, read?.fansSyncedAt].filter((value): value is string => Boolean(value));
+  return times.sort().at(-1) ?? null;
+}
+
+function syncAge(iso: string | null): string {
+  if (!iso) return "Sin sincronizar";
+  const mins = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 60_000));
+  if (mins < 1) return "Última sincronización: hace menos de 1 min";
+  return `Última sincronización: hace ${mins} min`;
+}
+
+function syncStateLabel(running: boolean, status: "idle" | "ok" | "error" | undefined, reason: string | null | undefined): string {
+  if (running) return "En curso";
+  if (status === "error") return reason ? `Error · ${reason}` : "Error";
+  if (status === "ok") return "OK";
+  return "Sin sincronizar";
+}
+
+function SyncInterval({ minutes, onSave }: { minutes: number; onSave: (minutes: number) => void }) {
+  const [value, setValue] = useState(String(minutes));
+  useEffect(() => setValue(String(minutes)), [minutes]);
+  return (
+    <form
+      className="flex flex-wrap items-center gap-2 text-sm"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSave(Number(value));
+      }}
+    >
+      <label className="text-muted" htmlFor="sync-interval">Sincronizar cada</label>
+      <input id="sync-interval" type="number" min={5} max={1440} value={value} onChange={(event) => setValue(event.target.value)} className="h-8 w-20 rounded-md border border-line bg-surface px-2" />
+      <span className="text-muted">min</span>
+      <button type="submit" className="rounded-md border border-line px-2 py-1 text-xs">Guardar</button>
+    </form>
+  );
+}
+
 function SyncControl({ creatorId, pending, disabled, onSync, reason }: { creatorId: string; pending: boolean; disabled?: boolean; onSync: (creatorId: string) => void; reason?: string | null }) {
   return (
     <span className="inline-flex flex-col items-start">
@@ -615,13 +661,19 @@ export function CreatorsPage() {
                       >
                         Comprobar
                       </button>
-                      <SyncControl
-                        creatorId={c.id}
-                        pending={reads.pendingId === c.id}
-                        disabled={!live || live.readsBlocked || !(teamAccess?.role === "owner" || teamAccess?.creatorIds.includes(c.id))}
-                        onSync={(id) => void reads.sync(id)}
-                        reason={reads.byCreator.get(c.id)?.lastReason}
-                      />
+                      <span className="inline-flex flex-col">
+                        <SyncControl
+                          creatorId={c.id}
+                          pending={reads.pendingId === c.id || reads.runningCreatorIds.includes(c.id)}
+                          disabled={!live || live.readsBlocked || !(teamAccess?.role === "owner" || teamAccess?.creatorIds.includes(c.id))}
+                          onSync={(id) => void reads.sync(id)}
+                        />
+                        <span className="mt-1 max-w-[16rem] text-[10px] leading-snug text-[#6d7585]">
+                          {syncAge(lastSyncAt(reads.byCreator.get(c.id)))}
+                          {" · "}
+                          {syncStateLabel(reads.pendingId === c.id || reads.runningCreatorIds.includes(c.id), reads.byCreator.get(c.id)?.lastStatus, reads.byCreator.get(c.id)?.lastReason)}
+                        </span>
+                      </span>
                     </div>
                   </td>
                 </tr>

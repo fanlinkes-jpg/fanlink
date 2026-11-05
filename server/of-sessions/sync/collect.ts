@@ -19,6 +19,7 @@ export type CollectedRead = {
   jsonPaths: string[];
   earningsCaptured: boolean;
   fansCaptured: boolean;
+  alreadyRunning?: boolean;
 };
 
 /**

@@ -91,6 +91,7 @@ test("la sincronización lee el JSON que piden las páginas y lo guarda", { time
     assert.equal(blocked.fans.length, 0);
 
     await pg.exec(await readFile(migration, "utf8"));
+    await pg.exec(await readFile(path.resolve(path.dirname(migration), "0008_sync_schedule.sql"), "utf8"));
     const sql: ReadSql = {
       async query<T>(text: string, params?: unknown[]): Promise<T[]> {
         const result = await pg.query<T>(text, params);

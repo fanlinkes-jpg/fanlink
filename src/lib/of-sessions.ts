@@ -88,12 +88,17 @@ export type CreatorReadView = {
   earningsSyncedAt: string | null;
   fansSyncedAt: string | null;
   lastReason: string | null;
+  lastAttemptAt: string | null;
+  consecutiveFailures: number;
+  lastStatus: "idle" | "ok" | "error";
   earnings: CreatorEarningView[] | null;
   fans: CreatorFanView[];
 };
 
 export type CreatorReadList = {
   role: "owner" | "member";
+  intervalMin: number;
+  runningCreatorIds: string[];
   creators: CreatorReadView[];
 };
 
@@ -102,6 +107,14 @@ export const listCreatorReads = createServerFn({ method: "GET" })
   .handler(async ({ context }): Promise<CreatorReadList> => {
     const { listCreatorReadViews } = await import("./of-sessions-runtime.server");
     return listCreatorReadViews(context.userId);
+  });
+
+export const setSyncInterval = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { minutes: number }) => input)
+  .handler(async ({ context, data }): Promise<number> => {
+    const { setSyncIntervalView } = await import("./of-sessions-runtime.server");
+    return setSyncIntervalView(context.userId, data.minutes);
   });
 
 export const syncCreatorRead = createServerFn({ method: "POST" })
