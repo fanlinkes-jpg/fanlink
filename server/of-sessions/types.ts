@@ -19,6 +19,8 @@ export interface Account {
   identityName: string | null;
   identityUserId: string | null;
   identityCheckedAt: string | null;
+  /** Por qué la identidad quedó sin verificar. Sin cookies, cabeceras ni query. */
+  identityReason: string | null;
   createdAt: string;
   updatedAt: string;
   lastCheckedAt: string | null;
@@ -40,6 +42,7 @@ export type AccountPatch = Partial<
     | "identityName"
     | "identityUserId"
     | "identityCheckedAt"
+    | "identityReason"
     | "lastCheckedAt"
     | "lastError"
   >

@@ -8,7 +8,19 @@ import {
   SessionCryptoError,
   writeEncryptedSession,
 } from "../crypto.ts";
-import { identityFromDom, identityFromUserJson, isCurrentUserResponseUrl, judgeIdentityMatch, type ReadIdentity } from "../identity.ts";
+import {
+  identityFailureReason,
+  identityFromDom,
+  identityFromMenu,
+  identityFromStateCandidates,
+  identityFromUserJson,
+  isCurrentUserResponseUrl,
+  jsonUrlWithoutSecrets,
+  judgeIdentityMatch,
+  readPageSignals,
+  type IdentityNotes,
+  type ReadIdentity,
+} from "../identity.ts";
 import { messages, publicErrorMessage } from "../messages.ts";
 import type { AccountRepository } from "../store/repository.ts";
 import type { Account } from "../types.ts";
@@ -153,8 +165,8 @@ export class SessionManager {
 
   /**
    * Comprueba la sesión guardada contra el sitio sin convertir ese resultado
-   * en el estado de cookies. La identidad solo se rellena si el adaptador
-   * declara un selector.
+   * en el estado de cookies. La identidad sale de lo que la página ya pide
+   * o ya muestra, y se compara con el handle de la ficha.
    */
   async inspectConnection(accountId: string, expectedHandle = ""): Promise<Account> {
     assertAccountId(accountId);
@@ -167,6 +179,7 @@ export class SessionManager {
       identityName: null,
       identityUserId: null,
       identityCheckedAt: now,
+      identityReason: null,
     };
     const verdict = await this.localVerdict(accountId);
     if (verdict !== "valid") {
@@ -187,6 +200,7 @@ export class SessionManager {
         identityName: outcome.identityName,
         identityUserId: outcome.identityUserId,
         identityCheckedAt: now,
+        identityReason: outcome.identityReason,
         lastCheckedAt: now,
         lastError: outcome.error,
       });
@@ -543,56 +557,67 @@ export class SessionManager {
     identityHandle: string | null;
     identityName: string | null;
     identityUserId: string | null;
+    identityReason: string | null;
     error: string | null;
   }> {
     const context = await this.newRestoredContext(accountId);
-    const seen: ReadIdentity[] = [];
+    const notes: IdentityNotes & { identities: ReadIdentity[] } = {
+      identities: [],
+      jsonPaths: [],
+      sawUsersMe: false,
+      usersMeUnreadable: false,
+      usersMeMissingUsername: false,
+      redirectedToLogin: false,
+    };
     const pending: Promise<void>[] = [];
+    const onResponse = (response: { url(): string; headers(): Record<string, string>; text(): Promise<string> }) => {
+      pending.push(this.observeResponse(response, notes));
+    };
+    context.on("response", onResponse);
+    const blank = {
+      identityState: "unavailable" as const,
+      identityLabel: null,
+      identityHandle: null,
+      identityName: null,
+      identityUserId: null,
+      identityReason: null as string | null,
+    };
     try {
       const page = await context.newPage();
-      page.on("response", (response) => {
-        pending.push(this.observeCurrentUser(response, seen));
-      });
-      const response = await page.goto(this.options.site.probeUrl, {
-        waitUntil: "domcontentloaded",
-        timeout: this.options.config.probeTimeoutMs,
-      });
-      await page.waitForLoadState("networkidle", { timeout: 8_000 }).catch(() => undefined);
-      await Promise.all(pending);
-      const finalUrl = page.url();
-      const blank = {
-        identityState: "unavailable" as const,
-        identityLabel: null,
-        identityHandle: null,
-        identityName: null,
-        identityUserId: null,
-      };
-      if (this.options.site.isInconclusiveUrl?.(finalUrl)) {
-        return { connection: "inconclusive", ...blank, error: messages.inconclusive };
+      const first = await this.watchNavigation(page, this.options.site.probeUrl, notes, pending);
+      if (this.options.site.isInconclusiveUrl?.(first.finalUrl)) {
+        return { connection: "inconclusive", ...blank, identityReason: "no concluyente", error: messages.inconclusive };
       }
       const cookies = mapCookies(await context.cookies());
       const loginFormVisible = await this.loginFormVisible(page);
+      if (loginFormVisible || this.options.site.isLoginUrl(first.finalUrl)) notes.redirectedToLogin = true;
       const alive = this.sessionLooksAlive(
         this.options.site.probeUrl,
-        response?.status() ?? 0,
-        finalUrl,
+        first.status,
+        first.finalUrl,
         cookies,
         loginFormVisible,
       );
       if (!alive) {
-        return { connection: "rejected", ...blank, error: messages.sessionInvalid };
+        const identityReason = identityFailureReason(notes);
+        console.info(`[fanlink:identidad] ${identityReason}`);
+        return { connection: "rejected", ...blank, identityReason, error: messages.sessionInvalid };
       }
-      const selector = this.options.site.identitySelector;
-      const node = selector ? page.locator(selector).first() : null;
-      const dom = node
-        ? {
-            text: await node.innerText().catch(() => ""),
-            username: await node.getAttribute("data-username").catch(() => null),
-            userId: await node.getAttribute("data-user-id").catch(() => null),
-          }
-        : null;
-      const read = seen[0] ?? identityFromDom(selector, dom);
+      let read: ReadIdentity | null = notes.identities[0] ?? null;
+      if (!read?.username) read = await this.identitySignals(page);
+      const profileUrl = this.options.site.profileUrl;
+      if (!read?.username && profileUrl && profileUrl !== this.options.site.probeUrl) {
+        try {
+          await this.watchNavigation(page, profileUrl, notes, pending);
+          if (this.options.site.isLoginUrl(page.url())) notes.redirectedToLogin = true;
+          read = notes.identities[0] ?? (await this.identitySignals(page));
+        } catch {
+          // La home ya demostró la conexión. El perfil es solo un intento más.
+        }
+      }
       const identityState = judgeIdentityMatch(expectedHandle, read?.username ?? null);
+      const identityReason = identityState === "unavailable" ? identityFailureReason(notes) : null;
+      if (identityReason) console.info(`[fanlink:identidad] ${identityReason}`);
       return {
         connection: "live",
         identityState,
@@ -600,28 +625,95 @@ export class SessionManager {
         identityName: read?.name ?? null,
         identityUserId: read?.userId ?? null,
         identityLabel: read?.username ?? read?.name ?? null,
+        identityReason,
         error: null,
       };
     } finally {
+      context.off("response", onResponse);
       this.openContexts.delete(context);
       await context.close().catch(() => undefined);
     }
   }
 
-  private async observeCurrentUser(
+  private async watchNavigation(
+    page: Page,
+    url: string,
+    notes: IdentityNotes & { identities: ReadIdentity[] },
+    pending: Promise<void>[],
+  ): Promise<{ status: number; finalUrl: string }> {
+    const response = await page.goto(url, {
+      waitUntil: "domcontentloaded",
+      timeout: this.options.config.probeTimeoutMs,
+    });
+    const budget = this.options.config.identityWaitMs;
+    await Promise.race([
+      page.waitForLoadState("networkidle", { timeout: budget }).catch(() => undefined),
+      delay(budget),
+    ]);
+    const deadline = Date.now() + budget;
+    while (Date.now() < deadline && notes.identities.length === 0) {
+      await delay(200);
+      await drain(pending);
+    }
+    await drain(pending);
+    return { status: response?.status() ?? 0, finalUrl: page.url() };
+  }
+
+  private async identitySignals(page: Page): Promise<ReadIdentity | null> {
+    const signals = await page.evaluate(readPageSignals).catch(() => null);
+    const fromState = signals ? identityFromStateCandidates(signals.candidates) : null;
+    if (fromState?.username) return fromState;
+    const selector = this.options.site.identitySelector;
+    const node = selector ? page.locator(selector).first() : null;
+    const present = node ? await node.count().catch(() => 0) : 0;
+    const dom = node && present > 0
+      ? {
+          text: await node.innerText({ timeout: 1_000 }).catch(() => ""),
+          username: await node.getAttribute("data-username", { timeout: 1_000 }).catch(() => null),
+          userId: await node.getAttribute("data-user-id", { timeout: 1_000 }).catch(() => null),
+        }
+      : null;
+    const fromDom = identityFromDom(selector, dom);
+    if (fromDom?.username) return fromDom;
+    if (signals) {
+      const fromMenu = identityFromMenu(signals.menuHrefs, signals.menuHandles);
+      if (fromMenu?.username) return fromMenu;
+    }
+    return fromDom;
+  }
+
+  private async observeResponse(
     response: { url(): string; headers(): Record<string, string>; text(): Promise<string> },
-    seen: ReadIdentity[],
+    notes: IdentityNotes & { identities: ReadIdentity[] },
   ): Promise<void> {
+    let url = "";
     try {
-      if (!isCurrentUserResponseUrl(response.url())) return;
+      url = response.url();
       const type = (response.headers()["content-type"] ?? "").toLowerCase();
-      if (type && !type.includes("json") && !type.includes("text")) return;
+      const usersMe = isCurrentUserResponseUrl(url);
+      const jsonPath = jsonUrlWithoutSecrets(url);
+      if (jsonPath && (type.includes("json") || usersMe) && !notes.jsonPaths.includes(jsonPath) && notes.jsonPaths.length < 20) {
+        notes.jsonPaths.push(jsonPath);
+      }
+      if (!usersMe) return;
+      notes.sawUsersMe = true;
+      if (type && !type.includes("json") && !type.includes("text") && !type.includes("javascript")) {
+        notes.usersMeUnreadable = true;
+        return;
+      }
       const raw = await response.text();
-      if (raw.length > 100_000) return;
+      if (raw.length > 1_500_000) {
+        notes.usersMeUnreadable = true;
+        return;
+      }
       const identity = identityFromUserJson(JSON.parse(raw) as unknown);
-      if (identity) seen.push(identity);
+      if (!identity) {
+        notes.usersMeMissingUsername = true;
+        return;
+      }
+      notes.identities.push(identity);
     } catch {
-      // Una respuesta que no es JSON del usuario actual se ignora.
+      if (url && isCurrentUserResponseUrl(url)) notes.usersMeUnreadable = true;
     }
   }
 
@@ -738,6 +830,13 @@ function mapCookies(
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function drain(pending: Promise<void>[]): Promise<void> {
+  for (let turn = 0; turn < 5 && pending.length > 0; turn += 1) {
+    const batch = pending.splice(0, pending.length);
+    await Promise.all(batch);
+  }
 }
 
 function isNotFound(error: unknown): boolean {

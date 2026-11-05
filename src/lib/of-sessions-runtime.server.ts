@@ -125,6 +125,7 @@ function toView(account: Account): CreatorSessionView | null {
     identityName: account.identityName,
     identityUserId: account.identityUserId,
     identityCheckedAt: account.identityCheckedAt,
+    identityReason: account.identityReason,
     readsBlocked: account.identityState === "mismatch",
     lastCheckedAt: account.lastCheckedAt,
     lastError: account.lastError,

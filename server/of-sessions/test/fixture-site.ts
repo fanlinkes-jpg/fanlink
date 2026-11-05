@@ -15,6 +15,8 @@ export interface FixtureHits {
   dashboard: number;
 }
 
+export type FixtureMode = "users-me" | "state" | "menu" | "profile" | "missing-username" | "none";
+
 export interface Fixture {
   origin: string;
   site: SiteAdapter;
@@ -35,27 +37,63 @@ const loginHtml = `<!doctype html>
   </body>
 </html>`;
 
-const dashboardHtml = `<!doctype html>
-<html lang="es">
-  <head>
-    <meta charset="utf-8">
-    <title>Dashboard</title>
-    <script>
-      localStorage.setItem("fanlink_user","42");
-      fetch("/api/me");
-    </script>
-  </head>
-  <body><h1>Dashboard</h1><p id="fanlink-identity" data-username="creadora" data-user-id="42">Creadora de prueba</p></body>
-</html>`;
+function profileHtml(mode: FixtureMode): string {
+  const fetchUser =
+    mode === "profile" ? `<script>fetch("/api2/v2/users/me?view=full&appToken=no-guardar");</script>` : "";
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Perfil</title>${fetchUser}</head><body><h1>Perfil</h1></body></html>`;
+}
+
+function pageHtml(title: string, head: string, body: string): string {
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>${title}</title>${head}</head><body>${body}</body></html>`;
+}
+
+function dashboardHtml(mode: FixtureMode): string {
+  const storage = `<script>localStorage.setItem("fanlink_user","42");</script>`;
+  const usersMe = `<script>fetch("/api2/v2/users/me?view=full&appToken=no-guardar");</script>`;
+  switch (mode) {
+    case "users-me":
+      return pageHtml(
+        "Dashboard",
+        storage + usersMe,
+        `<h1>Dashboard</h1><p id="fanlink-identity" data-username="creadora" data-user-id="42">Creadora de prueba</p>`,
+      );
+    case "state": {
+      const state = JSON.stringify({
+        auth: { user: { id: 99, username: "creadora", name: "Desde estado", password: "no-guardar", isAuth: true } },
+      });
+      return pageHtml("Dashboard", `${storage}<script>window.__INITIAL_STATE__=${state};</script>`, `<h1>Dashboard</h1>`);
+    }
+    case "menu":
+      return pageHtml(
+        "Dashboard",
+        storage,
+        `<h1>Dashboard</h1><aside><a href="/creadora?ref=secret">@creadora</a><a href="/posts">Posts</a></aside>`,
+      );
+    case "profile":
+      return pageHtml("Dashboard", storage, `<h1>Dashboard</h1>`);
+    case "none":
+      return pageHtml(
+        "Dashboard",
+        `${storage}<script>fetch("/api2/v2/init?token=sekret");</script>`,
+        `<h1>Dashboard</h1>`,
+      );
+    case "missing-username":
+      return pageHtml("Dashboard", storage + usersMe, `<h1>Dashboard</h1>`);
+    default: {
+      const exhaustive: never = mode;
+      return exhaustive;
+    }
+  }
+}
 
 const blankHtml = `<!doctype html>
 <html lang="es"><head><meta charset="utf-8"><title>Blank</title></head><body>blank</body></html>`;
 
-export async function startFixture(): Promise<Fixture> {
+export async function startFixture(mode: FixtureMode = "users-me"): Promise<Fixture> {
   let epoch = 1;
   const hits: FixtureHits = { login: 0, session: 0, dashboard: 0 };
   const server = createServer((req, res) => {
-    void handle(req, res, () => epoch, hits).catch(() => {
+    void handle(req, res, () => epoch, hits, mode).catch(() => {
       if (!res.headersSent) res.writeHead(500);
       res.end();
     });
@@ -87,6 +125,7 @@ async function handle(
   res: ServerResponse,
   epoch: () => number,
   hits: FixtureHits,
+  mode: FixtureMode,
 ): Promise<void> {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   if (req.method === "GET" && url.pathname === "/login") {
@@ -112,21 +151,18 @@ async function handle(
     res.end();
     return;
   }
-  if (req.method === "GET" && url.pathname === "/api/me") {
+  if (req.method === "GET" && (url.pathname === "/api/me" || url.pathname === "/api2/v2/users/me")) {
     if (!accepted(req, epoch())) {
       res.writeHead(401, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "no" }));
       return;
     }
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(
-      JSON.stringify({
-        id: 42,
-        username: "creadora",
-        name: "Creadora de prueba",
-        password: "no-guardar",
-      }),
-    );
+    const body =
+      mode === "missing-username"
+        ? { id: 5, name: "Sin handle", password: "no-guardar" }
+        : { id: 42, username: "creadora", name: "Creadora de prueba", password: "no-guardar" };
+    res.end(JSON.stringify(body));
     return;
   }
   if (req.method === "GET" && url.pathname === "/dashboard") {
@@ -135,7 +171,20 @@ async function handle(
       redirect(res, "/login");
       return;
     }
-    html(res, dashboardHtml);
+    html(res, dashboardHtml(mode));
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/api2/v2/init") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/my/profile") {
+    if (!accepted(req, epoch())) {
+      redirect(res, "/login");
+      return;
+    }
+    html(res, profileHtml(mode));
     return;
   }
   if (req.method === "GET" && url.pathname === "/blank") {
@@ -189,6 +238,7 @@ export function createFixtureSite(origin: string): SiteAdapter {
     hostname,
     loginUrl: `${origin}/login`,
     probeUrl: `${origin}/dashboard`,
+    profileUrl: `${origin}/my/profile`,
     requiredCookies: ["auth_id", "sess"],
     loggedOutSelector: 'input[type="password"]',
     identitySelector: "#fanlink-identity",

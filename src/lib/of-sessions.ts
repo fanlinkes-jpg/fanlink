@@ -26,6 +26,7 @@ export type CreatorSessionView = {
   identityName: string | null;
   identityUserId: string | null;
   identityCheckedAt: string | null;
+  identityReason: string | null;
   readsBlocked: boolean;
   lastCheckedAt: string | null;
   lastError: string | null;

@@ -7,6 +7,8 @@ export interface SiteAdapter {
   hostname: string;
   loginUrl: string;
   probeUrl: string;
+  /** Segunda página si la home no trae el usuario. No se llama a una API. */
+  profileUrl?: string;
   requiredCookies: readonly string[];
   /**
    * Selector del formulario de acceso. Si sigue visible, la persona

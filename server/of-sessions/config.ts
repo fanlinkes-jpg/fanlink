@@ -11,6 +11,8 @@ export interface FanlinkConfig {
   openLoginOnInvalidate: boolean;
   loginTimeoutMs: number;
   probeTimeoutMs: number;
+  /** Tras networkidle, cuánto se espera a que la página pida al usuario actual. */
+  identityWaitMs: number;
   /** Clave AES-256-GCM. Null si FANLINK_SESSION_KEY no está definida: no se escribe la sesión en claro. */
   sessionKey: Buffer | null;
 }
@@ -47,6 +49,7 @@ export function loadConfig(
     openLoginOnInvalidate: env.FANLINK_OPEN_LOGIN_ON_INVALIDATE !== "false",
     loginTimeoutMs,
     probeTimeoutMs: 30_000,
+    identityWaitMs: 15_000,
     sessionKey: readSessionKey(env.FANLINK_SESSION_KEY),
   };
 }

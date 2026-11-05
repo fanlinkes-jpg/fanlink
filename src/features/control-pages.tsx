@@ -518,11 +518,16 @@ export function CreatorsPage() {
                     <span className="text-xs text-[#6d7585]">{live ? CONNECTION_LABEL[live.connection] : "Sin comprobar"}</span>
                   </td>
                   <td className="border-b border-[#f4f5f7] px-4 py-3">
-                    <span className="text-xs" title={identityTitle(live)}>
+                    <span className="text-xs" title={live?.identityReason ?? identityTitle(live)}>
                       {live ? IDENTITY_STATE_LABEL[live.identityState] : IDENTITY_STATE_LABEL.unavailable}
                       {live?.identityHandle ? ` · @${live.identityHandle.replace(/^@+/, "")}` : ""}
                       {live?.readsBlocked ? " · lecturas bloqueadas" : ""}
                     </span>
+                    {live?.identityState === "unavailable" && live.identityReason ? (
+                      <span className="mt-1 block max-w-[16rem] text-[10px] leading-snug text-[#8a5a12]" title={live.identityReason}>
+                        {live.identityReason}
+                      </span>
+                    ) : null}
                   </td>
                   <td className="border-b border-[#f4f5f7] px-4 py-3">{c.platform}</td>
                   <td className="border-b border-[#f4f5f7] px-4 py-3 text-[#3b6cff]">{c.handle}</td>

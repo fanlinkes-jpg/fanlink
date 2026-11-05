@@ -42,7 +42,11 @@ Sin `DATABASE_URL`, esa base es un Postgres embebido en `data/pglite` (un solo p
 
 La pastilla **Activa** es la sesión guardada (cookies). **Conexión** es una comprobación aparte. **Identidad** compara el `username` leído con el handle de la ficha, sin distinguir `@` ni mayúsculas.
 
-Al pulsar **Comprobar**, el servidor abre la página normal del sitio con la sesión guardada y escucha las respuestas que esa página pide sola. Solo acepta un JSON cuya URL termina en `/users/me`, `/me` o `/api/me`, y de él copia `username`, `name` o `displayName`, e `id` si es numérico. No llama a ese endpoint por su cuenta ni firma peticiones. Si esa respuesta no aparece y el sitio declara un selector, usa el texto visible y `data-username` / `data-user-id`. OnlyFans no declara selector: si su web deja de pedir esa URL o cambia los campos, la conexión puede seguir en Aceptada y la identidad en **No verificada**. No se guardan cookies, tokens ni contraseñas.
+Al pulsar **Comprobar**, el servidor abre la home con la sesión guardada. El listener se registra antes de navegar. Espera a que la red se calme y, si aún no hay usuario, hasta 15 segundos más. Acepta el JSON que la propia página pide si la ruta contiene `/users/me` (vale `/api2/v2/users/me` y una query) o termina en `/api/me`. De ese JSON copia `username`, `name` o `displayName`, e `id` numérico. No llama a ese endpoint ni firma peticiones.
+
+Si en la home no aparece, lee el estado que la página ya tiene (`window.__INITIAL_STATE__`, `__NUXT__`, `__PINIA__`, Vuex o Pinia), solo lectura. Luego, si el sitio declara selector, el texto y `data-username`. Como último recurso, un enlace del menú con href `/<username>` o un único `@username` visible ahí. Si sigue sin usuario, abre `https://onlyfans.com/my/profile` y repite la lectura.
+
+Si no se puede verificar, bajo **No verificada** sale la razón (por ejemplo `no hubo respuesta users/me`, `campo username ausente` o `redirigido a login`) y, en el servidor, las rutas JSON sin query. No se guardan ni se escriben cookies, tokens, cabeceras, query ni cuerpos. Si OnlyFans cambia la ruta, los campos o el menú, la conexión puede seguir en Aceptada y la identidad en **No verificada**.
 
 - **Verificada**: el handle leído coincide con el de la ficha.
 - **No coincide**: la sesión es de otra cuenta. Se muestra el handle leído y se bloquean lecturas futuras de datos para esa ficha.
@@ -52,8 +56,16 @@ Al pulsar **Comprobar**, el servidor abre la página normal del sitio con la ses
 
 El puerto 8080 puede estar ocupado. No lo uses si otro proyecto lo tiene.
 
+Si ya hay una sesión guardada, no generes otra `FANLINK_SESSION_KEY`: la clave anterior es la que descifra `data/sessions`. En esa misma terminal:
+
 ```bash
-git pull
+git pull && npm install
+npm run dev -- --port 8081 --host 127.0.0.1
+```
+
+La primera vez, sin sesión previa:
+
+```bash
 npm install
 npx playwright install chromium
 unset DATABASE_URL
@@ -62,7 +74,7 @@ export FANLINK_SESSION_KEY="$(openssl rand -base64 32)"
 npm run dev -- --port 8081 --host 127.0.0.1
 ```
 
-Abre `http://127.0.0.1:8081`. En Creadoras, Conectar abre Chromium. Comprobar vuelve a abrir la página con la sesión guardada. No se leen métricas ni se envían mensajes.
+Abre `http://127.0.0.1:8081`. En Creadoras, Conectar abre Chromium. Comprobar puede tardar hasta medio minuto si la home no trae el usuario. No se leen métricas ni se envían mensajes.
 
 ## Datos
 

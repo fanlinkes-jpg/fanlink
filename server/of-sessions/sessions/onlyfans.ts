@@ -36,6 +36,7 @@ export const onlyFansSite: SiteAdapter = {
   hostname: "onlyfans.com",
   loginUrl: "https://onlyfans.com/",
   probeUrl: "https://onlyfans.com/",
+  profileUrl: "https://onlyfans.com/my/profile",
   requiredCookies: ["auth_id", "sess"],
   loggedOutSelector: 'input[type="password"]',
   isDashboardUrl(raw: string): boolean {

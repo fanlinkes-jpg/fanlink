@@ -72,6 +72,7 @@ export class AccountStore implements AccountRepository {
         identityName: null,
         identityUserId: null,
         identityCheckedAt: null,
+        identityReason: null,
         createdAt: timestamp,
         updatedAt: timestamp,
         lastCheckedAt: null,
@@ -193,11 +194,19 @@ function normalizeAccount(account: Account): Account {
     identityName: typeof account.identityName === "string" && account.identityName.trim() ? account.identityName : null,
     identityUserId: typeof account.identityUserId === "string" && /^\d+$/.test(account.identityUserId) ? account.identityUserId : null,
     identityCheckedAt: account.identityCheckedAt ?? null,
+    identityReason: cleanReason(account.identityReason),
     createdAt: account.createdAt,
     updatedAt: account.updatedAt,
     lastCheckedAt: account.lastCheckedAt ?? null,
     lastError: account.lastError ?? null,
   };
+}
+
+function cleanReason(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const text = value.replace(/\s+/g, " ").trim();
+  if (!text || /cookie|set-cookie|authorization|password/i.test(text)) return null;
+  return text.slice(0, 400);
 }
 
 function isNotFound(error: unknown): boolean {

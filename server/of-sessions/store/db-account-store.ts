@@ -29,6 +29,7 @@ interface AccountRow {
   identity_name: string | null;
   identity_user_id: string | null;
   identity_checked_at: Date | string | null;
+  identity_reason: string | null;
   last_checked_at: Date | string | null;
   last_error: string | null;
   created_at: Date | string;
@@ -102,6 +103,7 @@ export class DbAccountStore implements AccountRepository {
         identityName: null,
         identityUserId: null,
         identityCheckedAt: null,
+        identityReason: null,
         createdAt: timestamp,
         updatedAt: timestamp,
         lastCheckedAt: null,
@@ -150,9 +152,9 @@ export class DbAccountStore implements AccountRepository {
         `insert into of_session_account (
            id, creator_id, label, status, login_in_progress, session_rejected,
            has_storage_state, connection_status, identity_state, identity_label,
-           identity_handle, identity_name, identity_user_id, identity_checked_at,
+           identity_handle, identity_name, identity_user_id, identity_checked_at, identity_reason,
            last_checked_at, last_error, created_at, updated_at
-         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
          on conflict (id) do update set
            creator_id = excluded.creator_id,
            label = excluded.label,
@@ -167,6 +169,7 @@ export class DbAccountStore implements AccountRepository {
            identity_name = excluded.identity_name,
            identity_user_id = excluded.identity_user_id,
            identity_checked_at = excluded.identity_checked_at,
+           identity_reason = excluded.identity_reason,
            last_checked_at = excluded.last_checked_at,
            last_error = excluded.last_error,
            updated_at = excluded.updated_at`,
@@ -183,9 +186,9 @@ export class DbAccountStore implements AccountRepository {
       `insert into of_session_account (
          id, creator_id, label, status, login_in_progress, session_rejected,
          has_storage_state, connection_status, identity_state, identity_label,
-         identity_handle, identity_name, identity_user_id, identity_checked_at,
+         identity_handle, identity_name, identity_user_id, identity_checked_at, identity_reason,
          last_checked_at, last_error, created_at, updated_at
-       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
+       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
       accountParams(account),
     );
   }
@@ -216,6 +219,7 @@ function accountParams(account: Account): unknown[] {
     account.identityName,
     account.identityUserId,
     account.identityCheckedAt,
+    account.identityReason,
     account.lastCheckedAt,
     account.lastError,
     account.createdAt,
@@ -243,6 +247,7 @@ function rowToAccount(row: AccountRow): Account {
     identityName: row.identity_name ?? null,
     identityUserId: row.identity_user_id ?? null,
     identityCheckedAt: row.identity_checked_at == null ? null : asIso(row.identity_checked_at),
+    identityReason: row.identity_reason ?? null,
     createdAt: asIso(row.created_at),
     updatedAt: asIso(row.updated_at),
     lastCheckedAt:
