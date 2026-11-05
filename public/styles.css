@@ -1,0 +1,173 @@
+:root {
+  color-scheme: light;
+  --ink: #1c1915;
+  --muted: #5c564c;
+  --line: #e4ded2;
+  --paper: #f6f3ed;
+  --card: #fffdf9;
+  --accent: #1d4e89;
+  --active: #1f7a4d;
+  --active-bg: #e7f6ee;
+  --expired: #9a3412;
+  --expired-bg: #ffedd5;
+  --pending: #1d4e89;
+  --pending-bg: #e4eefb;
+  font-family: "Segoe UI", system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+main {
+  width: min(880px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 40px 0 64px;
+}
+
+h1, h2, p { margin: 0; }
+
+h1 {
+  margin-top: 4px;
+  font-size: 2rem;
+  letter-spacing: -0.03em;
+}
+
+h2 { font-size: 1.15rem; }
+
+.eyebrow {
+  color: var(--accent);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 0.78rem;
+}
+
+.lede, .note, #summary {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.lede { margin-top: 10px; max-width: 62ch; }
+
+.panel, .account {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+}
+
+.panel { margin-top: 28px; padding: 20px; }
+
+.note { margin-top: 14px; }
+
+label {
+  display: block;
+  font-weight: 650;
+  margin-bottom: 8px;
+}
+
+.row, .actions, .account-top, .section-head {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.row { align-items: stretch; }
+
+input, button {
+  font: inherit;
+  border-radius: 10px;
+}
+
+input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--line);
+  padding: 10px 12px;
+  background: white;
+  color: var(--ink);
+}
+
+button {
+  border: 0;
+  background: var(--accent);
+  color: white;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+
+button.secondary {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+
+button:disabled { opacity: 0.6; cursor: wait; }
+
+.section-head {
+  justify-content: space-between;
+  margin: 28px 0 12px;
+}
+
+.account {
+  padding: 16px;
+  margin-top: 12px;
+}
+
+.account-top { justify-content: space-between; align-items: flex-start; }
+
+.account h3 { margin: 0; font-size: 1.05rem; }
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.92rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.status::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.status[data-status="active"] { color: var(--active); background: var(--active-bg); }
+.status[data-status="expired"] { color: var(--expired); background: var(--expired-bg); }
+.status[data-status="pending_login"] { color: var(--pending); background: var(--pending-bg); }
+
+.meta, .error-text { margin-top: 8px; color: var(--muted); line-height: 1.4; }
+
+.error-text { color: var(--expired); }
+
+.actions { margin-top: 14px; flex-wrap: wrap; }
+
+.empty {
+  border: 1px dashed var(--line);
+  border-radius: 16px;
+  padding: 20px;
+  color: var(--muted);
+}
+
+.banner {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+@media (max-width: 640px) {
+  main { width: min(100% - 24px, 880px); padding-top: 24px; }
+  .row, .account-top, .section-head { flex-direction: column; align-items: stretch; }
+  button, .status { width: fit-content; }
+}
