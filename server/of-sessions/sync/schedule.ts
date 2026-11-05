@@ -151,12 +151,14 @@ export function startSyncLoop(deps: {
   void (async () => {
     while (!stopped) {
       try {
-        const inProgressIds = deps.inProgressIds();
         const intervalMs = (await deps.intervalMin()) * 60_000;
+        const accounts = await deps.accounts();
+        if (stopped) return;
+        const inProgressIds = deps.inProgressIds();
         const pick = selectSyncAccount({
           now: now(),
           intervalMs,
-          accounts: await deps.accounts(),
+          accounts,
           inProgressIds,
         });
         if (stopped) return;
@@ -168,8 +170,7 @@ export function startSyncLoop(deps: {
         if (stopped) return;
         await sleep(marginMs(random, marginMinMs, marginMaxMs));
       } catch (error) {
-        const message = error instanceof Error ? error.message : "error";
-        console.info(`[fanlink:lectura] el planificador reintenta: ${message.slice(0, 200)}`);
+        console.info(`[fanlink:lectura] el planificador reintenta: ${redactLog(error)}`);
         await sleep(5_000);
       }
     }
@@ -179,6 +180,11 @@ export function startSyncLoop(deps: {
       stopped = true;
     },
   };
+}
+
+function redactLog(error: unknown): string {
+  const message = error instanceof Error ? error.message : "error";
+  return message.replace(/cookie|set-cookie|authorization|bearer\s+\S+|sess=[^\s;]+/gi, "[omitido]").slice(0, 180);
 }
 
 function attemptTime(account: ScheduleAccount): number {

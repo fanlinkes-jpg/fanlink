@@ -4,7 +4,7 @@ import type { ReadSql } from "./store.ts";
 const ORIGIN = "onlyfans";
 
 export type StoredThread = ChatThread & { creatorId: string; syncedAt: string };
-export type StoredChatMessage = ChatMessage & { syncedAt: string };
+export type StoredChatMessage = ChatMessage & { creatorId: string; syncedAt: string };
 export type ChatMeta = {
   creatorId: string;
   consecutiveFailures: number;
@@ -154,6 +154,7 @@ export async function listChats(
       syncedAt: iso(row.synced_at) ?? "",
     })),
     messages: messages.map((row) => ({
+      creatorId: row.creator_id,
       messageKey: row.message_key,
       threadKey: row.thread_key,
       fanKey: row.fan_key,

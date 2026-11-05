@@ -9,7 +9,7 @@ export function RealChatsPage() {
   const teamAccess = useCrm((s) => s.teamAccess);
   const [data, setData] = useState<CreatorChatList | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [threadKey, setThreadKey] = useState<string | null>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
   async function refresh() {
@@ -33,8 +33,11 @@ export function RealChatsPage() {
   const threads = (data?.threads ?? []).filter(
     (thread) => allowed.has(thread.creatorId) && (creatorId === "all" || thread.creatorId === creatorId),
   );
-  const selected = threads.find((thread) => thread.threadKey === threadKey) ?? threads[0] ?? null;
-  const messages = (data?.messages ?? []).filter((message) => message.threadKey === selected?.threadKey);
+  const selected =
+    threads.find((thread) => `${thread.creatorId}:${thread.threadKey}` === selectedKey) ?? threads[0] ?? null;
+  const messages = (data?.messages ?? []).filter(
+    (message) => message.creatorId === selected?.creatorId && message.threadKey === selected?.threadKey,
+  );
   const meta = data?.meta.find((item) => item.creatorId === selected?.creatorId);
   const running = selected ? data?.runningCreatorIds.includes(selected.creatorId) : false;
   const canSync =
@@ -57,7 +60,7 @@ export function RealChatsPage() {
               <li key={`${thread.creatorId}:${thread.threadKey}`}>
                 <button
                   type="button"
-                  onClick={() => setThreadKey(thread.threadKey)}
+                  onClick={() => setSelectedKey(`${thread.creatorId}:${thread.threadKey}`)}
                   className={`block w-full px-4 py-3 text-left ${selected?.threadKey === thread.threadKey ? "bg-[#f4f6fb]" : ""}`}
                 >
                   <span className="block font-medium">{thread.fanName ?? thread.fanHandle ?? "Fan"}</span>

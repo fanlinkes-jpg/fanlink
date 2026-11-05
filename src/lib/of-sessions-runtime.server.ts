@@ -227,9 +227,7 @@ export async function listCreatorReadViews(userId: string): Promise<CreatorReadL
     role: access.role,
     intervalMin: await readSyncIntervalMin(sql, intervalMinFromEnv(process.env.FANLINK_SYNC_INTERVAL_MIN)),
     chatIntervalMin: await readChatIntervalMin(sql, chatIntervalMinFromEnv(process.env.FANLINK_CHAT_SYNC_MIN)),
-    runningCreatorIds: accounts.flatMap((account) =>
-      account.creatorId && running.has(account.id) ? [account.creatorId] : [],
-    ),
+    runningCreatorIds: visibleRunning(accounts, access.role === "owner" ? null : new Set(access.creatorIds), running),
     creators: rows.map((row) => presentRead(access.role, row)),
   };
 }
@@ -265,9 +263,7 @@ export async function listCreatorChatViews(userId: string): Promise<CreatorChatL
   const stored = await listChats(sql, creatorIds);
   const running = new Set(sessions.readingIds());
   return {
-    runningCreatorIds: accounts.flatMap((account) =>
-      account.creatorId && running.has(account.id) ? [account.creatorId] : [],
-    ),
+    runningCreatorIds: visibleRunning(accounts, access.role === "owner" ? null : new Set(access.creatorIds), running),
     threads: stored.threads.map((thread) => ({
       creatorId: thread.creatorId,
       threadKey: thread.threadKey,
@@ -279,6 +275,7 @@ export async function listCreatorChatViews(userId: string): Promise<CreatorChatL
       unread: thread.unread,
     })),
     messages: stored.messages.map((message) => ({
+      creatorId: message.creatorId,
       threadKey: message.threadKey,
       messageKey: message.messageKey,
       fromFan: message.fromFan,
@@ -289,7 +286,7 @@ export async function listCreatorChatViews(userId: string): Promise<CreatorChatL
       creatorId: item.creatorId,
       syncedAt: item.syncedAt,
       status: item.status,
-      reason: item.reason,
+      reason: access.role === "owner" ? item.reason : item.reason?.split(". json:")[0] ?? null,
     })),
   };
 }
@@ -346,7 +343,7 @@ function presentRead(role: "owner" | "member", row: Awaited<ReturnType<typeof li
     creatorId: row.creatorId,
     earningsSyncedAt: owner ? row.earningsSyncedAt : null,
     fansSyncedAt: row.fansSyncedAt,
-    lastReason: row.lastReason,
+    lastReason: owner ? row.lastReason : row.lastReason?.split(". json:")[0] ?? null,
     lastAttemptAt: row.lastAttemptAt,
     consecutiveFailures: row.consecutiveFailures,
     lastStatus: row.lastStatus,
@@ -365,9 +362,21 @@ function presentRead(role: "owner" | "member", row: Awaited<ReturnType<typeof li
       displayName: item.displayName,
       subscribedAt: item.subscribedAt,
       status: item.status,
-      spentCents: item.spentCents,
+      spentCents: owner ? item.spentCents : null,
     })),
   };
+}
+
+function visibleRunning(
+  accounts: Array<{ id: string; creatorId: string | null }>,
+  allowed: Set<string> | null,
+  running: Set<string>,
+): string[] {
+  return accounts.flatMap((account) => {
+    if (!account.creatorId || !running.has(account.id)) return [];
+    if (allowed && !allowed.has(account.creatorId)) return [];
+    return [account.creatorId];
+  });
 }
 
 function toView(account: Account): CreatorSessionView | null {

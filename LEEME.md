@@ -109,7 +109,19 @@ export FANLINK_SESSION_KEY="$(openssl rand -base64 32)"
 npm run dev -- --port 8081 --host 127.0.0.1
 ```
 
-Abre `http://127.0.0.1:8081`. En Creadoras, Conectar abre Chromium. Comprobar puede tardar hasta medio minuto si la home no trae el usuario. No se leen métricas ni se envían mensajes.
+Abre `http://127.0.0.1:8081`. En Creadoras, Conectar abre Chromium. Comprobar puede tardar hasta medio minuto si la home no trae el usuario.
+
+## Prueba en el Mac con OnlyFans real
+
+Usa la clave que ya tienes. No generes otra. Misma terminal: Control+C, `git pull && npm install`, `npm run dev -- --port 8081 --host 127.0.0.1`. Abre `http://127.0.0.1:8081`.
+
+1. **Creadoras.** El handle de la ficha debe ser el de la cuenta. Conectar abre Chromium: entra tú, Fanlink no pide la contraseña. Pulsa Comprobar. Mira Sesión guardada, Conexión e Identidad. Si Identidad es No verificada, el texto pequeño dice por qué y no bloquea. Si es No coincide, no sincronices: es otra cuenta.
+2. **Sincronizar.** Una cuenta. Puede tardar cerca de un minuto. En la terminal no deben aparecer cookies ni tokens.
+3. **Analítica.** La dueña ve ingresos y fans, o «Sin sincronizar» si aún no hay lectura. Un miembro no ve cifras de ingresos. El estado dice en curso, OK o error, y «Última sincronización: hace X min».
+4. **Chat.** Conversaciones leídas, no el demo antiguo. Sincronizar chats fuerza el turno. No hay caja que envíe a OnlyFans.
+5. **Equipo.** Teléfono `+34…`, interruptor Avisos y minutos entre avisos. Sin claves de WhatsApp, el aviso sale como `simulado` en la terminal cuando un fan escribe.
+6. **Campañas.** Borrador con fans sincronizados: vista previa y guardar. El botón dice «Envío real desactivado» y no se pulsa.
+7. **Inicio, listas, vault y enlaces.** No son cifras de OnlyFans. Deben decir que están sin sincronizar o que son ejemplo local.
 
 ## Datos
 

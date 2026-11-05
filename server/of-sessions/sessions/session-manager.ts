@@ -271,7 +271,7 @@ export class SessionManager {
   }
 
   readCreatorData(accountId: string, includeEarnings: boolean): Promise<CollectedRead> {
-    if (this.reading.has(accountId)) {
+    if (this.reading.size > 0) {
       return Promise.resolve({
         earnings: [],
         fans: [],
@@ -303,7 +303,7 @@ export class SessionManager {
       jsonPaths: [],
       alreadyRunning: true,
     };
-    if (this.reading.has(accountId)) return Promise.resolve(busy);
+    if (this.reading.size > 0) return Promise.resolve(busy);
     this.reading.add(accountId);
     const job = this.readTail.then(() => this.readChatsNow(accountId)).finally(() => {
       this.reading.delete(accountId);

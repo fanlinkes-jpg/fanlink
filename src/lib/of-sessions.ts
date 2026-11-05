@@ -116,6 +116,7 @@ export type CreatorChatList = {
     unread: number;
   }>;
   messages: Array<{
+    creatorId: string;
     threadKey: string;
     messageKey: string;
     fromFan: boolean;
