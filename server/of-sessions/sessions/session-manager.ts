@@ -8,6 +8,7 @@ import {
   SessionCryptoError,
   writeEncryptedSession,
 } from "../crypto.ts";
+import { identityFromProbe } from "../identity.ts";
 import { messages, publicErrorMessage } from "../messages.ts";
 import type { AccountRepository } from "../store/repository.ts";
 import type { Account } from "../types.ts";
@@ -148,6 +149,47 @@ export class SessionManager {
       }
     }
     return this.options.store.get(accountId);
+  }
+
+  /**
+   * Comprueba la sesión guardada contra el sitio sin convertir ese resultado
+   * en el estado de cookies. La identidad solo se rellena si el adaptador
+   * declara un selector.
+   */
+  async inspectConnection(accountId: string): Promise<Account> {
+    assertAccountId(accountId);
+    await this.options.store.get(accountId);
+    const now = this.now().toISOString();
+    const verdict = await this.localVerdict(accountId);
+    if (verdict !== "valid") {
+      return this.options.store.update(accountId, {
+        connection: "rejected",
+        identityState: "unavailable",
+        identityLabel: null,
+        lastCheckedAt: now,
+        lastError: verdict === "missing" ? messages.noSession : messages.cookiesExpired,
+      });
+    }
+    try {
+      const outcome = await this.readProbe(accountId);
+      return this.options.store.update(accountId, {
+        connection: outcome.connection,
+        identityState: outcome.identityState,
+        identityLabel: outcome.identityLabel,
+        lastCheckedAt: now,
+        lastError: outcome.error,
+      });
+    } catch (error) {
+      const message = publicErrorMessage(error, messages.internal);
+      const inconclusive = message === messages.inconclusive;
+      return this.options.store.update(accountId, {
+        connection: inconclusive ? "inconclusive" : "rejected",
+        identityState: "unavailable",
+        identityLabel: null,
+        lastCheckedAt: now,
+        lastError: message,
+      });
+    }
   }
 
   async beginInteractiveLogin(accountId: string): Promise<Account> {
@@ -479,6 +521,55 @@ export class SessionManager {
       );
     }
     return hasLiveCookies(this.options.site, cookies, this.now().getTime());
+  }
+
+  private async readProbe(accountId: string): Promise<{
+    connection: "live" | "rejected" | "inconclusive";
+    identityState: "unavailable" | "verified";
+    identityLabel: string | null;
+    error: string | null;
+  }> {
+    const context = await this.newRestoredContext(accountId);
+    try {
+      const page = await context.newPage();
+      const response = await page.goto(this.options.site.probeUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: this.options.config.probeTimeoutMs,
+      });
+      const finalUrl = page.url();
+      if (this.options.site.isInconclusiveUrl?.(finalUrl)) {
+        return {
+          connection: "inconclusive",
+          identityState: "unavailable",
+          identityLabel: null,
+          error: messages.inconclusive,
+        };
+      }
+      const cookies = mapCookies(await context.cookies());
+      const loginFormVisible = await this.loginFormVisible(page);
+      const alive = this.sessionLooksAlive(
+        this.options.site.probeUrl,
+        response?.status() ?? 0,
+        finalUrl,
+        cookies,
+        loginFormVisible,
+      );
+      if (!alive) {
+        return {
+          connection: "rejected",
+          identityState: "unavailable",
+          identityLabel: null,
+          error: messages.sessionInvalid,
+        };
+      }
+      const selector = this.options.site.identitySelector;
+      const text = selector ? await page.locator(selector).first().innerText().catch(() => "") : null;
+      const identity = identityFromProbe(selector, text);
+      return { connection: "live", ...identity, error: null };
+    } finally {
+      this.openContexts.delete(context);
+      await context.close().catch(() => undefined);
+    }
   }
 
   private async newRestoredContext(accountId: string): Promise<BrowserContext> {

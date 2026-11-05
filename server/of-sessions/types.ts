@@ -1,4 +1,6 @@
 export type SessionStatus = "active" | "expired" | "pending_login";
+export type ConnectionStatus = "not_checked" | "live" | "rejected" | "inconclusive";
+export type IdentityState = "unavailable" | "verified";
 
 export interface Account {
   id: string;
@@ -9,6 +11,10 @@ export interface Account {
   loginInProgress: boolean;
   sessionRejected: boolean;
   hasStorageState: boolean;
+  /** Resultado de una comprobación explícita. No sustituye a `status`. */
+  connection: ConnectionStatus;
+  identityState: IdentityState;
+  identityLabel: string | null;
   createdAt: string;
   updatedAt: string;
   lastCheckedAt: string | null;
@@ -23,6 +29,9 @@ export type AccountPatch = Partial<
     | "loginInProgress"
     | "sessionRejected"
     | "hasStorageState"
+    | "connection"
+    | "identityState"
+    | "identityLabel"
     | "lastCheckedAt"
     | "lastError"
   >

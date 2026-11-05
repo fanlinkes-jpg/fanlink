@@ -1,5 +1,5 @@
 import { ClientOnly, Link, useNavigate, useRouterState } from "@tanstack/react-router";
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import {
   BarChart3,
   CalendarClock,
@@ -27,7 +27,7 @@ import {
 import { Toaster } from "sonner";
 import { cn } from "@/lib/cn";
 import { useCrm, type Perm } from "@/lib/crm";
-import { Select } from "@/components/ui";
+import { hasPerm } from "@/lib/access-policy";
 import { SessionSync } from "@/components/session-sync";
 import { UserButton } from "@/lib/auth/gates";
 
@@ -180,7 +180,6 @@ export function Splash() {
 }
 
 function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean }) {
-  const [ready, setReady] = useState(false);
   const [menu, setMenu] = useState<string | null>(null);
   const [mobile, setMobile] = useState(false);
   const path = useRouterState({ select: (s) => s.location.pathname });
@@ -188,52 +187,102 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
   const creators = useCrm((s) => s.creators);
   const creatorId = useCrm((s) => s.creatorId);
   const setCreator = useCrm((s) => s.setCreator);
-  const employees = useCrm((s) => s.employees);
-  const activeEmployeeId = useCrm((s) => s.activeEmployeeId);
-  const setEmployee = useCrm((s) => s.setEmployee);
   const fans = useCrm((s) => s.fans);
   const query = useCrm((s) => s.query);
   const setQuery = useCrm((s) => s.setQuery);
   const translate = useCrm((s) => s.translate);
   const setTranslate = useCrm((s) => s.setTranslate);
-  const employee = employees.find((e) => e.id === activeEmployeeId) ?? employees[0];
+  const workspaceReady = useCrm((s) => s.workspaceReady);
+  const workspaceNotice = useCrm((s) => s.workspaceNotice);
+  const teamAccess = useCrm((s) => s.teamAccess);
 
-  useEffect(() => {
-    let on = true;
-    const finish = () => {
-      if (on) setReady(true);
-    };
-    let unsubscribe = () => {};
-    try {
-      unsubscribe = useCrm.persist.onFinishHydration(finish);
-      if (useCrm.persist.hasHydrated()) finish();
-      const pending = useCrm.persist.rehydrate() as { then?: unknown } | void;
-      if (pending && typeof pending.then === "function") {
-        void Promise.resolve(pending).then(finish, finish);
-      } else {
-        finish();
-      }
-    } catch {
-      finish();
-    }
-    return () => {
-      on = false;
-      unsubscribe();
-    };
-  }, []);
-
-  if (!ready || !employee) return <Splash />;
-
-  const allowed = (items: Item[]) => items.filter((item) => !item.perm || employee.perms.includes(item.perm));
+  const allowed = (items: Item[]) => items.filter((item) => hasPerm(teamAccess, item.perm ?? "mensajes") || !item.perm);
   const currentOk = MENUS.flatMap((m) => m.items).every((item) => {
     const active = item.href === "/" ? path === "/" : path.startsWith(item.href);
     if (!active || !item.perm) return true;
-    return employee.perms.includes(item.perm);
+    return hasPerm(teamAccess, item.perm);
   });
 
   return (
-    <div className="flex h-dvh bg-bg text-fg">
+    <>
       <SessionSync />
+      {!workspaceReady || !teamAccess ? (
+        <Splash />
+      ) : (
+        <ShellFrame
+          bleed={bleed}
+          menu={menu}
+          setMenu={setMenu}
+          mobile={mobile}
+          setMobile={setMobile}
+          path={path}
+          navigate={navigate}
+          creators={creators}
+          creatorId={creatorId}
+          setCreator={setCreator}
+          fans={fans}
+          query={query}
+          setQuery={setQuery}
+          translate={translate}
+          setTranslate={setTranslate}
+          workspaceNotice={workspaceNotice}
+          teamAccess={teamAccess}
+          allowed={allowed}
+          currentOk={currentOk}
+        >
+          {children}
+        </ShellFrame>
+      )}
+    </>
+  );
+}
+
+function ShellFrame({
+  children,
+  bleed,
+  menu,
+  setMenu,
+  mobile,
+  setMobile,
+  path,
+  navigate,
+  creators,
+  creatorId,
+  setCreator,
+  fans,
+  query,
+  setQuery,
+  translate,
+  setTranslate,
+  workspaceNotice,
+  teamAccess,
+  allowed,
+  currentOk,
+}: {
+  children: ReactNode;
+  bleed?: boolean;
+  menu: string | null;
+  setMenu: (value: string | null) => void;
+  mobile: boolean;
+  setMobile: (value: boolean) => void;
+  path: string;
+  navigate: ReturnType<typeof useNavigate>;
+  creators: Array<{ id: string; name: string; hue: number }>;
+  creatorId: string;
+  setCreator: (id: string) => void;
+  fans: Array<{ creatorId: string; unread: number }>;
+  query: string;
+  setQuery: (value: string) => void;
+  translate: boolean;
+  setTranslate: (value: boolean) => void;
+  workspaceNotice: string | null;
+  teamAccess: { displayName: string; devMode: boolean };
+  allowed: (items: Item[]) => Item[];
+  currentOk: boolean;
+}) {
+
+  return (
+    <div className="flex h-dvh bg-bg text-fg">
       <aside className="relative z-50 hidden w-14 shrink-0 flex-col items-center gap-1 border-r border-line bg-surface py-3 md:flex">
         <Logo className="mb-2" />
         <Link
@@ -324,16 +373,9 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
               Todas
             </button>
           </div>
-          <Select
-            aria-label="Operar como"
-            value={activeEmployeeId}
-            onChange={(e) => setEmployee(e.target.value)}
-            className="hidden max-w-36 border-white/20 bg-white/10 text-white md:block"
-          >
-            {employees.map((e) => (
-              <option key={e.id} value={e.id}>{e.name.split(" ")[0]}</option>
-            ))}
-          </Select>
+          <span className="hidden max-w-40 truncate rounded-lg bg-white/10 px-2 py-1 text-xs md:inline" title={teamAccess.devMode ? "Modo local de un solo operador" : teamAccess.displayName}>
+            {teamAccess.displayName}
+          </span>
           <button
             aria-label="Traducción"
             onClick={() => setTranslate(translate === false)}
@@ -356,9 +398,13 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
           />
         </header>
         <main className={cn("min-h-0 flex-1", bleed ? "overflow-hidden" : "overflow-auto pb-16 md:pb-0")}>
+          {teamAccess.devMode && (
+            <p className="bg-[#fff6e8] px-4 py-2 text-xs text-[#8a5a12]">Modo local de un solo operador. Solo vale en localhost y no aísla a un equipo.</p>
+          )}
+          {workspaceNotice && <p className="bg-amber-50 px-4 py-2 text-xs text-amber-800">{workspaceNotice}</p>}
           {currentOk ? children : (
             <div className="grid h-full place-items-center p-6 text-center">
-              <p className="text-sm text-muted">{employee.name} no tiene acceso a esta sección.</p>
+              <p className="text-sm text-muted">{teamAccess.displayName} no tiene acceso a esta sección.</p>
             </div>
           )}
         </main>

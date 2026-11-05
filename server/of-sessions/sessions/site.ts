@@ -13,6 +13,11 @@ export interface SiteAdapter {
    * todavía no ha entrado (o la sesión ya no sirve).
    */
   loggedOutSelector?: string;
+  /**
+   * Selector de un nombre visible ya acordado con el sitio.
+   * Si no está, la identidad queda como no verificable.
+   */
+  identitySelector?: string;
   isDashboardUrl(url: string): boolean;
   isLoginUrl(url: string): boolean;
   isInconclusiveUrl?(url: string): boolean;

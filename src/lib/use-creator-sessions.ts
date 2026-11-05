@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  checkCreatorSession,
   connectCreatorSession,
   listCreatorSessions,
   type ConnectCreatorInput,
@@ -37,6 +38,20 @@ export function useCreatorSessions() {
     };
   }, [refresh]);
 
+  const check = useCallback(
+    async (creatorId: string) => {
+      try {
+        const view = await checkCreatorSession({ data: { creatorId } });
+        await refresh();
+        return view;
+      } catch (err) {
+        setError(sessionErrorText(err));
+        return null;
+      }
+    },
+    [refresh],
+  );
+
   const connect = useCallback(
     async (input: ConnectCreatorInput) => {
       const view = await connectCreatorSession({ data: input });
@@ -49,7 +64,7 @@ export function useCreatorSessions() {
   const byCreator = new Map(
     sessions.map((session) => [session.creatorId, session]),
   );
-  return { sessions, byCreator, ready, error, refresh, connect };
+  return { sessions, byCreator, ready, error, refresh, connect, check };
 }
 
 export function sessionErrorText(error: unknown): string {

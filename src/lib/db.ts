@@ -1,3 +1,5 @@
+import { mkdirSync } from "node:fs";
+import path from "node:path";
 import { pendingMigrations } from "../../scripts/migration-plan.mjs";
 
 /** Which database backend is active. */
@@ -105,13 +107,21 @@ function createNeonSql(): Promise<Sql> {
   return globalRef.__pgSqlPromise__;
 }
 
+/** Un solo proceso. Con `DATABASE_URL` se usa Postgres y este directorio no interviene. */
+export function pgliteDataDir(): string {
+  const configured = process.env.FANLINK_PGLITE_DIR?.trim();
+  return configured || path.join(process.cwd(), "data", "pglite");
+}
+
 async function createPgliteSql(): Promise<Sql> {
-  // Embedded Postgres, imported on demand so it never loads on the Neon path.
-  // One in-memory instance per process, shared across HMR module instances, so
-  // data survives source edits (it resets on dev-server restart).
+  // Embedded Postgres on disk so a restart of this process keeps the workspace.
+  // One instance per process. Dos procesos sobre el mismo directorio no son seguros:
+  // para varios servidores hace falta `DATABASE_URL`.
   globalRef.__pgliteInstance__ ??= (async () => {
     const { PGlite } = await import("@electric-sql/pglite");
-    const pg = new PGlite({
+    const dataDir = pgliteDataDir();
+    mkdirSync(dataDir, { recursive: true });
+    const pg = new PGlite(dataDir, {
       parsers: {
         [OID_INT8]: Number,
         [OID_DATE]: identity,
@@ -212,7 +222,7 @@ export async function getPglite(): Promise<import("@electric-sql/pglite").PGlite
 /**
  * Finish DB bootstrap before the server handles traffic.
  *
- * - **PGLite** (preview / no `DATABASE_URL`): open the in-memory DB and apply
+ * - **PGLite** (sin `DATABASE_URL`): abre `data/pglite` y aplica
  *   `migrations/*.sql`. Idempotent — concurrent callers share one promise.
  * - **Neon**: no-op (pool is created lazily on first query).
  *

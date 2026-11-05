@@ -101,8 +101,9 @@ export function MessagesPage() {
   const [localQuery, setLocalQuery] = useState("");
 
   const employee = employees.find((e) => e.id === activeEmployeeId);
-  const canPrice = employee?.perms.includes("precios") ?? false;
-  const canSend = employee?.perms.includes("mensajes") ?? false;
+  const teamAccess = useCrm((s) => s.teamAccess);
+  const canPrice = teamAccess?.role === "owner" || teamAccess?.perms.includes("precios") === true;
+  const canSend = teamAccess?.role === "owner" || teamAccess?.perms.includes("mensajes") === true;
   const creator = creators.find((c) => c.id === creatorId) ?? creators[0];
 
   const visible = useMemo(() => {

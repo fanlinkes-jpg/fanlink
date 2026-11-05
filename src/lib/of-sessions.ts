@@ -4,6 +4,8 @@ import type { SessionStatus } from "../../server/of-sessions/types.ts";
 
 export type { SessionStatus };
 export {
+  CONNECTION_LABEL,
+  IDENTITY_STATE_LABEL,
   SESSION_STATUS_LABEL,
   sessionActionLabel,
 } from "../../server/of-sessions/status.ts";
@@ -17,6 +19,9 @@ export type CreatorSessionView = {
   loginInProgress: boolean;
   sessionRejected: boolean;
   hasStorageState: boolean;
+  connection: "not_checked" | "live" | "rejected" | "inconclusive";
+  identityState: "unavailable" | "verified";
+  identityLabel: string | null;
   lastCheckedAt: string | null;
   lastError: string | null;
 };
@@ -33,11 +38,11 @@ export type ConnectCreatorInput = {
  */
 export const listCreatorSessions = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
-  .handler(async (): Promise<CreatorSessionView[]> => {
+  .handler(async ({ context }): Promise<CreatorSessionView[]> => {
     // Playwright y el disco solo se cargan en el servidor.
     const { listCreatorSessionViews } =
       await import("./of-sessions-runtime.server");
-    return listCreatorSessionViews();
+    return listCreatorSessionViews(context.userId);
   });
 
 /**
@@ -47,7 +52,15 @@ export const listCreatorSessions = createServerFn({ method: "GET" })
 export const connectCreatorSession = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((input: ConnectCreatorInput) => input)
-  .handler(async ({ data }): Promise<CreatorSessionView> => {
+  .handler(async ({ context, data }): Promise<CreatorSessionView> => {
     const { connectCreator } = await import("./of-sessions-runtime.server");
-    return connectCreator(data);
+    return connectCreator(context.userId, data);
+  });
+
+export const checkCreatorSession = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string }) => input)
+  .handler(async ({ context, data }): Promise<CreatorSessionView> => {
+    const { inspectCreatorSession } = await import("./of-sessions-runtime.server");
+    return inspectCreatorSession(context.userId, data.creatorId);
   });

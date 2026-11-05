@@ -42,7 +42,7 @@ const dashboardHtml = `<!doctype html>
     <title>Dashboard</title>
     <script>localStorage.setItem("fanlink_user","42");</script>
   </head>
-  <body><h1>Dashboard</h1></body>
+  <body><h1>Dashboard</h1><p id="fanlink-identity">Creadora de prueba</p></body>
 </html>`;
 
 const blankHtml = `<!doctype html>
@@ -171,6 +171,7 @@ export function createFixtureSite(origin: string): SiteAdapter {
     probeUrl: `${origin}/dashboard`,
     requiredCookies: ["auth_id", "sess"],
     loggedOutSelector: 'input[type="password"]',
+    identitySelector: "#fanlink-identity",
     isDashboardUrl(raw: string): boolean {
       return samePath(origin, raw, "/dashboard");
     },

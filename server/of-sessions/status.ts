@@ -6,6 +6,18 @@ export const SESSION_STATUS_LABEL: Record<SessionStatus, string> = {
   expired: "Expirada",
 };
 
+export const CONNECTION_LABEL = {
+  not_checked: "Sin comprobar",
+  live: "Aceptada",
+  rejected: "Rechazada",
+  inconclusive: "No concluyente",
+} as const;
+
+export const IDENTITY_STATE_LABEL = {
+  unavailable: "No verificada",
+  verified: "Verificada",
+} as const;
+
 export function sessionActionLabel(
   status: SessionStatus,
 ): "Conectar" | "Reconectar" {

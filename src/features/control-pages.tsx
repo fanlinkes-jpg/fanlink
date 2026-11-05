@@ -4,7 +4,9 @@ import { toast } from "sonner";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { isLast24h, money, pct, timeAgo } from "@/lib/format";
 import { messageValue, useCrm, type Platform, type Role } from "@/lib/crm";
-import { SESSION_STATUS_LABEL, sessionActionLabel, type SessionStatus } from "@/lib/of-sessions";
+import { CONNECTION_LABEL, IDENTITY_STATE_LABEL, SESSION_STATUS_LABEL, sessionActionLabel, type SessionStatus } from "@/lib/of-sessions";
+import { hasPerm } from "@/lib/access-policy";
+import { listTeam, updateStaffAccess } from "@/lib/workspace";
 import { useCreatorSessions } from "@/lib/use-creator-sessions";
 import { PLATFORMS } from "@/features/growth-pages";
 import { Badge, Button, Field, Panel, Select } from "@/components/ui";
@@ -202,6 +204,7 @@ const SHIFT_STYLE = {
 } as const;
 
 export function TeamPage() {
+  const creators = useCrm((s) => s.creators);
   const employees = useCrm((s) => s.employees);
   const messages = useCrm((s) => s.messages);
   const togglePerm = useCrm((s) => s.togglePerm);
@@ -217,8 +220,9 @@ export function TeamPage() {
     <div className="space-y-4 p-4 md:p-6">
       <div>
         <h1 className="font-display text-2xl font-semibold">Empleados</h1>
-        <p className="text-sm text-muted">Métricas del día y turnos de la semana. Pulsa un turno para cambiarlo.</p>
+        <p className="text-sm text-muted">Los turnos de abajo son de la consola. El acceso real está en el servidor y no cambia al elegir a otra persona.</p>
       </div>
+      <TeamAccessPanel creatorIds={creators.map((creator) => creator.id)} />
 
       <div className="overflow-x-auto rounded-xl border border-line bg-white">
         <p className="border-b border-line px-4 py-3 text-sm font-semibold">Métricas</p>
@@ -355,6 +359,8 @@ export function CreatorsPage() {
   const employees = useCrm((s) => s.employees);
   const addCreator = useCrm((s) => s.addCreator);
   const sessions = useCreatorSessions();
+  const teamAccess = useCrm((s) => s.teamAccess);
+  const canOperate = hasPerm(teamAccess, "equipo");
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [nick, setNick] = useState("");
@@ -466,7 +472,7 @@ export function CreatorsPage() {
         <table className="w-full min-w-[980px] border-separate border-spacing-0 overflow-hidden rounded-xl bg-white text-left text-sm">
           <thead>
             <tr className="text-xs text-[#6d7585]">
-              {["Creadora", "Apodo", "Etiqueta", "Sesión", "Cuenta", "ID", "Empleados", "Acción"].map((h) => (
+              {["Creadora", "Apodo", "Etiqueta", "Sesión guardada", "Conexión", "Identidad", "Cuenta", "ID", "Empleados", "Acción"].map((h) => (
                 <th key={h} className="border-b border-[#eef0f3] px-4 py-3 font-semibold">{h}</th>
               ))}
             </tr>
@@ -498,25 +504,45 @@ export function CreatorsPage() {
                       <span className="text-xs text-[#6d7585]">Cargando</span>
                     )}
                   </td>
+                  <td className="border-b border-[#f4f5f7] px-4 py-3">
+                    <span className="text-xs text-[#6d7585]">{live ? CONNECTION_LABEL[live.connection] : "Sin comprobar"}</span>
+                  </td>
+                  <td className="border-b border-[#f4f5f7] px-4 py-3">
+                    <span className="text-xs">
+                      {live?.identityState === "verified" && live.identityLabel
+                        ? `${live.identityLabel} · ${IDENTITY_STATE_LABEL.verified}`
+                        : IDENTITY_STATE_LABEL.unavailable}
+                    </span>
+                  </td>
                   <td className="border-b border-[#f4f5f7] px-4 py-3">{c.platform}</td>
                   <td className="border-b border-[#f4f5f7] px-4 py-3 text-[#3b6cff]">{c.handle}</td>
                   <td className="border-b border-[#f4f5f7] px-4 py-3">{names.length ? names.join(", ") : "Sin asignar"}</td>
                   <td className="border-b border-[#f4f5f7] px-4 py-3">
-                    <Link to="/conectar" search={{ creadora: c.id }} className="rounded-lg bg-[#ff7a2f] px-2 py-1 text-xs font-medium text-white">
-                      {action}
-                    </Link>
+                    <div className="flex gap-1">
+                      <Link to="/conectar" search={{ creadora: c.id }} className="rounded-lg bg-[#ff7a2f] px-2 py-1 text-xs font-medium text-white">
+                        {action}
+                      </Link>
+                      <button
+                        type="button"
+                        disabled={!canOperate || !live}
+                        onClick={() => void sessions.check(c.id)}
+                        className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs disabled:opacity-50"
+                      >
+                        Comprobar
+                      </button>
+                    </div>
                   </td>
                 </tr>
               );
             })}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-sm text-muted">Ninguna sesión con esos filtros.</td>
+                <td colSpan={10} className="px-4 py-8 text-center text-sm text-muted">Ninguna sesión con esos filtros.</td>
               </tr>
             )}
           </tbody>
         </table>
-        <p className="mt-3 text-xs text-[#6d7585]">El estado (activa, pendiente de login o expirada) sale de la sesión de OnlyFans guardada en este servidor. Conectar abre una ventana de Chromium para que la dueña entre. Fanlink no pide ni guarda la contraseña.</p>
+        <p className="mt-3 text-xs text-[#6d7585]">Sesión guardada es el archivo de cookies. Conexión es una comprobación aparte y no prueba ingresos ni mensajes. La identidad de OnlyFans queda en no verificada: esta versión no tiene una fuente de nombre acordada. Conectar abre Chromium y no pide la contraseña.</p>
       </div>
     </div>
   );
@@ -597,9 +623,111 @@ export function SettingsPage() {
         </ul>
       </Panel>
       <Panel title="Demostración">
-        <p className="mb-3 text-sm text-muted">Vuelve a los datos de ejemplo de Fanlink si has hecho pruebas.</p>
+        <p className="mb-3 text-sm text-muted">Vuelve a los datos de ejemplo de Fanlink si has hecho pruebas. En la base compartida eso lo guarda la dueña.</p>
         <Button variant="danger" onClick={() => { resetDemo(); toast.success("Datos restaurados"); }}>Restaurar demo</Button>
       </Panel>
     </div>
+  );
+}
+
+function MemberGrants({
+  person,
+  creatorIds,
+  onSave,
+}: {
+  person: { userId: string; displayName: string; perms: string[]; creatorIds: string[] };
+  creatorIds: string[];
+  onSave: (userId: string, perms: string[], creatorIds: string[]) => Promise<void>;
+}) {
+  const perms = ["mensajes", "precios", "vault", "campanas", "analitica", "equipo", "ajustes"] as const;
+  return (
+    <div className="mt-3 rounded-lg border border-line p-3 text-sm">
+      <p className="font-medium">{person.displayName}</p>
+      <div className="mt-2 flex flex-wrap gap-3">
+        {perms.map((perm) => (
+          <label key={perm} className="flex items-center gap-1 text-xs">
+            <input
+              type="checkbox"
+              checked={person.perms.includes(perm)}
+              onChange={() => {
+                const next = person.perms.includes(perm) ? person.perms.filter((item) => item !== perm) : [...person.perms, perm];
+                void onSave(person.userId, next, person.creatorIds);
+              }}
+            />
+            {perm}
+          </label>
+        ))}
+      </div>
+      <div className="mt-2 flex flex-wrap gap-3">
+        {creatorIds.map((creatorId) => (
+          <label key={creatorId} className="flex items-center gap-1 text-xs">
+            <input
+              type="checkbox"
+              checked={person.creatorIds.includes(creatorId)}
+              onChange={() => {
+                const next = person.creatorIds.includes(creatorId)
+                  ? person.creatorIds.filter((item) => item !== creatorId)
+                  : [...person.creatorIds, creatorId];
+                void onSave(person.userId, person.perms, next);
+              }}
+            />
+            {creatorId}
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TeamAccessPanel({ creatorIds }: { creatorIds: string[] }) {
+  const access = useCrm((s) => s.teamAccess);
+  const [staff, setStaff] = useState<Array<{ userId: string; displayName: string; role: "owner" | "member"; perms: string[]; creatorIds: string[] }>>([]);
+  const [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    if (access?.role !== "owner") return;
+    let cancel = false;
+    void listTeam()
+      .then((result) => {
+        if (!cancel) setStaff(result.staff);
+      })
+      .catch((error: unknown) => {
+        if (!cancel) setNotice(error instanceof Error ? error.message : "No se ha podido leer el equipo.");
+      });
+    return () => {
+      cancel = true;
+    };
+  }, [access?.role]);
+
+  if (!access) return null;
+
+  async function saveMember(userId: string, perms: string[], memberCreatorIds: string[]) {
+    setNotice("");
+    try {
+      await updateStaffAccess({ data: { userId, perms, creatorIds: memberCreatorIds } });
+      const result = await listTeam();
+      setStaff(result.staff);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "No se ha podido guardar el acceso.");
+    }
+  }
+
+  return (
+    <Panel title="Acceso del servidor">
+      <p className="text-sm">Sesión autenticada: {access.displayName}. {access.role === "owner" ? "Dueña" : "Miembro"}.</p>
+      {access.devMode && (
+        <p className="mt-2 text-sm text-[#8a5a12]">Modo local de un solo operador, solo en localhost. No separa a varias personas.</p>
+      )}
+      {access.role !== "owner" && (
+        <p className="mt-2 text-sm text-muted">Los permisos y las creadoras los asigna la dueña. No se eligen en un desplegable.</p>
+      )}
+      {notice && <p className="mt-2 text-sm text-[#8a5a12]">{notice}</p>}
+      {access.role === "owner" &&
+        staff
+          .filter((person) => person.role === "member")
+          .map((person) => (
+            <MemberGrants key={person.userId} person={person} creatorIds={creatorIds} onSave={saveMember} />
+          ))}
+    </Panel>
   );
 }

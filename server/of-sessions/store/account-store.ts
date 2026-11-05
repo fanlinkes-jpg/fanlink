@@ -65,6 +65,9 @@ export class AccountStore implements AccountRepository {
         loginInProgress: false,
         sessionRejected: false,
         hasStorageState: false,
+        connection: "not_checked",
+        identityState: "unavailable",
+        identityLabel: null,
         createdAt: timestamp,
         updatedAt: timestamp,
         lastCheckedAt: null,
@@ -175,6 +178,12 @@ function normalizeAccount(account: Account): Account {
     loginInProgress: Boolean(account.loginInProgress),
     sessionRejected: Boolean(account.sessionRejected),
     hasStorageState: Boolean(account.hasStorageState),
+    connection:
+      account.connection === "live" || account.connection === "rejected" || account.connection === "inconclusive"
+        ? account.connection
+        : "not_checked",
+    identityState: account.identityState === "verified" ? "verified" : "unavailable",
+    identityLabel: typeof account.identityLabel === "string" && account.identityLabel.trim() ? account.identityLabel : null,
     createdAt: account.createdAt,
     updatedAt: account.updatedAt,
     lastCheckedAt: account.lastCheckedAt ?? null,

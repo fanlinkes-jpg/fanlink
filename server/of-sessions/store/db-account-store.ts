@@ -22,6 +22,9 @@ interface AccountRow {
   login_in_progress: boolean | string | number;
   session_rejected: boolean | string | number;
   has_storage_state: boolean | string | number;
+  connection_status: string | null;
+  identity_state: string | null;
+  identity_label: string | null;
   last_checked_at: Date | string | null;
   last_error: string | null;
   created_at: Date | string;
@@ -88,6 +91,9 @@ export class DbAccountStore implements AccountRepository {
         loginInProgress: false,
         sessionRejected: false,
         hasStorageState: false,
+        connection: "not_checked",
+        identityState: "unavailable",
+        identityLabel: null,
         createdAt: timestamp,
         updatedAt: timestamp,
         lastCheckedAt: null,
@@ -135,8 +141,9 @@ export class DbAccountStore implements AccountRepository {
       await this.sql.query(
         `insert into of_session_account (
            id, creator_id, label, status, login_in_progress, session_rejected,
-           has_storage_state, last_checked_at, last_error, created_at, updated_at
-         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+           has_storage_state, connection_status, identity_state, identity_label,
+           last_checked_at, last_error, created_at, updated_at
+         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
          on conflict (id) do update set
            creator_id = excluded.creator_id,
            label = excluded.label,
@@ -144,6 +151,9 @@ export class DbAccountStore implements AccountRepository {
            login_in_progress = excluded.login_in_progress,
            session_rejected = excluded.session_rejected,
            has_storage_state = excluded.has_storage_state,
+           connection_status = excluded.connection_status,
+           identity_state = excluded.identity_state,
+           identity_label = excluded.identity_label,
            last_checked_at = excluded.last_checked_at,
            last_error = excluded.last_error,
            updated_at = excluded.updated_at`,
@@ -159,8 +169,9 @@ export class DbAccountStore implements AccountRepository {
     await this.sql.query(
       `insert into of_session_account (
          id, creator_id, label, status, login_in_progress, session_rejected,
-         has_storage_state, last_checked_at, last_error, created_at, updated_at
-       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+         has_storage_state, connection_status, identity_state, identity_label,
+         last_checked_at, last_error, created_at, updated_at
+       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
       accountParams(account),
     );
   }
@@ -184,6 +195,9 @@ function accountParams(account: Account): unknown[] {
     account.loginInProgress,
     account.sessionRejected,
     account.hasStorageState,
+    account.connection,
+    account.identityState,
+    account.identityLabel,
     account.lastCheckedAt,
     account.lastError,
     account.createdAt,
@@ -200,6 +214,12 @@ function rowToAccount(row: AccountRow): Account {
     loginInProgress: asBool(row.login_in_progress),
     sessionRejected: asBool(row.session_rejected),
     hasStorageState: asBool(row.has_storage_state),
+    connection:
+      row.connection_status === "live" || row.connection_status === "rejected" || row.connection_status === "inconclusive"
+        ? row.connection_status
+        : "not_checked",
+    identityState: row.identity_state === "verified" ? "verified" : "unavailable",
+    identityLabel: row.identity_label ?? null,
     createdAt: asIso(row.created_at),
     updatedAt: asIso(row.updated_at),
     lastCheckedAt:

@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { createJSONStorage, persist } from "zustand/middleware";
 import { isLast24h } from "@/lib/format";
 
 export type Platform = "OnlyFans" | "Fansly" | "Fanvue" | "MYM";
@@ -254,20 +253,19 @@ type CrmState = DataSlice & {
   setNotify: (on: boolean) => void;
   setAgency: (name: string) => void;
   resetDemo: () => void;
+  workspaceReady: boolean;
+  workspaceNotice: string | null;
+  teamAccess: {
+    userId: string;
+    role: "owner" | "member";
+    perms: string[];
+    creatorIds: string[];
+    displayName: string;
+    devMode: boolean;
+  } | null;
 };
 
 const uid = () => Math.random().toString(36).slice(2, 9);
-
-const fanlinkStorage = createJSONStorage(() => ({
-  getItem: (name) =>
-    Promise.resolve(typeof window === "undefined" ? null : window.localStorage.getItem(name)),
-  setItem: (name, value) => {
-    if (typeof window !== "undefined") window.localStorage.setItem(name, value);
-  },
-  removeItem: (name) => {
-    if (typeof window !== "undefined") window.localStorage.removeItem(name);
-  },
-}));
 
 const REPLIES = [
   "Me interesa, mándame los detalles.",
@@ -372,10 +370,11 @@ export function suggestReplies(fan: Fan | undefined, copilot: boolean) {
   ];
 }
 
-export const useCrm = create<CrmState>()(
-  persist(
-    (set, get) => ({
+export const useCrm = create<CrmState>()((set, get) => ({
       ...freshData(),
+      workspaceReady: false,
+      workspaceNotice: null,
+      teamAccess: null,
       setCreator: (id) => set({ creatorId: id }),
       setTab: (tab) => set({ inboxTab: tab }),
       setQuery: (q) => set({ query: q }),
@@ -624,10 +623,7 @@ export const useCrm = create<CrmState>()(
       setNotify: (on) => set({ notifyShifts: on }),
       setAgency: (name) => set({ agency: name }),
       resetDemo: () => set(freshData()),
-    }),
-    { name: "fanlink-management-v2", skipHydration: true, storage: fanlinkStorage },
-  ),
-);
+}));
 
 export function revenue24h(messages: Msg[]) {
   return messages.filter((m) => isLast24h(m.at)).reduce((sum, m) => sum + messageValue(m), 0);
