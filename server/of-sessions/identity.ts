@@ -1,3 +1,4 @@
+import { messages } from "./messages.ts";
 import type { IdentityState } from "./types.ts";
 
 /**
@@ -32,8 +33,15 @@ export type IdentityNotes = {
   usersMeUnreadable: boolean;
   usersMeMissingUsername: boolean;
   redirectedToLogin: boolean;
+  guest: boolean;
+  sawLoginChallenge: boolean;
   jsonPaths: string[];
 };
+
+export type UsersMeVerdict =
+  | { kind: "logged_in"; identity: ReadIdentity }
+  | { kind: "guest" }
+  | { kind: "unknown" };
 
 const USERNAME_MAX = 80;
 const NAME_MAX = 80;
@@ -98,16 +106,55 @@ export function jsonUrlWithoutSecrets(url: string): string | null {
   }
 }
 
+export function isLoginChallengeUrl(url: string): boolean {
+  const path = pathnameOf(url);
+  if (!path) return false;
+  return path.includes("/webauthn/login") || path.includes("/posts/login") || path.includes("/login/options");
+}
+
+/**
+ * users/me de invitado no tiene username, o trae isAuth/isGuest en falso.
+ * Eso no es una identidad pendiente: la sesión no vale para OnlyFans.
+ */
+export function usersMeVerdict(value: unknown): UsersMeVerdict {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { kind: "unknown" };
+  const record = value as Record<string, unknown>;
+  const user = userRecord(value) ?? record;
+  if (isGuest(user) || isGuest(record)) return { kind: "guest" };
+  const identity = identityFromUserJson(value);
+  if (!identity?.username) {
+    if (
+      "isAuth" in record ||
+      "isAuth" in user ||
+      "isAuthenticated" in record ||
+      "isAuthenticated" in user ||
+      "ip" in record ||
+      "isGuest" in record ||
+      "guest" in record
+    ) {
+      return { kind: "guest" };
+    }
+    return { kind: "unknown" };
+  }
+  return { kind: "logged_in", identity };
+}
+
 export function identityFailureReason(notes: IdentityNotes): string {
+  if (notes.redirectedToLogin || notes.guest || notes.sawLoginChallenge) return messages.loginRequired;
   let reason = "no se pudo leer el usuario";
-  if (notes.redirectedToLogin) reason = "redirigido a login";
-  else if (notes.usersMeUnreadable) reason = "respuesta users/me no legible";
+  if (notes.usersMeUnreadable) reason = "respuesta users/me no legible";
   else if (notes.usersMeMissingUsername) reason = "campo username ausente";
   else if (!notes.sawUsersMe) reason = "no hubo respuesta users/me";
-  if (!notes.redirectedToLogin) reason = `${reason}. sin usuario en el estado ni en el menú`;
+  reason = `${reason}. sin usuario en el estado ni en el menú`;
   const paths = [...new Set(notes.jsonPaths)].filter((path) => !path.includes("?")).slice(0, 8);
   if (paths.length) reason = `${reason}. json: ${paths.join(", ")}`;
   return reason.slice(0, REASON_MAX);
+}
+
+function isGuest(record: Record<string, unknown>): boolean {
+  if (record.isAuth === false || record.isAuthenticated === false) return true;
+  if (record.isGuest === true || record.guest === true) return true;
+  return false;
 }
 
 export function identityFromUserJson(value: unknown): ReadIdentity | null {

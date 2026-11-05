@@ -1,6 +1,19 @@
 import { chromium, type BrowserContext } from "playwright";
 import { messages } from "../messages.ts";
 
+/**
+ * La misma huella en Conectar, Comprobar, Sincronizar y Chats.
+ * OnlyFans ata la sesión al perfil: un Chromium nuevo, headless o con otro
+ * user agent, recibe users/me de invitado aunque las cookies sigan guardadas.
+ */
+export const BROWSER_FINGERPRINT = {
+  userAgent:
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  viewport: { width: 1440, height: 900 },
+  locale: "es-ES",
+  timezoneId: "Europe/Madrid",
+} as const;
+
 export interface ManagedBrowser {
   newContext(options: { storageState: string }): Promise<BrowserContext>;
   close(): Promise<void>;
@@ -23,16 +36,23 @@ export function createPlaywrightFactory(): BrowserFactory {
     async launchPersistentContext(userDataDir, options) {
       return chromium.launchPersistentContext(userDataDir, {
         headless: options.headless,
-        viewport: { width: 1280, height: 800 },
-        locale: "es-ES",
-        timezoneId: "Europe/Madrid",
+        userAgent: BROWSER_FINGERPRINT.userAgent,
+        viewport: BROWSER_FINGERPRINT.viewport,
+        locale: BROWSER_FINGERPRINT.locale,
+        timezoneId: BROWSER_FINGERPRINT.timezoneId,
       });
     },
     async launch() {
       const browser = await chromium.launch({ headless: true });
       return {
         newContext(options) {
-          return browser.newContext({ storageState: options.storageState });
+          return browser.newContext({
+            storageState: options.storageState,
+            userAgent: BROWSER_FINGERPRINT.userAgent,
+            viewport: BROWSER_FINGERPRINT.viewport,
+            locale: BROWSER_FINGERPRINT.locale,
+            timezoneId: BROWSER_FINGERPRINT.timezoneId,
+          });
         },
         close() {
           return browser.close();

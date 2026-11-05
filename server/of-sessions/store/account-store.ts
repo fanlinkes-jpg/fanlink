@@ -184,7 +184,10 @@ function normalizeAccount(account: Account): Account {
     sessionRejected: Boolean(account.sessionRejected),
     hasStorageState: Boolean(account.hasStorageState),
     connection:
-      account.connection === "live" || account.connection === "rejected" || account.connection === "inconclusive"
+      account.connection === "live" ||
+      account.connection === "rejected" ||
+      account.connection === "inconclusive" ||
+      account.connection === "login_required"
         ? account.connection
         : "not_checked",
     identityState:

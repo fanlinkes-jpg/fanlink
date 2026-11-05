@@ -11,6 +11,7 @@ export const CONNECTION_LABEL = {
   live: "Aceptada",
   rejected: "Rechazada",
   inconclusive: "No concluyente",
+  login_required: "Caducada",
 } as const;
 
 export const IDENTITY_STATE_LABEL = {

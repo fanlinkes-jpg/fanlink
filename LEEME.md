@@ -115,8 +115,8 @@ Abre `http://127.0.0.1:8081`. En Creadoras, Conectar abre Chromium. Comprobar pu
 
 Usa la clave que ya tienes. No generes otra. Misma terminal: Control+C, `git pull && npm install`, `npm run dev -- --port 8081 --host 127.0.0.1`. Abre `http://127.0.0.1:8081`.
 
-1. **Creadoras.** El handle de la ficha debe ser el de la cuenta. Conectar abre Chromium: entra tú, Fanlink no pide la contraseña. Pulsa Comprobar. Mira Sesión guardada, Conexión e Identidad. Si Identidad es No verificada, el texto pequeño dice por qué y no bloquea. Si es No coincide, no sincronices: es otra cuenta.
-2. **Sincronizar.** Una cuenta. Puede tardar cerca de un minuto. En la terminal no deben aparecer cookies ni tokens.
+1. **Creadoras.** El handle de la ficha debe ser el de la cuenta. Si Conexión sale Caducada o el texto dice que OnlyFans pide iniciar sesión, pulsa Reconectar. Entra tú, incluido el segundo factor. La ventana se cierra sola solo cuando `users/me` trae tu username. Luego Comprobar y, si Conexión es Aceptada, Sincronizar. Si Identidad es No verificada, el texto pequeño dice por qué y no bloquea. Si es No coincide, no sincronices: es otra cuenta.
+2. **Sincronizar.** Una cuenta. Puede tardar cerca de un minuto. En la terminal no deben aparecer cookies ni tokens. Si OnlyFans redirige al login, Sesión guardada pasa a Expirada y el aviso es «OnlyFans pide iniciar sesión: pulsa Reconectar».
 3. **Analítica.** La dueña ve ingresos y fans, o «Sin sincronizar» si aún no hay lectura. Un miembro no ve cifras de ingresos. El estado dice en curso, OK o error, y «Última sincronización: hace X min».
 4. **Chat.** Conversaciones leídas, no el demo antiguo. Sincronizar chats fuerza el turno. No hay caja que envíe a OnlyFans.
 5. **Equipo.** Teléfono `+34…`, interruptor Avisos y minutos entre avisos. Sin claves de WhatsApp, el aviso sale como `simulado` en la terminal cuando un fan escribe.
@@ -144,7 +144,7 @@ Con Postgres (`DATABASE_URL`) la tabla persiste. Sin esa variable el CRM usa el 
 - `FANLINK_OPEN_LOGIN_ON_INVALIDATE=true` — reabre Chromium si la sesión deja de valer. En el CRM, el valor por defecto es no reabrir.
 - `DISPLAY` o `WAYLAND_DISPLAY` — escritorio para la ventana de login.
 
-La ventana de login no es headless. Las comprobaciones en segundo plano, si se lanzan, usan el JSON cifrado.
+La ventana de login no es headless. Comprobar, Sincronizar y Chats reabren el mismo perfil de Chromium (`data/profiles/<cuenta>`) con el mismo user agent, viewport, idioma `es-ES` y zona `Europe/Madrid`, y el mismo modo visible o headless que Conectar. No basta el archivo de cookies: OnlyFans puede tratar un navegador distinto como invitado y pedir login (`users/me` sin username, `webauthn/login` o `/posts/login`). La sesión solo se guarda cuando `users/me` trae un username. Si pide iniciar sesión, Conexión pasa a **Caducada** y el texto es «OnlyFans pide iniciar sesión: pulsa Reconectar». Las rutas vistas quedan en el log del servidor.
 
 ## Pruebas
 

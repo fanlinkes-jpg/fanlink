@@ -19,7 +19,7 @@ export type CreatorSessionView = {
   loginInProgress: boolean;
   sessionRejected: boolean;
   hasStorageState: boolean;
-  connection: "not_checked" | "live" | "rejected" | "inconclusive";
+  connection: "not_checked" | "live" | "rejected" | "inconclusive" | "login_required";
   identityState: "unavailable" | "verified" | "mismatch";
   identityLabel: string | null;
   identityHandle: string | null;

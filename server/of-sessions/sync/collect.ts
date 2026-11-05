@@ -1,5 +1,6 @@
 import type { BrowserContext, Page } from "playwright";
-import { jsonUrlWithoutSecrets } from "../identity.ts";
+import { isCurrentUserResponseUrl, isLoginChallengeUrl, jsonUrlWithoutSecrets, usersMeVerdict } from "../identity.ts";
+import { messages } from "../messages.ts";
 import type { SiteAdapter } from "../sessions/site.ts";
 import {
   classifyJsonPath,
@@ -19,6 +20,7 @@ export type CollectedRead = {
   jsonPaths: string[];
   earningsCaptured: boolean;
   fansCaptured: boolean;
+  loginRequired?: boolean;
   alreadyRunning?: boolean;
 };
 
@@ -38,6 +40,7 @@ export async function collectCreatorRead(
     earnings: [] as EarningRow[],
     fans: [] as FanRow[],
     redirected: false,
+    loginRequired: false,
     earningsUrl: false,
     fansUrl: false,
   };
@@ -61,16 +64,21 @@ export async function collectCreatorRead(
     if (notes.fans.length === 0 && markers) {
       notes.fans = parseFansDom(markers.fans, now);
     }
-    const reason = readFailureReason({
-      redirected: notes.redirected,
-      wantEarnings: options.includeEarnings,
-      earningsUrl: notes.earningsUrl,
-      earningsRows: notes.earnings.length > 0,
-      fansUrl: notes.fansUrl,
-      fansRows: notes.fans.length > 0,
-      jsonPaths: notes.paths,
-    });
-    if (reason) console.info(`[fanlink:lectura] ${reason}`);
+    const loginRequired = notes.loginRequired || (site.id === "onlyfans" && notes.redirected);
+    const reason = loginRequired
+      ? messages.loginRequired
+      : readFailureReason({
+          redirected: notes.redirected,
+          wantEarnings: options.includeEarnings,
+          earningsUrl: notes.earningsUrl,
+          earningsRows: notes.earnings.length > 0,
+          fansUrl: notes.fansUrl,
+          fansRows: notes.fans.length > 0,
+          jsonPaths: notes.paths,
+        });
+    if (reason) {
+      console.info(`[fanlink:lectura] ${reason}${notes.paths.length ? ` | json: ${notes.paths.join(", ")}` : ""}`);
+    }
     return {
       earnings: notes.earnings,
       fans: notes.fans.slice(0, 200),
@@ -78,6 +86,7 @@ export async function collectCreatorRead(
       jsonPaths: notes.paths,
       earningsCaptured: notes.earnings.length > 0,
       fansCaptured: notes.fans.length > 0,
+      loginRequired,
     };
   } finally {
     context.off("response", onResponse);
@@ -121,17 +130,28 @@ async function observe(
     fans: FanRow[];
     earningsUrl: boolean;
     fansUrl: boolean;
+    loginRequired: boolean;
   },
   now: Date,
 ): Promise<void> {
   let url = "";
   try {
     url = response.url();
+    if (isLoginChallengeUrl(url)) notes.loginRequired = true;
     const kind = classifyJsonPath(url);
     const type = (response.headers()["content-type"] ?? "").toLowerCase();
     const path = jsonUrlWithoutSecrets(url);
-    if (path && (type.includes("json") || kind !== "other") && !notes.paths.includes(path) && notes.paths.length < 20) {
+    const usersMe = isCurrentUserResponseUrl(url);
+    if (path && (type.includes("json") || kind !== "other" || usersMe) && !notes.paths.includes(path) && notes.paths.length < 20) {
       notes.paths.push(path);
+    }
+    if (usersMe && (!type || type.includes("json") || type.includes("text"))) {
+      const rawUser = await response.text();
+      if (rawUser.length <= 1_500_000) {
+        const verdict = usersMeVerdict(JSON.parse(rawUser) as unknown);
+        if (verdict.kind === "guest") notes.loginRequired = true;
+      }
+      return;
     }
     if (kind === "other") return;
     if (kind === "earnings") notes.earningsUrl = true;

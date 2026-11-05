@@ -3,6 +3,7 @@ export const messages = {
   loginClosed: "La ventana de login se cerró antes de llegar al dashboard",
   loginCancelled: "El login se canceló",
   sessionInvalid: "OnlyFans ha invalidado la sesión",
+  loginRequired: "OnlyFans pide iniciar sesión: pulsa Reconectar",
   cookiesExpired: "Las cookies de la sesión han caducado",
   noSession: "No hay sesión guardada",
   loginInProgress: "El login está en curso en la ventana del navegador",

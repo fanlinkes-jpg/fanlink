@@ -1,5 +1,5 @@
 export type SessionStatus = "active" | "expired" | "pending_login";
-export type ConnectionStatus = "not_checked" | "live" | "rejected" | "inconclusive";
+export type ConnectionStatus = "not_checked" | "live" | "rejected" | "inconclusive" | "login_required";
 export type IdentityState = "unavailable" | "verified" | "mismatch";
 
 export interface Account {

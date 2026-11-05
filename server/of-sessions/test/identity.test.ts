@@ -8,6 +8,8 @@ import {
   identityFromStateCandidates,
   identityFromUserJson,
   isCurrentUserResponseUrl,
+  isLoginChallengeUrl,
+  usersMeVerdict,
   jsonUrlWithoutSecrets,
   judgeIdentityMatch,
   normalizeHandle,
@@ -48,12 +50,24 @@ test("el DOM solo aporta identidad si el adaptador declaró selector", () => {
   });
 });
 
+test("users/me de invitado no es una cuenta logueada", () => {
+  assert.equal(usersMeVerdict({ isAuth: false, id: 0 }).kind, "guest");
+  assert.equal(usersMeVerdict({ id: 1, ip: "1.2.3.4" }).kind, "guest");
+  assert.equal(usersMeVerdict({ id: 5, name: "Sin handle" }).kind, "unknown");
+  assert.equal(usersMeVerdict({ isAuth: true, id: 9, username: "bigpoppa1111", name: "Big" }).kind, "logged_in");
+  const loggedIn = usersMeVerdict({ id: 9, username: "creadora", name: "Creadora" });
+  assert.equal(loggedIn.kind === "logged_in" ? loggedIn.identity.username : null, "creadora");
+});
+
 test("acepta /users/me con prefijo y query, y la ruta guardada no lleva secretos", () => {
   const url = "https://onlyfans.com/api2/v2/users/me?view=full&appToken=no-guardar";
   assert.equal(isCurrentUserResponseUrl(url), true);
   assert.equal(jsonUrlWithoutSecrets(url), "https://onlyfans.com/api2/v2/users/me");
   assert.equal(jsonUrlWithoutSecrets("https://user:secret@onlyfans.com/api2/v2/users/me"), null);
   assert.equal(isCurrentUserResponseUrl("https://onlyfans.com/api2/v2/users/99"), false);
+  assert.equal(isLoginChallengeUrl("https://onlyfans.com/api2/v2/webauthn/login/options"), true);
+  assert.equal(isLoginChallengeUrl("https://onlyfans.com/api2/v2/posts/login"), true);
+  assert.equal(isLoginChallengeUrl("https://onlyfans.com/login"), false);
 });
 
 test("la razón de identidad no incluye query ni cuerpos", () => {
@@ -62,6 +76,8 @@ test("la razón de identidad no incluye query ni cuerpos", () => {
     usersMeUnreadable: false,
     usersMeMissingUsername: false,
     redirectedToLogin: false,
+    guest: false,
+    sawLoginChallenge: false,
     jsonPaths: [
       "https://onlyfans.com/api2/v2/init",
       "https://onlyfans.com/api2/v2/users/me?appToken=no-guardar",
@@ -77,19 +93,23 @@ test("la razón de identidad no incluye query ni cuerpos", () => {
       usersMeUnreadable: false,
       usersMeMissingUsername: true,
       redirectedToLogin: false,
+      guest: false,
+      sawLoginChallenge: false,
       jsonPaths: [],
     }),
     /campo username ausente/,
   );
-  assert.match(
+  assert.equal(
     identityFailureReason({
-      sawUsersMe: false,
+      sawUsersMe: true,
       usersMeUnreadable: false,
-      usersMeMissingUsername: false,
-      redirectedToLogin: true,
-      jsonPaths: [],
+      usersMeMissingUsername: true,
+      redirectedToLogin: false,
+      guest: true,
+      sawLoginChallenge: true,
+      jsonPaths: ["https://onlyfans.com/api2/v2/users/me"],
     }),
-    /redirigido a login/,
+    "OnlyFans pide iniciar sesión: pulsa Reconectar",
   );
 });
 

@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { chmod, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
 import type { DisplayEnv, FanlinkConfig } from "../config.ts";
@@ -13,8 +13,9 @@ import {
   identityFromDom,
   identityFromMenu,
   identityFromStateCandidates,
-  identityFromUserJson,
   isCurrentUserResponseUrl,
+  isLoginChallengeUrl,
+  usersMeVerdict,
   jsonUrlWithoutSecrets,
   judgeIdentityMatch,
   readPageSignals,
@@ -196,8 +197,10 @@ export class SessionManager {
     }
     try {
       const outcome = await this.readProbe(accountId, expectedHandle);
+      const loginRequired = outcome.connection === "login_required";
       return this.options.store.update(accountId, {
         connection: outcome.connection,
+        ...(loginRequired ? { status: "expired" as const, sessionRejected: true } : {}),
         identityState: outcome.identityState,
         identityLabel: outcome.identityLabel,
         identityHandle: outcome.identityHandle,
@@ -268,6 +271,25 @@ export class SessionManager {
    */
   readingIds(): string[] {
     return [...this.reading];
+  }
+
+  /** La cookie sigue en disco, pero OnlyFans ha pedido login. */
+  async markLoginRequired(accountId: string): Promise<Account> {
+    const now = this.now().toISOString();
+    return this.options.store.update(accountId, {
+      status: "expired",
+      connection: "login_required",
+      sessionRejected: true,
+      identityState: "unavailable",
+      identityLabel: null,
+      identityHandle: null,
+      identityName: null,
+      identityUserId: null,
+      identityCheckedAt: now,
+      identityReason: messages.loginRequired,
+      lastCheckedAt: now,
+      lastError: messages.loginRequired,
+    });
   }
 
   readCreatorData(accountId: string, includeEarnings: boolean): Promise<CollectedRead> {
@@ -533,6 +555,22 @@ export class SessionManager {
         return;
       }
       const page = context.pages()[0] ?? (await context.newPage());
+      let sawLoggedInUser = false;
+      const loginPending: Promise<void>[] = [];
+      context.on("response", (response) => {
+        loginPending.push(
+          (async () => {
+            if (!isCurrentUserResponseUrl(response.url())) return;
+            try {
+              const verdict = usersMeVerdict(JSON.parse(await response.text()) as unknown);
+              if (verdict.kind === "logged_in") sawLoggedInUser = true;
+              if (verdict.kind === "guest") sawLoggedInUser = false;
+            } catch {
+              // Una respuesta que no es el usuario actual no decide el login.
+            }
+          })(),
+        );
+      });
       await page.goto(this.options.site.loginUrl, {
         waitUntil: "domcontentloaded",
         timeout: this.options.config.probeTimeoutMs,
@@ -541,7 +579,7 @@ export class SessionManager {
       if (this.options.afterLoginPageOpen) {
         await this.options.afterLoginPageOpen(page, accountId);
       }
-      const dashboard = await this.waitForDashboard(context);
+      const dashboard = await this.waitForDashboard(context, () => sawLoggedInUser, loginPending);
       await dashboard
         .waitForLoadState("load", { timeout: 15_000 })
         .catch(() => undefined);
@@ -580,7 +618,11 @@ export class SessionManager {
     }
   }
 
-  private async waitForDashboard(context: BrowserContext): Promise<Page> {
+  private async waitForDashboard(
+    context: BrowserContext,
+    loggedIn: () => boolean,
+    pending: Promise<void>[],
+  ): Promise<Page> {
     const deadline = Date.now() + this.options.config.loginTimeoutMs;
     while (Date.now() < deadline) {
       if (this.closed) throw new Error(messages.loginCancelled);
@@ -594,7 +636,7 @@ export class SessionManager {
       if (openPages.length === 0) throw new Error(messages.loginClosed);
       for (const page of openPages) {
         try {
-          if (await this.pageHasSession(page)) return page;
+          if (await this.pageHasSession(page, loggedIn, pending)) return page;
         } catch {
           // La página puede estar navegando. Se reintenta.
         }
@@ -604,7 +646,12 @@ export class SessionManager {
     throw new Error(messages.loginTimeout);
   }
 
-  private async pageHasSession(page: Page): Promise<boolean> {
+  private async pageHasSession(
+    page: Page,
+    loggedIn: () => boolean,
+    pending: Promise<void>[],
+  ): Promise<boolean> {
+    await drain(pending);
     const cookies = mapCookies(await page.context().cookies());
     if (
       !this.options.site.isAuthenticated(
@@ -615,6 +662,7 @@ export class SessionManager {
     )
       return false;
     if (await this.loginFormVisible(page)) return false;
+    if (this.options.site.id === "onlyfans" && !loggedIn()) return false;
     return true;
   }
 
@@ -653,7 +701,7 @@ export class SessionManager {
     accountId: string,
     expectedHandle: string,
   ): Promise<{
-    connection: "live" | "rejected" | "inconclusive";
+    connection: "live" | "rejected" | "inconclusive" | "login_required";
     identityState: "unavailable" | "verified" | "mismatch";
     identityLabel: string | null;
     identityHandle: string | null;
@@ -670,6 +718,8 @@ export class SessionManager {
       usersMeUnreadable: false,
       usersMeMissingUsername: false,
       redirectedToLogin: false,
+      guest: false,
+      sawLoginChallenge: false,
     };
     const pending: Promise<void>[] = [];
     const onResponse = (response: { url(): string; headers(): Record<string, string>; text(): Promise<string> }) => {
@@ -693,6 +743,15 @@ export class SessionManager {
       const cookies = mapCookies(await context.cookies());
       const loginFormVisible = await this.loginFormVisible(page);
       if (loginFormVisible || this.options.site.isLoginUrl(first.finalUrl)) notes.redirectedToLogin = true;
+      if (this.sessionNeedsLogin(notes, loginFormVisible)) {
+        this.logLoginRequired(notes);
+        return {
+          connection: "login_required",
+          ...blank,
+          identityReason: messages.loginRequired,
+          error: messages.loginRequired,
+        };
+      }
       const alive = this.sessionLooksAlive(
         this.options.site.probeUrl,
         first.status,
@@ -753,7 +812,7 @@ export class SessionManager {
       delay(budget),
     ]);
     const deadline = Date.now() + budget;
-    while (Date.now() < deadline && notes.identities.length === 0) {
+    while (Date.now() < deadline && notes.identities.length === 0 && !notes.guest && !notes.sawLoginChallenge) {
       await delay(200);
       await drain(pending);
     }
@@ -797,6 +856,7 @@ export class SessionManager {
       if (jsonPath && (type.includes("json") || usersMe) && !notes.jsonPaths.includes(jsonPath) && notes.jsonPaths.length < 20) {
         notes.jsonPaths.push(jsonPath);
       }
+      if (isLoginChallengeUrl(url)) notes.sawLoginChallenge = true;
       if (!usersMe) return;
       notes.sawUsersMe = true;
       if (type && !type.includes("json") && !type.includes("text") && !type.includes("javascript")) {
@@ -808,18 +868,58 @@ export class SessionManager {
         notes.usersMeUnreadable = true;
         return;
       }
-      const identity = identityFromUserJson(JSON.parse(raw) as unknown);
-      if (!identity) {
+      const verdict = usersMeVerdict(JSON.parse(raw) as unknown);
+      if (verdict.kind === "guest") {
+        notes.guest = true;
+        notes.usersMeMissingUsername = true;
+        notes.identities.splice(0, notes.identities.length);
+        return;
+      }
+      if (verdict.kind !== "logged_in") {
         notes.usersMeMissingUsername = true;
         return;
       }
-      notes.identities.push(identity);
+      notes.guest = false;
+      notes.identities.push(verdict.identity);
     } catch {
       if (url && isCurrentUserResponseUrl(url)) notes.usersMeUnreadable = true;
     }
   }
 
+  private sessionNeedsLogin(
+    notes: IdentityNotes & { identities: ReadIdentity[] },
+    loginFormVisible: boolean,
+  ): boolean {
+    if (this.options.site.id !== "onlyfans") return false;
+    return notes.redirectedToLogin || notes.guest || notes.sawLoginChallenge || loginFormVisible || notes.identities.length === 0;
+  }
+
+  private logLoginRequired(notes: IdentityNotes): void {
+    const paths = notes.jsonPaths.join(", ");
+    console.info(`[fanlink:identidad] ${messages.loginRequired}${paths ? ` | json: ${paths}` : ""}`);
+  }
+
+  /**
+   * Comprobar, sincronizar y chats reabren el perfil de Conectar
+   * (`data/profiles/<cuenta>`), con la misma huella y el mismo modo
+   * headless. Si ese perfil no existe, se restaura el storage state
+   * cifrado en un contexto con esa misma huella.
+   */
   private async newRestoredContext(accountId: string): Promise<BrowserContext> {
+    const profile = this.profileDir(accountId);
+    try {
+      const info = await stat(profile);
+      if (info.isDirectory()) {
+        const context = await this.options.browsers.launchPersistentContext(profile, {
+          headless: this.options.config.headlessLogin,
+        });
+        await this.seedPersistentProfile(context, accountId);
+        this.openContexts.add(context);
+        return context;
+      }
+    } catch {
+      // Perfil ausente: se usa el JSON cifrado.
+    }
     const browser = await this.backgroundBrowser();
     const plainPath = await this.materializePlainStorage(accountId);
     try {
@@ -829,6 +929,30 @@ export class SessionManager {
     } finally {
       await rm(plainPath, { force: true });
     }
+  }
+
+  /**
+   * El perfil guarda IndexedDB y las cookies con caducidad. Las de sesión
+   * se pierden al cerrar Chromium, así que se reponen desde el JSON cifrado
+   * solo si el perfil no las tiene ya. No se pisan las del perfil.
+   */
+  private async seedPersistentProfile(context: BrowserContext, accountId: string): Promise<void> {
+    const encrypted = await readFile(this.storagePath(accountId));
+    const state = parseStorageState(
+      JSON.parse(decryptBytes(encrypted, this.requireSessionKey()).toString("utf8")) as unknown,
+    );
+    const present = await context.cookies();
+    const known = new Set(present.map((cookie) => `${cookie.name}\n${cookie.domain}\n${cookie.path}`));
+    const missing = state.cookies.filter((cookie) => !known.has(`${cookie.name}\n${cookie.domain}\n${cookie.path}`));
+    if (missing.length > 0) await context.addCookies(missing);
+    if (state.origins.length === 0) return;
+    await context.addInitScript((origins) => {
+      const match = origins.find((item) => item.origin === location.origin);
+      if (!match) return;
+      for (const entry of match.localStorage) {
+        if (localStorage.getItem(entry.name) == null) localStorage.setItem(entry.name, entry.value);
+      }
+    }, state.origins);
   }
 
   /** Playwright lee un JSON en claro. Se descifra a un archivo temporal y se borra al cargar el contexto. */

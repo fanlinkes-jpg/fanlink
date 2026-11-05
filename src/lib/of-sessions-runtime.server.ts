@@ -83,6 +83,7 @@ function bootSyncLoop(sessions: SessionManager): void {
     sync: async (accountId) => {
       const read = await sessions.readCreatorData(accountId, true);
       if (read.alreadyRunning) return;
+      if (read.loginRequired) await sessions.markLoginRequired(accountId);
       const account = (await sessions.listAccounts()).find((item) => item.id === accountId);
       if (!account?.creatorId) return;
       await saveCreatorRead(await getSql(), account.creatorId, read);
@@ -103,6 +104,7 @@ function bootChatLoop(sessions: SessionManager): void {
     sync: async (accountId) => {
       const read = await sessions.readCreatorChats(accountId);
       if (read.alreadyRunning) return;
+      if (read.loginRequired) await sessions.markLoginRequired(accountId);
       const account = (await sessions.listAccounts()).find((item) => item.id === accountId);
       if (!account?.creatorId) return;
       const sql = await getSql();
@@ -301,6 +303,7 @@ export async function syncCreatorChatView(userId: string, creatorId: string): Pr
   const account = (await sessions.listAccounts()).find((item) => item.creatorId === id);
   if (!account) throw new Error("No hay sesión guardada para sincronizar.");
   const read = await sessions.readCreatorChats(account.id);
+  if (read.loginRequired) await sessions.markLoginRequired(account.id);
   if (!read.alreadyRunning) {
     const sql = await getSql();
     const events = await saveChatRead(sql, id, read);
@@ -318,6 +321,7 @@ export async function syncCreatorReadView(userId: string, creatorId: string): Pr
   const account = (await sessions.listAccounts()).find((item) => item.creatorId === id);
   if (!account) throw new Error("No hay sesión guardada para sincronizar.");
   const read = await sessions.readCreatorData(account.id, access.role === "owner");
+  if (read.loginRequired) await sessions.markLoginRequired(account.id);
   const sql = await getSql();
   if (!read.alreadyRunning) await saveCreatorRead(sql, id, read);
   const [stored] = await listCreatorReads(sql, [id]);

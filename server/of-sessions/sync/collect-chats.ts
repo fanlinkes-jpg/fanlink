@@ -1,5 +1,6 @@
 import type { BrowserContext, Page } from "playwright";
-import { jsonUrlWithoutSecrets } from "../identity.ts";
+import { isCurrentUserResponseUrl, isLoginChallengeUrl, jsonUrlWithoutSecrets, usersMeVerdict } from "../identity.ts";
+import { messages } from "../messages.ts";
 import type { SiteAdapter } from "../sessions/site.ts";
 import {
   chatFailureReason,
@@ -16,6 +17,7 @@ export type CollectedChats = {
   messages: ChatMessage[];
   reason: string | null;
   jsonPaths: string[];
+  loginRequired?: boolean;
   alreadyRunning?: boolean;
 };
 
@@ -33,6 +35,7 @@ export async function collectChats(
     threads: [] as ChatThread[],
     messages: [] as ChatMessage[],
     redirected: false,
+    loginRequired: false,
     sawUrl: false,
     parsed: false,
   };
@@ -62,14 +65,25 @@ export async function collectChats(
         if (dom.threads.length || dom.messages.length) notes.parsed = true;
       }
     }
-    const reason = chatFailureReason({
-      redirected: notes.redirected,
-      sawUrl: notes.sawUrl,
-      parsed: notes.parsed,
+    const loginRequired = notes.loginRequired || (site.id === "onlyfans" && notes.redirected);
+    const reason = loginRequired
+      ? messages.loginRequired
+      : chatFailureReason({
+          redirected: notes.redirected,
+          sawUrl: notes.sawUrl,
+          parsed: notes.parsed,
+          jsonPaths: notes.paths,
+        });
+    if (reason) {
+      console.info(`[fanlink:chat] ${reason}${notes.paths.length ? ` | json: ${notes.paths.join(", ")}` : ""}`);
+    }
+    return {
+      threads: notes.threads.slice(0, 40),
+      messages: notes.messages.slice(0, 80),
+      reason,
       jsonPaths: notes.paths,
-    });
-    if (reason) console.info(`[fanlink:chat] ${reason}`);
-    return { threads: notes.threads.slice(0, 40), messages: notes.messages.slice(0, 80), reason, jsonPaths: notes.paths };
+      loginRequired,
+    };
   } finally {
     context.off("response", onResponse);
   }
@@ -104,16 +118,26 @@ async function observe(
     messages: ChatMessage[];
     sawUrl: boolean;
     parsed: boolean;
+    loginRequired: boolean;
   },
 ): Promise<void> {
   let url = "";
   try {
     url = response.url();
+    if (isLoginChallengeUrl(url)) notes.loginRequired = true;
     const kind = classifyChatPath(url);
     const type = (response.headers()["content-type"] ?? "").toLowerCase();
     const path = jsonUrlWithoutSecrets(url);
-    if (path && (type.includes("json") || kind !== "other") && !notes.paths.includes(path) && notes.paths.length < 20) {
+    const usersMe = isCurrentUserResponseUrl(url);
+    if (path && (type.includes("json") || kind !== "other" || usersMe) && !notes.paths.includes(path) && notes.paths.length < 20) {
       notes.paths.push(path);
+    }
+    if (usersMe && (!type || type.includes("json") || type.includes("text"))) {
+      const rawUser = await response.text();
+      if (rawUser.length <= 1_500_000 && usersMeVerdict(JSON.parse(rawUser) as unknown).kind === "guest") {
+        notes.loginRequired = true;
+      }
+      return;
     }
     if (kind === "other") return;
     notes.sawUrl = true;

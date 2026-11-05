@@ -237,7 +237,10 @@ function rowToAccount(row: AccountRow): Account {
     sessionRejected: asBool(row.session_rejected),
     hasStorageState: asBool(row.has_storage_state),
     connection:
-      row.connection_status === "live" || row.connection_status === "rejected" || row.connection_status === "inconclusive"
+      row.connection_status === "live" ||
+      row.connection_status === "rejected" ||
+      row.connection_status === "inconclusive" ||
+      row.connection_status === "login_required"
         ? row.connection_status
         : "not_checked",
     identityState:

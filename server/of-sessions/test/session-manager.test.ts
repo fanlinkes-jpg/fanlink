@@ -113,12 +113,12 @@ test(
       );
       assert.equal(
         events.filter((event) => event.startsWith("persistent:true:")).length,
-        2,
+        4,
       );
-      assert.equal(events.filter((event) => event === "launch").length, 1);
+      assert.equal(events.filter((event) => event === "launch").length, 0);
       assert.equal(
         events.filter((event) => event.startsWith("context:")).length,
-        2,
+        0,
       );
 
       await assert.rejects(
@@ -176,12 +176,12 @@ test(
       assert.equal(stored.sessionRejected, false);
       assert.equal(fixture.hits.session, postsAfterLogin);
       assert.equal(
-        events.some((event) => event.startsWith("persistent:")),
-        false,
+        events.filter((event) => event.startsWith("persistent:true:")).length,
+        1,
       );
       assert.equal(
         events.filter((event) => event.startsWith("context:")).length,
-        1,
+        0,
       );
     } finally {
       await restarted.close();
@@ -233,7 +233,7 @@ test(
       await waitFor(
         () =>
           events.filter((event) => event.startsWith("persistent:true:"))
-            .length === 2,
+            .length === 3,
       );
       const pending = await created.sessions.getAccount(account.id);
       assert.equal(pending.status, "pending_login");
