@@ -15,13 +15,24 @@ import { AccountStore } from "../../server/of-sessions/store/account-store.ts";
 import { DbAccountStore } from "../../server/of-sessions/store/db-account-store.ts";
 import { createMirroringStore } from "../../server/of-sessions/store/mirroring-store.ts";
 import type { Account } from "../../server/of-sessions/types.ts";
-import type { CreatorReadList, CreatorReadView, CreatorSessionView } from "./of-sessions.ts";
+import type { CreatorChatList, CreatorReadList, CreatorReadView, CreatorSessionView } from "./of-sessions.ts";
+import { chatIntervalMinFromEnv } from "../../server/of-sessions/sync/chats.ts";
+import { listChatMeta, listChats, saveChatRead } from "../../server/of-sessions/sync/chat-store.ts";
 import { intervalMinFromEnv, startSyncLoop, type ScheduleAccount } from "../../server/of-sessions/sync/schedule.ts";
-import { listCreatorReads, listSyncMeta, readSyncIntervalMin, saveCreatorRead, writeSyncIntervalMin } from "../../server/of-sessions/sync/store.ts";
+import {
+  listCreatorReads,
+  listSyncMeta,
+  readChatIntervalMin,
+  readSyncIntervalMin,
+  saveCreatorRead,
+  writeChatIntervalMin,
+  writeSyncIntervalMin,
+} from "../../server/of-sessions/sync/store.ts";
 
 const globalRef = globalThis as typeof globalThis & {
   __ofSessionManager__?: Promise<SessionManager>;
   __ofSyncLoop__?: { stop: () => void };
+  __ofChatLoop__?: { stop: () => void };
 };
 
 export function ensureSyncScheduler(): void {
@@ -56,6 +67,7 @@ async function createManager(): Promise<SessionManager> {
   });
   await runtime.sessions.recoverInterruptedLogins();
   bootSyncLoop(runtime.sessions);
+  bootChatLoop(runtime.sessions);
   return runtime.sessions;
 }
 
@@ -74,6 +86,46 @@ function bootSyncLoop(sessions: SessionManager): void {
       if (!account?.creatorId) return;
       await saveCreatorRead(await getSql(), account.creatorId, read);
     },
+  });
+}
+
+function bootChatLoop(sessions: SessionManager): void {
+  if (process.env.FANLINK_SYNC_ENABLED === "false") return;
+  if (process.execArgv.includes("--test")) return;
+  if (globalRef.__ofChatLoop__) return;
+  globalRef.__ofChatLoop__ = startSyncLoop({
+    intervalMin: async () => readChatIntervalMin(await getSql(), chatIntervalMinFromEnv(process.env.FANLINK_CHAT_SYNC_MIN)),
+    inProgressIds: () => new Set(sessions.readingIds()),
+    accounts: () => chatScheduleAccounts(sessions),
+    marginMinMs: 8_000,
+    marginMaxMs: 25_000,
+    sync: async (accountId) => {
+      const read = await sessions.readCreatorChats(accountId);
+      if (read.alreadyRunning) return;
+      const account = (await sessions.listAccounts()).find((item) => item.id === accountId);
+      if (!account?.creatorId) return;
+      await saveChatRead(await getSql(), account.creatorId, read);
+    },
+  });
+}
+
+async function chatScheduleAccounts(sessions: SessionManager): Promise<ScheduleAccount[]> {
+  const [accounts, meta] = await Promise.all([sessions.listAccounts(), listChatMeta(await getSql())]);
+  const byCreator = new Map(meta.map((row) => [row.creatorId, row]));
+  return accounts.flatMap((account) => {
+    if (!account.creatorId) return [];
+    const state = byCreator.get(account.creatorId);
+    return [
+      {
+        accountId: account.id,
+        creatorId: account.creatorId,
+        status: account.status,
+        identityState: account.identityState,
+        hasStorageState: account.hasStorageState,
+        consecutiveFailures: state?.consecutiveFailures ?? 0,
+        lastAttemptAt: state?.lastAttemptAt ?? null,
+      },
+    ];
   });
 }
 
@@ -171,6 +223,7 @@ export async function listCreatorReadViews(userId: string): Promise<CreatorReadL
   return {
     role: access.role,
     intervalMin: await readSyncIntervalMin(sql, intervalMinFromEnv(process.env.FANLINK_SYNC_INTERVAL_MIN)),
+    chatIntervalMin: await readChatIntervalMin(sql, chatIntervalMinFromEnv(process.env.FANLINK_CHAT_SYNC_MIN)),
     runningCreatorIds: accounts.flatMap((account) =>
       account.creatorId && running.has(account.id) ? [account.creatorId] : [],
     ),
@@ -178,13 +231,77 @@ export async function listCreatorReadViews(userId: string): Promise<CreatorReadL
   };
 }
 
-export async function setSyncIntervalView(userId: string, minutes: number): Promise<number> {
+export async function setSyncIntervalView(
+  userId: string,
+  minutes: number,
+  chatMinutes?: number,
+): Promise<{ intervalMin: number; chatIntervalMin: number }> {
   const access = await accessFor(userId);
   if (access.role !== "owner") {
     throw new WorkspaceAccessError("Solo la dueña cambia cada cuánto se sincroniza.");
   }
   const sql = await getSql();
-  return writeSyncIntervalMin(sql, minutes);
+  const intervalMin = await writeSyncIntervalMin(sql, minutes);
+  const chatIntervalMin =
+    chatMinutes == null
+      ? await readChatIntervalMin(sql, chatIntervalMinFromEnv(process.env.FANLINK_CHAT_SYNC_MIN))
+      : await writeChatIntervalMin(sql, chatMinutes);
+  return { intervalMin, chatIntervalMin };
+}
+
+export async function listCreatorChatViews(userId: string): Promise<CreatorChatList> {
+  const access = await accessFor(userId);
+  const sessions = await getOfSessionManager();
+  const accounts = await sessions.listAccounts();
+  const creatorIds = accounts.flatMap((account) => {
+    if (!account.creatorId) return [];
+    if (access.role !== "owner" && !access.creatorIds.includes(account.creatorId)) return [];
+    return [account.creatorId];
+  });
+  const sql = await getSql();
+  const stored = await listChats(sql, creatorIds);
+  const running = new Set(sessions.readingIds());
+  return {
+    runningCreatorIds: accounts.flatMap((account) =>
+      account.creatorId && running.has(account.id) ? [account.creatorId] : [],
+    ),
+    threads: stored.threads.map((thread) => ({
+      creatorId: thread.creatorId,
+      threadKey: thread.threadKey,
+      fanKey: thread.fanKey,
+      fanHandle: thread.fanHandle,
+      fanName: thread.fanName,
+      lastMessageAt: thread.lastMessageAt,
+      excerpt: thread.excerpt,
+      unread: thread.unread,
+    })),
+    messages: stored.messages.map((message) => ({
+      threadKey: message.threadKey,
+      messageKey: message.messageKey,
+      fromFan: message.fromFan,
+      body: message.body,
+      sentAt: message.sentAt,
+    })),
+    meta: stored.meta.map((item) => ({
+      creatorId: item.creatorId,
+      syncedAt: item.syncedAt,
+      status: item.status,
+      reason: item.reason,
+    })),
+  };
+}
+
+export async function syncCreatorChatView(userId: string, creatorId: string): Promise<void> {
+  const access = await accessFor(userId);
+  const id = parseCreatorId(creatorId);
+  if (access.role !== "owner" && !access.creatorIds.includes(id)) {
+    throw new WorkspaceAccessError("No tienes acceso a esa creadora.");
+  }
+  const sessions = await getOfSessionManager();
+  const account = (await sessions.listAccounts()).find((item) => item.creatorId === id);
+  if (!account) throw new Error("No hay sesión guardada para sincronizar.");
+  const read = await sessions.readCreatorChats(account.id);
+  if (!read.alreadyRunning) await saveChatRead(await getSql(), id, read);
 }
 
 export async function syncCreatorReadView(userId: string, creatorId: string): Promise<CreatorReadView> {

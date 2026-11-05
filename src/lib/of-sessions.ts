@@ -98,8 +98,36 @@ export type CreatorReadView = {
 export type CreatorReadList = {
   role: "owner" | "member";
   intervalMin: number;
+  chatIntervalMin: number;
   runningCreatorIds: string[];
   creators: CreatorReadView[];
+};
+
+export type CreatorChatList = {
+  runningCreatorIds: string[];
+  threads: Array<{
+    creatorId: string;
+    threadKey: string;
+    fanKey: string | null;
+    fanHandle: string | null;
+    fanName: string | null;
+    lastMessageAt: string | null;
+    excerpt: string | null;
+    unread: number;
+  }>;
+  messages: Array<{
+    threadKey: string;
+    messageKey: string;
+    fromFan: boolean;
+    body: string;
+    sentAt: string;
+  }>;
+  meta: Array<{
+    creatorId: string;
+    syncedAt: string | null;
+    status: "idle" | "ok" | "error";
+    reason: string | null;
+  }>;
 };
 
 export const listCreatorReads = createServerFn({ method: "GET" })
@@ -111,10 +139,25 @@ export const listCreatorReads = createServerFn({ method: "GET" })
 
 export const setSyncInterval = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { minutes: number }) => input)
-  .handler(async ({ context, data }): Promise<number> => {
+  .validator((input: { minutes: number; chatMinutes?: number }) => input)
+  .handler(async ({ context, data }): Promise<{ intervalMin: number; chatIntervalMin: number }> => {
     const { setSyncIntervalView } = await import("./of-sessions-runtime.server");
-    return setSyncIntervalView(context.userId, data.minutes);
+    return setSyncIntervalView(context.userId, data.minutes, data.chatMinutes);
+  });
+
+export const listCreatorChats = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }): Promise<CreatorChatList> => {
+    const { listCreatorChatViews } = await import("./of-sessions-runtime.server");
+    return listCreatorChatViews(context.userId);
+  });
+
+export const syncCreatorChats = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string }) => input)
+  .handler(async ({ context, data }): Promise<void> => {
+    const { syncCreatorChatView } = await import("./of-sessions-runtime.server");
+    await syncCreatorChatView(context.userId, data.creatorId);
   });
 
 export const syncCreatorRead = createServerFn({ method: "POST" })

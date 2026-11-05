@@ -7,6 +7,7 @@ export function useOfReads() {
   const [role, setRole] = useState<"owner" | "member" | null>(null);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [intervalMin, setIntervalMin] = useState(30);
+  const [chatIntervalMin, setChatIntervalMin] = useState(2);
   const [runningCreatorIds, setRunningCreatorIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -16,6 +17,7 @@ export function useOfReads() {
       setCreators(result.creators);
       setRole(result.role);
       setIntervalMin(result.intervalMin);
+      setChatIntervalMin(result.chatIntervalMin);
       setRunningCreatorIds(result.runningCreatorIds);
       setError(null);
     } catch (err) {
@@ -29,9 +31,10 @@ export function useOfReads() {
     return () => clearInterval(timer);
   }, [refresh]);
 
-  const saveInterval = useCallback(async (minutes: number) => {
-    const saved = await setSyncInterval({ data: { minutes } });
-    setIntervalMin(saved);
+  const saveInterval = useCallback(async (minutes: number, chatMinutes: number) => {
+    const saved = await setSyncInterval({ data: { minutes, chatMinutes } });
+    setIntervalMin(saved.intervalMin);
+    setChatIntervalMin(saved.chatIntervalMin);
   }, []);
 
   const sync = useCallback(
@@ -51,5 +54,5 @@ export function useOfReads() {
   );
 
   const byCreator = new Map(creators.map((creator) => [creator.creatorId, creator]));
-  return { creators, byCreator, role, pendingId, intervalMin, runningCreatorIds, error, refresh, sync, saveInterval };
+  return { creators, byCreator, role, pendingId, intervalMin, chatIntervalMin, runningCreatorIds, error, refresh, sync, saveInterval };
 }

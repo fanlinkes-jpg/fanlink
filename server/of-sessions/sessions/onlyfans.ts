@@ -39,6 +39,7 @@ export const onlyFansSite: SiteAdapter = {
   profileUrl: "https://onlyfans.com/my/profile",
   earningsUrl: "https://onlyfans.com/my/statements/earnings",
   subscribersUrl: "https://onlyfans.com/my/subscribers/active",
+  chatsUrl: "https://onlyfans.com/my/chats",
   requiredCookies: ["auth_id", "sess"],
   loggedOutSelector: 'input[type="password"]',
   isDashboardUrl(raw: string): boolean {

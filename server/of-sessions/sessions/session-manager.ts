@@ -40,6 +40,7 @@ import { preparePrivateDir } from "./private-dir.ts";
 import type { SiteAdapter } from "./site.ts";
 import { hasLiveCookies } from "./site.ts";
 import { collectCreatorRead, type CollectedRead } from "../sync/collect.ts";
+import { collectChats, type CollectedChats } from "../sync/collect-chats.ts";
 import {
   judgeStorageState,
   parseStorageState,
@@ -292,6 +293,44 @@ export class SessionManager {
       () => undefined,
     );
     return job;
+  }
+
+  readCreatorChats(accountId: string): Promise<CollectedChats> {
+    const busy: CollectedChats = {
+      threads: [],
+      messages: [],
+      reason: "sincronización en curso",
+      jsonPaths: [],
+      alreadyRunning: true,
+    };
+    if (this.reading.has(accountId)) return Promise.resolve(busy);
+    this.reading.add(accountId);
+    const job = this.readTail.then(() => this.readChatsNow(accountId)).finally(() => {
+      this.reading.delete(accountId);
+    });
+    this.readTail = job.then(
+      () => undefined,
+      () => undefined,
+    );
+    return job;
+  }
+
+  private async readChatsNow(accountId: string): Promise<CollectedChats> {
+    const empty: CollectedChats = { threads: [], messages: [], reason: null, jsonPaths: [] };
+    const account = await this.options.store.get(accountId);
+    if (account.identityState === "mismatch") {
+      return { ...empty, reason: "Lecturas bloqueadas: la sesión guardada es de otra cuenta." };
+    }
+    try {
+      return await this.withSession(accountId, (context) =>
+        collectChats(context, this.options.site, {
+          paceMs: this.options.config.syncPaceMs,
+          waitMs: this.options.config.identityWaitMs,
+        }),
+      );
+    } catch (error) {
+      return { ...empty, reason: publicErrorMessage(error, "no se pudo abrir la sesión") };
+    }
   }
 
   private async readCreatorDataNow(accountId: string, includeEarnings: boolean): Promise<CollectedRead> {

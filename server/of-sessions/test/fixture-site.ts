@@ -22,6 +22,7 @@ export interface Fixture {
   site: SiteAdapter;
   hits: FixtureHits;
   invalidate(): void;
+  pushFanMessage(text: string): void;
   close(): Promise<void>;
 }
 
@@ -92,8 +93,9 @@ const blankHtml = `<!doctype html>
 export async function startFixture(mode: FixtureMode = "users-me"): Promise<Fixture> {
   let epoch = 1;
   const hits: FixtureHits = { login: 0, session: 0, dashboard: 0 };
+  const extraMessages: Array<{ id: number; text: string; at: string }> = [];
   const server = createServer((req, res) => {
-    void handle(req, res, () => epoch, hits, mode).catch(() => {
+    void handle(req, res, () => epoch, hits, mode, extraMessages).catch(() => {
       if (!res.headersSent) res.writeHead(500);
       res.end();
     });
@@ -113,6 +115,13 @@ export async function startFixture(mode: FixtureMode = "users-me"): Promise<Fixt
     invalidate() {
       epoch += 1;
     },
+    pushFanMessage(text: string) {
+      extraMessages.push({
+        id: 200 + extraMessages.length,
+        text,
+        at: "2026-11-05T11:00:00.000Z",
+      });
+    },
     close: () =>
       new Promise((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
@@ -126,6 +135,7 @@ async function handle(
   epoch: () => number,
   hits: FixtureHits,
   mode: FixtureMode,
+  extraMessages: Array<{ id: number; text: string; at: string }>,
 ): Promise<void> {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   if (req.method === "GET" && url.pathname === "/login") {
@@ -262,6 +272,80 @@ async function handle(
     );
     return;
   }
+  if (req.method === "GET" && url.pathname === "/api2/v2/chats") {
+    if (!accepted(req, epoch())) {
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "no" }));
+      return;
+    }
+    const latest = extraMessages.at(-1);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({
+        password: "no-guardar",
+        list: [
+          {
+            id: 7,
+            withUser: { id: 7, username: "fanuno", name: "Fan Uno" },
+            unreadMessagesCount: latest ? 1 : 0,
+            lastMessage: latest
+              ? { id: latest.id, text: latest.text, createdAt: latest.at, fromUser: { id: 7 } }
+              : { id: 100, text: "Hola, ¿sigues ahí?", createdAt: "2026-11-05T10:00:00.000Z", fromUser: { id: 7 } },
+          },
+        ],
+      }),
+    );
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/api2/v2/chats/7/messages") {
+    if (!accepted(req, epoch())) {
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "no" }));
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({
+        list: [
+          { id: 100, text: "Hola, ¿sigues ahí?", createdAt: "2026-11-05T10:00:00.000Z", fromUser: { id: 7 } },
+          { id: 101, text: "Sí, dime.", createdAt: "2026-11-05T10:05:00.000Z", fromUser: { id: 42 } },
+          ...extraMessages.map((item) => ({
+            id: item.id,
+            text: item.text,
+            createdAt: item.at,
+            fromUser: { id: 7 },
+          })),
+        ],
+      }),
+    );
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/my/chats") {
+    if (!accepted(req, epoch())) {
+      redirect(res, "/login");
+      return;
+    }
+    html(
+      res,
+      pageHtml(
+        "Chats",
+        `<script>fetch("/api2/v2/chats?skip=0&token=sekret");</script>`,
+        `<article data-fanlink-chat data-id="9" data-fan-id="9" data-handle="domfan" data-name="DOM" data-excerpt="desde el DOM" data-at="2026-11-05T09:00:00.000Z" data-unread="0">DOM</article>`,
+      ),
+    );
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/my/chats/7") {
+    if (!accepted(req, epoch())) {
+      redirect(res, "/login");
+      return;
+    }
+    html(
+      res,
+      pageHtml("Hilo", `<script>fetch("/api2/v2/chats/7/messages?order=desc&token=sekret");</script>`, `<h1>Hilo</h1>`),
+    );
+    return;
+  }
   if (req.method === "GET" && url.pathname === "/blank") {
     html(res, blankHtml);
     return;
@@ -316,6 +400,7 @@ export function createFixtureSite(origin: string): SiteAdapter {
     profileUrl: `${origin}/my/profile`,
     earningsUrl: `${origin}/my/statements/earnings`,
     subscribersUrl: `${origin}/my/subscribers/active`,
+    chatsUrl: `${origin}/my/chats`,
     requiredCookies: ["auth_id", "sess"],
     loggedOutSelector: 'input[type="password"]',
     identitySelector: "#fanlink-identity",

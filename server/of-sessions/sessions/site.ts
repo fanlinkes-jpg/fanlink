@@ -12,6 +12,8 @@ export interface SiteAdapter {
   /** Páginas normales de ganancias y fans. La sincronización solo las abre. */
   earningsUrl?: string;
   subscribersUrl?: string;
+  /** Página normal de conversaciones. La sincronización solo la abre. */
+  chatsUrl?: string;
   requiredCookies: readonly string[];
   /**
    * Selector del formulario de acceso. Si sigue visible, la persona

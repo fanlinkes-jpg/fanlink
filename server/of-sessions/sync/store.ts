@@ -189,6 +189,31 @@ export async function readSyncIntervalMin(sql: ReadSql, fallback: number): Promi
   return clampSaved(Number(saved), fallback);
 }
 
+export async function readChatIntervalMin(sql: ReadSql, fallback: number): Promise<number> {
+  const rows = await sql.query<{ chat_interval_min: number | string | null }>(
+    "select chat_interval_min from of_sync_settings where id = 1",
+  );
+  const saved = rows[0]?.chat_interval_min;
+  if (saved == null) return fallback;
+  const value = Number(saved);
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(30, Math.max(1, Math.round(value)));
+}
+
+export async function writeChatIntervalMin(sql: ReadSql, minutes: number): Promise<number> {
+  const value = Math.min(30, Math.max(1, Math.round(minutes)));
+  const current = await sql.query<{ interval_min: number | string }>(
+    "select interval_min from of_sync_settings where id = 1",
+  );
+  const interval = Number(current[0]?.interval_min ?? 30);
+  await sql.query(
+    `insert into of_sync_settings (id, interval_min, chat_interval_min) values (1, $1, $2)
+     on conflict (id) do update set chat_interval_min = excluded.chat_interval_min`,
+    [Number.isFinite(interval) ? interval : 30, value],
+  );
+  return value;
+}
+
 export async function writeSyncIntervalMin(sql: ReadSql, minutes: number): Promise<number> {
   const value = clampSaved(minutes, 30);
   await sql.query(

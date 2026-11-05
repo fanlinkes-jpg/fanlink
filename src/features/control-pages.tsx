@@ -46,7 +46,13 @@ export function AnalyticsPage() {
           ))}
         </div>
       </div>
-      {owner ? <SyncInterval minutes={reads.intervalMin} onSave={(minutes) => void reads.saveInterval(minutes)} /> : null}
+      {owner ? (
+        <SyncInterval
+          minutes={reads.intervalMin}
+          chatMinutes={reads.chatIntervalMin}
+          onSave={(minutes, chatMinutes) => void reads.saveInterval(minutes, chatMinutes)}
+        />
+      ) : null}
       {reads.error ? <p className="text-sm text-[#8a5a12]">{reads.error}</p> : null}
 
       {view === "creadoras" && owner && (
@@ -424,19 +430,32 @@ function syncStateLabel(running: boolean, status: "idle" | "ok" | "error" | unde
   return "Sin sincronizar";
 }
 
-function SyncInterval({ minutes, onSave }: { minutes: number; onSave: (minutes: number) => void }) {
+function SyncInterval({
+  minutes,
+  chatMinutes,
+  onSave,
+}: {
+  minutes: number;
+  chatMinutes: number;
+  onSave: (minutes: number, chatMinutes: number) => void;
+}) {
   const [value, setValue] = useState(String(minutes));
+  const [chats, setChats] = useState(String(chatMinutes));
   useEffect(() => setValue(String(minutes)), [minutes]);
+  useEffect(() => setChats(String(chatMinutes)), [chatMinutes]);
   return (
     <form
       className="flex flex-wrap items-center gap-2 text-sm"
       onSubmit={(event) => {
         event.preventDefault();
-        onSave(Number(value));
+        onSave(Number(value), Number(chats));
       }}
     >
-      <label className="text-muted" htmlFor="sync-interval">Sincronizar cada</label>
+      <label className="text-muted" htmlFor="sync-interval">Ingresos cada</label>
       <input id="sync-interval" type="number" min={5} max={1440} value={value} onChange={(event) => setValue(event.target.value)} className="h-8 w-20 rounded-md border border-line bg-surface px-2" />
+      <span className="text-muted">min</span>
+      <label className="text-muted" htmlFor="chat-interval">Chats cada</label>
+      <input id="chat-interval" type="number" min={1} max={30} value={chats} onChange={(event) => setChats(event.target.value)} className="h-8 w-20 rounded-md border border-line bg-surface px-2" />
       <span className="text-muted">min</span>
       <button type="submit" className="rounded-md border border-line px-2 py-1 text-xs">Guardar</button>
     </form>
