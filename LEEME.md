@@ -81,6 +81,12 @@ Sin credenciales el aviso es simulado y solo se escribe en el log, con el teléf
 
 El teléfono y el interruptor se guardan en Equipo, en el acceso del servidor. No hace falta una clave de WhatsApp para probar el modo simulado.
 
+## Masivos en borrador
+
+En Campañas, el bloque «Borrador con fans sincronizados» arma un masivo con fans reales: activos, expirados, con gasto mínimo o sin interacción reciente. Se escribe el mensaje (`{nombre}`), el precio de PPV, los medios del vault, se ve la estimación y se puede programar. Guardar no envía.
+
+`FANLINK_ENABLE_SEND` está apagado. El botón dice **Envío real desactivado** y no se puede pulsar. Aunque se activara, el servidor no envía a `onlyfans.com`. El adaptador del navegador solo se prueba contra el sitio local de pruebas.
+
 ## Prueba local
 
 El puerto 8080 puede estar ocupado. No lo uses si otro proyecto lo tiene.

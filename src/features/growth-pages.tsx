@@ -5,6 +5,7 @@ import { money, pct } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { fansForList, massPlan, useCrm, type Platform } from "@/lib/crm";
 import { Badge, Button, Field, Panel, Select } from "@/components/ui";
+import { CampaignDrafts } from "@/features/campaign-draft";
 
 export function ListsPage() {
   const lists = useCrm((s) => s.lists);
@@ -85,7 +86,6 @@ export function CampaignsPage() {
   const campaigns = useCrm((s) => s.campaigns);
   const lists = useCrm((s) => s.lists);
   const addCampaign = useCrm((s) => s.addCampaign);
-  const sendCampaign = useCrm((s) => s.sendCampaign);
   const setCampaignStatus = useCrm((s) => s.setCampaignStatus);
   const fans = useCrm((s) => s.fans);
   const messages = useCrm((s) => s.messages);
@@ -107,6 +107,7 @@ export function CampaignsPage() {
         </div>
         <p className="mt-3 text-sm text-muted">Un masivo por precio. {`{nombre}`} se cambia por el nombre de cada fan.</p>
       </div>
+      <CampaignDrafts />
       <Panel title="Nueva campaña">
         <form
           className="grid gap-2 md:grid-cols-2"
@@ -171,10 +172,7 @@ export function CampaignsPage() {
                   <td className="px-3 py-3 tabular-nums">{money(c.earned)}</td>
                   <td className="px-3 py-3">
                     <div className="flex flex-col gap-1">
-                      <Button onClick={() => {
-                        const n = sendCampaign(c.id);
-                        toast.success(n === 1 ? "1 masivo enviado" : `${n} masivos enviados`);
-                      }}>Enviar</Button>
+                      <Button disabled title="Envío real desactivado">Envío real desactivado</Button>
                       <Button variant="ghost" onClick={() => setCampaignStatus(c.id, c.status === "pausada" ? "activa" : "pausada")}>
                         {c.status === "pausada" ? "Reanudar" : "Pausar"}
                       </Button>

@@ -23,6 +23,7 @@ export interface Fixture {
   hits: FixtureHits;
   invalidate(): void;
   pushFanMessage(text: string): void;
+  sent: Array<{ fan: string; body: string; price: string }>;
   close(): Promise<void>;
 }
 
@@ -94,8 +95,9 @@ export async function startFixture(mode: FixtureMode = "users-me"): Promise<Fixt
   let epoch = 1;
   const hits: FixtureHits = { login: 0, session: 0, dashboard: 0 };
   const extraMessages: Array<{ id: number; text: string; at: string }> = [];
+  const sent: Array<{ fan: string; body: string; price: string }> = [];
   const server = createServer((req, res) => {
-    void handle(req, res, () => epoch, hits, mode, extraMessages).catch(() => {
+    void handle(req, res, () => epoch, hits, mode, extraMessages, sent).catch(() => {
       if (!res.headersSent) res.writeHead(500);
       res.end();
     });
@@ -115,6 +117,7 @@ export async function startFixture(mode: FixtureMode = "users-me"): Promise<Fixt
     invalidate() {
       epoch += 1;
     },
+    sent,
     pushFanMessage(text: string) {
       extraMessages.push({
         id: 200 + extraMessages.length,
@@ -136,6 +139,7 @@ async function handle(
   hits: FixtureHits,
   mode: FixtureMode,
   extraMessages: Array<{ id: number; text: string; at: string }>,
+  sent: Array<{ fan: string; body: string; price: string }>,
 ): Promise<void> {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   if (req.method === "GET" && url.pathname === "/login") {
@@ -346,6 +350,32 @@ async function handle(
     );
     return;
   }
+  if (req.method === "GET" && url.pathname === "/simulate-send") {
+    html(
+      res,
+      pageHtml(
+        "Envío simulado",
+        "",
+        `<form method="POST" action="/simulate-send"><input name="fan" /><textarea name="body"></textarea><input name="price" /><button type="submit">Enviar</button></form>`,
+      ),
+    );
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/simulate-send") {
+    const raw = await readBodyText(req);
+    const params = new URLSearchParams(raw);
+    sent.push({
+      fan: params.get("fan") ?? "",
+      body: params.get("body") ?? "",
+      price: params.get("price") ?? "",
+    });
+    redirect(res, "/simulate-sent");
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/simulate-sent") {
+    html(res, pageHtml("Enviado", "", "<p>ok</p>"));
+    return;
+  }
   if (req.method === "GET" && url.pathname === "/blank") {
     html(res, blankHtml);
     return;
@@ -382,9 +412,14 @@ function html(res: ServerResponse, body: string): void {
 }
 
 function readBody(req: IncomingMessage): Promise<void> {
+  return readBodyText(req).then(() => undefined);
+}
+
+function readBodyText(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
-    req.on("data", () => undefined);
-    req.on("end", () => resolve());
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
     req.on("error", reject);
   });
 }
