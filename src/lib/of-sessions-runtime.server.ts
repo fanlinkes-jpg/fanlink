@@ -49,6 +49,18 @@ async function createManager(): Promise<SessionManager> {
   return runtime.sessions;
 }
 
+async function creatorHandle(creatorId: string): Promise<string> {
+  const sql = await getSql();
+  const rows = await sql<{ state: { creators?: Array<{ id: string; handle?: string }> } | string }>`
+    select state from workspace_state where id = 1
+  `;
+  const raw = rows[0]?.state;
+  if (!raw) return "";
+  const state = typeof raw === "string" ? (JSON.parse(raw) as { creators?: Array<{ id: string; handle?: string }> }) : raw;
+  const creator = state.creators?.find((item) => item.id === creatorId);
+  return typeof creator?.handle === "string" ? creator.handle : "";
+}
+
 async function accessFor(userId: string) {
   const sql = await getSql();
   return ensureStaff(sql, userId, !authConfigured && userId === DEV_USER_ID);
@@ -91,7 +103,7 @@ export async function inspectCreatorSession(userId: string, creatorId: string): 
   const accounts = await sessions.listAccounts();
   const account = accounts.find((item) => item.creatorId === creatorId);
   if (!account) throw new Error("No hay sesión guardada para comprobar.");
-  const view = toView(await sessions.inspectConnection(account.id));
+  const view = toView(await sessions.inspectConnection(account.id, await creatorHandle(creatorId)));
   if (!view) throw new Error("La sesión no está ligada a una creadora");
   return view;
 }
@@ -109,6 +121,11 @@ function toView(account: Account): CreatorSessionView | null {
     connection: account.connection,
     identityState: account.identityState,
     identityLabel: account.identityLabel,
+    identityHandle: account.identityHandle,
+    identityName: account.identityName,
+    identityUserId: account.identityUserId,
+    identityCheckedAt: account.identityCheckedAt,
+    readsBlocked: account.identityState === "mismatch",
     lastCheckedAt: account.lastCheckedAt,
     lastError: account.lastError,
   };

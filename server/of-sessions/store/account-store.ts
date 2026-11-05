@@ -68,6 +68,10 @@ export class AccountStore implements AccountRepository {
         connection: "not_checked",
         identityState: "unavailable",
         identityLabel: null,
+        identityHandle: null,
+        identityName: null,
+        identityUserId: null,
+        identityCheckedAt: null,
         createdAt: timestamp,
         updatedAt: timestamp,
         lastCheckedAt: null,
@@ -182,8 +186,13 @@ function normalizeAccount(account: Account): Account {
       account.connection === "live" || account.connection === "rejected" || account.connection === "inconclusive"
         ? account.connection
         : "not_checked",
-    identityState: account.identityState === "verified" ? "verified" : "unavailable",
+    identityState:
+      account.identityState === "verified" || account.identityState === "mismatch" ? account.identityState : "unavailable",
     identityLabel: typeof account.identityLabel === "string" && account.identityLabel.trim() ? account.identityLabel : null,
+    identityHandle: typeof account.identityHandle === "string" && account.identityHandle.trim() ? account.identityHandle : null,
+    identityName: typeof account.identityName === "string" && account.identityName.trim() ? account.identityName : null,
+    identityUserId: typeof account.identityUserId === "string" && /^\d+$/.test(account.identityUserId) ? account.identityUserId : null,
+    identityCheckedAt: account.identityCheckedAt ?? null,
     createdAt: account.createdAt,
     updatedAt: account.updatedAt,
     lastCheckedAt: account.lastCheckedAt ?? null,

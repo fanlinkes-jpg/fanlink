@@ -8,7 +8,7 @@ import {
   SessionCryptoError,
   writeEncryptedSession,
 } from "../crypto.ts";
-import { identityFromProbe } from "../identity.ts";
+import { identityFromDom, identityFromUserJson, isCurrentUserResponseUrl, judgeIdentityMatch, type ReadIdentity } from "../identity.ts";
 import { messages, publicErrorMessage } from "../messages.ts";
 import type { AccountRepository } from "../store/repository.ts";
 import type { Account } from "../types.ts";
@@ -156,26 +156,37 @@ export class SessionManager {
    * en el estado de cookies. La identidad solo se rellena si el adaptador
    * declara un selector.
    */
-  async inspectConnection(accountId: string): Promise<Account> {
+  async inspectConnection(accountId: string, expectedHandle = ""): Promise<Account> {
     assertAccountId(accountId);
     await this.options.store.get(accountId);
     const now = this.now().toISOString();
+    const emptyIdentity = {
+      identityState: "unavailable" as const,
+      identityLabel: null,
+      identityHandle: null,
+      identityName: null,
+      identityUserId: null,
+      identityCheckedAt: now,
+    };
     const verdict = await this.localVerdict(accountId);
     if (verdict !== "valid") {
       return this.options.store.update(accountId, {
         connection: "rejected",
-        identityState: "unavailable",
-        identityLabel: null,
+        ...emptyIdentity,
         lastCheckedAt: now,
         lastError: verdict === "missing" ? messages.noSession : messages.cookiesExpired,
       });
     }
     try {
-      const outcome = await this.readProbe(accountId);
+      const outcome = await this.readProbe(accountId, expectedHandle);
       return this.options.store.update(accountId, {
         connection: outcome.connection,
         identityState: outcome.identityState,
         identityLabel: outcome.identityLabel,
+        identityHandle: outcome.identityHandle,
+        identityName: outcome.identityName,
+        identityUserId: outcome.identityUserId,
+        identityCheckedAt: now,
         lastCheckedAt: now,
         lastError: outcome.error,
       });
@@ -184,8 +195,7 @@ export class SessionManager {
       const inconclusive = message === messages.inconclusive;
       return this.options.store.update(accountId, {
         connection: inconclusive ? "inconclusive" : "rejected",
-        identityState: "unavailable",
-        identityLabel: null,
+        ...emptyIdentity,
         lastCheckedAt: now,
         lastError: message,
       });
@@ -523,27 +533,42 @@ export class SessionManager {
     return hasLiveCookies(this.options.site, cookies, this.now().getTime());
   }
 
-  private async readProbe(accountId: string): Promise<{
+  private async readProbe(
+    accountId: string,
+    expectedHandle: string,
+  ): Promise<{
     connection: "live" | "rejected" | "inconclusive";
-    identityState: "unavailable" | "verified";
+    identityState: "unavailable" | "verified" | "mismatch";
     identityLabel: string | null;
+    identityHandle: string | null;
+    identityName: string | null;
+    identityUserId: string | null;
     error: string | null;
   }> {
     const context = await this.newRestoredContext(accountId);
+    const seen: ReadIdentity[] = [];
+    const pending: Promise<void>[] = [];
     try {
       const page = await context.newPage();
+      page.on("response", (response) => {
+        pending.push(this.observeCurrentUser(response, seen));
+      });
       const response = await page.goto(this.options.site.probeUrl, {
         waitUntil: "domcontentloaded",
         timeout: this.options.config.probeTimeoutMs,
       });
+      await page.waitForLoadState("networkidle", { timeout: 8_000 }).catch(() => undefined);
+      await Promise.all(pending);
       const finalUrl = page.url();
+      const blank = {
+        identityState: "unavailable" as const,
+        identityLabel: null,
+        identityHandle: null,
+        identityName: null,
+        identityUserId: null,
+      };
       if (this.options.site.isInconclusiveUrl?.(finalUrl)) {
-        return {
-          connection: "inconclusive",
-          identityState: "unavailable",
-          identityLabel: null,
-          error: messages.inconclusive,
-        };
+        return { connection: "inconclusive", ...blank, error: messages.inconclusive };
       }
       const cookies = mapCookies(await context.cookies());
       const loginFormVisible = await this.loginFormVisible(page);
@@ -555,20 +580,48 @@ export class SessionManager {
         loginFormVisible,
       );
       if (!alive) {
-        return {
-          connection: "rejected",
-          identityState: "unavailable",
-          identityLabel: null,
-          error: messages.sessionInvalid,
-        };
+        return { connection: "rejected", ...blank, error: messages.sessionInvalid };
       }
       const selector = this.options.site.identitySelector;
-      const text = selector ? await page.locator(selector).first().innerText().catch(() => "") : null;
-      const identity = identityFromProbe(selector, text);
-      return { connection: "live", ...identity, error: null };
+      const node = selector ? page.locator(selector).first() : null;
+      const dom = node
+        ? {
+            text: await node.innerText().catch(() => ""),
+            username: await node.getAttribute("data-username").catch(() => null),
+            userId: await node.getAttribute("data-user-id").catch(() => null),
+          }
+        : null;
+      const read = seen[0] ?? identityFromDom(selector, dom);
+      const identityState = judgeIdentityMatch(expectedHandle, read?.username ?? null);
+      return {
+        connection: "live",
+        identityState,
+        identityHandle: read?.username ?? null,
+        identityName: read?.name ?? null,
+        identityUserId: read?.userId ?? null,
+        identityLabel: read?.username ?? read?.name ?? null,
+        error: null,
+      };
     } finally {
       this.openContexts.delete(context);
       await context.close().catch(() => undefined);
+    }
+  }
+
+  private async observeCurrentUser(
+    response: { url(): string; headers(): Record<string, string>; text(): Promise<string> },
+    seen: ReadIdentity[],
+  ): Promise<void> {
+    try {
+      if (!isCurrentUserResponseUrl(response.url())) return;
+      const type = (response.headers()["content-type"] ?? "").toLowerCase();
+      if (type && !type.includes("json") && !type.includes("text")) return;
+      const raw = await response.text();
+      if (raw.length > 100_000) return;
+      const identity = identityFromUserJson(JSON.parse(raw) as unknown);
+      if (identity) seen.push(identity);
+    } catch {
+      // Una respuesta que no es JSON del usuario actual se ignora.
     }
   }
 

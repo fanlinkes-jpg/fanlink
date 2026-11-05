@@ -1,6 +1,6 @@
 export type SessionStatus = "active" | "expired" | "pending_login";
 export type ConnectionStatus = "not_checked" | "live" | "rejected" | "inconclusive";
-export type IdentityState = "unavailable" | "verified";
+export type IdentityState = "unavailable" | "verified" | "mismatch";
 
 export interface Account {
   id: string;
@@ -15,6 +15,10 @@ export interface Account {
   connection: ConnectionStatus;
   identityState: IdentityState;
   identityLabel: string | null;
+  identityHandle: string | null;
+  identityName: string | null;
+  identityUserId: string | null;
+  identityCheckedAt: string | null;
   createdAt: string;
   updatedAt: string;
   lastCheckedAt: string | null;
@@ -32,6 +36,10 @@ export type AccountPatch = Partial<
     | "connection"
     | "identityState"
     | "identityLabel"
+    | "identityHandle"
+    | "identityName"
+    | "identityUserId"
+    | "identityCheckedAt"
     | "lastCheckedAt"
     | "lastError"
   >

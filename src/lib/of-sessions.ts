@@ -20,8 +20,13 @@ export type CreatorSessionView = {
   sessionRejected: boolean;
   hasStorageState: boolean;
   connection: "not_checked" | "live" | "rejected" | "inconclusive";
-  identityState: "unavailable" | "verified";
+  identityState: "unavailable" | "verified" | "mismatch";
   identityLabel: string | null;
+  identityHandle: string | null;
+  identityName: string | null;
+  identityUserId: string | null;
+  identityCheckedAt: string | null;
+  readsBlocked: boolean;
   lastCheckedAt: string | null;
   lastError: string | null;
 };

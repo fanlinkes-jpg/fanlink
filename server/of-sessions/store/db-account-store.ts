@@ -25,6 +25,10 @@ interface AccountRow {
   connection_status: string | null;
   identity_state: string | null;
   identity_label: string | null;
+  identity_handle: string | null;
+  identity_name: string | null;
+  identity_user_id: string | null;
+  identity_checked_at: Date | string | null;
   last_checked_at: Date | string | null;
   last_error: string | null;
   created_at: Date | string;
@@ -94,6 +98,10 @@ export class DbAccountStore implements AccountRepository {
         connection: "not_checked",
         identityState: "unavailable",
         identityLabel: null,
+        identityHandle: null,
+        identityName: null,
+        identityUserId: null,
+        identityCheckedAt: null,
         createdAt: timestamp,
         updatedAt: timestamp,
         lastCheckedAt: null,
@@ -142,8 +150,9 @@ export class DbAccountStore implements AccountRepository {
         `insert into of_session_account (
            id, creator_id, label, status, login_in_progress, session_rejected,
            has_storage_state, connection_status, identity_state, identity_label,
+           identity_handle, identity_name, identity_user_id, identity_checked_at,
            last_checked_at, last_error, created_at, updated_at
-         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
          on conflict (id) do update set
            creator_id = excluded.creator_id,
            label = excluded.label,
@@ -154,6 +163,10 @@ export class DbAccountStore implements AccountRepository {
            connection_status = excluded.connection_status,
            identity_state = excluded.identity_state,
            identity_label = excluded.identity_label,
+           identity_handle = excluded.identity_handle,
+           identity_name = excluded.identity_name,
+           identity_user_id = excluded.identity_user_id,
+           identity_checked_at = excluded.identity_checked_at,
            last_checked_at = excluded.last_checked_at,
            last_error = excluded.last_error,
            updated_at = excluded.updated_at`,
@@ -170,8 +183,9 @@ export class DbAccountStore implements AccountRepository {
       `insert into of_session_account (
          id, creator_id, label, status, login_in_progress, session_rejected,
          has_storage_state, connection_status, identity_state, identity_label,
+         identity_handle, identity_name, identity_user_id, identity_checked_at,
          last_checked_at, last_error, created_at, updated_at
-       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
       accountParams(account),
     );
   }
@@ -198,6 +212,10 @@ function accountParams(account: Account): unknown[] {
     account.connection,
     account.identityState,
     account.identityLabel,
+    account.identityHandle,
+    account.identityName,
+    account.identityUserId,
+    account.identityCheckedAt,
     account.lastCheckedAt,
     account.lastError,
     account.createdAt,
@@ -218,8 +236,13 @@ function rowToAccount(row: AccountRow): Account {
       row.connection_status === "live" || row.connection_status === "rejected" || row.connection_status === "inconclusive"
         ? row.connection_status
         : "not_checked",
-    identityState: row.identity_state === "verified" ? "verified" : "unavailable",
+    identityState:
+      row.identity_state === "verified" || row.identity_state === "mismatch" ? row.identity_state : "unavailable",
     identityLabel: row.identity_label ?? null,
+    identityHandle: row.identity_handle ?? null,
+    identityName: row.identity_name ?? null,
+    identityUserId: row.identity_user_id ?? null,
+    identityCheckedAt: row.identity_checked_at == null ? null : asIso(row.identity_checked_at),
     createdAt: asIso(row.created_at),
     updatedAt: asIso(row.updated_at),
     lastCheckedAt:

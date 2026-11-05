@@ -40,9 +40,12 @@ const dashboardHtml = `<!doctype html>
   <head>
     <meta charset="utf-8">
     <title>Dashboard</title>
-    <script>localStorage.setItem("fanlink_user","42");</script>
+    <script>
+      localStorage.setItem("fanlink_user","42");
+      fetch("/api/me");
+    </script>
   </head>
-  <body><h1>Dashboard</h1><p id="fanlink-identity">Creadora de prueba</p></body>
+  <body><h1>Dashboard</h1><p id="fanlink-identity" data-username="creadora" data-user-id="42">Creadora de prueba</p></body>
 </html>`;
 
 const blankHtml = `<!doctype html>
@@ -107,6 +110,23 @@ async function handle(
       ],
     });
     res.end();
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/api/me") {
+    if (!accepted(req, epoch())) {
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "no" }));
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({
+        id: 42,
+        username: "creadora",
+        name: "Creadora de prueba",
+        password: "no-guardar",
+      }),
+    );
     return;
   }
   if (req.method === "GET" && url.pathname === "/dashboard") {

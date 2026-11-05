@@ -16,6 +16,7 @@ export const CONNECTION_LABEL = {
 export const IDENTITY_STATE_LABEL = {
   unavailable: "No verificada",
   verified: "Verificada",
+  mismatch: "No coincide",
 } as const;
 
 export function sessionActionLabel(

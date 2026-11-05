@@ -236,6 +236,7 @@ test("la tabla liga cada sesión a una creadora y el archivo se puede reconstrui
   try {
     await pg.exec(await readFile(MIGRATION, "utf8"));
     await pg.exec(await readFile(path.resolve(path.dirname(MIGRATION), "0004_staff_and_connection.sql"), "utf8"));
+    await pg.exec(await readFile(path.resolve(path.dirname(MIGRATION), "0005_identity_fields.sql"), "utf8"));
     const sql = {
       query: async <T>(text: string, params: unknown[] = []) =>
         (await pg.query<T>(text, params)).rows,

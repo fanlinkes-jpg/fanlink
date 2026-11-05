@@ -40,7 +40,29 @@ Sin `DATABASE_URL`, esa base es un Postgres embebido en `data/pglite` (un solo p
 
 `VITE_AUTH_ENABLED=false` solo funciona en localhost y sin `DATABASE_URL`. Es un operador local, no separa a varias personas. En cuanto hay base real, hace falta el login del equipo.
 
-La pastilla **Activa** es la sesión guardada (cookies). **Conexión** es una comprobación aparte. **Identidad** sale solo si el sitio declara un nombre visible. OnlyFans, en esta versión, se queda en **No verificada**. No se leen métricas ni se envían mensajes.
+La pastilla **Activa** es la sesión guardada (cookies). **Conexión** es una comprobación aparte. **Identidad** compara el `username` leído con el handle de la ficha, sin distinguir `@` ni mayúsculas.
+
+Al pulsar **Comprobar**, el servidor abre la página normal del sitio con la sesión guardada y escucha las respuestas que esa página pide sola. Solo acepta un JSON cuya URL termina en `/users/me`, `/me` o `/api/me`, y de él copia `username`, `name` o `displayName`, e `id` si es numérico. No llama a ese endpoint por su cuenta ni firma peticiones. Si esa respuesta no aparece y el sitio declara un selector, usa el texto visible y `data-username` / `data-user-id`. OnlyFans no declara selector: si su web deja de pedir esa URL o cambia los campos, la conexión puede seguir en Aceptada y la identidad en **No verificada**. No se guardan cookies, tokens ni contraseñas.
+
+- **Verificada**: el handle leído coincide con el de la ficha.
+- **No coincide**: la sesión es de otra cuenta. Se muestra el handle leído y se bloquean lecturas futuras de datos para esa ficha.
+- **No verificada**: no se pudo leer un username, o la ficha no tiene handle.
+
+## Prueba local
+
+El puerto 8080 puede estar ocupado. No lo uses si otro proyecto lo tiene.
+
+```bash
+git pull
+npm install
+npx playwright install chromium
+unset DATABASE_URL
+export VITE_AUTH_ENABLED=false
+export FANLINK_SESSION_KEY="$(openssl rand -base64 32)"
+npm run dev -- --port 8081 --host 127.0.0.1
+```
+
+Abre `http://127.0.0.1:8081`. En Creadoras, Conectar abre Chromium. Comprobar vuelve a abrir la página con la sesión guardada. No se leen métricas ni se envían mensajes.
 
 ## Datos
 
@@ -53,7 +75,7 @@ data/                         # gitignore
 
 La tabla `of_session_account` (migración `migrations/0003_of_sessions.sql`) liga `creator_id` del CRM con el id de la sesión. Las cookies no van a la base de datos.
 
-Con Postgres (`DATABASE_URL`) la tabla persiste. Sin esa variable el CRM usa PGLite en memoria: al reiniciar el proceso, el archivo `data/accounts.json` vuelve a cargar el vínculo en la tabla.
+Con Postgres (`DATABASE_URL`) la tabla persiste. Sin esa variable el CRM usa el Postgres embebido de `data/pglite`. El archivo `data/accounts.json` también guarda el vínculo de la sesión, sin cookies.
 
 ## Variables
 

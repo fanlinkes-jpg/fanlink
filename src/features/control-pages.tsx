@@ -339,6 +339,16 @@ export function TeamPage() {
   );
 }
 
+function identityTitle(live: { identityName: string | null; identityUserId: string | null; identityCheckedAt: string | null } | undefined): string | undefined {
+  if (!live) return undefined;
+  const parts = [
+    live.identityName ? `Nombre: ${live.identityName}` : "",
+    live.identityUserId ? `Id: ${live.identityUserId}` : "",
+    live.identityCheckedAt ? `Última verificación: ${live.identityCheckedAt}` : "",
+  ].filter(Boolean);
+  return parts.length ? parts.join(" · ") : undefined;
+}
+
 function sessionTone(status: SessionStatus): string {
   switch (status) {
     case "active":
@@ -508,10 +518,10 @@ export function CreatorsPage() {
                     <span className="text-xs text-[#6d7585]">{live ? CONNECTION_LABEL[live.connection] : "Sin comprobar"}</span>
                   </td>
                   <td className="border-b border-[#f4f5f7] px-4 py-3">
-                    <span className="text-xs">
-                      {live?.identityState === "verified" && live.identityLabel
-                        ? `${live.identityLabel} · ${IDENTITY_STATE_LABEL.verified}`
-                        : IDENTITY_STATE_LABEL.unavailable}
+                    <span className="text-xs" title={identityTitle(live)}>
+                      {live ? IDENTITY_STATE_LABEL[live.identityState] : IDENTITY_STATE_LABEL.unavailable}
+                      {live?.identityHandle ? ` · @${live.identityHandle.replace(/^@+/, "")}` : ""}
+                      {live?.readsBlocked ? " · lecturas bloqueadas" : ""}
                     </span>
                   </td>
                   <td className="border-b border-[#f4f5f7] px-4 py-3">{c.platform}</td>
