@@ -54,7 +54,7 @@ Si no se puede verificar, bajo **No verificada** sale la razón (por ejemplo `no
 
 ## Lectura de ingresos y fans
 
-**Sincronizar**, en Creadoras o en Analítica, abre con la sesión guardada las páginas normales `https://onlyfans.com/my/statements/earnings` y `https://onlyfans.com/my/subscribers/active`. El listener se registra antes de navegar. Se guardan solo los campos que el JSON o el DOM dejan leer: día e importes por suscripciones, propinas, mensajes y posts; fans con id, handle, nombre, fecha, estado y gasto si viene. Hay pausas, como mucho tres desplazamientos y una cuenta cada vez. No se envía nada ni se llama a un endpoint por nuestra cuenta.
+La lectura automática abre primero el feed y, si `users/me` trae username, las páginas `https://onlyfans.com/my/statements/earnings` y `https://onlyfans.com/my/subscribers/active`. El listener se registra antes de navegar. Se guardan solo los campos que el JSON o el DOM dejan leer: día e importes por suscripciones, propinas, mensajes y posts; fans con id, handle, nombre, fecha, estado y gasto si viene. Hay pausas, como mucho tres desplazamientos y una cuenta cada vez. No se envía nada ni se llama a un endpoint por nuestra cuenta. La fila de Creadoras no tiene botón de sincronizar. La dueña puede forzarla desde Más o desde Analítica. Un miembro recibe rechazo del servidor.
 
 Fragilidad: si OnlyFans cambia esas páginas, los nombres de los campos o deja de pedir ese JSON, la sincronización no inventa cifras. La razón puede ser `sin respuesta de ingresos`, `sin respuesta de fans`, `página cambiada` o `redirigido a login`, con las rutas JSON sin query. Los ingresos solo los ve la dueña. Un chatter ve los fans de las cuentas que tiene asignadas, sin totales de la agencia. Si la identidad es **No coincide**, no se sincroniza.
 
@@ -66,7 +66,7 @@ El servidor sincroniza solo cada cuenta con sesión activa. Por defecto cada 30 
 
 El mismo planificador abre `https://onlyfans.com/my/chats` y, como mucho, dos hilos recientes. Escucha el JSON que esas páginas piden (`/chats`, `/messages`) y, si no hay, marcadores del DOM. No envía mensajes. Por defecto cada 2 minutos (`FANLINK_CHAT_SYNC_MIN`, de 1 a 30). La dueña lo cambia en Analítica, en «Chats cada». Usa el mismo turno que ingresos: una cuenta cada vez, sin repetir la que ya está en curso, y sin entrar si la identidad no coincide o la sesión está caducada.
 
-Los hilos y los mensajes se guardan por creadora y por fan. Un mensaje nuevo de un fan crea el evento interno `new_fan_message` (creadora, fan, extracto, hora) y una línea en el log. La segunda lectura del mismo mensaje no lo repite. Chat muestra solo lo guardado; un chatter ve las cuentas que tiene asignadas. Abrir Chat no sincroniza. El botón **Sincronizar chats** fuerza esa lectura.
+Los hilos y los mensajes se guardan por creadora y por fan. Un mensaje nuevo de un fan crea el evento interno `new_fan_message` (creadora, fan, extracto, hora) y una línea en el log. La segunda lectura del mismo mensaje no lo repite. Chat muestra solo lo guardado; un chatter ve las cuentas que tiene asignadas. Abrir Chat no sincroniza. Solo la dueña ve **Forzar sincronización**; el servidor se lo niega a un miembro.
 
 Fragilidad: si OnlyFans cambia la ruta del chat o los campos `withUser`, `lastMessage`, `text` y `createdAt`, la lista puede quedar vacía y la razón será `sin respuesta de chats` o `página cambiada (chats)`. El envío no existe en esta versión.
 
@@ -115,10 +115,10 @@ Abre `http://127.0.0.1:8081`. En Creadoras, Conectar abre Chromium. Comprobar pu
 
 Usa la clave que ya tienes. No generes otra. Misma terminal: Control+C, `git pull && npm install`, `npm run dev -- --port 8081 --host 127.0.0.1`. Abre `http://127.0.0.1:8081`.
 
-1. **Creadoras.** El handle de la ficha debe ser el de la cuenta. Si Conexión sale Caducada o el texto dice que OnlyFans pide iniciar sesión, pulsa Reconectar. Entra tú, incluido el segundo factor. La ventana se cierra sola solo cuando `users/me` trae tu username. Luego Comprobar y, si Conexión es Aceptada, Sincronizar. Si Identidad es No verificada, el texto pequeño dice por qué y no bloquea. Si es No coincide, no sincronices: es otra cuenta.
-2. **Sincronizar.** Una cuenta. Puede tardar cerca de un minuto. En la terminal no deben aparecer cookies ni tokens. Si OnlyFans redirige al login, Sesión guardada pasa a Expirada y el aviso es «OnlyFans pide iniciar sesión: pulsa Reconectar».
+1. **Creadoras.** El handle de la ficha debe ser el de la cuenta. Si Conexión sale Caducada o el texto dice que OnlyFans pide iniciar sesión, pulsa Reconectar. Entra tú, incluido el segundo factor. La ventana se cierra sola solo cuando `users/me` trae tu username. Luego Comprobar. La fila ya no tiene Sincronizar: muestra «Última sincronización: hace X min» y OK, en curso o un error corto. La dueña puede abrir Más y pulsar Forzar sincronización. Un miembro no ve ese botón.
+2. **Automática.** Al arrancar el servidor, la primera pasada sale hacia el minuto. Luego sigue el intervalo (30 min si no lo cambias). En la terminal, una línea por pasada: cuenta, resultado, fans e ingresos. No salen cookies, tokens ni listas de URLs en la pantalla.
 3. **Analítica.** La dueña ve ingresos y fans, o «Sin sincronizar» si aún no hay lectura. Un miembro no ve cifras de ingresos. El estado dice en curso, OK o error, y «Última sincronización: hace X min».
-4. **Chat.** Conversaciones leídas, no el demo antiguo. Sincronizar chats fuerza el turno. No hay caja que envíe a OnlyFans.
+4. **Chat.** Conversaciones leídas, no el demo antiguo. Solo la dueña ve Forzar sincronización. No hay caja que envíe a OnlyFans.
 5. **Equipo.** Teléfono `+34…`, interruptor Avisos y minutos entre avisos. Sin claves de WhatsApp, el aviso sale como `simulado` en la terminal cuando un fan escribe.
 6. **Campañas.** Borrador con fans sincronizados: vista previa y guardar. El botón dice «Envío real desactivado» y no se pulsa.
 7. **Inicio, listas, vault y enlaces.** No son cifras de OnlyFans. Deben decir que están sin sincronizar o que son ejemplo local.

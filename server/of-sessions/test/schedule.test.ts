@@ -8,6 +8,7 @@ import {
   selectSyncAccount,
   type ScheduleAccount,
 } from "../sync/schedule.ts";
+import { publicSyncReason } from "../messages.ts";
 
 const NOW = new Date("2026-11-05T12:00:00.000Z");
 const INTERVAL = 30 * 60 * 1000;
@@ -113,6 +114,30 @@ test("la espera crece con los fallos seguidos y luego vuelve a tocar", () => {
     accounts: [account({ consecutiveFailures: 3, lastAttemptAt: old })],
   });
   assert.equal(ready.accountId, "a1");
+});
+
+test("la primera pasada no espera media hora", () => {
+  const recent = new Date(NOW.getTime() - 60_000).toISOString();
+  const held = selectSyncAccount({
+    now: NOW,
+    intervalMs: INTERVAL,
+    inProgressIds: new Set(),
+    accounts: [account({ lastAttemptAt: recent })],
+  });
+  assert.equal(held.accountId, null);
+  const forced = selectSyncAccount({
+    now: NOW,
+    intervalMs: INTERVAL,
+    inProgressIds: new Set(),
+    ignoreCadence: true,
+    accounts: [account({ lastAttemptAt: recent })],
+  });
+  assert.equal(forced.accountId, "a1");
+  assert.equal(
+    publicSyncReason("redirigido a login. json: https://onlyfans.com/my/statements/earnings"),
+    "OnlyFans pide iniciar sesión: pulsa Reconectar",
+  );
+  assert.equal(publicSyncReason("sin respuesta de fans"), "sin respuesta de fans");
 });
 
 test("el margen entre cuentas sale del azar y no es cero", () => {

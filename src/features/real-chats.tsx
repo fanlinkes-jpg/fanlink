@@ -40,9 +40,7 @@ export function RealChatsPage() {
   );
   const meta = data?.meta.find((item) => item.creatorId === selected?.creatorId);
   const running = selected ? data?.runningCreatorIds.includes(selected.creatorId) : false;
-  const canSync =
-    selected != null &&
-    (teamAccess?.role === "owner" || teamAccess?.creatorIds.includes(selected.creatorId) === true);
+  const canForce = teamAccess?.role === "owner" && selected != null;
 
   return (
     <div className="flex h-full min-h-0 bg-white text-[#1c2333]">
@@ -81,24 +79,26 @@ export function RealChatsPage() {
               <div>
                 <p className="font-medium">{selected.fanName ?? selected.fanHandle}</p>
                 <p className="text-xs text-[#6d7585]">
-                  {running ? "En curso" : meta?.status === "error" ? `Error · ${meta.reason ?? ""}` : meta?.status === "ok" ? "OK" : "Sin sincronizar"}
+                  {running ? "En curso" : meta?.status === "error" ? `Error · ${shortReason(meta.reason)}` : meta?.status === "ok" ? "OK" : "Sin sincronizar"}
                   {meta?.syncedAt ? ` · ${syncAge(meta.syncedAt)}` : ""}
                 </p>
               </div>
-              <button
-                type="button"
-                disabled={!canSync || pending || running}
-                onClick={() => {
-                  setPending(true);
-                  void syncCreatorChats({ data: { creatorId: selected.creatorId } })
-                    .then(() => refresh())
-                    .catch((err: unknown) => setError(sessionErrorText(err)))
-                    .finally(() => setPending(false));
-                }}
-                className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs disabled:opacity-50"
-              >
-                {pending || running ? "Sincronizando…" : "Sincronizar chats"}
-              </button>
+              {canForce ? (
+                <button
+                  type="button"
+                  disabled={pending || running}
+                  onClick={() => {
+                    setPending(true);
+                    void syncCreatorChats({ data: { creatorId: selected.creatorId } })
+                      .then(() => refresh())
+                      .catch((err: unknown) => setError(sessionErrorText(err)))
+                      .finally(() => setPending(false));
+                  }}
+                  className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs disabled:opacity-50"
+                >
+                  {pending || running ? "Sincronizando…" : "Forzar sincronización"}
+                </button>
+              ) : null}
             </header>
             <ol className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-4">
               {messages.map((message) => (
@@ -118,6 +118,14 @@ export function RealChatsPage() {
       </section>
     </div>
   );
+}
+
+function shortReason(reason: string | null | undefined): string {
+  if (!reason) return "error";
+  const cut = reason.split(". json:")[0] ?? reason;
+  const text = cut.replace(/https?:\/\/\S+/g, "").replace(/\s+/g, " ").trim();
+  if (/redirigido a login/i.test(text)) return "OnlyFans pide iniciar sesión: pulsa Reconectar";
+  return text;
 }
 
 function syncAge(iso: string): string {

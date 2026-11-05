@@ -245,8 +245,6 @@ function count(value: unknown): number {
   return Math.min(999, Math.trunc(number));
 }
 
-function withPaths(reason: string, paths: string[]): string {
-  const safe = [...new Set(paths)].filter((path) => !path.includes("?") && !SECRET.test(path)).slice(0, 8);
-  const text = safe.length ? `${reason}. json: ${safe.join(", ")}` : reason;
-  return text.slice(0, 400);
+function withPaths(reason: string, _paths: string[]): string {
+  return reason.slice(0, 180);
 }

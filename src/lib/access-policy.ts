@@ -75,6 +75,11 @@ export function hasPerm(access: TeamAccess | null, perm: TeamPerm): boolean {
   return access.perms.includes(perm);
 }
 
+export function assertOwnerForce(access: TeamAccess | null): void {
+  if (access?.role === "owner") return;
+  throw new WorkspaceAccessError("Solo la dueña puede forzar la sincronización.");
+}
+
 export function canOperateCreator(access: TeamAccess | null, creatorId: string, perm: TeamPerm): boolean {
   if (!hasPerm(access, perm)) return false;
   if (!access) return false;

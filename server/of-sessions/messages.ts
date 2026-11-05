@@ -25,6 +25,16 @@ export const messages = {
   internal: "Error interno",
 } as const;
 
+/** Texto de la interfaz. Las rutas se quedan en el log. */
+export function publicSyncReason(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const withoutPaths = value.split(". json:")[0] ?? value;
+  const text = withoutPaths.replace(/https?:\/\/\S+/g, "").replace(/\s+/g, " ").trim();
+  if (!text || /cookie|set-cookie|authorization|password/i.test(text)) return "no se pudo leer";
+  if (/redirigido a login/i.test(text)) return messages.loginRequired;
+  return text.slice(0, 180);
+}
+
 export function publicErrorMessage(error: unknown, fallback: string): string {
   if (!(error instanceof Error)) return fallback;
   const firstLine = error.message.split("\n")[0] ?? fallback;

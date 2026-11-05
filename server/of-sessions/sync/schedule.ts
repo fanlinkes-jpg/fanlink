@@ -56,6 +56,8 @@ export function selectSyncAccount(input: {
   intervalMs: number;
   accounts: ScheduleAccount[];
   inProgressIds: ReadonlySet<string>;
+  /** La primera pasada tras arrancar no espera los 30 minutos. */
+  ignoreCadence?: boolean;
 }): SchedulePick {
   const skipped: Array<{ accountId: string; reason: SkipReason }> = [];
   if (input.inProgressIds.size > 0) {
@@ -70,7 +72,7 @@ export function selectSyncAccount(input: {
   const due: ScheduleAccount[] = [];
   let soonest = CHECK_CAP_MS;
   for (const account of input.accounts) {
-    const reason = skipReason(account, input.now, input.intervalMs);
+    const reason = skipReason(account, input.now, input.intervalMs, input.ignoreCadence === true);
     if (reason === "not_due" || reason === "backoff") {
       soonest = Math.min(soonest, remainingMs(account, input.now, input.intervalMs));
       skipped.push({ accountId: account.accountId, reason });
@@ -113,11 +115,11 @@ export async function runSyncOnce(input: {
   return { ran: pick.accountId };
 }
 
-function skipReason(account: ScheduleAccount, now: Date, intervalMs: number): SkipReason | null {
+function skipReason(account: ScheduleAccount, now: Date, intervalMs: number, ignoreCadence: boolean): SkipReason | null {
   if (account.identityState === "mismatch") return "mismatch";
   if (account.status === "expired") return "expired";
   if (account.status !== "active" || !account.hasStorageState) return "pending";
-  if (!account.lastAttemptAt) return null;
+  if (ignoreCadence || !account.lastAttemptAt) return null;
   const wait = backoffMs(intervalMs, account.consecutiveFailures);
   const elapsed = now.getTime() - Date.parse(account.lastAttemptAt);
   if (elapsed >= wait) return null;
@@ -141,6 +143,8 @@ export function startSyncLoop(deps: {
   random?: () => number;
   marginMinMs?: number;
   marginMaxMs?: number;
+  /** Espera antes de la primera pasada. Por defecto un minuto. */
+  firstDelayMs?: number;
 }): { stop: () => void } {
   let stopped = false;
   const sleep = deps.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
@@ -148,9 +152,15 @@ export function startSyncLoop(deps: {
   const random = deps.random ?? Math.random;
   const marginMinMs = deps.marginMinMs ?? 15_000;
   const marginMaxMs = deps.marginMaxMs ?? 90_000;
+  const firstDelayMs = deps.firstDelayMs ?? 60_000;
   void (async () => {
+    let startup = true;
     while (!stopped) {
       try {
+        if (startup) {
+          await sleep(firstDelayMs);
+          if (stopped) return;
+        }
         const intervalMs = (await deps.intervalMin()) * 60_000;
         const accounts = await deps.accounts();
         if (stopped) return;
@@ -160,7 +170,9 @@ export function startSyncLoop(deps: {
           intervalMs,
           accounts,
           inProgressIds,
+          ignoreCadence: startup,
         });
+        startup = false;
         if (stopped) return;
         if (!pick.accountId || !pick.creatorId) {
           await sleep(pick.waitMs);

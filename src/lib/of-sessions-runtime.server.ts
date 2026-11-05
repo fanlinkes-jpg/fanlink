@@ -1,9 +1,10 @@
 import path from "node:path";
-import { canOperateCreator, WorkspaceAccessError } from "@/lib/access-policy";
+import { assertOwnerForce, canOperateCreator, WorkspaceAccessError } from "@/lib/access-policy";
 import { DEV_USER_ID, authConfigured } from "@/lib/auth/verify.server";
 import { getSql } from "@/lib/db";
 import { ensureStaff } from "@/lib/workspace-store";
 import { beginCreatorLogin } from "../../server/of-sessions/connect.ts";
+import { messages, publicSyncReason } from "../../server/of-sessions/messages.ts";
 import { parseCreatorId } from "../../server/of-sessions/types.ts";
 import { assertNoCredentials } from "../../server/of-sessions/credentials.ts";
 import { loadCrmSessionConfig } from "../../server/of-sessions/config.ts";
@@ -82,9 +83,11 @@ function bootSyncLoop(sessions: SessionManager): void {
     accounts: () => scheduleAccounts(sessions),
     sync: async (accountId) => {
       const read = await sessions.readCreatorData(accountId, true);
+      const account = (await sessions.listAccounts()).find((item) => item.id === accountId);
+      const creatorId = account?.creatorId ?? accountId;
+      logCreatorRead(creatorId, read);
       if (read.alreadyRunning) return;
       if (read.loginRequired) await sessions.markLoginRequired(accountId);
-      const account = (await sessions.listAccounts()).find((item) => item.id === accountId);
       if (!account?.creatorId) return;
       await saveCreatorRead(await getSql(), account.creatorId, read);
     },
@@ -288,17 +291,15 @@ export async function listCreatorChatViews(userId: string): Promise<CreatorChatL
       creatorId: item.creatorId,
       syncedAt: item.syncedAt,
       status: item.status,
-      reason: access.role === "owner" ? item.reason : item.reason?.split(". json:")[0] ?? null,
+      reason: publicSyncReason(item.reason),
     })),
   };
 }
 
 export async function syncCreatorChatView(userId: string, creatorId: string): Promise<void> {
   const access = await accessFor(userId);
+  assertOwnerForce(access);
   const id = parseCreatorId(creatorId);
-  if (access.role !== "owner" && !access.creatorIds.includes(id)) {
-    throw new WorkspaceAccessError("No tienes acceso a esa creadora.");
-  }
   const sessions = await getOfSessionManager();
   const account = (await sessions.listAccounts()).find((item) => item.creatorId === id);
   if (!account) throw new Error("No hay sesión guardada para sincronizar.");
@@ -313,14 +314,13 @@ export async function syncCreatorChatView(userId: string, creatorId: string): Pr
 
 export async function syncCreatorReadView(userId: string, creatorId: string): Promise<CreatorReadView> {
   const access = await accessFor(userId);
+  assertOwnerForce(access);
   const id = parseCreatorId(creatorId);
-  if (access.role !== "owner" && !access.creatorIds.includes(id)) {
-    throw new WorkspaceAccessError("No tienes acceso a esa creadora.");
-  }
   const sessions = await getOfSessionManager();
   const account = (await sessions.listAccounts()).find((item) => item.creatorId === id);
   if (!account) throw new Error("No hay sesión guardada para sincronizar.");
-  const read = await sessions.readCreatorData(account.id, access.role === "owner");
+  const read = await sessions.readCreatorData(account.id, true);
+  logCreatorRead(id, read);
   if (read.loginRequired) await sessions.markLoginRequired(account.id);
   const sql = await getSql();
   if (!read.alreadyRunning) await saveCreatorRead(sql, id, read);
@@ -330,7 +330,7 @@ export async function syncCreatorReadView(userId: string, creatorId: string): Pr
       creatorId: id,
       earningsSyncedAt: null,
       fansSyncedAt: null,
-      lastReason: read.reason,
+      lastReason: publicSyncReason(read.reason),
       lastAttemptAt: null,
       consecutiveFailures: 0,
       lastStatus: read.alreadyRunning ? "idle" : "error",
@@ -347,7 +347,7 @@ function presentRead(role: "owner" | "member", row: Awaited<ReturnType<typeof li
     creatorId: row.creatorId,
     earningsSyncedAt: owner ? row.earningsSyncedAt : null,
     fansSyncedAt: row.fansSyncedAt,
-    lastReason: owner ? row.lastReason : row.lastReason?.split(". json:")[0] ?? null,
+    lastReason: publicSyncReason(row.lastReason),
     lastAttemptAt: row.lastAttemptAt,
     consecutiveFailures: row.consecutiveFailures,
     lastStatus: row.lastStatus,
@@ -383,6 +383,20 @@ function visibleRunning(
   });
 }
 
+function logCreatorRead(
+  creatorId: string,
+  read: { reason: string | null; fans: unknown[]; earnings: unknown[]; alreadyRunning?: boolean },
+): void {
+  if (read.alreadyRunning) {
+    console.info(`[fanlink:lectura] cuenta=${creatorId} resultado=en curso`);
+    return;
+  }
+  const motivo = read.reason ? ` motivo=${publicSyncReason(read.reason) ?? messages.loginRequired}` : "";
+  console.info(
+    `[fanlink:lectura] cuenta=${creatorId} resultado=${read.reason ? "error" : "ok"} fans=${read.fans.length} ingresos=${read.earnings.length}${motivo}`,
+  );
+}
+
 function toView(account: Account): CreatorSessionView | null {
   if (!account.creatorId) return null;
   return {
@@ -400,9 +414,9 @@ function toView(account: Account): CreatorSessionView | null {
     identityName: account.identityName,
     identityUserId: account.identityUserId,
     identityCheckedAt: account.identityCheckedAt,
-    identityReason: account.identityReason,
+    identityReason: publicSyncReason(account.identityReason),
     readsBlocked: account.identityState === "mismatch",
     lastCheckedAt: account.lastCheckedAt,
-    lastError: account.lastError,
+    lastError: publicSyncReason(account.lastError),
   };
 }

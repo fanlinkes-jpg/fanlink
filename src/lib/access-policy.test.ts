@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  assertOwnerForce,
   assertWorkspaceChange,
   canOperateCreator,
   emptyWorkspace,
@@ -42,6 +43,12 @@ test("un miembro solo toca fans de las creadoras asignadas", () => {
   assert.equal(canOperateCreator(chatter, "c-otra", "mensajes"), false);
   assert.equal(canOperateCreator(chatter, "c-alba", "equipo"), false);
   assert.equal(canOperateCreator(owner, "c-otra", "equipo"), true);
+});
+
+test("solo la dueña puede forzar la sincronización", () => {
+  assert.doesNotThrow(() => assertOwnerForce(owner));
+  assert.throws(() => assertOwnerForce(chatter), /dueña/);
+  assert.throws(() => assertOwnerForce(null), /dueña/);
 });
 
 test("un miembro no cambia el equipo", () => {

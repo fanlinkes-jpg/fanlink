@@ -41,6 +41,9 @@ export async function collectCreatorRead(
     fans: [] as FanRow[],
     redirected: false,
     loginRequired: false,
+    sawLoggedIn: false,
+    earningsRedirect: false,
+    fansRedirect: false,
     earningsUrl: false,
     fansUrl: false,
   };
@@ -51,11 +54,15 @@ export async function collectCreatorRead(
   context.on("response", onResponse);
   try {
     const page = await context.newPage();
-    if (options.includeEarnings && site.earningsUrl) {
-      await openPage(page, site.earningsUrl, options, notes, pending, false, site);
-    }
-    if (site.subscribersUrl) {
-      await openPage(page, site.subscribersUrl, options, notes, pending, true, site);
+    if (site.id === "onlyfans") {
+      await warmOnlyFans(page, site, options, notes, pending);
+    } else {
+      if (options.includeEarnings && site.earningsUrl) {
+        await openPage(page, site.earningsUrl, options, notes, pending, false, site);
+      }
+      if (site.subscribersUrl) {
+        await openPage(page, site.subscribersUrl, options, notes, pending, true, site);
+      }
     }
     const markers = await page.evaluate(readSyncMarkers).catch(() => null);
     if (options.includeEarnings && notes.earnings.length === 0 && markers) {
@@ -64,10 +71,13 @@ export async function collectCreatorRead(
     if (notes.fans.length === 0 && markers) {
       notes.fans = parseFansDom(markers.fans, now);
     }
-    const loginRequired = notes.loginRequired || (site.id === "onlyfans" && notes.redirected);
+    const loginRequired = site.id === "onlyfans" && !notes.sawLoggedIn && (notes.loginRequired || notes.redirected);
+    const pageLogin = notes.sawLoggedIn && (notes.earningsRedirect || notes.fansRedirect);
     const reason = loginRequired
       ? messages.loginRequired
-      : readFailureReason({
+      : pageLogin
+        ? pageLoginReason(notes.earningsRedirect, notes.fansRedirect)
+        : readFailureReason({
           redirected: notes.redirected,
           wantEarnings: options.includeEarnings,
           earningsUrl: notes.earningsUrl,
@@ -93,6 +103,47 @@ export async function collectCreatorRead(
   }
 }
 
+/**
+ * OnlyFans puede mandar /my/statements/earnings al login si el feed aún no
+ * ha arrancado en ese perfil. Primero se abre la home y se espera un
+ * users/me con username. Si esa respuesta es de invitado, no se abren
+ * ingresos ni fans. Si el usuario está logueado y una de esas páginas
+ * pide login, la sesión no se marca caducada: el fallo es de esa página.
+ */
+async function warmOnlyFans(
+  page: Page,
+  site: SiteAdapter,
+  options: { paceMs: number; waitMs: number; includeEarnings: boolean },
+  notes: {
+    redirected: boolean;
+    loginRequired: boolean;
+    sawLoggedIn: boolean;
+    earningsRedirect: boolean;
+    fansRedirect: boolean;
+  },
+  pending: Promise<void>[],
+): Promise<void> {
+  const homeRedirect = await openPage(page, site.probeUrl, options, notes, pending, false, site);
+  if (homeRedirect) notes.redirected = true;
+  if (!notes.sawLoggedIn || notes.loginRequired) {
+    notes.loginRequired = true;
+    return;
+  }
+  notes.redirected = false;
+  if (options.includeEarnings && site.earningsUrl) {
+    notes.earningsRedirect = await openPage(page, site.earningsUrl, options, notes, pending, false, site);
+  }
+  if (site.subscribersUrl) {
+    notes.fansRedirect = await openPage(page, site.subscribersUrl, options, notes, pending, true, site);
+  }
+}
+
+function pageLoginReason(earnings: boolean, fans: boolean): string {
+  if (earnings && fans) return "las páginas de ingresos y fans pidieron login";
+  if (earnings) return "la página de ingresos pidió login";
+  return "la página de fans pidió login";
+}
+
 async function openPage(
   page: Page,
   url: string,
@@ -101,17 +152,20 @@ async function openPage(
   pending: Promise<void>[],
   scroll: boolean,
   site: SiteAdapter,
-): Promise<void> {
+): Promise<boolean> {
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
   await Promise.race([
     page.waitForLoadState("networkidle", { timeout: options.waitMs }).catch(() => undefined),
     delay(options.waitMs),
   ]);
   await drain(pending);
-  if (site.isLoginUrl(page.url())) notes.redirected = true;
-  const login = site.loggedOutSelector ? await page.locator(site.loggedOutSelector).count().catch(() => 0) : 0;
-  if (login > 0) notes.redirected = true;
-  if (scroll && !notes.redirected) {
+  let redirected = site.isLoginUrl(page.url());
+  const login = site.loggedOutSelector
+    ? await page.locator(`${site.loggedOutSelector}:visible`).count().catch(() => 0)
+    : 0;
+  if (login > 0) redirected = true;
+  if (redirected) notes.redirected = true;
+  if (scroll && !redirected) {
     for (let step = 0; step < 3; step += 1) {
       await page.mouse.wheel(0, 700).catch(() => undefined);
       await delay(options.paceMs);
@@ -120,6 +174,7 @@ async function openPage(
   }
   await delay(options.paceMs);
   await drain(pending);
+  return redirected;
 }
 
 async function observe(
@@ -131,6 +186,7 @@ async function observe(
     earningsUrl: boolean;
     fansUrl: boolean;
     loginRequired: boolean;
+    sawLoggedIn: boolean;
   },
   now: Date,
 ): Promise<void> {
@@ -149,7 +205,13 @@ async function observe(
       const rawUser = await response.text();
       if (rawUser.length <= 1_500_000) {
         const verdict = usersMeVerdict(JSON.parse(rawUser) as unknown);
-        if (verdict.kind === "guest") notes.loginRequired = true;
+        if (verdict.kind === "logged_in") {
+          notes.sawLoggedIn = true;
+          notes.loginRequired = false;
+        } else if (verdict.kind === "guest") {
+          notes.sawLoggedIn = false;
+          notes.loginRequired = true;
+        }
       }
       return;
     }

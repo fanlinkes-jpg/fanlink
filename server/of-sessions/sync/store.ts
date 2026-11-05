@@ -1,3 +1,4 @@
+import { publicSyncReason } from "../messages.ts";
 import type { EarningRow, FanRow } from "./parse.ts";
 
 export type ReadSql = {
@@ -80,7 +81,7 @@ export async function saveCreatorRead(
       "select consecutive_failures from of_sync_state where creator_id = $1",
       [creatorId],
     );
-    const failed = Boolean(cleanReason(read.reason));
+    const failed = Boolean(publicSyncReason(read.reason));
     const failures = failed ? Number(previous[0]?.consecutive_failures ?? 0) + 1 : 0;
     await sql.query(
       `insert into of_sync_state (
@@ -100,7 +101,7 @@ export async function saveCreatorRead(
         creatorId,
         read.earningsCaptured ? syncedAt : null,
         read.fansCaptured ? syncedAt : null,
-        cleanReason(read.reason),
+        publicSyncReason(read.reason),
         read.jsonPaths.filter((path) => !path.includes("?")).slice(0, 8).join("\n"),
         ORIGIN,
         syncedAt,
@@ -271,9 +272,3 @@ function iso(value: Date | string | null): string | null {
   return parsed.toISOString();
 }
 
-function cleanReason(value: string | null): string | null {
-  if (!value) return null;
-  const text = value.replace(/\s+/g, " ").trim();
-  if (!text || /cookie|set-cookie|authorization|password/i.test(text)) return "no se pudo leer";
-  return text.slice(0, 400);
-}

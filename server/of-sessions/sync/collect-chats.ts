@@ -36,6 +36,8 @@ export async function collectChats(
     messages: [] as ChatMessage[],
     redirected: false,
     loginRequired: false,
+    sawLoggedIn: false,
+    pageLogin: false,
     sawUrl: false,
     parsed: false,
   };
@@ -49,10 +51,22 @@ export async function collectChats(
     if (!site.chatsUrl) {
       return { threads: [], messages: [], reason: "sin respuesta de chats", jsonPaths: [] };
     }
-    await openChat(page, site.chatsUrl, options, notes, pending, site);
+    if (site.id === "onlyfans") {
+      await openChat(page, site.probeUrl, options, notes, pending, site);
+      if (notes.sawLoggedIn && !notes.loginRequired) {
+        notes.redirected = false;
+        await openChat(page, site.chatsUrl, options, notes, pending, site);
+        notes.pageLogin = notes.redirected;
+        if (notes.pageLogin) notes.redirected = false;
+      } else {
+        notes.loginRequired = true;
+      }
+    } else {
+      await openChat(page, site.chatsUrl, options, notes, pending, site);
+    }
     const threads = notes.threads.slice(0, 2);
     for (const thread of threads) {
-      if (notes.redirected) break;
+      if (notes.redirected || notes.pageLogin || notes.loginRequired) break;
       const url = threadUrl(site.chatsUrl, thread.threadKey);
       await openChat(page, url, options, notes, pending, site);
     }
@@ -65,10 +79,12 @@ export async function collectChats(
         if (dom.threads.length || dom.messages.length) notes.parsed = true;
       }
     }
-    const loginRequired = notes.loginRequired || (site.id === "onlyfans" && notes.redirected);
+    const loginRequired = site.id === "onlyfans" && !notes.sawLoggedIn && (notes.loginRequired || notes.redirected);
     const reason = loginRequired
       ? messages.loginRequired
-      : chatFailureReason({
+      : notes.pageLogin
+        ? "la página de chats pidió login"
+        : chatFailureReason({
           redirected: notes.redirected,
           sawUrl: notes.sawUrl,
           parsed: notes.parsed,
@@ -106,7 +122,9 @@ async function openChat(
   await delay(options.paceMs);
   await drain(pending);
   if (site.isLoginUrl(page.url())) notes.redirected = true;
-  const login = site.loggedOutSelector ? await page.locator(site.loggedOutSelector).count().catch(() => 0) : 0;
+  const login = site.loggedOutSelector
+    ? await page.locator(`${site.loggedOutSelector}:visible`).count().catch(() => 0)
+    : 0;
   if (login > 0) notes.redirected = true;
 }
 
@@ -119,6 +137,7 @@ async function observe(
     sawUrl: boolean;
     parsed: boolean;
     loginRequired: boolean;
+    sawLoggedIn: boolean;
   },
 ): Promise<void> {
   let url = "";
@@ -134,8 +153,15 @@ async function observe(
     }
     if (usersMe && (!type || type.includes("json") || type.includes("text"))) {
       const rawUser = await response.text();
-      if (rawUser.length <= 1_500_000 && usersMeVerdict(JSON.parse(rawUser) as unknown).kind === "guest") {
-        notes.loginRequired = true;
+      if (rawUser.length <= 1_500_000) {
+        const verdict = usersMeVerdict(JSON.parse(rawUser) as unknown);
+        if (verdict.kind === "logged_in") {
+          notes.sawLoggedIn = true;
+          notes.loginRequired = false;
+        } else if (verdict.kind === "guest") {
+          notes.sawLoggedIn = false;
+          notes.loginRequired = true;
+        }
       }
       return;
     }

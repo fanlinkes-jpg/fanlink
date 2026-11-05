@@ -910,8 +910,10 @@ export class SessionManager {
     try {
       const info = await stat(profile);
       if (info.isDirectory()) {
+        const headless = this.options.config.headlessLogin;
+        console.info(`[fanlink:navegador] perfil=${accountId} headless=${String(headless)}`);
         const context = await this.options.browsers.launchPersistentContext(profile, {
-          headless: this.options.config.headlessLogin,
+          headless,
         });
         await this.seedPersistentProfile(context, accountId);
         this.openContexts.add(context);

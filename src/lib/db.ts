@@ -240,9 +240,14 @@ const globalBoot = globalThis as typeof globalThis & {
   __pgBootstrapPromise__?: Promise<void>;
 };
 if (typeof window === "undefined" && dbSource === "pglite") {
-  globalBoot.__pgBootstrapPromise__ ??= ensureDbReady().catch((err) => {
-    globalBoot.__pgBootstrapPromise__ = undefined;
-    console.error("[db] PGLite bootstrap failed:", err);
-    throw err;
-  });
+  globalBoot.__pgBootstrapPromise__ ??= ensureDbReady()
+    .then(async () => {
+      const sync = await import("./of-sessions-runtime.server.ts");
+      sync.ensureSyncScheduler();
+    })
+    .catch((err) => {
+      globalBoot.__pgBootstrapPromise__ = undefined;
+      console.error("[db] PGLite bootstrap failed:", err);
+      throw err;
+    });
 }

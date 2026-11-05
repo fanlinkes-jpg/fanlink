@@ -36,7 +36,7 @@ export function AnalyticsPage() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="font-display text-2xl font-semibold">Analítica</h1>
-          <p className="text-sm text-muted">Las cifras son las guardadas. Abrir esta pantalla no sincroniza. El servidor lo hace solo, y Sincronizar lo fuerza.</p>
+          <p className="text-sm text-muted">Las cifras son las guardadas. Abrir esta pantalla no sincroniza. El servidor lo hace solo, cerca de un minuto después de arrancar y luego cada cierto tiempo.</p>
         </div>
         <div className="flex gap-1 rounded-md border border-line p-1">
           {(["creadoras", "equipo", "fans"] as const).map((v) => (
@@ -94,6 +94,7 @@ export function AnalyticsPage() {
                         <SyncControl
                           creatorId={c.id}
                           pending={reads.pendingId === c.id || reads.runningCreatorIds.includes(c.id)}
+                          label="Forzar sincronización"
                           onSync={(id) => void reads.sync(id)}
                         />
                       </td>
@@ -417,7 +418,7 @@ function lastSyncAt(read: { earningsSyncedAt: string | null; fansSyncedAt: strin
 }
 
 function syncAge(iso: string | null): string {
-  if (!iso) return "Sin sincronizar";
+  if (!iso) return "Última sincronización: aún no";
   const mins = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 60_000));
   if (mins < 1) return "Última sincronización: hace menos de 1 min";
   return `Última sincronización: hace ${mins} min`;
@@ -425,9 +426,16 @@ function syncAge(iso: string | null): string {
 
 function syncStateLabel(running: boolean, status: "idle" | "ok" | "error" | undefined, reason: string | null | undefined): string {
   if (running) return "En curso";
-  if (status === "error") return reason ? `Error · ${reason}` : "Error";
+  if (status === "error") return reason ? `Error · ${shortReason(reason)}` : "Error";
   if (status === "ok") return "OK";
   return "Sin sincronizar";
+}
+
+function shortReason(reason: string): string {
+  const cut = reason.split(". json:")[0] ?? reason;
+  const text = cut.replace(/https?:\/\/\S+/g, "").replace(/\s+/g, " ").trim();
+  if (/redirigido a login/i.test(text)) return "OnlyFans pide iniciar sesión: pulsa Reconectar";
+  return text;
 }
 
 function SyncInterval({
@@ -462,14 +470,11 @@ function SyncInterval({
   );
 }
 
-function SyncControl({ creatorId, pending, disabled, onSync, reason }: { creatorId: string; pending: boolean; disabled?: boolean; onSync: (creatorId: string) => void; reason?: string | null }) {
+function SyncControl({ creatorId, pending, disabled, onSync, label }: { creatorId: string; pending: boolean; disabled?: boolean; onSync: (creatorId: string) => void; label: string }) {
   return (
-    <span className="inline-flex flex-col items-start">
-      <button type="button" disabled={disabled || pending} onClick={() => onSync(creatorId)} className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs disabled:opacity-50">
-        {pending ? "Sincronizando…" : "Sincronizar"}
-      </button>
-      {reason ? <span className="mt-1 max-w-[16rem] text-[10px] leading-snug text-[#8a5a12]" title={reason}>{reason}</span> : null}
-    </span>
+    <button type="button" disabled={disabled || pending} onClick={() => onSync(creatorId)} className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs disabled:opacity-50">
+      {pending ? "Sincronizando…" : label}
+    </button>
   );
 }
 
@@ -659,8 +664,8 @@ export function CreatorsPage() {
                       {live?.readsBlocked ? " · lecturas bloqueadas" : ""}
                     </span>
                     {live?.identityState === "unavailable" && live.identityReason ? (
-                      <span className="mt-1 block max-w-[16rem] text-[10px] leading-snug text-[#8a5a12]" title={live.identityReason}>
-                        {live.identityReason}
+                      <span className="mt-1 block max-w-[16rem] text-[10px] leading-snug text-[#8a5a12]" title={shortReason(live.identityReason)}>
+                        {shortReason(live.identityReason)}
                       </span>
                     ) : null}
                   </td>
@@ -680,18 +685,23 @@ export function CreatorsPage() {
                       >
                         Comprobar
                       </button>
-                      <span className="inline-flex flex-col">
-                        <SyncControl
-                          creatorId={c.id}
-                          pending={reads.pendingId === c.id || reads.runningCreatorIds.includes(c.id)}
-                          disabled={!live || live.readsBlocked || !(teamAccess?.role === "owner" || teamAccess?.creatorIds.includes(c.id))}
-                          onSync={(id) => void reads.sync(id)}
-                        />
-                        <span className="mt-1 max-w-[16rem] text-[10px] leading-snug text-[#6d7585]">
-                          {syncAge(lastSyncAt(reads.byCreator.get(c.id)))}
-                          {" · "}
+                      <span className="inline-flex max-w-[16rem] flex-col text-[10px] leading-snug text-[#6d7585]">
+                        <span>{syncAge(lastSyncAt(reads.byCreator.get(c.id)))}</span>
+                        <span>
                           {syncStateLabel(reads.pendingId === c.id || reads.runningCreatorIds.includes(c.id), reads.byCreator.get(c.id)?.lastStatus, reads.byCreator.get(c.id)?.lastReason)}
                         </span>
+                        {teamAccess?.role === "owner" ? (
+                          <details className="mt-1">
+                            <summary className="cursor-pointer">Más</summary>
+                            <SyncControl
+                              creatorId={c.id}
+                              pending={reads.pendingId === c.id || reads.runningCreatorIds.includes(c.id)}
+                              disabled={!live || live.readsBlocked}
+                              label="Forzar sincronización"
+                              onSync={(id) => void reads.sync(id)}
+                            />
+                          </details>
+                        ) : null}
                       </span>
                     </div>
                   </td>
@@ -705,7 +715,7 @@ export function CreatorsPage() {
             )}
           </tbody>
         </table>
-        <p className="mt-3 text-xs text-[#6d7585]">Sincronizar abre las páginas de ganancias y de fans con la sesión guardada y lee lo que esas páginas piden. No envía nada. Si la identidad no coincide, no sincroniza. Puede tardar cerca de un minuto. Una cuenta cada vez.</p>
+        <p className="mt-3 text-xs text-[#6d7585]">La sincronización es automática: abre ganancias y fans con el perfil de la cuenta y no envía nada. La fila muestra la última pasada. Solo la dueña puede forzarla desde Más. Si la identidad no coincide, no se lee.</p>
       </div>
     </div>
   );
