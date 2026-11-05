@@ -50,7 +50,15 @@ Si no se puede verificar, bajo **No verificada** sale la razón (por ejemplo `no
 
 - **Verificada**: el handle leído coincide con el de la ficha.
 - **No coincide**: la sesión es de otra cuenta. Se muestra el handle leído y se bloquean lecturas futuras de datos para esa ficha.
-- **No verificada**: no se pudo leer un username, o la ficha no tiene handle.
+- **No verificada**: no se pudo leer un username, o la ficha no tiene handle. No impide sincronizar.
+
+## Lectura de ingresos y fans
+
+**Sincronizar**, en Creadoras o en Analítica, abre con la sesión guardada las páginas normales `https://onlyfans.com/my/statements/earnings` y `https://onlyfans.com/my/subscribers/active`. El listener se registra antes de navegar. Se guardan solo los campos que el JSON o el DOM dejan leer: día e importes por suscripciones, propinas, mensajes y posts; fans con id, handle, nombre, fecha, estado y gasto si viene. Hay pausas, como mucho tres desplazamientos y una cuenta cada vez. No se envía nada ni se llama a un endpoint por nuestra cuenta.
+
+Fragilidad: si OnlyFans cambia esas páginas, los nombres de los campos o deja de pedir ese JSON, la sincronización no inventa cifras. La razón puede ser `sin respuesta de ingresos`, `sin respuesta de fans`, `página cambiada` o `redirigido a login`, con las rutas JSON sin query. Los ingresos solo los ve la dueña. Un chatter ve los fans de las cuentas que tiene asignadas, sin totales de la agencia. Si la identidad es **No coincide**, no se sincroniza.
+
+Hasta que exista una sincronización, Analítica y Fans muestran **Sin sincronizar**. El origen guardado es `onlyfans`.
 
 ## Prueba local
 

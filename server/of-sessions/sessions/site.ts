@@ -9,6 +9,9 @@ export interface SiteAdapter {
   probeUrl: string;
   /** Segunda página si la home no trae el usuario. No se llama a una API. */
   profileUrl?: string;
+  /** Páginas normales de ganancias y fans. La sincronización solo las abre. */
+  earningsUrl?: string;
+  subscribersUrl?: string;
   requiredCookies: readonly string[];
   /**
    * Selector del formulario de acceso. Si sigue visible, la persona

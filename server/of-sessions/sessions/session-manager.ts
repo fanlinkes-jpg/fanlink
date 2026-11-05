@@ -39,6 +39,7 @@ import { assertLoginDisplay } from "./display.ts";
 import { preparePrivateDir } from "./private-dir.ts";
 import type { SiteAdapter } from "./site.ts";
 import { hasLiveCookies } from "./site.ts";
+import { collectCreatorRead, type CollectedRead } from "../sync/collect.ts";
 import {
   judgeStorageState,
   parseStorageState,
@@ -72,6 +73,7 @@ export class SessionManager {
   private readonly loginTasks = new Map<string, Promise<void>>();
   private readonly openContexts = new Set<BrowserContext>();
   private background: ManagedBrowser | null = null;
+  private readTail: Promise<void> = Promise.resolve();
   private closed = false;
   private started = false;
   private readonly options: SessionManagerOptions;
@@ -255,6 +257,46 @@ export class SessionManager {
     } finally {
       this.openContexts.delete(context);
       await context.close().catch(() => undefined);
+    }
+  }
+
+  /**
+   * Una cuenta cada vez. No sincroniza si la identidad no coincide.
+   * `includeEarnings` lo decide el servidor: un chatter no abre la página de ingresos.
+   */
+  readCreatorData(accountId: string, includeEarnings: boolean): Promise<CollectedRead> {
+    const job = this.readTail.then(() => this.readCreatorDataNow(accountId, includeEarnings));
+    this.readTail = job.then(
+      () => undefined,
+      () => undefined,
+    );
+    return job;
+  }
+
+  private async readCreatorDataNow(accountId: string, includeEarnings: boolean): Promise<CollectedRead> {
+    const empty: CollectedRead = {
+      earnings: [],
+      fans: [],
+      reason: null,
+      jsonPaths: [],
+      earningsCaptured: false,
+      fansCaptured: false,
+    };
+    const account = await this.options.store.get(accountId);
+    if (account.identityState === "mismatch") {
+      return { ...empty, reason: "Lecturas bloqueadas: la sesión guardada es de otra cuenta." };
+    }
+    try {
+      return await this.withSession(accountId, (context) =>
+        collectCreatorRead(context, this.options.site, {
+          paceMs: this.options.config.syncPaceMs,
+          waitMs: this.options.config.identityWaitMs,
+          includeEarnings,
+          now: this.now(),
+        }),
+      );
+    } catch (error) {
+      return { ...empty, reason: publicErrorMessage(error, "no se pudo abrir la sesión") };
     }
   }
 

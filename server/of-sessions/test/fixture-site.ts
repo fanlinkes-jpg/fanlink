@@ -187,6 +187,81 @@ async function handle(
     html(res, profileHtml(mode));
     return;
   }
+  if (req.method === "GET" && url.pathname === "/api2/v2/earnings/chart") {
+    if (!accepted(req, epoch())) {
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "no" }));
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({
+        currency: "USD",
+        password: "no-guardar",
+        list: [{ date: "2026-11-01", subscriptions: 4, tips: 3, messages: 2, posts: 1 }],
+      }),
+    );
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/api2/v2/subscriptions/subscribers") {
+    if (!accepted(req, epoch())) {
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "no" }));
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({
+        list: [
+          {
+            id: 7,
+            username: "fanuno",
+            name: "Fan Uno",
+            password: "no-guardar",
+            subscribedOnData: { subscribedAt: "2026-10-01T00:00:00.000Z", totalSumm: 15.5 },
+          },
+          {
+            id: 8,
+            username: "fanexp",
+            name: "Fan Exp",
+            subscribedOnExpiredNow: true,
+            subscribedOnData: { subscribeAt: "2026-01-02", totalSumm: 0 },
+          },
+        ],
+      }),
+    );
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/my/statements/earnings") {
+    if (!accepted(req, epoch())) {
+      redirect(res, "/login");
+      return;
+    }
+    html(
+      res,
+      pageHtml(
+        "Ganancias",
+        `<script>fetch("/api2/v2/earnings/chart?startDate=2026-11-01&token=sekret");</script>`,
+        `<p data-fanlink-earning data-day="2026-11-02" data-kind="tip" data-amount="99" data-currency="USD">DOM</p>`,
+      ),
+    );
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/my/subscribers/active") {
+    if (!accepted(req, epoch())) {
+      redirect(res, "/login");
+      return;
+    }
+    html(
+      res,
+      pageHtml(
+        "Fans",
+        `<script>fetch("/api2/v2/subscriptions/subscribers?offset=0&token=sekret");</script>`,
+        `<p data-fanlink-fan data-id="1" data-handle="domfan" data-name="DOM" data-subscribed="2026-02-02" data-status="active" data-spent="1">DOM</p>`,
+      ),
+    );
+    return;
+  }
   if (req.method === "GET" && url.pathname === "/blank") {
     html(res, blankHtml);
     return;
@@ -239,6 +314,8 @@ export function createFixtureSite(origin: string): SiteAdapter {
     loginUrl: `${origin}/login`,
     probeUrl: `${origin}/dashboard`,
     profileUrl: `${origin}/my/profile`,
+    earningsUrl: `${origin}/my/statements/earnings`,
+    subscribersUrl: `${origin}/my/subscribers/active`,
     requiredCookies: ["auth_id", "sess"],
     loggedOutSelector: 'input[type="password"]',
     identitySelector: "#fanlink-identity",

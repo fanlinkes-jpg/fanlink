@@ -63,6 +63,55 @@ export const connectCreatorSession = createServerFn({ method: "POST" })
     return connectCreator(context.userId, data);
   });
 
+export type EarningKind = "total" | "subscription" | "tip" | "message" | "post";
+
+export type CreatorEarningView = {
+  day: string;
+  kind: EarningKind;
+  amountCents: number;
+  currency: string;
+};
+
+export type CreatorFanView = {
+  fanKey: string;
+  ofUserId: string | null;
+  handle: string | null;
+  displayName: string | null;
+  subscribedAt: string | null;
+  status: "active" | "expired";
+  spentCents: number | null;
+};
+
+/** Lectura guardada de OnlyFans. `earnings` es null si quien mira no es la dueña. */
+export type CreatorReadView = {
+  creatorId: string;
+  earningsSyncedAt: string | null;
+  fansSyncedAt: string | null;
+  lastReason: string | null;
+  earnings: CreatorEarningView[] | null;
+  fans: CreatorFanView[];
+};
+
+export type CreatorReadList = {
+  role: "owner" | "member";
+  creators: CreatorReadView[];
+};
+
+export const listCreatorReads = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }): Promise<CreatorReadList> => {
+    const { listCreatorReadViews } = await import("./of-sessions-runtime.server");
+    return listCreatorReadViews(context.userId);
+  });
+
+export const syncCreatorRead = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string }) => input)
+  .handler(async ({ context, data }): Promise<CreatorReadView> => {
+    const { syncCreatorReadView } = await import("./of-sessions-runtime.server");
+    return syncCreatorReadView(context.userId, data.creatorId);
+  });
+
 export const checkCreatorSession = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((input: { creatorId: string }) => input)

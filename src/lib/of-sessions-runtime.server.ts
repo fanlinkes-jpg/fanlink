@@ -15,7 +15,8 @@ import { AccountStore } from "../../server/of-sessions/store/account-store.ts";
 import { DbAccountStore } from "../../server/of-sessions/store/db-account-store.ts";
 import { createMirroringStore } from "../../server/of-sessions/store/mirroring-store.ts";
 import type { Account } from "../../server/of-sessions/types.ts";
-import type { CreatorSessionView } from "./of-sessions.ts";
+import type { CreatorReadList, CreatorReadView, CreatorSessionView } from "./of-sessions.ts";
+import { listCreatorReads, saveCreatorRead } from "../../server/of-sessions/sync/store.ts";
 
 const globalRef = globalThis as typeof globalThis & {
   __ofSessionManager__?: Promise<SessionManager>;
@@ -106,6 +107,73 @@ export async function inspectCreatorSession(userId: string, creatorId: string): 
   const view = toView(await sessions.inspectConnection(account.id, await creatorHandle(creatorId)));
   if (!view) throw new Error("La sesión no está ligada a una creadora");
   return view;
+}
+
+export async function listCreatorReadViews(userId: string): Promise<CreatorReadList> {
+  const access = await accessFor(userId);
+  const sessions = await getOfSessionManager();
+  const accounts = await sessions.listAccounts();
+  const creatorIds = accounts.flatMap((account) => {
+    if (!account.creatorId) return [];
+    if (access.role !== "owner" && !access.creatorIds.includes(account.creatorId)) return [];
+    return [account.creatorId];
+  });
+  const sql = await getSql();
+  const rows = await listCreatorReads(sql, creatorIds);
+  return { role: access.role, creators: rows.map((row) => presentRead(access.role, row)) };
+}
+
+export async function syncCreatorReadView(userId: string, creatorId: string): Promise<CreatorReadView> {
+  const access = await accessFor(userId);
+  const id = parseCreatorId(creatorId);
+  if (access.role !== "owner" && !access.creatorIds.includes(id)) {
+    throw new WorkspaceAccessError("No tienes acceso a esa creadora.");
+  }
+  const sessions = await getOfSessionManager();
+  const account = (await sessions.listAccounts()).find((item) => item.creatorId === id);
+  if (!account) throw new Error("No hay sesión guardada para sincronizar.");
+  const read = await sessions.readCreatorData(account.id, access.role === "owner");
+  const sql = await getSql();
+  await saveCreatorRead(sql, id, read);
+  const [stored] = await listCreatorReads(sql, [id]);
+  if (!stored) {
+    return {
+      creatorId: id,
+      earningsSyncedAt: null,
+      fansSyncedAt: null,
+      lastReason: read.reason,
+      earnings: access.role === "owner" ? [] : null,
+      fans: [],
+    };
+  }
+  return presentRead(access.role, stored);
+}
+
+function presentRead(role: "owner" | "member", row: Awaited<ReturnType<typeof listCreatorReads>>[number]): CreatorReadView {
+  const owner = role === "owner";
+  return {
+    creatorId: row.creatorId,
+    earningsSyncedAt: owner ? row.earningsSyncedAt : null,
+    fansSyncedAt: row.fansSyncedAt,
+    lastReason: row.lastReason,
+    earnings: owner
+      ? row.earnings.map((item) => ({
+          day: item.day,
+          kind: item.kind,
+          amountCents: item.amountCents,
+          currency: item.currency,
+        }))
+      : null,
+    fans: row.fans.map((item) => ({
+      fanKey: item.fanKey,
+      ofUserId: item.ofUserId,
+      handle: item.handle,
+      displayName: item.displayName,
+      subscribedAt: item.subscribedAt,
+      status: item.status,
+      spentCents: item.spentCents,
+    })),
+  };
 }
 
 function toView(account: Account): CreatorSessionView | null {

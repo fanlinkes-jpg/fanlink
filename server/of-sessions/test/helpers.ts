@@ -32,6 +32,7 @@ export function testConfig(
     loginTimeoutMs: 20_000,
     probeTimeoutMs: 15_000,
     identityWaitMs: 1_000,
+    syncPaceMs: 40,
     sessionKey: TEST_SESSION_KEY,
     ...overrides,
   };

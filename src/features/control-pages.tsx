@@ -2,12 +2,14 @@ import { useEffect, useState } from "react";
 import { useNavigate, Link } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { isLast24h, money, pct, timeAgo } from "@/lib/format";
+import { isLast24h, money, timeAgo } from "@/lib/format";
 import { messageValue, useCrm, type Platform, type Role } from "@/lib/crm";
 import { CONNECTION_LABEL, IDENTITY_STATE_LABEL, SESSION_STATUS_LABEL, sessionActionLabel, type SessionStatus } from "@/lib/of-sessions";
 import { hasPerm } from "@/lib/access-policy";
 import { listTeam, updateStaffAccess } from "@/lib/workspace";
 import { useCreatorSessions } from "@/lib/use-creator-sessions";
+import { useOfReads } from "@/lib/use-of-reads";
+import type { CreatorEarningView } from "@/lib/of-sessions";
 import { PLATFORMS } from "@/features/growth-pages";
 import { Badge, Button, Field, Panel, Select } from "@/components/ui";
 
@@ -15,19 +17,26 @@ export function AnalyticsPage() {
   const [view, setView] = useState<"creadoras" | "equipo" | "fans">("creadoras");
   const creators = useCrm((s) => s.creators);
   const employees = useCrm((s) => s.employees);
-  const fans = useCrm((s) => s.fans);
   const messages = useCrm((s) => s.messages);
   const creatorId = useCrm((s) => s.creatorId);
+  const teamAccess = useCrm((s) => s.teamAccess);
+  const reads = useOfReads();
+  const owner = reads.role === "owner" || teamAccess?.role === "owner";
   const scopedCreators = creators.filter((c) => creatorId === "all" || c.id === creatorId);
-  const chart = scopedCreators.map((c) => ({ name: c.name.split(" ")[0], euros: c.revenue30 }));
   const recent = messages.filter((m) => isLast24h(m.at) && m.from === "team" && m.status === "enviado" && !m.unsent);
+  const chart = owner ? earningsChart(scopedCreators.map((c) => c.id), reads.byCreator) : [];
+  const fanRows = scopedCreators.flatMap((creator) => {
+    const read = reads.byCreator.get(creator.id);
+    if (!read?.fansSyncedAt) return [];
+    return read.fans.map((fan) => ({ ...fan, creatorName: creator.name, creatorId: creator.id }));
+  });
 
   return (
     <div className="space-y-4 p-4 md:p-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="font-display text-2xl font-semibold">Analítica</h1>
-          <p className="text-sm text-muted">La misma cifra, tres cortes: creadora, empleado y fan.</p>
+          <p className="text-sm text-muted">Ingresos y fans salen de OnlyFans al pulsar Sincronizar. Si no hay lectura, no hay cifra.</p>
         </div>
         <div className="flex gap-1 rounded-md border border-line p-1">
           {(["creadoras", "equipo", "fans"] as const).map((v) => (
@@ -37,58 +46,72 @@ export function AnalyticsPage() {
           ))}
         </div>
       </div>
+      {reads.error ? <p className="text-sm text-[#8a5a12]">{reads.error}</p> : null}
 
-      {view === "creadoras" && (
+      {view === "creadoras" && owner && (
         <>
-          <Panel title="Ingresos 30 días" bodyClass="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chart}>
-                <XAxis dataKey="name" tick={{ fill: "var(--color-muted)", fontSize: 12 }} axisLine={false} tickLine={false} />
-                <YAxis hide />
-                <Tooltip formatter={(v) => [money(Number(v)), "30 días"]} contentStyle={{ background: "var(--color-raised)", border: "1px solid var(--color-line)", color: "var(--color-fg)" }} />
-                <Bar dataKey="euros" fill="var(--color-primary)" radius={6} />
-              </BarChart>
-            </ResponsiveContainer>
-          </Panel>
+          {chart.length === 0 ? (
+            <p className="rounded-lg border border-line px-4 py-8 text-sm text-muted">Sin sincronizar</p>
+          ) : (
+            <Panel title="Ingresos sincronizados" bodyClass="h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={chart}>
+                  <XAxis dataKey="day" tick={{ fill: "var(--color-muted)", fontSize: 12 }} axisLine={false} tickLine={false} />
+                  <YAxis hide />
+                  <Tooltip formatter={(v) => [centsLabel(Number(v), chart[0]?.currency ?? "USD"), "Día"]} contentStyle={{ background: "var(--color-raised)", border: "1px solid var(--color-line)", color: "var(--color-fg)" }} />
+                  <Bar dataKey="amountCents" fill="var(--color-primary)" radius={6} />
+                </BarChart>
+              </ResponsiveContainer>
+            </Panel>
+          )}
           <div className="overflow-x-auto rounded-lg border border-line">
             <table className="w-full min-w-[640px] text-left text-sm">
               <thead className="bg-surface text-xs text-muted">
-                <tr>{["Creadora", "Plataforma", "Subs", "30 días", "Crecimiento", "Parte agencia"].map((h) => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr>
+                <tr>{["Creadora", "Fans", "Ingresos", "Tipos", "Última sincronización", ""].map((h) => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr>
               </thead>
               <tbody>
-                {scopedCreators.map((c) => (
-                  <tr key={c.id} className="border-t border-line">
-                    <td className="px-3 py-3">{c.name}</td>
-                    <td className="px-3 py-3">{c.platform}</td>
-                    <td className="px-3 py-3 tabular-nums">{c.subscribers}</td>
-                    <td className="px-3 py-3 tabular-nums">{money(c.revenue30)}</td>
-                    <td className={`px-3 py-3 tabular-nums ${c.growth >= 0 ? "text-primary" : "text-danger"}`}>{pct(c.growth)}</td>
-                    <td className="px-3 py-3 tabular-nums">{money(Math.round(c.revenue30 * (c.split / 100)))} · {c.split}%</td>
-                  </tr>
-                ))}
+                {scopedCreators.map((c) => {
+                  const read = reads.byCreator.get(c.id);
+                  const moneyRows = read?.earnings ?? [];
+                  return (
+                    <tr key={c.id} className="border-t border-line">
+                      <td className="px-3 py-3">{c.name}</td>
+                      <td className="px-3 py-3 tabular-nums">{read?.fansSyncedAt ? read.fans.length : "Sin sincronizar"}</td>
+                      <td className="px-3 py-3 tabular-nums">{read?.earningsSyncedAt ? centsLabel(sumCents(moneyRows), moneyRows[0]?.currency ?? "USD") : "Sin sincronizar"}</td>
+                      <td className="px-3 py-3 text-xs">{read?.earningsSyncedAt ? kindSummary(moneyRows) : "—"}</td>
+                      <td className="px-3 py-3 text-xs">{read?.earningsSyncedAt ?? read?.fansSyncedAt ?? "Sin sincronizar"}</td>
+                      <td className="px-3 py-3">
+                        <SyncControl creatorId={c.id} pending={reads.pendingId === c.id} onSync={(id) => void reads.sync(id)} reason={read?.lastReason} />
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         </>
       )}
 
+      {view === "creadoras" && !owner && (
+        <p className="rounded-lg border border-line px-4 py-8 text-sm text-muted">Los ingresos los ve la dueña. Aquí no hay cifras globales.</p>
+      )}
+
       {view === "equipo" && (
         <div className="overflow-x-auto rounded-lg border border-line">
           <table className="w-full min-w-[640px] text-left text-sm">
             <thead className="bg-surface text-xs text-muted">
-              <tr>{["Persona", "Rol", "Mensajes 24 h", "Ventas 24 h", "Respuesta", "Turno hoy"].map((h) => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr>
+              <tr>{["Persona", "Rol", "Mensajes 24 h", "Ingresos", "Respuesta", "Turno hoy"].map((h) => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr>
             </thead>
             <tbody>
               {employees.map((e) => {
                 const mine = recent.filter((m) => m.creditedTo === e.id);
-                const sales = mine.reduce((s, m) => s + messageValue(m), 0);
                 const day = (new Date().getDay() + 6) % 7;
                 return (
                   <tr key={e.id} className="border-t border-line">
                     <td className="px-3 py-3">{e.name}{e.online ? " · en línea" : ""}</td>
                     <td className="px-3 py-3">{e.role}</td>
                     <td className="px-3 py-3 tabular-nums">{mine.length}</td>
-                    <td className="px-3 py-3 tabular-nums">{money(sales)}</td>
+                    <td className="px-3 py-3 text-muted">Sin sincronizar</td>
                     <td className="px-3 py-3">{e.replyMin ? `${e.replyMin} min` : "—"}</td>
                     <td className="px-3 py-3 capitalize">{e.shifts[day]}</td>
                   </tr>
@@ -103,23 +126,20 @@ export function AnalyticsPage() {
         <div className="overflow-x-auto rounded-lg border border-line">
           <table className="w-full min-w-[640px] text-left text-sm">
             <thead className="bg-surface text-xs text-muted">
-              <tr>{["Fan", "Creadora", "Nivel", "Vida", "30 días", "Estado"].map((h) => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr>
+              <tr>{["Fan", "Creadora", "Suscripción", "Estado", "Gastado"].map((h) => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr>
             </thead>
             <tbody>
-              {fans
-                .filter((f) => creatorId === "all" || f.creatorId === creatorId)
-                .slice()
-                .sort((a, b) => b.spendLife - a.spendLife)
-                .map((f) => (
-                  <tr key={f.id} className="border-t border-line">
-                    <td className="px-3 py-3">{f.name}<div className="text-xs text-muted">{f.handle}</div></td>
-                    <td className="px-3 py-3">{creators.find((c) => c.id === f.creatorId)?.name}</td>
-                    <td className="px-3 py-3 capitalize">{f.tier}</td>
-                    <td className="px-3 py-3 tabular-nums">{money(f.spendLife)}</td>
-                    <td className="px-3 py-3 tabular-nums">{money(f.spend30)}</td>
-                    <td className="px-3 py-3 capitalize">{f.status}</td>
-                  </tr>
-                ))}
+              {fanRows.length === 0 ? (
+                <tr><td colSpan={5} className="px-3 py-8 text-center text-muted">Sin sincronizar</td></tr>
+              ) : fanRows.map((fan) => (
+                <tr key={`${fan.creatorId}:${fan.fanKey}`} className="border-t border-line">
+                  <td className="px-3 py-3">{fan.displayName ?? fan.handle ?? fan.ofUserId}<div className="text-xs text-muted">{fan.handle ? `@${fan.handle}` : fan.ofUserId}</div></td>
+                  <td className="px-3 py-3">{fan.creatorName}</td>
+                  <td className="px-3 py-3 text-xs">{fan.subscribedAt?.slice(0, 10) ?? "—"}</td>
+                  <td className="px-3 py-3">{fan.status === "active" ? "Activo" : "Expirado"}</td>
+                  <td className="px-3 py-3 tabular-nums">{fan.spentCents == null ? "—" : centsLabel(fan.spentCents, "USD")}</td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
@@ -339,6 +359,55 @@ export function TeamPage() {
   );
 }
 
+function centsLabel(cents: number, currency: string): string {
+  const major = (cents / 100).toLocaleString("es-ES", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return `${major} ${currency}`;
+}
+
+function sumCents(rows: CreatorEarningView[]): number {
+  const parts = rows.filter((row) => row.kind !== "total").reduce((sum, row) => sum + row.amountCents, 0);
+  if (parts > 0) return parts;
+  return rows.reduce((sum, row) => sum + row.amountCents, 0);
+}
+
+function kindSummary(rows: CreatorEarningView[]): string {
+  const labels: Record<CreatorEarningView["kind"], string> = {
+    total: "total",
+    subscription: "suscripciones",
+    tip: "propinas",
+    message: "mensajes",
+    post: "posts",
+  };
+  const seen = [...new Set(rows.map((row) => labels[row.kind]))];
+  return seen.length ? seen.join(", ") : "—";
+}
+
+function earningsChart(creatorIds: string[], byCreator: Map<string, { earnings: CreatorEarningView[] | null }>): Array<{ day: string; amountCents: number; currency: string }> {
+  const days = new Map<string, { parts: number; total: number; currency: string }>();
+  for (const id of creatorIds) {
+    for (const row of byCreator.get(id)?.earnings ?? []) {
+      const slot = days.get(row.day) ?? { parts: 0, total: 0, currency: row.currency };
+      if (row.kind === "total") slot.total += row.amountCents;
+      else slot.parts += row.amountCents;
+      days.set(row.day, slot);
+    }
+  }
+  return [...days.entries()]
+    .sort((left, right) => left[0].localeCompare(right[0]))
+    .map(([day, slot]) => ({ day, amountCents: slot.parts > 0 ? slot.parts : slot.total, currency: slot.currency }));
+}
+
+function SyncControl({ creatorId, pending, disabled, onSync, reason }: { creatorId: string; pending: boolean; disabled?: boolean; onSync: (creatorId: string) => void; reason?: string | null }) {
+  return (
+    <span className="inline-flex flex-col items-start">
+      <button type="button" disabled={disabled || pending} onClick={() => onSync(creatorId)} className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs disabled:opacity-50">
+        {pending ? "Sincronizando…" : "Sincronizar"}
+      </button>
+      {reason ? <span className="mt-1 max-w-[16rem] text-[10px] leading-snug text-[#8a5a12]" title={reason}>{reason}</span> : null}
+    </span>
+  );
+}
+
 function identityTitle(live: { identityName: string | null; identityUserId: string | null; identityCheckedAt: string | null } | undefined): string | undefined {
   if (!live) return undefined;
   const parts = [
@@ -369,6 +438,7 @@ export function CreatorsPage() {
   const employees = useCrm((s) => s.employees);
   const addCreator = useCrm((s) => s.addCreator);
   const sessions = useCreatorSessions();
+  const reads = useOfReads();
   const teamAccess = useCrm((s) => s.teamAccess);
   const canOperate = hasPerm(teamAccess, "equipo");
   const [open, setOpen] = useState(false);
@@ -545,6 +615,13 @@ export function CreatorsPage() {
                       >
                         Comprobar
                       </button>
+                      <SyncControl
+                        creatorId={c.id}
+                        pending={reads.pendingId === c.id}
+                        disabled={!live || live.readsBlocked || !(teamAccess?.role === "owner" || teamAccess?.creatorIds.includes(c.id))}
+                        onSync={(id) => void reads.sync(id)}
+                        reason={reads.byCreator.get(c.id)?.lastReason}
+                      />
                     </div>
                   </td>
                 </tr>
@@ -557,7 +634,7 @@ export function CreatorsPage() {
             )}
           </tbody>
         </table>
-        <p className="mt-3 text-xs text-[#6d7585]">Sesión guardada es el archivo de cookies. Conexión es una comprobación aparte y no prueba ingresos ni mensajes. La identidad de OnlyFans queda en no verificada: esta versión no tiene una fuente de nombre acordada. Conectar abre Chromium y no pide la contraseña.</p>
+        <p className="mt-3 text-xs text-[#6d7585]">Sincronizar abre las páginas de ganancias y de fans con la sesión guardada y lee lo que esas páginas piden. No envía nada. Si la identidad no coincide, no sincroniza. Puede tardar cerca de un minuto. Una cuenta cada vez.</p>
       </div>
     </div>
   );
