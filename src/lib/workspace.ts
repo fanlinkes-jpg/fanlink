@@ -104,6 +104,20 @@ export const updateStaffAccess = createServerFn({ method: "POST" })
     return ensureStaff(sql, context.userId, devMode);
   });
 
+export const updateStaffAlert = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { userId: string; phone: string; enabled: boolean; quietMinutes: number }) => input)
+  .handler(async ({ context, data }) => {
+    const { getSql } = await import("@/lib/db");
+    const { ensureStaff, setStaffAlert } = await import("@/lib/workspace-store");
+    const { DEV_USER_ID, authConfigured } = await import("@/lib/auth/verify.server");
+    const sql = await getSql();
+    const devMode = !authConfigured && context.userId === DEV_USER_ID;
+    const actor = await ensureStaff(sql, context.userId, devMode);
+    await setStaffAlert(sql, actor, data.userId, data);
+    return { ok: true as const };
+  });
+
 export const listTeam = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {

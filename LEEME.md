@@ -70,6 +70,17 @@ Los hilos y los mensajes se guardan por creadora y por fan. Un mensaje nuevo de 
 
 Fragilidad: si OnlyFans cambia la ruta del chat o los campos `withUser`, `lastMessage`, `text` y `createdAt`, la lista puede quedar vacía y la razón será `sin respuesta de chats` o `página cambiada (chats)`. El envío no existe en esta versión.
 
+## Avisos de WhatsApp
+
+Cuando entra un `new_fan_message`, Fanlink avisa a los miembros asignados a esa creadora que tengan el interruptor de avisos encendido y un teléfono en formato internacional. El texto lleva el nombre de la cuenta, el fan y el extracto. Varios fans del mismo momento salen en un solo mensaje. El mismo fan no se repite hasta que pasan los minutos guardados en su ficha (por defecto 15, `FANLINK_ALERT_QUIET_MIN`).
+
+Sin credenciales el aviso es simulado y solo se escribe en el log, con el teléfono enmascarado. Para un proveedor real, sin pegar claves en el código:
+
+- Twilio: `FANLINK_WHATSAPP_PROVIDER=twilio`, `FANLINK_TWILIO_ACCOUNT_SID`, `FANLINK_TWILIO_AUTH_TOKEN`, `FANLINK_TWILIO_WHATSAPP_FROM`.
+- Cloud API: `FANLINK_WHATSAPP_PROVIDER=cloud`, `FANLINK_WHATSAPP_TOKEN`, `FANLINK_WHATSAPP_PHONE_ID`.
+
+El teléfono y el interruptor se guardan en Equipo, en el acceso del servidor. No hace falta una clave de WhatsApp para probar el modo simulado.
+
 ## Prueba local
 
 El puerto 8080 puede estar ocupado. No lo uses si otro proyecto lo tiene.

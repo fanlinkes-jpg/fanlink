@@ -16,6 +16,7 @@ import { DbAccountStore } from "../../server/of-sessions/store/db-account-store.
 import { createMirroringStore } from "../../server/of-sessions/store/mirroring-store.ts";
 import type { Account } from "../../server/of-sessions/types.ts";
 import type { CreatorChatList, CreatorReadList, CreatorReadView, CreatorSessionView } from "./of-sessions.ts";
+import { deliverFanAlerts } from "../../server/of-sessions/notify/deliver.ts";
 import { chatIntervalMinFromEnv } from "../../server/of-sessions/sync/chats.ts";
 import { listChatMeta, listChats, saveChatRead } from "../../server/of-sessions/sync/chat-store.ts";
 import { intervalMinFromEnv, startSyncLoop, type ScheduleAccount } from "../../server/of-sessions/sync/schedule.ts";
@@ -104,7 +105,9 @@ function bootChatLoop(sessions: SessionManager): void {
       if (read.alreadyRunning) return;
       const account = (await sessions.listAccounts()).find((item) => item.id === accountId);
       if (!account?.creatorId) return;
-      await saveChatRead(await getSql(), account.creatorId, read);
+      const sql = await getSql();
+      const events = await saveChatRead(sql, account.creatorId, read);
+      await deliverFanAlerts(sql, events);
     },
   });
 }
@@ -301,7 +304,11 @@ export async function syncCreatorChatView(userId: string, creatorId: string): Pr
   const account = (await sessions.listAccounts()).find((item) => item.creatorId === id);
   if (!account) throw new Error("No hay sesión guardada para sincronizar.");
   const read = await sessions.readCreatorChats(account.id);
-  if (!read.alreadyRunning) await saveChatRead(await getSql(), id, read);
+  if (!read.alreadyRunning) {
+    const sql = await getSql();
+    const events = await saveChatRead(sql, id, read);
+    await deliverFanAlerts(sql, events);
+  }
 }
 
 export async function syncCreatorReadView(userId: string, creatorId: string): Promise<CreatorReadView> {

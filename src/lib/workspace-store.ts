@@ -61,16 +61,57 @@ export async function readAccess(sql: SqlQuery, userId: string, devMode: boolean
   };
 }
 
-export async function listStaff(sql: SqlQuery): Promise<Array<TeamAccess & { displayName: string }>> {
+export type StaffAlert = {
+  phone: string | null;
+  alertsEnabled: boolean;
+  quietMinutes: number;
+};
+
+export async function listStaff(sql: SqlQuery): Promise<Array<TeamAccess & { displayName: string } & StaffAlert>> {
   const profiles = await sql.query<ProfileRow>("select user_id, display_name, role, perms from staff_profile order by created_at, user_id");
   const grants = await sql.query<GrantRow & { user_id: string }>("select user_id, creator_id from creator_grant");
-  return profiles.map((profile) => ({
-    userId: profile.user_id,
-    role: profile.role === "owner" ? "owner" : "member",
-    perms: readPerms(profile.perms),
-    creatorIds: grants.filter((grant) => grant.user_id === profile.user_id).map((grant) => grant.creator_id),
-    displayName: profile.display_name,
-  }));
+  const alerts = await sql.query<{ user_id: string; phone: string | null; alerts_enabled: boolean | string; quiet_minutes: number | string | null }>(
+    "select user_id, phone, alerts_enabled, quiet_minutes from staff_alert",
+  );
+  return profiles.map((profile) => {
+    const alert = alerts.find((row) => row.user_id === profile.user_id);
+    return {
+      userId: profile.user_id,
+      role: profile.role === "owner" ? "owner" : "member",
+      perms: readPerms(profile.perms),
+      creatorIds: grants.filter((grant) => grant.user_id === profile.user_id).map((grant) => grant.creator_id),
+      displayName: profile.display_name,
+      phone: alert?.phone ?? null,
+      alertsEnabled: alert?.alerts_enabled === true || alert?.alerts_enabled === "t" || alert?.alerts_enabled === "true",
+      quietMinutes: Number(alert?.quiet_minutes ?? 15) || 15,
+    };
+  });
+}
+
+export async function setStaffAlert(
+  sql: SqlQuery,
+  actor: TeamAccess,
+  userId: string,
+  input: { phone: string; enabled: boolean; quietMinutes: number },
+): Promise<void> {
+  if (actor.role !== "owner" && actor.userId !== userId) {
+    throw new WorkspaceAccessError("Solo puedes cambiar tu propio aviso.");
+  }
+  const phone = input.phone.trim();
+  if (phone && !/^\+[1-9]\d{7,14}$/.test(phone.replace(/[\s()-]/g, ""))) {
+    throw new WorkspaceAccessError("El teléfono tiene que ir en formato internacional, por ejemplo +34600000000.");
+  }
+  const quiet = Math.min(1440, Math.max(1, Math.round(input.quietMinutes) || 15));
+  const normalized = phone ? phone.replace(/[\s()-]/g, "") : null;
+  await sql.query(
+    `insert into staff_alert (user_id, phone, alerts_enabled, quiet_minutes)
+     values ($1, $2, $3, $4)
+     on conflict (user_id) do update set
+       phone = excluded.phone,
+       alerts_enabled = excluded.alerts_enabled,
+       quiet_minutes = excluded.quiet_minutes`,
+    [userId, normalized, input.enabled, quiet],
+  );
 }
 
 export async function setStaffPerms(sql: SqlQuery, actor: TeamAccess, userId: string, perms: string[]): Promise<void> {

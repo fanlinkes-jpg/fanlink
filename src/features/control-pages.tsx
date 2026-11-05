@@ -6,7 +6,7 @@ import { isLast24h, money, timeAgo } from "@/lib/format";
 import { messageValue, useCrm, type Platform, type Role } from "@/lib/crm";
 import { CONNECTION_LABEL, IDENTITY_STATE_LABEL, SESSION_STATUS_LABEL, sessionActionLabel, type SessionStatus } from "@/lib/of-sessions";
 import { hasPerm } from "@/lib/access-policy";
-import { listTeam, updateStaffAccess } from "@/lib/workspace";
+import { listTeam, updateStaffAccess, updateStaffAlert } from "@/lib/workspace";
 import { useCreatorSessions } from "@/lib/use-creator-sessions";
 import { useOfReads } from "@/lib/use-of-reads";
 import type { CreatorEarningView } from "@/lib/of-sessions";
@@ -797,10 +797,12 @@ function MemberGrants({
   person,
   creatorIds,
   onSave,
+  onAlert,
 }: {
-  person: { userId: string; displayName: string; perms: string[]; creatorIds: string[] };
+  person: { userId: string; displayName: string; perms: string[]; creatorIds: string[]; phone: string | null; alertsEnabled: boolean; quietMinutes: number };
   creatorIds: string[];
   onSave: (userId: string, perms: string[], creatorIds: string[]) => Promise<void>;
+  onAlert: (userId: string, phone: string, enabled: boolean, quietMinutes: number) => Promise<void>;
 }) {
   const perms = ["mensajes", "precios", "vault", "campanas", "analitica", "equipo", "ajustes"] as const;
   return (
@@ -821,6 +823,7 @@ function MemberGrants({
           </label>
         ))}
       </div>
+      <AlertFields person={person} onAlert={onAlert} />
       <div className="mt-2 flex flex-wrap gap-3">
         {creatorIds.map((creatorId) => (
           <label key={creatorId} className="flex items-center gap-1 text-xs">
@@ -842,9 +845,44 @@ function MemberGrants({
   );
 }
 
+function AlertFields({
+  person,
+  onAlert,
+}: {
+  person: { userId: string; phone: string | null; alertsEnabled: boolean; quietMinutes: number };
+  onAlert: (userId: string, phone: string, enabled: boolean, quietMinutes: number) => Promise<void>;
+}) {
+  const [phone, setPhone] = useState(person.phone ?? "");
+  const [enabled, setEnabled] = useState(person.alertsEnabled);
+  const [quiet, setQuiet] = useState(String(person.quietMinutes));
+  return (
+    <form
+      className="mt-3 flex flex-wrap items-end gap-2"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void onAlert(person.userId, phone, enabled, Number(quiet) || 15);
+      }}
+    >
+      <label className="text-xs text-muted">
+        WhatsApp
+        <input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="+34600000000" className="mt-1 block h-8 rounded-md border border-line px-2 text-sm" />
+      </label>
+      <label className="flex items-center gap-1 text-xs">
+        <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
+        Avisos
+      </label>
+      <label className="text-xs text-muted">
+        Minutos entre avisos del mismo fan
+        <input value={quiet} onChange={(event) => setQuiet(event.target.value)} inputMode="numeric" className="mt-1 block h-8 w-16 rounded-md border border-line px-2 text-sm" />
+      </label>
+      <button type="submit" className="rounded-md border border-line px-2 py-1 text-xs">Guardar aviso</button>
+    </form>
+  );
+}
+
 function TeamAccessPanel({ creatorIds }: { creatorIds: string[] }) {
   const access = useCrm((s) => s.teamAccess);
-  const [staff, setStaff] = useState<Array<{ userId: string; displayName: string; role: "owner" | "member"; perms: string[]; creatorIds: string[] }>>([]);
+  const [staff, setStaff] = useState<Array<{ userId: string; displayName: string; role: "owner" | "member"; perms: string[]; creatorIds: string[]; phone: string | null; alertsEnabled: boolean; quietMinutes: number }>>([]);
   const [notice, setNotice] = useState("");
 
   useEffect(() => {
@@ -875,6 +913,17 @@ function TeamAccessPanel({ creatorIds }: { creatorIds: string[] }) {
     }
   }
 
+  async function saveAlert(userId: string, phone: string, enabled: boolean, quietMinutes: number) {
+    setNotice("");
+    try {
+      await updateStaffAlert({ data: { userId, phone, enabled, quietMinutes } });
+      const result = await listTeam();
+      setStaff(result.staff);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "No se ha podido guardar el aviso.");
+    }
+  }
+
   return (
     <Panel title="Acceso del servidor">
       <p className="text-sm">Sesión autenticada: {access.displayName}. {access.role === "owner" ? "Dueña" : "Miembro"}.</p>
@@ -889,7 +938,7 @@ function TeamAccessPanel({ creatorIds }: { creatorIds: string[] }) {
         staff
           .filter((person) => person.role === "member")
           .map((person) => (
-            <MemberGrants key={person.userId} person={person} creatorIds={creatorIds} onSave={saveMember} />
+            <MemberGrants key={person.userId} person={person} creatorIds={creatorIds} onSave={saveMember} onAlert={saveAlert} />
           ))}
     </Panel>
   );
