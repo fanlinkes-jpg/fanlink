@@ -31,7 +31,6 @@ export type Creator = {
   nick?: string;
   tag?: string;
   staff?: string[];
-  session?: "conectada" | "pendiente" | "caida";
 };
 
 export type Fan = {
@@ -609,7 +608,6 @@ export const useCrm = create<CrmState>()(
               hue: Math.floor(Math.random() * 360),
               proxy: "IP dedicada · pendiente",
               staff: [],
-              session: "pendiente",
             },
           ],
         })),

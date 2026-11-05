@@ -4,6 +4,8 @@ import { toast } from "sonner";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { isLast24h, money, pct, timeAgo } from "@/lib/format";
 import { messageValue, useCrm, type Platform, type Role } from "@/lib/crm";
+import { SESSION_STATUS_LABEL, sessionActionLabel, type SessionStatus } from "@/lib/of-sessions";
+import { useCreatorSessions } from "@/lib/use-creator-sessions";
 import { PLATFORMS } from "@/features/growth-pages";
 import { Badge, Button, Field, Panel, Select } from "@/components/ui";
 
@@ -333,17 +335,26 @@ export function TeamPage() {
   );
 }
 
-const SESSION_LABEL = { conectada: "Conectada", pendiente: "Pendiente", caida: "Caída" } as const;
-type Session = keyof typeof SESSION_LABEL;
-
-function sessionOf(c: { session?: Session; status: string }): Session {
-  return c.session ?? (c.status === "activa" ? "conectada" : "pendiente");
+function sessionTone(status: SessionStatus): string {
+  switch (status) {
+    case "active":
+      return "bg-emerald-50 text-emerald-700";
+    case "pending_login":
+      return "bg-amber-50 text-amber-700";
+    case "expired":
+      return "bg-red-50 text-red-700";
+    default: {
+      const exhaustive: never = status;
+      return exhaustive;
+    }
+  }
 }
 
 export function CreatorsPage() {
   const creators = useCrm((s) => s.creators);
   const employees = useCrm((s) => s.employees);
   const addCreator = useCrm((s) => s.addCreator);
+  const sessions = useCreatorSessions();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [nick, setNick] = useState("");
@@ -359,39 +370,32 @@ export function CreatorsPage() {
   const tags = [...new Set(creators.map((c) => c.tag || c.city))];
 
   useEffect(() => {
-    const defaults: Record<string, { nick: string; tag: string; staff: string[]; session: Session }> = {
-      "c-alba": { nick: "Alba Studio", tag: "estudio", staff: ["e-lucia", "e-marta", "e-diego"], session: "conectada" },
-      "c-nerea": { nick: "Nerea", tag: "lifestyle", staff: ["e-marta", "e-nora"], session: "conectada" },
-      "c-ines": { nick: "Inés Costa", tag: "costa", staff: ["e-diego", "e-hugo"], session: "pendiente" },
-      "c-carla": { nick: "Carla", tag: "premium", staff: ["e-lucia", "e-nora"], session: "caida" },
+    const defaults: Record<string, { nick: string; tag: string; staff: string[] }> = {
+      "c-alba": { nick: "Alba Studio", tag: "estudio", staff: ["e-lucia", "e-marta", "e-diego"] },
+      "c-nerea": { nick: "Nerea", tag: "lifestyle", staff: ["e-marta", "e-nora"] },
+      "c-ines": { nick: "Inés Costa", tag: "costa", staff: ["e-diego", "e-hugo"] },
+      "c-carla": { nick: "Carla", tag: "premium", staff: ["e-lucia", "e-nora"] },
     };
-    if (!creators.some((c) => defaults[c.id] && !c.session)) return;
+    if (!creators.some((c) => defaults[c.id] && !c.nick)) return;
     useCrm.setState((s) => ({
-      creators: s.creators.map((c) => (defaults[c.id] && !c.session ? { ...c, ...defaults[c.id] } : c)),
+      creators: s.creators.map((c) => (defaults[c.id] && !c.nick ? { ...c, ...defaults[c.id] } : c)),
     }));
   }, [creators]);
+
+  function statusOf(id: string): SessionStatus {
+    return sessions.byCreator.get(id)?.status ?? "pending_login";
+  }
 
   const rows = creators.filter((c) => {
     const blob = `${c.name} ${c.nick ?? ""} ${c.handle}`.toLowerCase();
     if (q && !blob.includes(q.toLowerCase())) return false;
     if (platformFilter !== "todas" && c.platform !== platformFilter) return false;
     if (tagFilter !== "todas" && (c.tag || c.city) !== tagFilter) return false;
-    if (sessionFilter !== "todas" && sessionOf(c) !== sessionFilter) return false;
+    if (sessions.ready && !sessions.error && sessionFilter !== "todas" && statusOf(c.id) !== sessionFilter) return false;
     if (staffFilter !== "todos" && !(c.staff ?? []).includes(staffFilter)) return false;
     if (statusFilter !== "todas" && c.status !== statusFilter) return false;
     return true;
   });
-
-  function cycleSession(id: string) {
-    const order: Session[] = ["conectada", "pendiente", "caida"];
-    useCrm.setState((s) => ({
-      creators: s.creators.map((c) => {
-        if (c.id !== id) return c;
-        const next = order[(order.indexOf(sessionOf(c)) + 1) % order.length];
-        return { ...c, session: next };
-      }),
-    }));
-  }
 
   return (
     <div className="min-h-full bg-[#f4f6f8]">
@@ -413,7 +417,7 @@ export function CreatorsPage() {
             setHandle("");
             setTag("");
             setOpen(false);
-            toast.success("Creadora añadida. La sesión queda pendiente.");
+            toast.success("Creadora añadida. La sesión queda pendiente de login.");
           }}
         >
           <Field value={name} onChange={(e) => setName(e.target.value)} placeholder="Nombre" required />
@@ -439,9 +443,9 @@ export function CreatorsPage() {
         </Select>
         <Select value={sessionFilter} onChange={(e) => setSessionFilter(e.target.value)} aria-label="Sesión" className="h-9 bg-[#eef0f3]">
           <option value="todas">Estado de sesión</option>
-          <option value="conectada">Conectada</option>
-          <option value="pendiente">Pendiente</option>
-          <option value="caida">Caída</option>
+          <option value="active">Activa</option>
+          <option value="pending_login">Pendiente de login</option>
+          <option value="expired">Expirada</option>
         </Select>
         <Select value={staffFilter} onChange={(e) => setStaffFilter(e.target.value)} aria-label="Empleado" className="h-9 bg-[#eef0f3]">
           <option value="todos">Empleado</option>
@@ -454,6 +458,10 @@ export function CreatorsPage() {
         </Select>
       </div>
 
+      {sessions.error && (
+        <p className="mx-4 mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{sessions.error}</p>
+      )}
+
       <div className="overflow-x-auto px-4 pb-6">
         <table className="w-full min-w-[980px] border-separate border-spacing-0 overflow-hidden rounded-xl bg-white text-left text-sm">
           <thead>
@@ -465,8 +473,10 @@ export function CreatorsPage() {
           </thead>
           <tbody>
             {rows.map((c) => {
-              const session = sessionOf(c);
+              const live = sessions.byCreator.get(c.id);
+              const status = statusOf(c.id);
               const names = (c.staff ?? []).map((id) => employees.find((e) => e.id === id)?.name.split(" ")[0]).filter(Boolean);
+              const action = live?.loginInProgress ? "Entrando…" : sessionActionLabel(status);
               return (
                 <tr key={c.id} className="border-t border-[#f0f1f4]">
                   <td className="border-b border-[#f4f5f7] px-4 py-3">
@@ -478,20 +488,23 @@ export function CreatorsPage() {
                   <td className="border-b border-[#f4f5f7] px-4 py-3">{c.nick || c.name}</td>
                   <td className="border-b border-[#f4f5f7] px-4 py-3">{c.tag || c.city}</td>
                   <td className="border-b border-[#f4f5f7] px-4 py-3">
-                    <span className={`rounded-full px-2 py-1 text-xs ${session === "conectada" ? "bg-emerald-50 text-emerald-700" : session === "pendiente" ? "bg-amber-50 text-amber-700" : "bg-red-50 text-red-700"}`}>
-                      {SESSION_LABEL[session]}
-                    </span>
+                    {live || (sessions.ready && !sessions.error) ? (
+                      <span title={live?.lastError ?? undefined} className={`rounded-full px-2 py-1 text-xs ${sessionTone(status)}`}>
+                        {SESSION_STATUS_LABEL[status]}
+                      </span>
+                    ) : sessions.ready ? (
+                      <span className="text-xs text-[#8a5a12]">Sin datos</span>
+                    ) : (
+                      <span className="text-xs text-[#6d7585]">Cargando</span>
+                    )}
                   </td>
                   <td className="border-b border-[#f4f5f7] px-4 py-3">{c.platform}</td>
                   <td className="border-b border-[#f4f5f7] px-4 py-3 text-[#3b6cff]">{c.handle}</td>
                   <td className="border-b border-[#f4f5f7] px-4 py-3">{names.length ? names.join(", ") : "Sin asignar"}</td>
                   <td className="border-b border-[#f4f5f7] px-4 py-3">
-                    <div className="flex gap-1">
-                      <Link to="/conectar" className="rounded-lg bg-[#ff7a2f] px-2 py-1 text-xs font-medium text-white">Conectar</Link>
-                      <button type="button" onClick={() => cycleSession(c.id)} className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs hover:bg-[#f4f6f8]">
-                        Estado
-                      </button>
-                    </div>
+                    <Link to="/conectar" search={{ creadora: c.id }} className="rounded-lg bg-[#ff7a2f] px-2 py-1 text-xs font-medium text-white">
+                      {action}
+                    </Link>
                   </td>
                 </tr>
               );
@@ -503,7 +516,7 @@ export function CreatorsPage() {
             )}
           </tbody>
         </table>
-        <p className="mt-3 text-xs text-[#6d7585]">Cada fila es una sesión. Conectada, pendiente o caída. Esto no entra en OnlyFans: marca el estado de esa cuenta dentro de la consola.</p>
+        <p className="mt-3 text-xs text-[#6d7585]">El estado (activa, pendiente de login o expirada) sale de la sesión de OnlyFans guardada en este servidor. Conectar abre una ventana de Chromium para que la dueña entre. Fanlink no pide ni guarda la contraseña.</p>
       </div>
     </div>
   );
