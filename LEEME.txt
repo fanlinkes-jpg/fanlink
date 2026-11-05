@@ -1,0 +1,10 @@
+Fanlink Management
+
+Para abrirlo en tu ordenador:
+
+1. Instala Node.js 22 o superior.
+2. En esta carpeta: npm install
+3. Luego: npm run dev
+4. Abre http://localhost:8080
+
+La consola guarda los datos de prueba en el navegador. La pantalla Conectar cuenta no inicia sesión en OnlyFans y no envía la contraseña.

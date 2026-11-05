@@ -1,0 +1,592 @@
+import { useEffect, useState } from "react";
+import { useNavigate, Link } from "@tanstack/react-router";
+import { toast } from "sonner";
+import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { isLast24h, money, pct, timeAgo } from "@/lib/format";
+import { messageValue, useCrm, type Platform, type Role } from "@/lib/crm";
+import { PLATFORMS } from "@/features/growth-pages";
+import { Badge, Button, Field, Panel, Select } from "@/components/ui";
+
+export function AnalyticsPage() {
+  const [view, setView] = useState<"creadoras" | "equipo" | "fans">("creadoras");
+  const creators = useCrm((s) => s.creators);
+  const employees = useCrm((s) => s.employees);
+  const fans = useCrm((s) => s.fans);
+  const messages = useCrm((s) => s.messages);
+  const creatorId = useCrm((s) => s.creatorId);
+  const scopedCreators = creators.filter((c) => creatorId === "all" || c.id === creatorId);
+  const chart = scopedCreators.map((c) => ({ name: c.name.split(" ")[0], euros: c.revenue30 }));
+  const recent = messages.filter((m) => isLast24h(m.at) && m.from === "team" && m.status === "enviado" && !m.unsent);
+
+  return (
+    <div className="space-y-4 p-4 md:p-6">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="font-display text-2xl font-semibold">Analítica</h1>
+          <p className="text-sm text-muted">La misma cifra, tres cortes: creadora, empleado y fan.</p>
+        </div>
+        <div className="flex gap-1 rounded-md border border-line p-1">
+          {(["creadoras", "equipo", "fans"] as const).map((v) => (
+            <button key={v} onClick={() => setView(v)} className={`rounded-md px-3 py-1 text-sm capitalize ${view === v ? "bg-raised text-fg" : "text-muted"}`}>
+              {v}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {view === "creadoras" && (
+        <>
+          <Panel title="Ingresos 30 días" bodyClass="h-64">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={chart}>
+                <XAxis dataKey="name" tick={{ fill: "var(--color-muted)", fontSize: 12 }} axisLine={false} tickLine={false} />
+                <YAxis hide />
+                <Tooltip formatter={(v) => [money(Number(v)), "30 días"]} contentStyle={{ background: "var(--color-raised)", border: "1px solid var(--color-line)", color: "var(--color-fg)" }} />
+                <Bar dataKey="euros" fill="var(--color-primary)" radius={6} />
+              </BarChart>
+            </ResponsiveContainer>
+          </Panel>
+          <div className="overflow-x-auto rounded-lg border border-line">
+            <table className="w-full min-w-[640px] text-left text-sm">
+              <thead className="bg-surface text-xs text-muted">
+                <tr>{["Creadora", "Plataforma", "Subs", "30 días", "Crecimiento", "Parte agencia"].map((h) => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr>
+              </thead>
+              <tbody>
+                {scopedCreators.map((c) => (
+                  <tr key={c.id} className="border-t border-line">
+                    <td className="px-3 py-3">{c.name}</td>
+                    <td className="px-3 py-3">{c.platform}</td>
+                    <td className="px-3 py-3 tabular-nums">{c.subscribers}</td>
+                    <td className="px-3 py-3 tabular-nums">{money(c.revenue30)}</td>
+                    <td className={`px-3 py-3 tabular-nums ${c.growth >= 0 ? "text-primary" : "text-danger"}`}>{pct(c.growth)}</td>
+                    <td className="px-3 py-3 tabular-nums">{money(Math.round(c.revenue30 * (c.split / 100)))} · {c.split}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {view === "equipo" && (
+        <div className="overflow-x-auto rounded-lg border border-line">
+          <table className="w-full min-w-[640px] text-left text-sm">
+            <thead className="bg-surface text-xs text-muted">
+              <tr>{["Persona", "Rol", "Mensajes 24 h", "Ventas 24 h", "Respuesta", "Turno hoy"].map((h) => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr>
+            </thead>
+            <tbody>
+              {employees.map((e) => {
+                const mine = recent.filter((m) => m.creditedTo === e.id);
+                const sales = mine.reduce((s, m) => s + messageValue(m), 0);
+                const day = (new Date().getDay() + 6) % 7;
+                return (
+                  <tr key={e.id} className="border-t border-line">
+                    <td className="px-3 py-3">{e.name}{e.online ? " · en línea" : ""}</td>
+                    <td className="px-3 py-3">{e.role}</td>
+                    <td className="px-3 py-3 tabular-nums">{mine.length}</td>
+                    <td className="px-3 py-3 tabular-nums">{money(sales)}</td>
+                    <td className="px-3 py-3">{e.replyMin ? `${e.replyMin} min` : "—"}</td>
+                    <td className="px-3 py-3 capitalize">{e.shifts[day]}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {view === "fans" && (
+        <div className="overflow-x-auto rounded-lg border border-line">
+          <table className="w-full min-w-[640px] text-left text-sm">
+            <thead className="bg-surface text-xs text-muted">
+              <tr>{["Fan", "Creadora", "Nivel", "Vida", "30 días", "Estado"].map((h) => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr>
+            </thead>
+            <tbody>
+              {fans
+                .filter((f) => creatorId === "all" || f.creatorId === creatorId)
+                .slice()
+                .sort((a, b) => b.spendLife - a.spendLife)
+                .map((f) => (
+                  <tr key={f.id} className="border-t border-line">
+                    <td className="px-3 py-3">{f.name}<div className="text-xs text-muted">{f.handle}</div></td>
+                    <td className="px-3 py-3">{creators.find((c) => c.id === f.creatorId)?.name}</td>
+                    <td className="px-3 py-3 capitalize">{f.tier}</td>
+                    <td className="px-3 py-3 tabular-nums">{money(f.spendLife)}</td>
+                    <td className="px-3 py-3 tabular-nums">{money(f.spend30)}</td>
+                    <td className="px-3 py-3 capitalize">{f.status}</td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function AuditPage() {
+  const messages = useCrm((s) => s.messages);
+  const fans = useCrm((s) => s.fans);
+  const creators = useCrm((s) => s.creators);
+  const unsend = useCrm((s) => s.unsend);
+  const openFan = useCrm((s) => s.openFan);
+  const navigate = useNavigate();
+  const [who, setWho] = useState("todos");
+  const [kind, setKind] = useState("todos");
+  const authors = ["todos", ...new Set(messages.filter((m) => m.from === "team").map((m) => m.author))];
+  const rows = [...messages].reverse().filter((m) => m.from === "team").filter((m) => who === "todos" || m.author === who).filter((m) => {
+    if (kind === "ppv") return Boolean(m.ppv);
+    if (kind === "masivo") return Boolean(m.mass);
+    if (kind === "retenido") return m.status === "retenido" || Boolean(m.flag);
+    return true;
+  });
+
+  return (
+    <div className="space-y-4 p-4 md:p-6">
+      <div>
+        <h1 className="font-display text-2xl font-semibold">Bandeja de mensajes</h1>
+        <p className="text-sm text-muted">Control de calidad: todo lo que sale del equipo, incluidos los retenidos por palabras prohibidas.</p>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Select value={who} onChange={(e) => setWho(e.target.value)} aria-label="Empleado">
+          {authors.map((a) => <option key={a} value={a}>{a === "todos" ? "Todo el equipo" : a}</option>)}
+        </Select>
+        <Select value={kind} onChange={(e) => setKind(e.target.value)} aria-label="Tipo">
+          <option value="todos">Todos</option>
+          <option value="ppv">PPV</option>
+          <option value="masivo">Masivos</option>
+          <option value="retenido">Retenidos</option>
+        </Select>
+      </div>
+      <div className="overflow-x-auto rounded-lg border border-line">
+        <table className="w-full min-w-[760px] text-left text-sm">
+          <thead className="bg-surface text-xs text-muted">
+            <tr>{["Cuándo", "Quién", "Fan", "Mensaje", "Estado", ""].map((h) => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr>
+          </thead>
+          <tbody>
+            {rows.map((m) => (
+              <tr key={m.id} className="border-t border-line align-top">
+                <td className="px-3 py-3 text-xs text-muted">{timeAgo(m.at)}</td>
+                <td className="px-3 py-3">{m.author}<div className="text-xs text-muted">{creators.find((c) => c.id === m.creatorId)?.name}</div></td>
+                <td className="px-3 py-3">{fans.find((f) => f.id === m.fanId)?.name}</td>
+                <td className="max-w-xs px-3 py-3">
+                  <p className="line-clamp-2">{m.text}</p>
+                  {m.ppv && <p className="text-xs text-gold">{m.ppv.title} · {money(m.ppv.price)}{m.ppv.band ? ` · ${m.ppv.band}` : ""} · {m.ppv.unlocked ? "abierto" : "cerrado"}</p>}
+                </td>
+                <td className="px-3 py-3">
+                  {m.unsent ? <Badge>Deshecho</Badge> : m.status === "retenido" ? <Badge tone="danger">Retenido · {m.flag}</Badge> : <Badge tone="primary">Enviado</Badge>}
+                  {messageValue(m) > 0 && <div className="mt-1 text-xs text-gold">{money(messageValue(m))}</div>}
+                </td>
+                <td className="px-3 py-3">
+                  <div className="flex flex-col gap-1">
+                    <Button variant="ghost" onClick={() => { openFan(m.fanId); void navigate({ to: "/mensajes" }); }}>Abrir</Button>
+                    {!m.unsent && m.status === "enviado" && <Button variant="danger" onClick={() => unsend(m.id)}>Deshacer</Button>}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+const DAYS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
+const SHIFT_STYLE = {
+  mañana: "bg-[#e7f0ff] text-[#2456c7]",
+  noche: "bg-[#efe8ff] text-[#5b3cc4]",
+  libre: "bg-[#f3f4f6] text-[#8b93a3]",
+} as const;
+
+export function TeamPage() {
+  const employees = useCrm((s) => s.employees);
+  const messages = useCrm((s) => s.messages);
+  const togglePerm = useCrm((s) => s.togglePerm);
+  const cycleShift = useCrm((s) => s.cycleShift);
+  const addEmployee = useCrm((s) => s.addEmployee);
+  const [name, setName] = useState("");
+  const [role, setRole] = useState<Role>("Chatter");
+  const perms = ["mensajes", "precios", "vault", "campanas", "analitica", "equipo", "ajustes"] as const;
+  const today = (new Date().getDay() + 6) % 7;
+  const recent = messages.filter((m) => isLast24h(m.at) && m.from === "team" && m.status === "enviado" && !m.unsent);
+
+  return (
+    <div className="space-y-4 p-4 md:p-6">
+      <div>
+        <h1 className="font-display text-2xl font-semibold">Empleados</h1>
+        <p className="text-sm text-muted">Métricas del día y turnos de la semana. Pulsa un turno para cambiarlo.</p>
+      </div>
+
+      <div className="overflow-x-auto rounded-xl border border-line bg-white">
+        <p className="border-b border-line px-4 py-3 text-sm font-semibold">Métricas</p>
+        <table className="w-full min-w-[860px] text-left text-sm">
+          <thead className="text-xs text-muted">
+            <tr>
+              {["Persona", "Rol", "Horas sem.", "Mensajes 24 h", "Ventas 24 h", "PPV", "Propinas", "Respuesta", "Turno hoy"].map((h) => (
+                <th key={h} className="px-3 py-2 font-medium">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {employees.map((e) => {
+              const mine = recent.filter((m) => m.creditedTo === e.id);
+              const sales = mine.reduce((sum, m) => sum + messageValue(m), 0);
+              const tips = mine.reduce((sum, m) => sum + (m.tip ?? 0), 0);
+              const ppv = mine.filter((m) => m.ppv?.unlocked).length;
+              return (
+                <tr key={e.id} className="border-t border-line">
+                  <td className="px-3 py-3 font-medium">
+                    {e.name}
+                    <span className={`ml-2 inline-block h-2 w-2 rounded-full ${e.online ? "bg-emerald-500" : "bg-[#d0d4dc]"}`} />
+                  </td>
+                  <td className="px-3 py-3">{e.role}</td>
+                  <td className="px-3 py-3 tabular-nums">{e.shifts.reduce((n, shift) => n + (shift === "libre" ? 0 : 8), 0)} h</td>
+                  <td className="px-3 py-3 tabular-nums">{mine.length}</td>
+                  <td className="px-3 py-3 tabular-nums">{money(sales)}</td>
+                  <td className="px-3 py-3 tabular-nums">{ppv}</td>
+                  <td className="px-3 py-3 tabular-nums">{money(tips)}</td>
+                  <td className="px-3 py-3">{e.replyMin ? `${e.replyMin} min` : "—"}</td>
+                  <td className="px-3 py-3">
+                    <span className={`rounded-lg px-2 py-1 text-xs capitalize ${SHIFT_STYLE[e.shifts[today]]}`}>{e.shifts[today]}</span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="overflow-x-auto rounded-xl border border-line bg-white">
+        <p className="border-b border-line px-4 py-3 text-sm font-semibold">Turnos</p>
+        <table className="w-full min-w-[760px] text-left text-sm">
+          <thead className="text-xs text-muted">
+            <tr>
+              <th className="px-3 py-2 font-medium">Persona</th>
+              {DAYS.map((d, i) => (
+                <th key={d} className={`px-2 py-2 font-medium ${i === today ? "text-[#2456c7]" : ""}`}>{d}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {employees.map((e) => (
+              <tr key={e.id} className="border-t border-line">
+                <td className="px-3 py-3">
+                  <p className="font-medium">{e.name}</p>
+                  <p className="text-xs text-muted">{e.role}</p>
+                </td>
+                {e.shifts.map((shift, i) => (
+                  <td key={`${e.id}-${DAYS[i]}`} className="px-2 py-2">
+                    <button
+                      onClick={() => cycleShift(e.id, i)}
+                      className={`w-full rounded-lg px-1 py-2 text-xs capitalize ${SHIFT_STYLE[shift]} ${i === today ? "ring-2 ring-[#2456c7]" : ""}`}
+                    >
+                      {shift}
+                    </button>
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <Panel title="Incorporar">
+        <form className="flex flex-col gap-2 sm:flex-row" onSubmit={(e) => { e.preventDefault(); addEmployee(name, role); setName(""); toast.success("Persona añadida"); }}>
+          <Field value={name} onChange={(e) => setName(e.target.value)} placeholder="Nombre" required />
+          <Select value={role} onChange={(e) => setRole(e.target.value as Role)} aria-label="Rol">
+            {(["Manager", "Chatter", "VA"] as Role[]).map((r) => <option key={r}>{r}</option>)}
+          </Select>
+          <Button type="submit">Añadir</Button>
+        </form>
+      </Panel>
+      <Panel title="Permisos" bodyClass="overflow-x-auto">
+        <table className="w-full min-w-[720px] text-left text-sm">
+          <thead className="text-xs text-muted">
+            <tr>
+              <th className="py-2 pr-3 font-medium">Persona</th>
+              {perms.map((p) => <th key={p} className="px-2 py-2 font-medium capitalize">{p}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {employees.map((e) => (
+              <tr key={e.id} className="border-t border-line">
+                <td className="py-2 pr-3">{e.name}</td>
+                {perms.map((p) => (
+                  <td key={p} className="px-2 py-2">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 accent-primary"
+                      checked={e.perms.includes(p)}
+                      disabled={e.role === "Dueña"}
+                      onChange={() => togglePerm(e.id, p)}
+                      aria-label={`${e.name} ${p}`}
+                    />
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Panel>
+    </div>
+  );
+}
+
+const SESSION_LABEL = { conectada: "Conectada", pendiente: "Pendiente", caida: "Caída" } as const;
+type Session = keyof typeof SESSION_LABEL;
+
+function sessionOf(c: { session?: Session; status: string }): Session {
+  return c.session ?? (c.status === "activa" ? "conectada" : "pendiente");
+}
+
+export function CreatorsPage() {
+  const creators = useCrm((s) => s.creators);
+  const employees = useCrm((s) => s.employees);
+  const addCreator = useCrm((s) => s.addCreator);
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [nick, setNick] = useState("");
+  const [handle, setHandle] = useState("");
+  const [platform, setPlatform] = useState<Platform>("OnlyFans");
+  const [tag, setTag] = useState("");
+  const [q, setQ] = useState("");
+  const [platformFilter, setPlatformFilter] = useState("todas");
+  const [tagFilter, setTagFilter] = useState("todas");
+  const [sessionFilter, setSessionFilter] = useState("todas");
+  const [staffFilter, setStaffFilter] = useState("todos");
+  const [statusFilter, setStatusFilter] = useState("todas");
+  const tags = [...new Set(creators.map((c) => c.tag || c.city))];
+
+  useEffect(() => {
+    const defaults: Record<string, { nick: string; tag: string; staff: string[]; session: Session }> = {
+      "c-alba": { nick: "Alba Studio", tag: "estudio", staff: ["e-lucia", "e-marta", "e-diego"], session: "conectada" },
+      "c-nerea": { nick: "Nerea", tag: "lifestyle", staff: ["e-marta", "e-nora"], session: "conectada" },
+      "c-ines": { nick: "Inés Costa", tag: "costa", staff: ["e-diego", "e-hugo"], session: "pendiente" },
+      "c-carla": { nick: "Carla", tag: "premium", staff: ["e-lucia", "e-nora"], session: "caida" },
+    };
+    if (!creators.some((c) => defaults[c.id] && !c.session)) return;
+    useCrm.setState((s) => ({
+      creators: s.creators.map((c) => (defaults[c.id] && !c.session ? { ...c, ...defaults[c.id] } : c)),
+    }));
+  }, [creators]);
+
+  const rows = creators.filter((c) => {
+    const blob = `${c.name} ${c.nick ?? ""} ${c.handle}`.toLowerCase();
+    if (q && !blob.includes(q.toLowerCase())) return false;
+    if (platformFilter !== "todas" && c.platform !== platformFilter) return false;
+    if (tagFilter !== "todas" && (c.tag || c.city) !== tagFilter) return false;
+    if (sessionFilter !== "todas" && sessionOf(c) !== sessionFilter) return false;
+    if (staffFilter !== "todos" && !(c.staff ?? []).includes(staffFilter)) return false;
+    if (statusFilter !== "todas" && c.status !== statusFilter) return false;
+    return true;
+  });
+
+  function cycleSession(id: string) {
+    const order: Session[] = ["conectada", "pendiente", "caida"];
+    useCrm.setState((s) => ({
+      creators: s.creators.map((c) => {
+        if (c.id !== id) return c;
+        const next = order[(order.indexOf(sessionOf(c)) + 1) % order.length];
+        return { ...c, session: next };
+      }),
+    }));
+  }
+
+  return (
+    <div className="min-h-full bg-[#f4f6f8]">
+      <div className="flex items-center justify-between border-b border-[#e6e8ee] bg-white px-4 py-3">
+        <h1 className="font-display text-lg font-semibold">Administrar creadoras</h1>
+        <button type="button" onClick={() => setOpen((v) => !v)} className="rounded-full bg-[#ff7a2f] px-4 py-2 text-sm font-medium text-white">
+          Añadir creadora
+        </button>
+      </div>
+
+      {open && (
+        <form
+          className="grid gap-2 border-b border-[#e6e8ee] bg-white p-4 md:grid-cols-6"
+          onSubmit={(e) => {
+            e.preventDefault();
+            addCreator({ name, nick, handle, platform, city: "España", tag });
+            setName("");
+            setNick("");
+            setHandle("");
+            setTag("");
+            setOpen(false);
+            toast.success("Creadora añadida. La sesión queda pendiente.");
+          }}
+        >
+          <Field value={name} onChange={(e) => setName(e.target.value)} placeholder="Nombre" required />
+          <Field value={nick} onChange={(e) => setNick(e.target.value)} placeholder="Apodo" />
+          <Field value={handle} onChange={(e) => setHandle(e.target.value)} placeholder="@cuenta" required />
+          <Select value={platform} onChange={(e) => setPlatform(e.target.value as Platform)} aria-label="Plataforma">
+            {PLATFORMS.map((p) => <option key={p}>{p}</option>)}
+          </Select>
+          <Field value={tag} onChange={(e) => setTag(e.target.value)} placeholder="Etiqueta" />
+          <Button type="submit">Guardar</Button>
+        </form>
+      )}
+
+      <div className="flex flex-wrap gap-2 px-4 py-3">
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Nombre de la creadora" className="h-9 rounded-lg border border-[#e6e8ee] bg-[#eef0f3] px-3 text-sm" />
+        <Select value={platformFilter} onChange={(e) => setPlatformFilter(e.target.value)} aria-label="Plataforma" className="h-9 bg-[#eef0f3]">
+          <option value="todas">Plataforma</option>
+          {PLATFORMS.map((p) => <option key={p} value={p}>{p}</option>)}
+        </Select>
+        <Select value={tagFilter} onChange={(e) => setTagFilter(e.target.value)} aria-label="Etiqueta" className="h-9 bg-[#eef0f3]">
+          <option value="todas">Etiqueta</option>
+          {tags.map((t) => <option key={t} value={t}>{t}</option>)}
+        </Select>
+        <Select value={sessionFilter} onChange={(e) => setSessionFilter(e.target.value)} aria-label="Sesión" className="h-9 bg-[#eef0f3]">
+          <option value="todas">Estado de sesión</option>
+          <option value="conectada">Conectada</option>
+          <option value="pendiente">Pendiente</option>
+          <option value="caida">Caída</option>
+        </Select>
+        <Select value={staffFilter} onChange={(e) => setStaffFilter(e.target.value)} aria-label="Empleado" className="h-9 bg-[#eef0f3]">
+          <option value="todos">Empleado</option>
+          {employees.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
+        </Select>
+        <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} aria-label="Estado de la cuenta" className="h-9 bg-[#eef0f3]">
+          <option value="todas">Estado de la cuenta</option>
+          <option value="activa">Activa</option>
+          <option value="pausa">En pausa</option>
+        </Select>
+      </div>
+
+      <div className="overflow-x-auto px-4 pb-6">
+        <table className="w-full min-w-[980px] border-separate border-spacing-0 overflow-hidden rounded-xl bg-white text-left text-sm">
+          <thead>
+            <tr className="text-xs text-[#6d7585]">
+              {["Creadora", "Apodo", "Etiqueta", "Sesión", "Cuenta", "ID", "Empleados", "Acción"].map((h) => (
+                <th key={h} className="border-b border-[#eef0f3] px-4 py-3 font-semibold">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((c) => {
+              const session = sessionOf(c);
+              const names = (c.staff ?? []).map((id) => employees.find((e) => e.id === id)?.name.split(" ")[0]).filter(Boolean);
+              return (
+                <tr key={c.id} className="border-t border-[#f0f1f4]">
+                  <td className="border-b border-[#f4f5f7] px-4 py-3">
+                    <div className="flex items-center gap-3">
+                      <span className="grid h-9 w-9 place-items-center rounded-full text-xs font-semibold text-white" style={{ background: `hsl(${c.hue} 45% 42%)` }}>{c.name.slice(0, 1)}</span>
+                      <span className="font-medium">{c.name}</span>
+                    </div>
+                  </td>
+                  <td className="border-b border-[#f4f5f7] px-4 py-3">{c.nick || c.name}</td>
+                  <td className="border-b border-[#f4f5f7] px-4 py-3">{c.tag || c.city}</td>
+                  <td className="border-b border-[#f4f5f7] px-4 py-3">
+                    <span className={`rounded-full px-2 py-1 text-xs ${session === "conectada" ? "bg-emerald-50 text-emerald-700" : session === "pendiente" ? "bg-amber-50 text-amber-700" : "bg-red-50 text-red-700"}`}>
+                      {SESSION_LABEL[session]}
+                    </span>
+                  </td>
+                  <td className="border-b border-[#f4f5f7] px-4 py-3">{c.platform}</td>
+                  <td className="border-b border-[#f4f5f7] px-4 py-3 text-[#3b6cff]">{c.handle}</td>
+                  <td className="border-b border-[#f4f5f7] px-4 py-3">{names.length ? names.join(", ") : "Sin asignar"}</td>
+                  <td className="border-b border-[#f4f5f7] px-4 py-3">
+                    <div className="flex gap-1">
+                      <Link to="/conectar" className="rounded-lg bg-[#ff7a2f] px-2 py-1 text-xs font-medium text-white">Conectar</Link>
+                      <button type="button" onClick={() => cycleSession(c.id)} className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs hover:bg-[#f4f6f8]">
+                        Estado
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+            {rows.length === 0 && (
+              <tr>
+                <td colSpan={8} className="px-4 py-8 text-center text-sm text-muted">Ninguna sesión con esos filtros.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+        <p className="mt-3 text-xs text-[#6d7585]">Cada fila es una sesión. Conectada, pendiente o caída. Esto no entra en OnlyFans: marca el estado de esa cuenta dentro de la consola.</p>
+      </div>
+    </div>
+  );
+}
+
+export function SettingsPage() {
+  const agency = useCrm((s) => s.agency);
+  const setAgency = useCrm((s) => s.setAgency);
+  const stopWords = useCrm((s) => s.stopWords);
+  const addStopWord = useCrm((s) => s.addStopWord);
+  const removeStopWord = useCrm((s) => s.removeStopWord);
+  const translate = useCrm((s) => s.translate);
+  const setTranslate = useCrm((s) => s.setTranslate);
+  const copilot = useCrm((s) => s.copilot);
+  const setCopilot = useCrm((s) => s.setCopilot);
+  const adaptPrices = useCrm((s) => s.adaptPrices);
+  const setAdaptPrices = useCrm((s) => s.setAdaptPrices);
+  const notify = useCrm((s) => s.notifyShifts);
+  const setNotify = useCrm((s) => s.setNotify);
+  const resetDemo = useCrm((s) => s.resetDemo);
+  const [word, setWord] = useState("");
+
+  return (
+    <div className="space-y-4 p-4 md:p-6">
+      <div>
+        <h1 className="font-display text-2xl font-semibold">Ajustes</h1>
+        <p className="text-sm text-muted">La operación de Fanlink se guarda en este navegador. No hay conexión real con las plataformas.</p>
+      </div>
+      <Panel title="Agencia">
+        <label className="block text-xs text-muted">Nombre
+          <Field value={agency} onChange={(e) => setAgency(e.target.value)} className="mt-1" />
+        </label>
+        <p className="mt-3 text-sm text-muted">Moneda EUR · Zona Europe/Madrid · Sede Valladolid</p>
+      </Panel>
+      <Panel title="Traducción en Mensajes Pro">
+        <label className="flex items-center justify-between gap-3 text-sm">
+          Traducción para el equipo
+          <input type="checkbox" className="h-4 w-4 accent-primary" checked={translate !== false} onChange={(e) => setTranslate(e.target.checked)} />
+        </label>
+        <p className="mt-2 text-sm text-muted">En el hilo, cada mensaje muestra el texto original y debajo la traducción. El botón de la barra superior lo enciende o lo apaga.</p>
+      </Panel>
+      <Panel title="Copiloto y avisos">
+        <label className="flex items-center justify-between gap-3 text-sm">
+          Sugerencias de respuesta en el chat
+          <input type="checkbox" className="h-4 w-4 accent-primary" checked={copilot} onChange={(e) => setCopilot(e.target.checked)} />
+        </label>
+        <label className="mt-3 flex items-center justify-between gap-3 text-sm">
+          Avisar si un turno se queda sin cobertura
+          <input type="checkbox" className="h-4 w-4 accent-primary" checked={notify} onChange={(e) => setNotify(e.target.checked)} />
+        </label>
+      </Panel>
+      <Panel title="Precio adaptado del PPV">
+        <label className="flex items-center justify-between gap-3 text-sm">
+          Cobrar según lo que compra cada fan
+          <input type="checkbox" className="h-4 w-4 accent-primary" checked={adaptPrices !== false} onChange={(e) => setAdaptPrices(e.target.checked)} />
+        </label>
+        <ul className="mt-3 space-y-1 text-sm text-muted">
+          <li>Sin compras: ×0,55 sobre la base.</li>
+          <li>Sin compra este mes, pero ya compró: ×0,70.</li>
+          <li>Compra poco, menos de 50 € en 30 días: ×0,80.</li>
+          <li>Gasto medio: el precio base.</li>
+          <li>Compra mucho: ×1,30.</li>
+          <li>Máximo gasto, ballenas: ×1,55.</li>
+        </ul>
+        <p className="mt-2 text-xs text-muted">En campañas el importe es la base. Cada fan recibe el suyo.</p>
+      </Panel>
+      <Panel title="Palabras prohibidas">
+        <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); addStopWord(word); setWord(""); }}>
+          <Field value={word} onChange={(e) => setWord(e.target.value)} placeholder="Añadir palabra" />
+          <Button type="submit">Añadir</Button>
+        </form>
+        <ul className="mt-3 flex flex-wrap gap-2">
+          {stopWords.map((w) => (
+            <li key={w}>
+              <button className="rounded-md bg-danger/15 px-2 py-1 text-xs text-danger" onClick={() => removeStopWord(w)}>{w} ×</button>
+            </li>
+          ))}
+        </ul>
+      </Panel>
+      <Panel title="Demostración">
+        <p className="mb-3 text-sm text-muted">Vuelve a los datos de ejemplo de Fanlink si has hecho pruebas.</p>
+        <Button variant="danger" onClick={() => { resetDemo(); toast.success("Datos restaurados"); }}>Restaurar demo</Button>
+      </Panel>
+    </div>
+  );
+}
