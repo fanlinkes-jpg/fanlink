@@ -24,6 +24,7 @@ import { presentTeamMetrics } from "../../server/of-sessions/metrics/present-tea
 import { changeRatio, creatorReport } from "@/lib/creator-metrics";
 import { deliverFanAlerts } from "../../server/of-sessions/notify/deliver.ts";
 import { chatIntervalMinFromEnv } from "../../server/of-sessions/sync/chats.ts";
+import { chatIntervalMinutes, inboxIsOpen } from "../../server/of-sessions/sync/live.ts";
 import { listChatMeta, listChats, recordOutbound, saveChatRead } from "../../server/of-sessions/sync/chat-store.ts";
 import { intervalMinFromEnv, startSyncLoop, type ScheduleAccount } from "../../server/of-sessions/sync/schedule.ts";
 import {
@@ -107,7 +108,10 @@ function bootChatLoop(sessions: SessionManager): void {
   if (process.execArgv.includes("--test")) return;
   if (globalRef.__ofChatLoop__) return;
   globalRef.__ofChatLoop__ = startSyncLoop({
-    intervalMin: async () => readChatIntervalMin(await getSql(), chatIntervalMinFromEnv(process.env.FANLINK_CHAT_SYNC_MIN)),
+    intervalMin: async () => chatIntervalMinutes(
+      await readChatIntervalMin(await getSql(), chatIntervalMinFromEnv(process.env.FANLINK_CHAT_SYNC_MIN)),
+      inboxIsOpen(),
+    ),
     inProgressIds: () => new Set(sessions.readingIds()),
     accounts: () => chatScheduleAccounts(sessions),
     marginMinMs: 8_000,

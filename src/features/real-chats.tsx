@@ -26,8 +26,11 @@ export function RealChatsPage() {
 
   useEffect(() => {
     void refresh();
-    const timer = setInterval(() => void refresh(), 15_000);
-    return () => clearInterval(timer);
+    const source = new EventSource("/api/chat-live");
+    source.addEventListener("chats", () => {
+      void refresh();
+    });
+    return () => source.close();
   }, []);
 
   const threads = (data?.threads ?? []).filter(

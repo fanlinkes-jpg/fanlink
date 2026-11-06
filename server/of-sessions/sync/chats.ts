@@ -64,12 +64,22 @@ export type ChatUser = {
 
 export const CHAT_OPEN_LIMIT = 8;
 
-/** Primero los no leídos y, dentro de eso, los más recientes. */
-export function threadsToOpen(threads: ChatThread[], limit = CHAT_OPEN_LIMIT): ChatThread[] {
+/** Por defecto se abren antes los no leídos. `FANLINK_CHAT_OPEN_UNREAD=false` lo apaga. */
+export function openUnreadFirst(raw: string | undefined = process.env.FANLINK_CHAT_OPEN_UNREAD): boolean {
+  return raw !== "false";
+}
+
+export function threadsToOpen(
+  threads: ChatThread[],
+  limit = CHAT_OPEN_LIMIT,
+  unreadFirst = openUnreadFirst(),
+): ChatThread[] {
   return [...threads]
     .sort((left, right) => {
-      const unread = Number(right.unread > 0) - Number(left.unread > 0);
-      if (unread !== 0) return unread;
+      if (unreadFirst) {
+        const unread = Number(right.unread > 0) - Number(left.unread > 0);
+        if (unread !== 0) return unread;
+      }
       return (right.lastMessageAt ?? "").localeCompare(left.lastMessageAt ?? "");
     })
     .slice(0, limit);
