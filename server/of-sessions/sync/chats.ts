@@ -168,10 +168,11 @@ export function parseChatMessages(
   threadKey: string,
   fanKey: string | null,
   accountId: string | null = null,
+  source: "page" | "socket" = "page",
 ): ChatMessage[] {
   const rows: ChatMessage[] = [];
   walk(value, 0, (record) => {
-    const message = messageFrom(record, threadKey, fanKey, accountId);
+    const message = messageFrom(record, threadKey, fanKey, accountId, source);
     if (message) rows.push(message);
   });
   return mergeMessages([], rows);
@@ -397,6 +398,7 @@ function messageFrom(
   threadKey: string,
   fanKey: string | null,
   accountId: string | null,
+  source: "page" | "socket" = "page",
 ): ChatMessage | null {
   const body = visibleText(record.text ?? record.body, 2000);
   const sentAt = iso(record.createdAt ?? record.created_at ?? record.at);
@@ -404,9 +406,13 @@ function messageFrom(
   if (!body || !sentAt || !messageKey) return null;
   const chat = nested(record.chat);
   const ownThread = clean(record.chatId, 40) ?? clean(record.chat_id, 40) ?? clean(chat?.id, 40);
-  const thread = ownThread ?? threadKey;
+  const fromId = clean(nested(record.fromUser)?.id, 40);
+  const withId = clean(nested(record.withUser)?.id, 40);
+  const verified = threadKey && (fromId === threadKey || withId === threadKey) ? threadKey : null;
+  const thread = ownThread ?? (source === "socket" ? verified : threadKey);
+  if (!thread) return null;
   const fan = ownThread ?? fanKey;
-  const fromUserId = clean(nested(record.fromUser)?.id, 40);
+  const fromUserId = fromId;
   const flag = fromFanFlag(fromUserId, fan, accountId);
   return {
     messageKey,
