@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { createSessionRuntime } from "../runtime.ts";
-import { chartEarnings, classifyJsonPath, parseEarningsDom, parseEarningsJson, parseFansJson, parseTransactions, readFailureReason } from "../sync/parse.ts";
+import { chartEarnings, classifyJsonPath, isRecognizedEmpty, parseEarningsDom, parseEarningsJson, parseFansJson, parseTransactions, readFailureReason } from "../sync/parse.ts";
 import { listCreatorReads, saveCreatorRead, type ReadSql } from "../sync/store.ts";
 import { startFixture } from "./fixture-site.ts";
 import { completeFixtureLogin, recordingFactory, removeDir, tempDataDir, testConfig, testDisplay } from "./helpers.ts";
@@ -14,8 +14,16 @@ const NOW = new Date("2026-11-05T00:00:00.000Z");
 
 test("clasifica rutas de ingresos y fans sin usar la query", () => {
   assert.equal(classifyJsonPath("https://onlyfans.com/api2/v2/earnings/chart?token=sekret"), "earnings");
+  assert.equal(classifyJsonPath("https://onlyfans.com/api2/v2/payouts/transactions?startDate=2026-11-01"), "earnings");
+  assert.equal(classifyJsonPath("https://onlyfans.com/api2/v2/payouts/balances"), "other");
+  assert.equal(classifyJsonPath("https://onlyfans.com/api2/v2/payouts/check-receive"), "other");
+  assert.equal(classifyJsonPath("https://onlyfans.com/my/statements/earnings"), "other");
   assert.equal(classifyJsonPath("https://onlyfans.com/api2/v2/subscriptions/subscribers?offset=0"), "fans");
+  assert.equal(classifyJsonPath("https://onlyfans.com/api2/v2/users/42/subscribers"), "fans");
+  assert.equal(classifyJsonPath("https://onlyfans.com/my/subscribers/active"), "other");
   assert.equal(classifyJsonPath("https://onlyfans.com/api2/v2/users/me"), "other");
+  assert.equal(isRecognizedEmpty({ list: [] }), true);
+  assert.equal(isRecognizedEmpty({ payoutAvailable: 10 }), false);
 });
 
 test("el JSON inventado de ingresos y fans no copia secretos", () => {
@@ -65,14 +73,13 @@ test("el JSON inventado de ingresos y fans no copia secretos", () => {
   const reason = readFailureReason({
     redirected: false,
     wantEarnings: true,
-    earningsUrl: false,
-    earningsRows: false,
-    fansUrl: true,
-    fansRows: false,
+    earnings: "pending",
+    fans: "changed",
     jsonPaths: ["https://onlyfans.com/api2/v2/init", "https://onlyfans.com/api2/v2/earnings/chart?token=sekret"],
   });
-  assert.match(reason ?? "", /sin respuesta de ingresos/);
+  assert.match(reason ?? "", /sin datos todavía \(ingresos\)/);
   assert.match(reason ?? "", /página cambiada \(fans\)/);
+  assert.equal(readFailureReason({ redirected: false, wantEarnings: true, earnings: "empty", fans: "empty", jsonPaths: [] }), null);
   assert.equal(reason?.includes("sekret"), false);
   assert.equal(reason?.includes("?"), false);
 });

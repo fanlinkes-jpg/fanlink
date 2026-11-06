@@ -3,6 +3,7 @@
  * `withUser`, `lastMessage` y mensajes con `text` y `createdAt`. Si OnlyFans
  * cambia esos nombres, el chat queda vacío y la razón lo dice. No se envía nada.
  */
+import { sectionFailure, type SectionOutcome } from "./parse.ts";
 
 export type ChatThread = {
   threadKey: string;
@@ -46,8 +47,9 @@ export function classifyChatPath(url: string): "list" | "messages" | "other" {
   } catch {
     return "other";
   }
+  if (!path.includes("/api2/") && !path.includes("/api/")) return "other";
   if (!path.includes("/chat") && !path.includes("/message")) return "other";
-  if (/\/messages(\/|$)/.test(path) || /\/\d+$/.test(path)) return "messages";
+  if (/\/messages(\/|$)/.test(path) || /\/chats\/\d+$/.test(path)) return "messages";
   return "list";
 }
 
@@ -139,11 +141,10 @@ export function newFanEvents(
   return events;
 }
 
-export function chatFailureReason(input: { redirected: boolean; sawUrl: boolean; parsed: boolean; jsonPaths: string[] }): string | null {
+export function chatFailureReason(input: { redirected: boolean; outcome: SectionOutcome; jsonPaths: string[] }): string | null {
   if (input.redirected) return withPaths("redirigido a login", input.jsonPaths);
-  if (input.parsed) return null;
-  if (input.sawUrl) return withPaths("página cambiada (chats)", input.jsonPaths);
-  return withPaths("sin respuesta de chats", input.jsonPaths);
+  const reason = sectionFailure("chats", input.outcome);
+  return reason ? withPaths(reason, input.jsonPaths) : null;
 }
 
 function threadFrom(record: Record<string, unknown>): ChatThread | null {

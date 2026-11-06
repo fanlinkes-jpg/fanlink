@@ -52,7 +52,7 @@ export function RealChatsPage() {
         </div>
         {error ? <p className="px-4 text-sm text-[#8a5a12]">{error}</p> : null}
         {threads.length === 0 ? (
-          <p className="px-4 py-8 text-sm text-[#6d7585]">Sin sincronizar</p>
+          <p className="px-4 py-8 text-sm text-[#6d7585]">{emptyChatsLabel(data)}</p>
         ) : (
           <ul className="min-h-0 flex-1 overflow-y-auto">
             {threads.map((thread) => (
@@ -190,6 +190,15 @@ function FanFacts({
       Notas {note || "Sin datos"}
     </p>
   );
+}
+
+function emptyChatsLabel(data: CreatorChatList | null): string {
+  if (data?.meta.some((item) => item.status === "error")) {
+    const reason = data.meta.find((item) => item.status === "error")?.reason;
+    return reason ? `Error · ${shortReason(reason)}` : "Error";
+  }
+  if (data?.meta.some((item) => item.status === "ok")) return "Sin conversaciones";
+  return "Sin sincronizar";
 }
 
 function shortReason(reason: string | null | undefined): string {

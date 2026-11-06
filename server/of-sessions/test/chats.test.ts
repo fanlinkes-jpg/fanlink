@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { createSessionRuntime } from "../runtime.ts";
-import { chatIntervalMinFromEnv, classifyChatPath, newFanEvents, parseChatList, parseChatMessages } from "../sync/chats.ts";
+import { chatFailureReason, chatIntervalMinFromEnv, classifyChatPath, newFanEvents, parseChatList, parseChatMessages } from "../sync/chats.ts";
 import { saveChatRead } from "../sync/chat-store.ts";
 import type { ReadSql } from "../sync/store.ts";
 import { startFixture } from "./fixture-site.ts";
@@ -17,6 +17,10 @@ test("los chats se leen de rutas de conversación y el aviso no se repite", () =
   assert.equal(chatIntervalMinFromEnv("90"), 30);
   assert.equal(classifyChatPath("https://onlyfans.com/api2/v2/chats?skip=0&token=sekret"), "list");
   assert.equal(classifyChatPath("https://onlyfans.com/api2/v2/chats/7/messages?order=desc"), "messages");
+  assert.equal(classifyChatPath("https://onlyfans.com/my/chats"), "other");
+  assert.equal(chatFailureReason({ redirected: false, outcome: "pending", jsonPaths: [] }), "sin datos todavía (chats)");
+  assert.equal(chatFailureReason({ redirected: false, outcome: "empty", jsonPaths: [] }), null);
+  assert.equal(chatFailureReason({ redirected: false, outcome: "changed", jsonPaths: [] }), "página cambiada (chats)");
   const threads = parseChatList({
     password: "no-guardar",
     list: [{ id: 7, withUser: { id: 7, username: "fanuno", name: "Fan Uno" }, lastMessage: { text: "Hola", createdAt: "2026-11-05T10:00:00.000Z" } }],

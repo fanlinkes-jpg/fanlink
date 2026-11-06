@@ -4,7 +4,9 @@
  * Fragilidad: no hay un contrato firmado. Se aceptan nombres de campo
  * habituales (date, subscriptions, tips, messages, posts, subscribedOnData,
  * totalSumm). Si OnlyFans los cambia, la sincronización queda vacía y la
- * razón dice «página cambiada» o «sin respuesta». No se copian otros campos.
+ * razón dice «página cambiada». Si la página no ha pedido el JSON todavía,
+ * la razón dice «sin datos todavía». Una lista reconocida y vacía no es un
+ * error. No se copian otros campos.
  */
 
 export type EarningKind = "total" | "subscription" | "tip" | "message" | "post";
@@ -78,6 +80,80 @@ const DATE_KEYS = ["date", "day", "time", "period", "from", "timestamp"];
 const LIST_KEYS = ["list", "earnings", "rows", "items", "data", "chart", "subscribers", "users"];
 const SECRET = /password|token|cookie|secret|sess|authorization|csrf/i;
 
+export type SectionOutcome = "ok" | "empty" | "changed" | "pending";
+
+const OUTCOME_RANK: Record<SectionOutcome, number> = { pending: 0, changed: 1, empty: 2, ok: 3 };
+
+/** Una lectura posterior no degrada un resultado mejor. */
+export function preferOutcome(current: SectionOutcome, next: SectionOutcome): SectionOutcome {
+  return OUTCOME_RANK[next] > OUTCOME_RANK[current] ? next : current;
+}
+
+const EMPTY_LIST_KEYS = [
+  "list",
+  "items",
+  "data",
+  "rows",
+  "chart",
+  "subscribers",
+  "users",
+  "chats",
+  "messages",
+  "transactions",
+  "history",
+  "operations",
+  "earnings",
+];
+
+/** Lista presente y sin filas. Un objeto sin esas claves no cuenta como vacío. */
+export function isRecognizedEmpty(value: unknown): boolean {
+  if (Array.isArray(value)) return value.length === 0;
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  const lists = EMPTY_LIST_KEYS.filter((key) => Array.isArray(record[key]));
+  if (lists.length === 0) return false;
+  return lists.every((key) => (record[key] as unknown[]).length === 0);
+}
+
+export function outcomeFromParsed(rowCount: number, payload: unknown): SectionOutcome {
+  if (rowCount > 0) return "ok";
+  if (isRecognizedEmpty(payload)) return "empty";
+  return "changed";
+}
+
+export function sectionFailure(label: string, outcome: SectionOutcome): string | null {
+  switch (outcome) {
+    case "ok":
+    case "empty":
+      return null;
+    case "changed":
+      return `página cambiada (${label})`;
+    case "pending":
+      return `sin datos todavía (${label})`;
+    default: {
+      const never: never = outcome;
+      return never;
+    }
+  }
+}
+
+function isApiPath(path: string): boolean {
+  return path.includes("/api2/") || path.includes("/api/");
+}
+
+/** Saldos y el HTML de la pantalla no son el gráfico ni los movimientos. */
+function isEarningsDataPath(path: string): boolean {
+  if (/\/payouts\/(balances|balance|check-receive|requests|cards|bank)/.test(path)) return false;
+  if (path.includes("/earnings")) return true;
+  if (path.includes("/payouts/transactions")) return true;
+  if (/\/statements\/(chart|transactions|earnings)/.test(path)) return true;
+  return false;
+}
+
+function isFansDataPath(path: string): boolean {
+  return path.includes("subscriber") || path.includes("/fans");
+}
+
 export function classifyJsonPath(url: string): "earnings" | "fans" | "other" {
   let path = "";
   try {
@@ -85,8 +161,9 @@ export function classifyJsonPath(url: string): "earnings" | "fans" | "other" {
   } catch {
     return "other";
   }
-  if (/earnings|statements|payouts|\/stats/.test(path)) return "earnings";
-  if (/subscribers|subscriptions|\/fans/.test(path)) return "fans";
+  if (!isApiPath(path)) return "other";
+  if (isEarningsDataPath(path)) return "earnings";
+  if (isFansDataPath(path)) return "fans";
   return "other";
 }
 
@@ -193,20 +270,18 @@ export function takeContiguousTransactions<T extends { occurredAt: string; txKey
 export function readFailureReason(input: {
   redirected: boolean;
   wantEarnings: boolean;
-  earningsUrl: boolean;
-  earningsRows: boolean;
-  fansUrl: boolean;
-  fansRows: boolean;
+  earnings: SectionOutcome;
+  fans: SectionOutcome;
   jsonPaths: string[];
 }): string | null {
   if (input.redirected) return withPaths("redirigido a login", input.jsonPaths);
   const parts: string[] = [];
-  if (input.wantEarnings && !input.earningsRows) {
-    parts.push(input.earningsUrl ? "página cambiada (ingresos)" : "sin respuesta de ingresos");
+  if (input.wantEarnings) {
+    const earnings = sectionFailure("ingresos", input.earnings);
+    if (earnings) parts.push(earnings);
   }
-  if (!input.fansRows) {
-    parts.push(input.fansUrl ? "página cambiada (fans)" : "sin respuesta de fans");
-  }
+  const fans = sectionFailure("fans", input.fans);
+  if (fans) parts.push(fans);
   if (!parts.length) return null;
   return withPaths(parts.join(". "), input.jsonPaths);
 }
