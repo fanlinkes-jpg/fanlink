@@ -117,7 +117,7 @@ export type Employee = {
   id: string;
   name: string;
   role: Role;
-  replyMin: number;
+  replyMin: number | null;
   online: boolean;
   perms: Perm[];
   shifts: Array<"mañana" | "noche" | "libre">;
@@ -580,7 +580,7 @@ export const useCrm = create<CrmState>()((set, get) => ({
               id: uid(),
               name: name.trim() || "Nuevo",
               role,
-              replyMin: 6,
+              replyMin: null,
               online: false,
               perms: role === "Chatter" ? ["mensajes", "vault"] : role === "VA" ? ["vault"] : ["mensajes", "analitica", "equipo"],
               shifts: ["libre", "libre", "libre", "libre", "libre", "libre", "libre"],

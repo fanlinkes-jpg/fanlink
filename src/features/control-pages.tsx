@@ -12,7 +12,7 @@ import { useOfReads } from "@/lib/use-of-reads";
 import type { CreatorEarningView, CreatorReadView } from "@/lib/of-sessions";
 import { changeRatio, creatorReport, type MetricPeriod } from "@/lib/creator-metrics";
 import { fanProfiles, rankFans } from "@/lib/fan-metrics";
-import { seedEmployeeStat } from "@/lib/employee-metrics";
+import { employeeMetricCells } from "@/lib/employee-metrics";
 import { listCreatorChats, listTeamMetrics, setCreatorProxy, type TeamMetricView } from "@/lib/of-sessions";
 import { PLATFORMS } from "@/features/growth-pages";
 import { Badge, Button, Field, Panel, Select } from "@/components/ui";
@@ -247,15 +247,17 @@ const SHIFT_STYLE = {
 export function TeamPage() {
   const creators = useCrm((s) => s.creators);
   const employees = useCrm((s) => s.employees);
-  const messages = useCrm((s) => s.messages);
   const togglePerm = useCrm((s) => s.togglePerm);
   const cycleShift = useCrm((s) => s.cycleShift);
   const addEmployee = useCrm((s) => s.addEmployee);
   const [name, setName] = useState("");
   const [role, setRole] = useState<Role>("Chatter");
+  const [teamRows, setTeamRows] = useState<TeamMetricView[]>([]);
   const perms = ["mensajes", "precios", "vault", "campanas", "analitica", "equipo", "ajustes"] as const;
   const today = (new Date().getDay() + 6) % 7;
-  const recent = messages.filter((m) => isLast24h(m.at) && m.from === "team" && m.status === "enviado" && !m.unsent);
+  useEffect(() => {
+    void listTeamMetrics().then(setTeamRows).catch(() => setTeamRows([]));
+  }, []);
 
   return (
     <div className="space-y-4 p-4 md:p-6">
@@ -277,10 +279,8 @@ export function TeamPage() {
           </thead>
           <tbody>
             {employees.map((e) => {
-              const mine = recent.filter((m) => m.creditedTo === e.id);
-              const sales = mine.reduce((sum, m) => sum + messageValue(m), 0);
-              const tips = mine.reduce((sum, m) => sum + (m.tip ?? 0), 0);
-              const ppv = mine.filter((m) => m.ppv?.unlocked).length;
+              const synced = teamRows.find((row) => row.name === e.name) ?? null;
+              const [gross, ppv, reply, threads] = employeeMetricCells(synced);
               return (
                 <tr key={e.id} className="border-t border-line">
                   <td className="px-3 py-3 font-medium">
@@ -289,11 +289,11 @@ export function TeamPage() {
                   </td>
                   <td className="px-3 py-3">{e.role}</td>
                   <td className="px-3 py-3 tabular-nums">{e.shifts.reduce((n, shift) => n + (shift === "libre" ? 0 : 8), 0)} h</td>
-                  <td className="px-3 py-3 tabular-nums">{seedEmployeeStat(e.name, String(mine.length))}</td>
-                  <td className="px-3 py-3 tabular-nums">{seedEmployeeStat(e.name, money(sales))}</td>
-                  <td className="px-3 py-3 tabular-nums">{seedEmployeeStat(e.name, String(ppv))}</td>
-                  <td className="px-3 py-3 tabular-nums">{seedEmployeeStat(e.name, money(tips))}</td>
-                  <td className="px-3 py-3">{seedEmployeeStat(e.name, e.replyMin ? `${e.replyMin} min` : "—")}</td>
+                  <td className="px-3 py-3 tabular-nums">{threads}</td>
+                  <td className="px-3 py-3 tabular-nums">{gross}</td>
+                  <td className="px-3 py-3 tabular-nums">{ppv}</td>
+                  <td className="px-3 py-3 tabular-nums">Sin datos</td>
+                  <td className="px-3 py-3">{reply}</td>
                   <td className="px-3 py-3">
                     <span className={`rounded-lg px-2 py-1 text-xs capitalize ${SHIFT_STYLE[e.shifts[today]]}`}>{e.shifts[today]}</span>
                   </td>
