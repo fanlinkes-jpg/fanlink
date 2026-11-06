@@ -33,7 +33,7 @@ export DATABASE_URL="postgres://fanlink:${POSTGRES_PASSWORD}@127.0.0.1:5432/fanl
 npm run db:migrate
 ```
 
-Tiene que listar las migraciones aplicadas, incluida `0012` en adelante. Los tests de la suite usan PGLite, que ejecuta los mismos SQL. Un test contra Postgres de verdad solo corre si `DATABASE_URL` apunta a una base vacía de pruebas: `node --experimental-strip-types --test server/of-sessions/test/postgres.test.ts`.
+Tiene que listar las migraciones aplicadas, incluida `0019_chat_author.sql`. Los tests de la suite usan PGLite, que ejecuta los mismos SQL. Un test contra Postgres de verdad solo corre si `DATABASE_URL` apunta a una base vacía de pruebas: `node --experimental-strip-types --test server/of-sessions/test/postgres.test.ts`.
 
 ## 3. Proxy por cuenta
 
@@ -61,3 +61,9 @@ export FANLINK_WHATSAPP_PHONE_ID=
 ```
 
 `FANLINK_ALERT_QUIET_MIN` es el mínimo entre avisos del mismo fan. `FANLINK_ALERT_MODE` vale `all` (defecto: todos los chatters con avisos), `assigned` (solo quien tiene la cuenta) o `users` (la lista `FANLINK_ALERT_USERS`, ids separados por comas). El teléfono de cada miembro se guarda en Equipo.
+
+## 5. Tiempo real del chat
+
+`GET /api/chat-live` es un stream SSE. El proxy no puede acumular la respuesta: nginx necesita `proxy_buffering off;` y la app ya manda `X-Accel-Buffering: no`. El timeout de lectura tiene que aguantar la conexión abierta (minutos, no el timeout corto de una API). Sin eso el navegador se entera del mensaje tarde o la conexión se corta.
+
+`npm run db:migrate` aplica también `0019_chat_author.sql` (autor del mensaje y borradores salientes) y `0020_chat_card.sql` (ficha del fan).
