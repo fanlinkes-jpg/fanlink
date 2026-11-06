@@ -162,6 +162,12 @@ export type CreatorChatList = {
     status: "idle" | "ok" | "error";
     reason: string | null;
   }>;
+  pending: Array<{
+    id: string;
+    creatorId: string;
+    threadKey: string | null;
+    body: string;
+  }>;
 };
 
 export const listCreatorReads = createServerFn({ method: "GET" })

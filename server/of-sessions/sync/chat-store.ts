@@ -348,6 +348,27 @@ async function attachOutboundAuthors(sql: ReadSql, creatorId: string, messages: 
   }
 }
 
+export async function listPendingOutbounds(
+  sql: ReadSql,
+  creatorIds: string[],
+): Promise<Array<{ id: string; creatorId: string; threadKey: string | null; body: string }>> {
+  if (!creatorIds.length) return [];
+  const filter = creatorIds.map((_, index) => `$${index + 1}`).join(", ");
+  const rows = await sql.query<{ id: string; creator_id: string; thread_key: string | null; body: string }>(
+    `select id, creator_id, thread_key, body
+     from of_chat_outbound
+     where creator_id in (${filter}) and matched_message_key is null
+     order by created_at`,
+    creatorIds,
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    creatorId: row.creator_id,
+    threadKey: row.thread_key,
+    body: row.body,
+  }));
+}
+
 export async function recordOutbound(sql: ReadSql, draft: OutboundDraft & { creatorId: string }): Promise<void> {
   await sql.query(
     `insert into of_chat_outbound (id, creator_id, thread_key, fan_key, author_id, body, price_cents, created_at, of_message_key)

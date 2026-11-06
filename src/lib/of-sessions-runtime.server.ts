@@ -28,7 +28,7 @@ import { chatIntervalMinFromEnv } from "../../server/of-sessions/sync/chats.ts";
 import { chatIntervalMinutes, inboxIsOpen, activeThreadWatches } from "../../server/of-sessions/sync/live.ts";
 import { openWatchContext, runInboxWatch } from "../../server/of-sessions/sync/inbox-watch.ts";
 import { pickAccountWatch } from "../../server/of-sessions/sync/watch-plan.ts";
-import { listChatMeta, listChats, recordOutbound, saveChatRead } from "../../server/of-sessions/sync/chat-store.ts";
+import { listChatMeta, listChats, listPendingOutbounds, recordOutbound, saveChatRead } from "../../server/of-sessions/sync/chat-store.ts";
 import { intervalMinFromEnv, startSyncLoop, type ScheduleAccount } from "../../server/of-sessions/sync/schedule.ts";
 import {
   listCreatorReads,
@@ -432,6 +432,7 @@ export async function listCreatorChatViews(userId: string): Promise<CreatorChatL
       status: item.status,
       reason: publicSyncReason(item.reason),
     })),
+    pending: await listPendingOutbounds(sql, creatorIds),
   };
 }
 

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { presentTeamMetrics } from "../metrics/present-team.ts";
-import { listChats, recordOutbound, saveChatRead } from "../sync/chat-store.ts";
+import { listChats, listPendingOutbounds, recordOutbound, saveChatRead } from "../sync/chat-store.ts";
 import type { ReadSql } from "../sync/store.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -32,6 +32,9 @@ test("un pendiente de la bandeja queda atribuido en el hilo y en Equipo al sincr
     priceCents: null,
     ofMessageKey: null,
   });
+  const pending = await listPendingOutbounds(sql, ["creator-1"]);
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0]?.body, "hola");
   await saveChatRead(sql, "creator-1", {
     reason: null,
     jsonPaths: [],
@@ -55,6 +58,7 @@ test("un pendiente de la bandeja queda atribuido en el hilo y en Equipo al sincr
   const stored = (await listChats(sql, ["creator-1"])).messages[0];
   assert.equal(stored?.authorId, "e-1");
   assert.equal(stored?.authorName, "Ana");
+  assert.equal((await listPendingOutbounds(sql, ["creator-1"])).length, 0);
   const team = presentTeamMetrics(
     { role: "owner", userId: "owner", perms: [], creatorIds: [] },
     [{

@@ -29,7 +29,11 @@ export function RealChatsPage() {
 
   async function refresh() {
     try {
-      setData(await listCreatorChats());
+      const list = await listCreatorChats();
+      setData(list);
+      setPendingOut(list.pending.flatMap((item) => (
+        item.threadKey ? [{ id: item.id, threadKey: item.threadKey, body: item.body }] : []
+      )));
       setError(null);
     } catch (err) {
       setError(sessionErrorText(err));
@@ -204,7 +208,6 @@ export function RealChatsPage() {
                   onClick={() => {
                     if (!selected || !draft.trim()) return;
                     const body = draft.trim();
-                    setPendingOut((items) => [...items, { id: crypto.randomUUID(), threadKey: selected.threadKey, body }]);
                     setDraft("");
                     void recordChatOutbound({
                       data: {
@@ -215,7 +218,10 @@ export function RealChatsPage() {
                         priceCents: null,
                         ofMessageKey: null,
                       },
-                    }).catch((err: unknown) => setError(sessionErrorText(err)));
+                    }).then(() => refresh()).catch((err: unknown) => {
+                      setDraft(body);
+                      setError(sessionErrorText(err));
+                    });
                   }}
                   className="rounded-full border border-[#e6e8ee] px-4 py-2 text-sm disabled:opacity-50"
                 >
