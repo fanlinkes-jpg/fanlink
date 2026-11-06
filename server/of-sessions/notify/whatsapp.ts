@@ -24,6 +24,10 @@ export type WhatsAppEnv = {
   FANLINK_WHATSAPP_TOKEN?: string;
   FANLINK_WHATSAPP_PHONE_ID?: string;
   FANLINK_ALERT_QUIET_MIN?: string;
+  /** all (defecto), assigned o users. */
+  FANLINK_ALERT_MODE?: string;
+  /** Lista de user id cuando el modo es users. */
+  FANLINK_ALERT_USERS?: string;
 };
 
 export function maskPhone(phone: string): string {

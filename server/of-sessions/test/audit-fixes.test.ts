@@ -101,24 +101,22 @@ test("sin interacción conocida no hay LTV ni segmento inventado", () => {
 
 test("la misma venta no se reparte entre dos chatters", () => {
   const reports = chatterReports({
-    assignments: [
-      { creatorId: "c-alba", userId: "a", startedAt: "2026-11-01T00:00:00.000Z", endedAt: null },
-      { creatorId: "c-alba", userId: "b", startedAt: "2026-11-01T00:00:00.000Z", endedAt: null },
+    sales: [{ creatorId: "c-alba", fanKey: "7", at: "2026-11-03T15:00:00.000Z", grossCents: 800, kind: "tip" }],
+    messages: [
+      { creatorId: "c-alba", threadKey: "7", fanKey: "7", at: "2026-11-03T14:00:00.000Z", fromFan: false, priceCents: null, purchased: null, authorId: "a" },
+      { creatorId: "c-alba", threadKey: "7", fanKey: "7", at: "2026-11-03T14:10:00.000Z", fromFan: false, priceCents: null, purchased: null, authorId: "b" },
     ],
-    sales: [{ creatorId: "c-alba", at: "2026-11-03T15:00:00.000Z", grossCents: 800, kind: "tip" }],
-    messages: [],
   });
   assert.equal(reports.every((row) => row.grossCents == null), true);
 });
 
 test("la primera respuesta cuenta un turno, no cada mensaje del fan", () => {
   const [report] = chatterReports({
-    assignments: [{ creatorId: "c-alba", userId: "a", startedAt: "2026-11-01T00:00:00.000Z", endedAt: null }],
     sales: [],
     messages: [
-      { creatorId: "c-alba", threadKey: "7", at: "2026-11-05T10:00:00.000Z", fromFan: true, priceCents: null, purchased: null },
-      { creatorId: "c-alba", threadKey: "7", at: "2026-11-05T10:02:00.000Z", fromFan: true, priceCents: null, purchased: null },
-      { creatorId: "c-alba", threadKey: "7", at: "2026-11-05T10:10:00.000Z", fromFan: false, priceCents: null, purchased: null },
+      { creatorId: "c-alba", threadKey: "7", fanKey: "7", at: "2026-11-05T10:00:00.000Z", fromFan: true, priceCents: null, purchased: null, authorId: null },
+      { creatorId: "c-alba", threadKey: "7", fanKey: "7", at: "2026-11-05T10:02:00.000Z", fromFan: true, priceCents: null, purchased: null, authorId: null },
+      { creatorId: "c-alba", threadKey: "7", fanKey: "7", at: "2026-11-05T10:10:00.000Z", fromFan: false, priceCents: null, purchased: null, authorId: "a" },
     ],
   });
   assert.equal(report?.firstReplyMinutes, 10);
@@ -126,12 +124,11 @@ test("la primera respuesta cuenta un turno, no cada mensaje del fan", () => {
 
 test("un chatter sin ventas propias no ve un cero", () => {
   const reports = chatterReports({
-    assignments: [
-      { creatorId: "c-alba", userId: "a", startedAt: "2026-11-01T00:00:00.000Z", endedAt: null },
-      { creatorId: "c-otra", userId: "b", startedAt: "2026-11-01T00:00:00.000Z", endedAt: null },
+    sales: [{ creatorId: "c-alba", fanKey: "7", at: "2026-11-03T15:00:00.000Z", grossCents: 800, kind: "tip" }],
+    messages: [
+      { creatorId: "c-alba", threadKey: "7", fanKey: "7", at: "2026-11-03T14:00:00.000Z", fromFan: false, priceCents: null, purchased: null, authorId: "a" },
+      { creatorId: "c-otra", threadKey: "9", fanKey: "9", at: "2026-11-03T14:00:00.000Z", fromFan: false, priceCents: null, purchased: null, authorId: "b" },
     ],
-    sales: [{ creatorId: "c-alba", at: "2026-11-03T15:00:00.000Z", grossCents: 800, kind: "tip" }],
-    messages: [],
   });
   assert.equal(reports.find((row) => row.userId === "b")?.grossCents, null);
   assert.equal(reports.find((row) => row.userId === "a")?.grossCents, 800);
@@ -151,11 +148,10 @@ test("un PPV a precio 0 o solo abierto no cuenta como compra", () => {
   assert.equal(messages.find((row) => row.messageKey === "1")?.purchased, null);
   assert.equal(messages.find((row) => row.messageKey === "1")?.priceCents, 0);
   const [report] = chatterReports({
-    assignments: [{ creatorId: "c-alba", userId: "a", startedAt: "2026-11-01T00:00:00.000Z", endedAt: null }],
     sales: [],
     messages: [
-      { creatorId: "c-alba", threadKey: "7", at: "2026-11-05T10:00:00.000Z", fromFan: false, priceCents: 0, purchased: true },
-      { creatorId: "c-alba", threadKey: "7", at: "2026-11-05T10:01:00.000Z", fromFan: false, priceCents: 500, purchased: null },
+      { creatorId: "c-alba", threadKey: "7", fanKey: "7", at: "2026-11-05T10:00:00.000Z", fromFan: false, priceCents: 0, purchased: true, authorId: "a" },
+      { creatorId: "c-alba", threadKey: "7", fanKey: "7", at: "2026-11-05T10:01:00.000Z", fromFan: false, priceCents: 500, purchased: null, authorId: "a" },
     ],
   });
   assert.equal(report?.ppvSent, 1);

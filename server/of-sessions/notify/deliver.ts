@@ -1,5 +1,6 @@
 import type { FanMessageEvent } from "../sync/chats.ts";
 import type { ReadSql } from "../sync/store.ts";
+import { alertMode, alertUserList, targetsForCreator, type AlertPerson } from "./audience.ts";
 import { planAlerts, type AlertTarget, type RecentAlert } from "./plan.ts";
 import { createWhatsAppSender, normalizePhone, type WhatsAppEnv } from "./whatsapp.ts";
 
@@ -69,32 +70,31 @@ async function creatorNames(sql: ReadSql, creatorIds: string[]): Promise<Map<str
 }
 
 async function targetsByCreator(sql: ReadSql, creatorIds: string[], env: WhatsAppEnv): Promise<Map<string, AlertTarget[]>> {
-  const filter = creatorIds.map((_, index) => `$${index + 1}`).join(", ");
-  const grants = await sql.query<{ user_id: string; creator_id: string }>(
-    `select user_id, creator_id from creator_grant where creator_id in (${filter})`,
-    creatorIds,
+  const mode = alertMode(env.FANLINK_ALERT_MODE);
+  const grants = await sql.query<{ user_id: string; creator_id: string }>("select user_id, creator_id from creator_grant");
+  const alerts = await sql.query<{ user_id: string; phone: string | null; alerts_enabled: boolean | string; quiet_minutes: number | string | null }>(
+    "select user_id, phone, alerts_enabled, quiet_minutes from staff_alert",
   );
-  const userIds = [...new Set(grants.map((row) => row.user_id))];
-  const alerts = userIds.length
-    ? await sql.query<{ user_id: string; phone: string | null; alerts_enabled: boolean | string; quiet_minutes: number | string | null }>(
-        `select user_id, phone, alerts_enabled, quiet_minutes from staff_alert where user_id in (${userIds.map((_, index) => `$${index + 1}`).join(", ")})`,
-        userIds,
-      )
-    : [];
-  const byUser = new Map(alerts.map((row) => [row.user_id, row]));
-  const map = new Map<string, AlertTarget[]>();
+  const grantsByUser = new Map<string, string[]>();
   for (const grant of grants) {
-    const alert = byUser.get(grant.user_id);
-    const phone = alert?.phone ? normalizePhone(alert.phone) : null;
-    const list = map.get(grant.creator_id) ?? [];
-    const quiet = Number(alert?.quiet_minutes ?? quietMinutes(env));
-    list.push({
-      userId: grant.user_id,
-      phone,
-      enabled: alert?.alerts_enabled === true || alert?.alerts_enabled === "t" || alert?.alerts_enabled === "true",
+    const list = grantsByUser.get(grant.user_id) ?? [];
+    list.push(grant.creator_id);
+    grantsByUser.set(grant.user_id, list);
+  }
+  const people: AlertPerson[] = alerts.map((row) => {
+    const quiet = Number(row.quiet_minutes ?? quietMinutes(env));
+    return {
+      userId: row.user_id,
+      phone: row.phone ? normalizePhone(row.phone) : null,
+      enabled: row.alerts_enabled === true || row.alerts_enabled === "t" || row.alerts_enabled === "true",
       quietMinutes: Number.isFinite(quiet) ? quiet : quietMinutes(env),
-    });
-    map.set(grant.creator_id, list);
+      creatorIds: grantsByUser.get(row.user_id) ?? [],
+    };
+  });
+  const listed = alertUserList(env.FANLINK_ALERT_USERS);
+  const map = new Map<string, AlertTarget[]>();
+  for (const creatorId of creatorIds) {
+    map.set(creatorId, targetsForCreator(people, creatorId, mode, listed));
   }
   return map;
 }

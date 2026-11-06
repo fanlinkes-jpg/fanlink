@@ -1,12 +1,6 @@
-export type AssignmentSpan = {
-  creatorId: string;
-  userId: string;
-  startedAt: string;
-  endedAt: string | null;
-};
-
 export type TeamSale = {
   creatorId: string;
+  fanKey: string | null;
   at: string;
   grossCents: number;
   kind: "tip" | "ppv";
@@ -15,10 +9,13 @@ export type TeamSale = {
 export type TeamMessage = {
   creatorId: string;
   threadKey: string;
+  fanKey: string | null;
   at: string;
   fromFan: boolean;
   priceCents: number | null;
   purchased: boolean | null;
+  /** Autor en el CRM. Null si OnlyFans no dice quién escribió. */
+  authorId: string | null;
 };
 
 export type ChatterReport = {
@@ -30,46 +27,41 @@ export type ChatterReport = {
   threads: number | null;
 };
 
-export function chatterReports(input: {
-  assignments: AssignmentSpan[];
-  sales: TeamSale[];
-  messages: TeamMessage[];
-}): ChatterReport[] {
-  const users = [...new Set(input.assignments.map((row) => row.userId))];
+/**
+ * Cada venta es de quien escribió el mensaje. Si dos autores escribieron
+ * a ese fan antes de la venta, no se atribuye a ninguno.
+ */
+export function chatterReports(input: { messages: TeamMessage[]; sales: TeamSale[] }): ChatterReport[] {
+  const users = [...new Set(input.messages.flatMap((message) => (message.authorId ? [message.authorId] : [])))];
   return users.map((userId) => {
-    const spans = input.assignments.filter((row) => row.userId === userId);
-    const sales = input.sales.filter((sale) => soleUser(input.assignments, sale.creatorId, sale.at) === userId);
-    const messages = input.messages.filter((message) => soleUser(input.assignments, message.creatorId, message.at) === userId);
-    const sent = messages.filter((message) => !message.fromFan && message.priceCents != null && message.priceCents > 0);
-    const replies = firstReplies(messages);
+    const mine = input.messages.filter((message) => message.authorId === userId);
+    const sales = input.sales.filter((sale) => soleAuthor(sale, input.messages) === userId);
+    const sent = mine.filter((message) => !message.fromFan && message.priceCents != null && message.priceCents > 0);
+    const replies = firstReplies(input.messages, userId);
     return {
       userId,
       grossCents: sales.length === 0 ? null : sales.reduce((sum, sale) => sum + sale.grossCents, 0),
-      ppvSent: messages.length === 0 ? null : sent.length,
-      ppvBought: messages.length === 0 ? null : sent.filter((message) => message.purchased === true).length,
+      ppvSent: mine.length === 0 ? null : sent.length,
+      ppvBought: mine.length === 0 ? null : sent.filter((message) => message.purchased === true).length,
       firstReplyMinutes: replies.length === 0 ? null : Math.round(replies.reduce((sum, value) => sum + value, 0) / replies.length),
-      threads: messages.length === 0 ? null : new Set(messages.map((message) => `${message.creatorId}:${message.threadKey}`)).size,
+      threads: mine.length === 0 ? null : new Set(mine.map((message) => `${message.creatorId}:${message.threadKey}`)).size,
     };
   });
 }
 
-function soleUser(spans: AssignmentSpan[], creatorId: string, at: string): string | null {
-  const users = spans.filter((span) => covers([span], creatorId, at)).map((span) => span.userId);
-  const unique = [...new Set(users)];
+function soleAuthor(sale: TeamSale, messages: TeamMessage[]): string | null {
+  const authors = messages.flatMap((message) => {
+    if (message.fromFan || !message.authorId) return [];
+    if (message.creatorId !== sale.creatorId) return [];
+    if (sale.fanKey && message.fanKey && message.fanKey !== sale.fanKey) return [];
+    if (message.at > sale.at) return [];
+    return [message.authorId];
+  });
+  const unique = [...new Set(authors)];
   return unique.length === 1 ? unique[0] ?? null : null;
 }
 
-function covers(spans: AssignmentSpan[], creatorId: string, at: string): boolean {
-  const time = Date.parse(at);
-  return spans.some((span) => {
-    if (span.creatorId !== creatorId) return false;
-    const start = Date.parse(span.startedAt);
-    const end = span.endedAt ? Date.parse(span.endedAt) : Number.POSITIVE_INFINITY;
-    return time >= start && time < end;
-  });
-}
-
-function firstReplies(messages: TeamMessage[]): number[] {
+function firstReplies(messages: TeamMessage[], userId: string): number[] {
   const byThread = new Map<string, TeamMessage[]>();
   for (const message of messages) {
     const key = `${message.creatorId}:${message.threadKey}`;
@@ -91,6 +83,7 @@ function firstReplies(messages: TeamMessage[]): number[] {
       while (index < ordered.length && ordered[index]?.fromFan) index += 1;
       const reply = ordered[index];
       if (!reply || reply.fromFan) continue;
+      if (reply.authorId !== userId) continue;
       const delta = (Date.parse(reply.at) - Date.parse(start.at)) / 60_000;
       if (delta >= 0) minutes.push(delta);
     }

@@ -84,7 +84,24 @@ export function canOperateCreator(access: TeamAccess | null, creatorId: string, 
   if (!hasPerm(access, perm)) return false;
   if (!access) return false;
   if (access.role === "owner") return true;
+  if (perm === "mensajes") return true;
   return access.creatorIds.includes(creatorId);
+}
+
+/** Las conversaciones son de todo el equipo. La asignación de cuenta no las recorta. */
+export function creatorIdsForChats(access: TeamAccess | null, allCreatorIds: string[]): string[] {
+  if (access?.role !== "owner" && access?.role !== "member") return [];
+  return allCreatorIds;
+}
+
+export function canSeeAgencyEarnings(access: TeamAccess | null): boolean {
+  return access?.role === "owner";
+}
+
+export function canSeeChatterFigures(access: TeamAccess | null, subjectUserId: string): boolean {
+  if (!access) return false;
+  if (access.role === "owner") return true;
+  return access.userId === subjectUserId;
 }
 
 export function assertWorkspaceChange(access: TeamAccess, prev: WorkspaceSlice, next: WorkspaceSlice): void {
@@ -139,7 +156,10 @@ function assertRecords(
   for (const id of changedIds(prev, next)) {
     const record = next.find((item) => item.id === id) ?? prev.find((item) => item.id === id);
     const creatorId = record?.creatorId ?? id;
-    if (!access.perms.includes(perm) || !access.creatorIds.includes(creatorId)) {
+    if (!access.perms.includes(perm)) {
+      throw new WorkspaceAccessError(message);
+    }
+    if (perm !== "mensajes" && !access.creatorIds.includes(creatorId)) {
       throw new WorkspaceAccessError(message);
     }
   }

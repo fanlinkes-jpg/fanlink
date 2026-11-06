@@ -998,6 +998,7 @@ function MemberGrants({
         ))}
       </div>
       <AlertFields person={person} onAlert={onAlert} />
+      <p className="mt-3 text-xs text-muted">Asignación opcional. El chat es común y no depende de estas cuentas.</p>
       <div className="mt-2 flex flex-wrap gap-3">
         {creatorIds.map((creatorId) => (
           <label key={creatorId} className="flex items-center gap-1 text-xs">

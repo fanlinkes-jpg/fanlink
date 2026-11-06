@@ -38,9 +38,9 @@ test("un miembro solo toca fans de las creadoras asignadas", () => {
   const edited = { ...ownFan, fans: [{ id: "f1", creatorId: "c-alba", notes: "hola" }] };
   assert.doesNotThrow(() => assertWorkspaceChange(chatter, ownFan, edited));
   const other = { ...prev, fans: [{ id: "f2", creatorId: "c-otra", notes: "" }] };
-  assert.throws(() => assertWorkspaceChange(chatter, prev, other), /esa creadora/);
+  assert.doesNotThrow(() => assertWorkspaceChange(chatter, prev, other));
   assert.equal(canOperateCreator(chatter, "c-alba", "mensajes"), true);
-  assert.equal(canOperateCreator(chatter, "c-otra", "mensajes"), false);
+  assert.equal(canOperateCreator(chatter, "c-otra", "mensajes"), true);
   assert.equal(canOperateCreator(chatter, "c-alba", "equipo"), false);
   assert.equal(canOperateCreator(owner, "c-otra", "equipo"), true);
 });

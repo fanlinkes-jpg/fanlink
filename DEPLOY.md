@@ -60,4 +60,4 @@ export FANLINK_WHATSAPP_TOKEN=
 export FANLINK_WHATSAPP_PHONE_ID=
 ```
 
-`FANLINK_ALERT_QUIET_MIN` es el mínimo entre avisos del mismo fan. El teléfono de cada miembro se guarda en Equipo.
+`FANLINK_ALERT_QUIET_MIN` es el mínimo entre avisos del mismo fan. `FANLINK_ALERT_MODE` vale `all` (defecto: todos los chatters con avisos), `assigned` (solo quien tiene la cuenta) o `users` (la lista `FANLINK_ALERT_USERS`, ids separados por comas). El teléfono de cada miembro se guarda en Equipo.

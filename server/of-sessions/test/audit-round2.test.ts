@@ -27,25 +27,18 @@ test("no se expira más del 30 % de los fans activos", () => {
   assert.equal(few.warning, null);
 });
 
-test("con solape no se atribuyen PPV, hilos ni la primera respuesta", () => {
+test("si dos autores escribieron al mismo fan, la venta no se duplica", () => {
   const reports = chatterReports({
-    assignments: [
-      { creatorId: "c-alba", userId: "a", startedAt: "2026-11-01T00:00:00.000Z", endedAt: null },
-      { creatorId: "c-alba", userId: "b", startedAt: "2026-11-01T00:00:00.000Z", endedAt: null },
-    ],
-    sales: [{ creatorId: "c-alba", at: "2026-11-03T12:00:00.000Z", grossCents: 800, kind: "ppv" }],
+    sales: [{ creatorId: "c-alba", fanKey: "7", at: "2026-11-05T10:06:00.000Z", grossCents: 500, kind: "ppv" }],
     messages: [
-      { creatorId: "c-alba", threadKey: "7", at: "2026-11-05T10:00:00.000Z", fromFan: true, priceCents: null, purchased: null },
-      { creatorId: "c-alba", threadKey: "7", at: "2026-11-05T10:05:00.000Z", fromFan: false, priceCents: 500, purchased: true },
+      { creatorId: "c-alba", threadKey: "7", fanKey: "7", at: "2026-11-05T10:00:00.000Z", fromFan: true, priceCents: null, purchased: null, authorId: null },
+      { creatorId: "c-alba", threadKey: "7", fanKey: "7", at: "2026-11-05T10:04:00.000Z", fromFan: false, priceCents: null, purchased: null, authorId: "a" },
+      { creatorId: "c-alba", threadKey: "7", fanKey: "7", at: "2026-11-05T10:05:00.000Z", fromFan: false, priceCents: 500, purchased: true, authorId: "b" },
     ],
   });
-  for (const report of reports) {
-    assert.equal(report.grossCents, null);
-    assert.equal(report.ppvSent, null);
-    assert.equal(report.ppvBought, null);
-    assert.equal(report.firstReplyMinutes, null);
-    assert.equal(report.threads, null);
-  }
+  assert.equal(reports.find((row) => row.userId === "a")?.grossCents, null);
+  assert.equal(reports.find((row) => row.userId === "b")?.grossCents, null);
+  assert.equal(reports.find((row) => row.userId === "b")?.ppvSent, 1);
 });
 
 test("el LTV usa el gasto de la ficha si las transacciones no cubren el historial", () => {

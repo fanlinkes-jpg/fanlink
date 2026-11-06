@@ -27,11 +27,8 @@ export function RealChatsPage() {
     return () => clearInterval(timer);
   }, []);
 
-  const allowed = new Set(
-    teamAccess?.role === "owner" ? creators.map((creator) => creator.id) : (teamAccess?.creatorIds ?? []),
-  );
   const threads = (data?.threads ?? []).filter(
-    (thread) => allowed.has(thread.creatorId) && (creatorId === "all" || thread.creatorId === creatorId),
+    (thread) => creatorId === "all" || thread.creatorId === creatorId,
   );
   const selected =
     threads.find((thread) => `${thread.creatorId}:${thread.threadKey}` === selectedKey) ?? threads[0] ?? null;
