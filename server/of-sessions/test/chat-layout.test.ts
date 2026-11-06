@@ -46,6 +46,21 @@ test("el botón Enviar se ve entero sin scroll de página", async () => {
       for (const part of seen.parts) {
         assert.ok(part.top >= 0 && part.bottom <= viewport.height + 1, `${label}: ${part.label} queda fuera`);
       }
+      const dialog = page.getByRole("dialog", { name: "Ficha del fan" });
+      await page.getByRole("button", { name: "Ficha del fan" }).click();
+      await dialog.waitFor();
+      await dialog.getByText("Comportamiento de gasto").waitFor();
+      await dialog.getByText("Métricas").waitFor();
+      await dialog.getByText("Suscripción").waitFor();
+      await page.keyboard.press("Escape");
+      await dialog.waitFor({ state: "hidden" });
+      await page.getByRole("button", { name: "Ficha del fan" }).click();
+      await dialog.waitFor();
+      await page.getByRole("button", { name: "Cerrar", exact: true }).click();
+      await dialog.waitFor({ state: "hidden" });
+      const after = await sendButtonBox(page);
+      assert.equal(after.found, true, `${label}: el botón desaparece al cerrar la ficha`);
+      assert.ok(after.bottom <= viewport.height + 1, `${label}: el botón sale por abajo al cerrar la ficha`);
       if (viewport.capture) {
         await page.screenshot({ path: path.join(shots, `mensajes-${viewport.width}x${viewport.height}.png`) });
       }

@@ -62,6 +62,14 @@ export function RealChatsPage() {
   const running = selected ? data?.runningCreatorIds.includes(selected.creatorId) : false;
   const canForce = teamAccess?.role === "owner" && selected != null;
   useEffect(() => {
+    if (!insightsOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setInsightsOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [insightsOpen]);
+  useEffect(() => {
     const params = new URLSearchParams();
     if (selected?.creatorId) params.set("creatorId", selected.creatorId);
     if (selected?.threadKey) params.set("threadKey", selected.threadKey);
@@ -148,7 +156,7 @@ export function RealChatsPage() {
               <p className="truncate font-medium">{selected ? (selected.fanName ?? selected.fanHandle ?? "Fan") : "Sin sincronizar"}</p>
               <div className="flex items-center gap-2">
                 <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => void refresh()}>Recargar</button>
-                <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs xl:hidden" onClick={() => setInsightsOpen(true)}>Ficha</button>
+                <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => setInsightsOpen(true)}>Ficha del fan</button>
                 <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => setMenu((open) => !open)} aria-label="Menú">Menú</button>
               </div>
             </header>
@@ -233,13 +241,34 @@ export function RealChatsPage() {
               </div>
             </form>
       </section>
-      <div className="hidden h-full min-h-0 w-[320px] shrink-0 overflow-hidden border-l border-[#e6e8ee] xl:block">
-        {selected ? <InsightPane thread={selected} reads={reads.byCreator} crmFans={crmFans} messages={messages} onNotes={saveNote} /> : null}
-      </div>
-      {insightsOpen && selected ? (
-        <div className="fixed inset-0 z-40 bg-black/30 xl:hidden" onClick={() => setInsightsOpen(false)}>
-          <div className="absolute inset-y-0 right-0 w-[min(100%,360px)] shadow-xl" onClick={(event) => event.stopPropagation()}>
-            <InsightPane thread={selected} reads={reads.byCreator} crmFans={crmFans} messages={messages} onNotes={saveNote} />
+      {insightsOpen ? (
+        <div className="fixed inset-0 z-50">
+          <button type="button" className="absolute inset-0 bg-black/30" aria-label="Cerrar ficha" onClick={() => setInsightsOpen(false)} />
+          <div role="dialog" aria-label="Ficha del fan" className="absolute inset-y-0 right-0 flex w-[min(100%,380px)] min-h-0 flex-col bg-white shadow-xl">
+            <div className="flex shrink-0 items-center justify-end border-b border-[#e6e8ee] bg-white px-2 py-1">
+              <button type="button" aria-label="Cerrar" className="rounded px-2 py-1 text-sm" onClick={() => setInsightsOpen(false)}>X</button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-hidden">
+              {selected ? (
+                <InsightPane thread={selected} reads={reads.byCreator} crmFans={crmFans} messages={messages} onNotes={saveNote} />
+              ) : (
+                <FanInsights
+                  name={null}
+                  handle={null}
+                  spentCents={null}
+                  tipsCents={null}
+                  status={null}
+                  expiresAt={null}
+                  renewAuto={null}
+                  subPriceCents={null}
+                  notes=""
+                  notesEditable={false}
+                  onNotes={() => undefined}
+                  transactions={[]}
+                  ppvPrices={[]}
+                />
+              )}
+            </div>
           </div>
         </div>
       ) : null}
