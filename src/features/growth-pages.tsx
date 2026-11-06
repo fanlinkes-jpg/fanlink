@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
+import { VaultBrowser } from "@/features/vault-browser";
 import { money, pct } from "@/lib/format";
-import { cn } from "@/lib/cn";
 import { fansForList, useCrm, type Platform } from "@/lib/crm";
 import { Badge, Button, Field, Panel, Select } from "@/components/ui";
 import { CampaignDrafts } from "@/features/campaign-draft";
@@ -181,69 +181,23 @@ export function CampaignsPage() {
 }
 
 export function VaultPage() {
-  const vault = useCrm((s) => s.vault);
   const creators = useCrm((s) => s.creators);
   const creatorId = useCrm((s) => s.creatorId);
-  const setAttach = useCrm((s) => s.setAttach);
-  const navigate = useNavigate();
-  const [folder, setFolder] = useState("Todas");
-  const [sort, setSort] = useState<"revenue" | "rate">("revenue");
-  const folders = ["Todas", ...new Set(vault.map((v) => v.folder))];
-  const items = vault
-    .filter((v) => creatorId === "all" || v.creatorId === creatorId)
-    .filter((v) => folder === "Todas" || v.folder === folder)
-    .sort((a, b) => (sort === "revenue" ? b.revenue - a.revenue : b.unlocks / Math.max(1, b.sent) - a.unlocks / Math.max(1, a.sent)));
-
+  const teamAccess = useCrm((s) => s.teamAccess);
+  const creator = creators.find((item) => item.id === creatorId) ?? null;
+  if (!creator) {
+    return <p className="p-6 text-sm text-[#6d7585]">Sin datos</p>;
+  }
   return (
-    <div className="space-y-4 p-4 md:p-6">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="font-display text-2xl font-semibold">Vault Pro</h1>
-          <p className="text-sm text-muted">Biblioteca local de ejemplo. No son ingresos de OnlyFans. Sirve para elegir medios en un borrador.</p>
-        </div>
-        <div className="flex gap-2">
-          <Select value={folder} onChange={(e) => setFolder(e.target.value)} aria-label="Carpeta">
-            {folders.map((f) => <option key={f}>{f}</option>)}
-          </Select>
-          <Select value={sort} onChange={(e) => setSort(e.target.value as "revenue" | "rate")} aria-label="Orden">
-            <option value="revenue">Por ingresos</option>
-            <option value="rate">Por desbloqueo</option>
-          </Select>
-        </div>
-      </div>
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {items.map((item) => {
-          const creator = creators.find((c) => c.id === item.creatorId);
-          return (
-            <article key={item.id} className="overflow-hidden rounded-lg border border-line bg-surface">
-              <div className="flex h-28 items-end p-3" style={{ background: `linear-gradient(160deg, hsl(${item.hue} 35% 28%), hsl(${item.hue} 20% 12%))` }}>
-                <span className="text-xs font-medium text-fg">{item.kind} · {item.folder}</span>
-              </div>
-              <div className="space-y-2 p-3">
-                <p className="font-medium">{item.title}</p>
-                <p className="text-xs">
-                  <span className={cn("rounded-full px-2 py-0.5", item.sent > 0 ? "bg-[#e7f0ff] text-[#2456c7]" : "bg-[#f3f4f6] text-[#6d7585]")}>
-                    {item.sent > 0 ? "Ya usado" : "Sin enviar"}
-                  </span>
-                </p>
-                <p className="text-xs text-muted">{creator?.name} · sugerido {money(item.price)}</p>
-                <p className="text-xs text-muted">Ejemplo local. No es ingreso de OnlyFans.</p>
-                <Button
-                  variant="soft"
-                  onClick={() => {
-                    setAttach(item.id);
-                    void navigate({ to: "/mensajes" });
-                    toast.success("Adjuntado al compositor");
-                  }}
-                >
-                  Usar en un chat
-                </Button>
-              </div>
-            </article>
-          );
-        })}
-      </div>
-    </div>
+    <VaultBrowser
+      creatorId={creator.id}
+      creatorName={creator.name}
+      fanName={null}
+      fanKey={null}
+      chatterId={teamAccess?.userId ?? null}
+      messages={[]}
+      onAttach={() => undefined}
+    />
   );
 }
 

@@ -164,6 +164,7 @@ export type CreatorChatList = {
       priceCents: number | null;
       paid: boolean | null;
       opened: boolean | null;
+      vaultId?: string | null;
     }> | null;
   }>;
   meta: Array<{

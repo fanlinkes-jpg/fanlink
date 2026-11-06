@@ -66,7 +66,7 @@ export FANLINK_WHATSAPP_PHONE_ID=
 
 `GET /api/chat-live` es un stream SSE. El proxy no puede acumular la respuesta: nginx necesita `proxy_buffering off;` y la app ya manda `X-Accel-Buffering: no`. El timeout de lectura tiene que aguantar la conexión abierta (minutos, no el timeout corto de una API). Sin eso el navegador se entera del mensaje tarde o la conexión se corta.
 
-`npm run db:migrate` aplica también `0019_chat_author.sql` (autor del mensaje y borradores salientes), `0020_chat_card.sql` (ficha del fan) y `0021_message_media.sql` (miniatura y archivo del mensaje).
+`npm run db:migrate` aplica también `0019_chat_author.sql` (autor del mensaje y borradores salientes), `0020_chat_card.sql` (ficha del fan), `0021_message_media.sql` (miniatura y archivo del mensaje) y `0022_vault_media.sql` (bóveda).
 
 ## 6. Masivos
 

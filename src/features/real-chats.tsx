@@ -6,6 +6,7 @@ import { sessionErrorText } from "@/lib/use-creator-sessions";
 import { useOfReads } from "@/lib/use-of-reads";
 import { ChatBubble } from "@/features/chat-bubble";
 import { FanInsights } from "@/features/fan-insights";
+import { VaultBrowser } from "@/features/vault-browser";
 
 const EMOJIS = ["😊", "🔥", "❤️", "😘", "🎁"];
 
@@ -26,6 +27,8 @@ export function RealChatsPage() {
   const [menu, setMenu] = useState(false);
   const [draft, setDraft] = useState("");
   const [sendEnabled, setSendEnabled] = useState(false);
+  const [vaultOpen, setVaultOpen] = useState(false);
+  const [attachments, setAttachments] = useState<Array<{ id: string; title: string; warning: string | null }>>([]);
   const [pendingOut, setPendingOut] = useState<Array<{ id: string; threadKey: string; body: string }>>([]);
 
   async function refresh() {
@@ -194,17 +197,30 @@ export function RealChatsPage() {
                 ))}
                 <button type="button" disabled className="ml-auto rounded px-2 text-xs text-[#b0b6c2]" title="Sin datos">Traducción</button>
                 <button type="button" disabled className="rounded px-2 text-xs text-[#b0b6c2]" title="Sin datos">Guiones</button>
-                <button type="button" disabled className="rounded px-2 text-xs text-[#b0b6c2]" title="Sin datos">Galería</button>
+                <button type="button" className="rounded px-2 text-xs" onClick={() => setVaultOpen(true)}>Add from media vault</button>
               </div>
+              {attachments.length > 0 ? (
+                <ul className="mb-2 flex flex-wrap gap-1">
+                  {attachments.map((item) => (
+                    <li key={item.id} className="rounded-full border border-[#e6e8ee] px-2 py-1 text-[10px]">
+                      {item.title}
+                      {item.warning ? <span className="ml-1 text-[#8a5a12]">{item.warning}</span> : null}
+                      <button type="button" className="ml-1" aria-label="Quitar adjunto" onClick={() => setAttachments((current) => current.filter((row) => row.id !== item.id))}>×</button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
               <div className="flex items-end gap-2">
                 <textarea value={draft} onChange={(event) => setDraft(event.target.value)} rows={2} placeholder="Escribe un mensaje" className="min-h-12 flex-1 resize-none rounded-xl border border-[#e6e8ee] px-3 py-2 text-sm" />
                 <button
                   type="button"
-                  disabled={!draft.trim()}
+                  disabled={!draft.trim() && attachments.length === 0}
                   onClick={() => {
-                    if (!selected || !draft.trim()) return;
-                    const body = draft.trim();
+                    if (!selected || (!draft.trim() && attachments.length === 0)) return;
+                    const attached = attachments.map((item) => `[adjunto] ${item.title}`).join("\n");
+                    const body = [draft.trim(), attached].filter(Boolean).join("\n");
                     setDraft("");
+                    setAttachments([]);
                     void recordChatOutbound({
                       data: {
                         creatorId: selected.creatorId,
@@ -240,6 +256,23 @@ export function RealChatsPage() {
         <div className="fixed inset-0 z-40 bg-black/30 xl:hidden" onClick={() => setInsightsOpen(false)}>
           <div className="absolute inset-y-0 right-0 w-[min(100%,360px)] shadow-xl" onClick={(event) => event.stopPropagation()}>
             <InsightPane thread={selected} reads={reads.byCreator} crmFans={crmFans} messages={messages} onNotes={saveNote} />
+          </div>
+        </div>
+      ) : null}
+      {vaultOpen && selected ? (
+        <div className="fixed inset-0 z-50 bg-black/40 p-6" onClick={() => setVaultOpen(false)}>
+          <div className="h-full overflow-hidden rounded-xl bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
+            <VaultBrowser
+              creatorId={selected.creatorId}
+              creatorName={creators.find((creator) => creator.id === selected.creatorId)?.name ?? "Sin datos"}
+              fanName={selected.fanName}
+              fanKey={selected.fanKey}
+              chatterId={teamAccess?.userId ?? null}
+              messages={messages}
+              onAttach={(item, warning) => {
+                setAttachments((current) => current.some((row) => row.id === item.id) ? current : [...current, { id: item.id, title: item.title ?? "Sin datos", warning }]);
+              }}
+            />
           </div>
         </div>
       ) : null}

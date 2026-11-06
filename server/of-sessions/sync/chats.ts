@@ -62,6 +62,8 @@ export type ChatMedia = {
   priceCents: number | null;
   paid: boolean | null;
   opened: boolean | null;
+  /** Id en la bóveda, si el JSON del mensaje lo trae. Sirve para el historial por fan. */
+  vaultId?: string | null;
 };
 
 export type FanMessageEvent = {
@@ -479,6 +481,7 @@ export function mediaItems(record: Record<string, unknown>): ChatMedia[] {
     const ownPrice = priceCents(row.price);
     const locked = typeof row.canView === "boolean" ? row.canView === false : typeof row.isLocked === "boolean" ? row.isLocked === true : null;
     const opened = typeof row.isOpened === "boolean" ? row.isOpened : null;
+    const vaultId = clean(row.id, 40);
     return [{
       kind: mediaKind(row.type ?? row.mediaType),
       seconds,
@@ -488,6 +491,7 @@ export function mediaItems(record: Record<string, unknown>): ChatMedia[] {
       priceCents: ownPrice ?? messagePrice,
       paid: opened ?? messagePaid,
       opened,
+      vaultId,
     }];
   });
 }

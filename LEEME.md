@@ -84,6 +84,16 @@ Con `VITE_AUTH_ENABLED=false` (solo localhost y sin `DATABASE_URL`), un miembro 
 
 La miniatura se corta a 5 MB, con 8 s de silencio y 20 s de reloj total. El vídeo se reenvía de trozo en trozo: solo un `bytes=N-M` de como máximo 8 MB, con tiempo de cabeceras y de inactividad separados (12 s). La playlist HLS se reutiliza 10 s, con tope de 32 entradas y 256 KB. La caché de miniaturas no pasa de 200 ficheros ni de 50 MB, se borra a la semana y no se poda en cada escritura (como mucho cada 60 s).
 
+## Bóveda
+
+`Add from media vault` abre la bóveda de la cuenta. No envía. Adjuntar deja la pieza en el compositor; **Dejar pendiente** guarda el borrador que ya existía. El botón de envío real sigue apagado.
+
+La lectura abre `https://onlyfans.com/my/vault` y guarda el JSON que esa página pide. No se construye ni se firma una llamada a `api2`. Va de una página en una, con al menos 5 segundos de espera (`FANLINK_VAULT_PACE_MS` no puede bajar de eso). **Sync now** empieza. **Continue** solo sigue si el JSON anterior trajo cursor; si no, dice «Sin datos». Hace falta `0022_vault_media.sql`.
+
+Si falta el título, la duración, el precio, la pareja o el historial, se muestra «Sin datos». El precio sugerido solo sale con duración y carpeta: sola o individual entre $12 y $17 (unos $1.08 por minuto), pareja entre $19 y $29, anal o película en el techo, y un dólar por encima de la última compra de ese fan dentro de la banda. `NO VENDER` y `SIN EDITAR` no se adjuntan. Si un mensaje de la cuenta ya guardó el id de esa pieza para ese fan, se avisa con fecha, precio, compra y chatter.
+
+Las listas quedan a la izquierda y el grid a la derecha. Se puede buscar en la carpeta abierta o en toda la bóveda, por texto, tipo, pareja, gratis o PPV, enviado a este fan y el resto de filtros. El orden es fecha, duración, ventas o precio. Cada chatter recuerda los suyos en este navegador.
+
 ## Avisos de WhatsApp
 
 Cuando entra un `new_fan_message`, Fanlink avisa a los miembros asignados a esa creadora que tengan el interruptor de avisos encendido y un teléfono en formato internacional. El texto lleva el nombre de la cuenta, el fan y el extracto. Varios fans del mismo momento salen en un solo mensaje. El mismo fan no se repite hasta que pasan los minutos guardados en su ficha (por defecto 15, `FANLINK_ALERT_QUIET_MIN`).

@@ -56,6 +56,7 @@ export function decodeMedia(raw: string | null): ChatMedia[] | null {
         priceCents: typeof row.priceCents === "number" ? row.priceCents : null,
         paid: typeof row.paid === "boolean" ? row.paid : null,
         opened: typeof row.opened === "boolean" ? row.opened : null,
+        vaultId: typeof row.vaultId === "string" ? row.vaultId : null,
       }];
     });
   } catch {
