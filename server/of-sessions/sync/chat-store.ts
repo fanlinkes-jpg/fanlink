@@ -368,14 +368,15 @@ async function attachOutboundAuthors(sql: ReadSql, creatorId: string, messages: 
 export async function listPendingOutbounds(
   sql: ReadSql,
   creatorIds: string[],
-): Promise<Array<{ id: string; creatorId: string; threadKey: string | null; body: string }>> {
+): Promise<Array<{ id: string; creatorId: string; threadKey: string | null; body: string; scheduledAt: string | null; authorName: string | null }>> {
   if (!creatorIds.length) return [];
   const filter = creatorIds.map((_, index) => `$${index + 1}`).join(", ");
-  const rows = await sql.query<{ id: string; creator_id: string; thread_key: string | null; body: string }>(
-    `select id, creator_id, thread_key, body
-     from of_chat_outbound
-     where creator_id in (${filter}) and matched_message_key is null
-     order by created_at`,
+  const rows = await sql.query<{ id: string; creator_id: string; thread_key: string | null; body: string; scheduled_at: Date | string | null; author_name: string | null }>(
+    `select o.id, o.creator_id, o.thread_key, o.body, o.scheduled_at, p.display_name as author_name
+     from of_chat_outbound o
+     left join staff_profile p on p.user_id = o.author_id
+     where o.creator_id in (${filter}) and o.matched_message_key is null
+     order by o.created_at`,
     creatorIds,
   );
   return rows.map((row) => ({
@@ -383,14 +384,16 @@ export async function listPendingOutbounds(
     creatorId: row.creator_id,
     threadKey: row.thread_key,
     body: row.body,
+    scheduledAt: row.scheduled_at == null ? null : row.scheduled_at instanceof Date ? row.scheduled_at.toISOString() : String(row.scheduled_at),
+    authorName: row.author_name,
   }));
 }
 
 export async function recordOutbound(sql: ReadSql, draft: OutboundDraft & { creatorId: string }): Promise<void> {
   await sql.query(
-    `insert into of_chat_outbound (id, creator_id, thread_key, fan_key, author_id, body, price_cents, created_at, of_message_key)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-    [draft.id, draft.creatorId, draft.threadKey, draft.fanKey, draft.authorId, draft.body, draft.priceCents, draft.createdAt, draft.ofMessageKey],
+    `insert into of_chat_outbound (id, creator_id, thread_key, fan_key, author_id, body, price_cents, created_at, of_message_key, scheduled_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+    [draft.id, draft.creatorId, draft.threadKey, draft.fanKey, draft.authorId, draft.body, draft.priceCents, draft.createdAt, draft.ofMessageKey, draft.scheduledAt ?? null],
   );
 }
 

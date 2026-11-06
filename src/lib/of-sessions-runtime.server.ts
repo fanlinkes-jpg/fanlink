@@ -714,7 +714,7 @@ export async function saveFanProfileView(
 
 export async function recordChatOutboundView(
   userId: string,
-  input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; ofMessageKey: string | null },
+  input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; ofMessageKey: string | null; scheduledAt?: string | null },
 ): Promise<{ ok: true; sent: false }> {
   const access = await accessFor(userId);
   if (access.role !== "owner" && !access.perms.includes("mensajes")) {
@@ -732,6 +732,7 @@ export async function recordChatOutboundView(
     priceCents: input.priceCents,
     createdAt: new Date().toISOString(),
     ofMessageKey: input.ofMessageKey,
+    scheduledAt: input.scheduledAt ?? null,
   });
   return { ok: true, sent: false };
 }

@@ -28,14 +28,16 @@ export function RealChatsPage() {
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [scriptOpen, setScriptOpen] = useState(false);
   const [sendEnabled, setSendEnabled] = useState(false);
-  const [pendingOut, setPendingOut] = useState<Array<{ id: string; creatorId: string; threadKey: string; body: string }>>([]);
+  const [pendingOut, setPendingOut] = useState<Array<{ id: string; creatorId: string; threadKey: string; body: string; scheduledAt: string | null; authorName: string | null }>>([]);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [scheduleAt, setScheduleAt] = useState("");
 
   async function refresh() {
     try {
       const list = await listCreatorChats();
       setData(list);
       setPendingOut(list.pending.flatMap((item) => (
-        item.threadKey ? [{ id: item.id, creatorId: item.creatorId, threadKey: item.threadKey, body: item.body }] : []
+        item.threadKey ? [{ id: item.id, creatorId: item.creatorId, threadKey: item.threadKey, body: item.body, scheduledAt: item.scheduledAt, authorName: item.authorName }] : []
       )));
       setError(null);
     } catch (err) {
@@ -190,7 +192,7 @@ export function RealChatsPage() {
               {pendingOut.filter((item) => item.creatorId === selected?.creatorId && item.threadKey === selected?.threadKey).map((item) => (
                 <li key={item.id} className="text-right">
                   <p className="inline-block max-w-[70%] rounded-2xl border border-dashed border-[#c5cad6] px-3 py-2 text-sm">{item.body}</p>
-                  <p className="mt-1 text-[10px] text-[#8a5a12]">Pendiente · no enviado</p>
+                  <p className="mt-1 text-[10px] text-[#8a5a12]">{item.scheduledAt ? `Pendiente · programado ${item.scheduledAt.slice(0, 16).replace("T", " ")} · ${item.authorName ?? "Sin datos"} · no enviado` : "Pendiente · no enviado"}</p>
                 </li>
               ))}
               {messages.map((message) => (
@@ -228,7 +230,41 @@ export function RealChatsPage() {
                   ))}
                 </div>
               </div>
+              {scheduleOpen ? (
+                <div className="mb-1 flex flex-wrap items-center gap-2">
+                  <input type="datetime-local" aria-label="Fecha programada" value={scheduleAt} onChange={(event) => setScheduleAt(event.target.value)} className="h-8 rounded border border-[#e6e8ee] px-2 text-xs" />
+                  <button
+                    type="button"
+                    disabled={!draft.trim() || !scheduleAt || !selected}
+                    onClick={() => {
+                      if (!selected || !draft.trim() || !scheduleAt) return;
+                      const body = draft.trim();
+                      const price = draftPrice;
+                      const when = new Date(scheduleAt).toISOString();
+                      setDraft("");
+                      setDraftPrice(null);
+                      setScheduleAt("");
+                      setScheduleOpen(false);
+                      void recordChatOutbound({
+                        data: {
+                          creatorId: selected.creatorId,
+                          fanKey: selected.fanKey,
+                          threadKey: selected.threadKey,
+                          body,
+                          priceCents: price,
+                          ofMessageKey: null,
+                          scheduledAt: when,
+                        },
+                      }).then(() => refresh()).catch((err: unknown) => setError(sessionErrorText(err)));
+                    }}
+                    className="rounded border border-[#e6e8ee] px-2 py-1 text-xs disabled:opacity-50"
+                  >
+                    Guardar programado
+                  </button>
+                </div>
+              ) : null}
               <div className="mb-1 flex justify-end">
+                <button type="button" className="rounded px-2 py-0.5 text-xs text-[#2456c7]" aria-label="Programar" onClick={() => setScheduleOpen((open) => !open)}>Calendario</button>
                 <button type="button" className="rounded px-2 py-0.5 text-xs text-[#2456c7]" onClick={() => setScriptOpen((open) => !open)}>Guiones</button>
                 <button type="button" className="rounded px-2 py-0.5 text-xs text-[#2456c7]" onClick={() => setEmojiOpen((open) => !open)}>{emojiOpen ? "Cerrar emojis" : "Más emojis"}</button>
               </div>
@@ -252,6 +288,7 @@ export function RealChatsPage() {
                         body,
                         priceCents: price,
                         ofMessageKey: null,
+                        scheduledAt: null,
                       },
                     }).then(() => refresh()).catch((err: unknown) => {
                       setDraft(body);

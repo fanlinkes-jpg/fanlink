@@ -171,6 +171,8 @@ export type CreatorChatList = {
     creatorId: string;
     threadKey: string | null;
     body: string;
+    scheduledAt: string | null;
+    authorName: string | null;
   }>;
   notes: Array<{
     creatorId: string;
@@ -282,7 +284,7 @@ export const saveFanProfile = createServerFn({ method: "POST" })
 
 export const recordChatOutbound = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; ofMessageKey: string | null }) => input)
+  .validator((input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; ofMessageKey: string | null; scheduledAt?: string | null }) => input)
   .handler(async ({ context, data }) => {
     const { recordChatOutboundView } = await import("./of-sessions-runtime.server");
     return recordChatOutboundView(context.userId, data);
