@@ -159,6 +159,11 @@ export type CreatorChatList = {
     mediaCount: number | null;
     mediaSeconds: number | null;
     mediaPreview: string | null;
+    media: Array<{ kind: "foto" | "video" | "audio" | null; seconds: number | null; preview: string | null; locked: boolean | null; priceCents: number | null; paid: boolean | null; opened: boolean | null }> | null;
+    liked: boolean | null;
+    replyBody: string | null;
+    eventKind: "compra" | "propina" | null;
+    eventCents: number | null;
   }>;
   meta: Array<{
     creatorId: string;
@@ -289,6 +294,22 @@ export const chatSendAccess = createServerFn({ method: "GET" })
   .handler(async ({ context }): Promise<{ creatorIds: string[] }> => {
     const { chatSendAccessView } = await import("./of-sessions-runtime.server");
     return chatSendAccessView(context.userId);
+  });
+
+export const loadOlderMessages = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string; threadKey: string }) => input)
+  .handler(async ({ context, data }) => {
+    const { loadOlderMessagesView } = await import("./of-sessions-runtime.server");
+    return loadOlderMessagesView(context.userId, data);
+  });
+
+export const loadMoreChats = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string }) => input)
+  .handler(async ({ context, data }) => {
+    const { loadMoreChatsView } = await import("./of-sessions-runtime.server");
+    return loadMoreChatsView(context.userId, data);
   });
 
 export const sendChatMessage = createServerFn({ method: "POST" })
