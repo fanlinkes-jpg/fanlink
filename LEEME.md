@@ -89,6 +89,10 @@ En Campañas, el bloque «Borrador con fans sincronizados» arma un masivo con f
 
 `FANLINK_ENABLE_SEND` está apagado. El botón dice **Envío real desactivado** y no se puede pulsar. Aunque se activara, el servidor no envía a `onlyfans.com`. El adaptador del navegador solo se prueba contra el sitio local de pruebas.
 
+El masivo nuevo (`of_mass_message`, migración `0027`) tampoco sale de aquí. Además de `FANLINK_ENABLE_SEND=true` hace falta `FANLINK_ENABLE_MASS_SEND=true` y la cuenta en `FANLINK_SEND_ALLOW_ACCOUNTS`. Las dos siguen apagadas. Crear el borrador lo hace la dueña o quien tenga el permiso `masivos`. Un chatter no ve los ingresos ni el buy rate de ese masivo.
+
+Lanzarlo son dos pasos y solo de un admin. El primero guarda el hash de un token y quién lo pidió. El token caduca a los 2 minutos según el reloj de la base, no según la hora que mande el cliente. El segundo paso lo presenta el mismo admin: la base lo consume en la misma sentencia que pasa el masivo a enviado, y solo si el hash coincide y aún no ha caducado. Un token vivo no se sustituye en silencio. Pasar a enviado no es un booleano que pueda marcar un chatter.
+
 ## Prueba local
 
 El puerto 8080 puede estar ocupado. No lo uses si otro proyecto lo tiene.
