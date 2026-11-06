@@ -25,14 +25,14 @@ export function RealChatsPage() {
   const [menu, setMenu] = useState(false);
   const [draft, setDraft] = useState("");
   const [sendEnabled, setSendEnabled] = useState(false);
-  const [pendingOut, setPendingOut] = useState<Array<{ id: string; threadKey: string; body: string }>>([]);
+  const [pendingOut, setPendingOut] = useState<Array<{ id: string; creatorId: string; threadKey: string; body: string }>>([]);
 
   async function refresh() {
     try {
       const list = await listCreatorChats();
       setData(list);
       setPendingOut(list.pending.flatMap((item) => (
-        item.threadKey ? [{ id: item.id, threadKey: item.threadKey, body: item.body }] : []
+        item.threadKey ? [{ id: item.id, creatorId: item.creatorId, threadKey: item.threadKey, body: item.body }] : []
       )));
       setError(null);
     } catch (err) {
@@ -176,7 +176,7 @@ export function RealChatsPage() {
             ) : null}
             <ol className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
               {messages.length === 0 ? <li className="text-sm text-[#6d7585]">Sin datos</li> : null}
-              {pendingOut.filter((item) => item.threadKey === selected.threadKey).map((item) => (
+              {pendingOut.filter((item) => item.creatorId === selected.creatorId && item.threadKey === selected.threadKey).map((item) => (
                 <li key={item.id} className="text-right">
                   <p className="inline-block max-w-[70%] rounded-2xl border border-dashed border-[#c5cad6] px-3 py-2 text-sm">{item.body}</p>
                   <p className="mt-1 text-[10px] text-[#8a5a12]">Pendiente · no enviado</p>
