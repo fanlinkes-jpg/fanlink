@@ -56,7 +56,7 @@ export async function saveMassDraft(
   if (!canCreateMass(actor)) {
     throw new MassAccessError("No tienes permiso para los masivos.");
   }
-  if (launch) return commitLaunch(sql, draft.id, actor, launch.token);
+  if (launch) return commitLaunch(sql, draft, actor, launch.token);
   if (
     draft.status !== "draft" &&
     draft.status !== "scheduled" &&
@@ -247,20 +247,22 @@ function rowToDraft(row: MassRow): MassDraft {
 
 async function commitLaunch(
   sql: ReadSql,
-  id: string,
+  draft: MassDraft,
   actor: MassActor | null,
   token: string,
 ): Promise<MassDraft> {
   const rows = await sql.query<{
+    id: string;
     status: string;
     launch_token_hash: string | null;
     launch_issued_by: string | null;
     token_live: boolean | string | null;
   }>(
-    `select status, launch_token_hash, launch_issued_by,
+    `select id, status, launch_token_hash, launch_issued_by,
             (launch_token_expires_at > now()) as token_live
-     from of_mass_message where id = $1`,
-    [id],
+     from of_mass_message
+     where creator_id = $1 and idempotency_key = $2`,
+    [draft.accountId, draft.idempotencyKey],
   );
   const row = rows[0];
   if (!row) throw new MassTransitionError("No está el masivo.");
@@ -287,20 +289,22 @@ async function commitLaunch(
          launch_token_hash = null,
          launch_token_expires_at = null,
          launch_issued_by = null
-     where id = $1
-       and launch_token_hash = $2
-       and launch_issued_by = $3
+     where creator_id = $1
+       and idempotency_key = $2
+       and launch_token_hash = $3
+       and launch_issued_by = $4
        and launch_token_expires_at > now()
-       and status = $4
+       and status = $5
      returning id`,
-    [id, hashLaunchToken(token), adminId, row.status],
+    [draft.accountId, draft.idempotencyKey, hashLaunchToken(token), adminId, row.status],
   );
   if (!consumed.length) {
     const again = await sql.query<typeof row>(
-      `select status, launch_token_hash, launch_issued_by,
+      `select id, status, launch_token_hash, launch_issued_by,
               (launch_token_expires_at > now()) as token_live
-       from of_mass_message where id = $1`,
-      [id],
+       from of_mass_message
+       where creator_id = $1 and idempotency_key = $2`,
+      [draft.accountId, draft.idempotencyKey],
     );
     const miss = launchMiss(again[0], adminId);
     if (miss) throw new MassTransitionError(miss);
@@ -309,7 +313,7 @@ async function commitLaunch(
     }
     throw new MassTransitionError("El token ya se consumió.");
   }
-  const stored = await readMassDraft(sql, id);
+  const stored = await readMassDraft(sql, consumed[0]?.id ?? row.id);
   if (!stored) throw new MassTransitionError("No está el masivo.");
   return stored;
 }

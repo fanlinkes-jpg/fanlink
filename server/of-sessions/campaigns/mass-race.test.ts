@@ -41,63 +41,69 @@ test("dos conexiones de Postgres no duplican el guardado ni el lanzamiento", asy
         );
         await left.query(migration);
       }
-      const composed = composeMass({
-        accountId,
-        name: "Carrera",
-        body: "Hola {nombre}",
-        priceCents: 300,
-        scheduledAt: "2026-11-06T18:00:00.000Z",
-        segment: { includeAll: true },
-        now: new Date("2026-11-06T10:00:00.000Z"),
-        createId: () => draftId,
-        idempotencyKey: key,
-      });
-      assert.equal(composed.ok, true);
-      if (!composed.ok) return;
-      const [savedLeft, savedRight] = await Promise.all([
-        saveMassDraft(sqlOf(left), composed.draft, OWNER),
-        saveMassDraft(
-          sqlOf(right),
-          { ...composed.draft, id: `${composed.draft.id}-b` },
-          OWNER,
-        ),
-      ]);
-      assert.equal(savedLeft.id, savedRight.id);
-      const saved = await left.query<{ total: number }>(
-        "select count(*)::int as total from of_mass_message where idempotency_key = $1",
-        [key],
-      );
-      assert.equal(Number(saved.rows[0]?.total), 1);
+      for (let round = 0; round < 200; round += 1) {
+        const roundKey = `${key}-${round}`;
+        const roundId = `${draftId}-${round}`;
+        const composed = composeMass({
+          accountId,
+          name: "Carrera",
+          body: "Hola {nombre}",
+          priceCents: 300,
+          scheduledAt: "2026-11-06T18:00:00.000Z",
+          segment: { includeAll: true },
+          now: new Date("2026-11-06T10:00:00.000Z"),
+          createId: () => roundId,
+          idempotencyKey: roundKey,
+        });
+        assert.equal(composed.ok, true);
+        if (!composed.ok) return;
+        const [savedLeft, savedRight] = await Promise.all([
+          saveMassDraft(sqlOf(left), composed.draft, OWNER),
+          saveMassDraft(
+            sqlOf(right),
+            { ...composed.draft, id: `${composed.draft.id}-b` },
+            OWNER,
+          ),
+        ]);
+        assert.equal(savedLeft.id, savedRight.id);
+        const saved = await left.query<{ total: number }>(
+          "select count(*)::int as total from of_mass_message where idempotency_key = $1",
+          [roundKey],
+        );
+        assert.equal(Number(saved.rows[0]?.total), 1);
 
-      const opened = await openMassLaunch(sqlOf(left), {
-        draftId: savedLeft.id,
-        actor: OWNER,
-      });
-      const launched = await Promise.allSettled([
-        saveMassDraft(sqlOf(left), composed.draft, OWNER, {
-          token: opened.token,
-        }),
-        saveMassDraft(sqlOf(right), composed.draft, OWNER, {
-          token: opened.token,
-        }),
-      ]);
-      assert.equal(
-        launched.filter((item) => item.status === "fulfilled").length,
-        1,
-      );
-      assert.equal(
-        launched.filter((item) => item.status === "rejected").length,
-        1,
-      );
-      const row = await left.query<{
-        status: string;
-        launch_token_hash: string | null;
-      }>(
-        "select status, launch_token_hash from of_mass_message where id = $1",
-        [savedLeft.id],
-      );
-      assert.equal(row.rows[0]?.status, "sent");
-      assert.equal(row.rows[0]?.launch_token_hash, null);
+        const opened = await openMassLaunch(sqlOf(left), {
+          draftId: savedLeft.id,
+          actor: OWNER,
+        });
+        const launched = await Promise.allSettled([
+          saveMassDraft(sqlOf(left), savedLeft, OWNER, {
+            token: opened.token,
+          }),
+          saveMassDraft(sqlOf(right), savedRight, OWNER, {
+            token: opened.token,
+          }),
+        ]);
+        assert.equal(
+          launched.filter((item) => item.status === "fulfilled").length,
+          1,
+          `vuelta ${round}`,
+        );
+        assert.equal(
+          launched.filter((item) => item.status === "rejected").length,
+          1,
+          `vuelta ${round}`,
+        );
+        const row = await left.query<{
+          status: string;
+          launch_token_hash: string | null;
+        }>(
+          "select status, launch_token_hash from of_mass_message where creator_id = $1 and idempotency_key = $2",
+          [accountId, roundKey],
+        );
+        assert.equal(row.rows[0]?.status, "sent");
+        assert.equal(row.rows[0]?.launch_token_hash, null);
+      }
     } catch (error) {
       bodyError = error;
     } finally {

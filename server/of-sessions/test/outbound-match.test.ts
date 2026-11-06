@@ -28,13 +28,14 @@ test("la 0033 deja un borrador por mensaje aunque ya hubiera duplicados", async 
       ('ana', 'Ana', 'member', '[]'::jsonb),
       ('luis', 'Luis', 'member', '[]'::jsonb);
     insert into of_chat_message (
-      creator_id, message_key, thread_key, from_fan, body, sent_at, synced_at
-    ) values (
-      'c1', 'm-1', '7', false, 'hola', '2026-11-06T12:00:30.000Z', '2026-11-06T12:01:00.000Z'
-    );
+      creator_id, message_key, thread_key, from_fan, body, sent_at, synced_at, author_id
+    ) values
+      ('c1', 'm-1', '7', false, 'hola', '2026-11-06T12:00:30.000Z', '2026-11-06T12:01:00.000Z', 'ana'),
+      ('c1', 'm-keep', '7', false, 'sigo', '2026-11-06T12:02:00.000Z', '2026-11-06T12:02:00.000Z', 'luis');
     insert into of_chat_outbound (id, creator_id, author_id, body, created_at, matched_message_key) values
       ('lejos', 'c1', 'ana', 'hola', '2026-11-06T12:00:00.000Z', 'm-1'),
       ('cerca', 'c1', 'luis', 'hola', '2026-11-06T12:00:28.000Z', 'm-1'),
+      ('solo', 'c1', 'luis', 'sigo', '2026-11-06T12:02:00.000Z', 'm-keep'),
       ('viejo', 'c1', 'ana', 'sin hora', '2026-11-06T11:00:00.000Z', 'm-2'),
       ('nuevo', 'c1', 'luis', 'sin hora', '2026-11-06T11:30:00.000Z', 'm-2'),
       ('otro', 'c2', 'ana', 'hola', '2026-11-06T12:00:00.000Z', 'm-1');
@@ -47,14 +48,17 @@ test("la 0033 deja un borrador por mensaje aunque ya hubiera duplicados", async 
   );
   const keyOf = new Map(rows.rows.map((row) => [row.id, row.matched_message_key]));
   assert.equal(keyOf.get("cerca"), "m-1");
+  assert.equal(keyOf.get("solo"), "m-keep");
   assert.equal(keyOf.get("lejos"), null);
   assert.equal(keyOf.get("viejo"), "m-2");
   assert.equal(keyOf.get("nuevo"), null);
   assert.equal(keyOf.get("otro"), "m-1");
-  const author = await db.query<{ author_id: string | null }>(
-    "select author_id from of_chat_message where message_key = 'm-1'",
+  const authors = await db.query<{ message_key: string; author_id: string | null }>(
+    "select message_key, author_id from of_chat_message where creator_id = 'c1' order by message_key",
   );
-  assert.equal(author.rows[0]?.author_id, null);
+  const authorOf = new Map(authors.rows.map((row) => [row.message_key, row.author_id]));
+  assert.equal(authorOf.get("m-1"), null);
+  assert.equal(authorOf.get("m-keep"), "luis");
   await assert.rejects(
     db.exec("insert into of_chat_outbound (id, creator_id, author_id, body, matched_message_key) values ('dup', 'c1', 'ana', 'hola', 'm-1')"),
   );
@@ -64,6 +68,13 @@ test("la 0033 deja un borrador por mensaje aunque ya hubiera duplicados", async 
 test("el segundo borrador no se queda el mensaje y la lectura sigue guardada", async () => {
   const db = new PGlite();
   await applyMigrations(db, true);
+  const names = (await readdir(path.join(root, "migrations"))).filter((name) => name.endsWith(".sql"));
+  if (names.includes("0026_chat_history.sql")) {
+    const liked = await db.query<{ column_name: string }>(
+      "select column_name from information_schema.columns where table_name = 'of_chat_message' and column_name = 'liked'",
+    );
+    assert.equal(liked.rows.length, 1);
+  }
   await db.exec("insert into staff_profile (user_id, display_name, role, perms) values ('ana', 'Ana', 'member', '[]'::jsonb), ('luis', 'Luis', 'member', '[]'::jsonb)");
   await db.exec(`
     insert into of_chat_outbound (id, creator_id, thread_key, fan_key, author_id, body, created_at) values
