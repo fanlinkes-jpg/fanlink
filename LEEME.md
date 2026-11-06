@@ -62,6 +62,16 @@ Hasta que exista una sincronización, Analítica y Fans muestran **Sin sincroniz
 
 El servidor sincroniza solo cada cuenta con sesión activa. Por defecto cada 30 minutos (`FANLINK_SYNC_INTERVAL_MIN`). La dueña puede cambiarlo en Analítica, entre 5 y 1440 minutos; ese valor guardado manda sobre la variable. Va de una en una, con un margen al azar de 15 a 90 segundos entre cuentas. No entra una cuenta con identidad **No coincide**, ni una sesión caducada o sin guardar. Si esa cuenta ya se está sincronizando (también a mano), no se lanza otra. Tras dos fallos seguidos la siguiente espera es el doble, luego el cuádruple, hasta 16 veces el intervalo. `FANLINK_SYNC_ENABLED=false` apaga el planificador. En la fila se ve «Última sincronización: hace X min» y el estado: en curso, OK o error con el motivo.
 
+## Permisos
+
+Decisión del dueño, del 2026-11-06: cualquier chatter ve el gasto de cada fan en todas las creadoras. El código lo mantiene así.
+
+- Un miembro con permiso de mensajes ve y trabaja los chats de todas las cuentas. `creatorIdsForChats` devuelve todas, y `canOperateCreator` con `mensajes` no mira la asignación. La asignación se guarda, pero no recorta el chat.
+- El gasto de cada fan (`spentCents`) sale en la bandeja y en la ficha del fan para cualquier chatter, en todas las creadoras. `presentRead` no lo quita a un miembro.
+- Los ingresos agregados de una creadora los ve solo la dueña. `canSeeAgencyEarnings` es cierto solo para el rol owner. Un miembro recibe `earnings` y `transactions` en null, y en Inicio `dayGrossCents` y `monthGrossCents` también en null.
+- El bruto de otro chatter lo ve solo la dueña. Cada chatter ve el suyo (`canSeeChatterFigures`).
+- Forzar la sincronización solo lo puede la dueña.
+
 ## Chats, solo lectura
 
 El mismo planificador abre `https://onlyfans.com/my/chats` y, por defecto, hasta 8 hilos, primero los no leídos (`FANLINK_CHAT_OPEN_UNREAD=false` lo deja en los más recientes). La ruta del hilo es `/my/chats/chat/{id}`. Escucha el JSON que esas páginas piden y no llama endpoints por su cuenta. No envía mensajes a OnlyFans: `FANLINK_ENABLE_SEND` sigue apagado. Si un chatter escribe en el CRM, se guarda su autor y, al sincronizar, se casa con el mensaje real por texto, hora, precio o id.
