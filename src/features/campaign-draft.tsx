@@ -15,6 +15,11 @@ const SEGMENTS = [
   { id: "new", label: "Nuevo" },
 ] as const;
 
+function formatRatio(value: number | null): string {
+  if (value == null) return "Sin datos";
+  return `${Math.round(value * 100)}%`;
+}
+
 export function CampaignDrafts() {
   const creators = useCrm((s) => s.creators);
   const vault = useCrm((s) => s.vault);
@@ -125,7 +130,12 @@ export function CampaignDrafts() {
       <ul className="mt-4 space-y-2 text-sm">
         {drafts.map((draft) => (
           <li key={draft.id} className="rounded-md border border-line px-3 py-2">
-            <p className="font-medium">{draft.name} · {draft.recipientCount} fans · {draft.status === "scheduled" ? "programada" : "borrador"}</p>
+            <p className="font-medium">{draft.name} · {draft.recipientCount} destinatarios · {draft.status === "scheduled" ? "programada" : "borrador"}</p>
+            <p className="text-muted">
+              Compras: {draft.purchases == null ? "Sin datos" : draft.purchases}
+              {" · "}Ingresos: {draft.revenueCents == null ? "Sin datos" : (draft.revenueCents / 100).toFixed(2)}
+              {" · "}Conversión: {formatRatio(draft.purchases == null || draft.recipientCount <= 0 ? null : draft.purchases / draft.recipientCount)}
+            </p>
             <p className="text-muted">{draft.body}</p>
           </li>
         ))}

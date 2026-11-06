@@ -16,6 +16,8 @@ export type CampaignDraftView = {
   vaultIds: string[];
   scheduledAt: string | null;
   recipientCount: number;
+  purchases: number | null;
+  revenueCents: number | null;
   status: "draft" | "scheduled";
 };
 
@@ -93,6 +95,8 @@ export async function saveCampaignDraftView(
     vaultIds: input.vaultIds.slice(0, 12),
     scheduledAt: input.scheduledAt,
     recipientCount: fans.length,
+    purchases: null,
+    revenueCents: null,
     status,
   };
 }
@@ -111,7 +115,13 @@ export async function listCampaignDraftViews(userId: string): Promise<CampaignDr
     scheduled_at: Date | string | null;
     recipient_count: number;
     status: string;
-  }>("select id, creator_id, name, segment, body, price_cents, vault_ids, scheduled_at, recipient_count, status from of_campaign_draft order by created_at desc");
+    purchases: number | null;
+    revenue_cents: number | null;
+  }>(`select d.id, d.creator_id, d.name, d.segment, d.body, d.price_cents, d.vault_ids, d.scheduled_at,
+            d.recipient_count, d.status, r.purchases, r.revenue_cents
+     from of_campaign_draft d
+     left join of_campaign_result r on r.draft_id = d.id
+     order by d.created_at desc`);
   return rows.flatMap((row) => {
     if (access.role !== "owner" && !access.creatorIds.includes(row.creator_id)) return [];
     return [
@@ -125,6 +135,8 @@ export async function listCampaignDraftViews(userId: string): Promise<CampaignDr
         vaultIds: row.vault_ids ? row.vault_ids.split(",").filter(Boolean) : [],
         scheduledAt: row.scheduled_at == null ? null : new Date(row.scheduled_at).toISOString(),
         recipientCount: Number(row.recipient_count),
+        purchases: row.purchases == null ? null : Number(row.purchases),
+        revenueCents: row.revenue_cents == null ? null : Number(row.revenue_cents),
         status: row.status === "scheduled" ? "scheduled" : "draft",
       },
     ];
