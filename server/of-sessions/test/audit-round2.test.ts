@@ -90,8 +90,8 @@ test("el PPV del fan es null si esa persona no tiene mensajes de una lectura cor
 });
 
 test("la persona semilla no enseña mensajes ni ventas locales", () => {
-  assert.equal(seedEmployeeStat("Tú", "4"), "Sin datos");
-  assert.equal(seedEmployeeStat("Lucía", "4"), "4");
+  assert.equal(seedEmployeeStat({ role: "Dueña", id: "e-yo" }, "4"), "Sin datos");
+  assert.equal(seedEmployeeStat({ role: "Chatter", id: "e-lucia" }, "4"), "4");
 });
 
 test("el tope de 400 no adelanta el cursor por delante de un hueco", () => {

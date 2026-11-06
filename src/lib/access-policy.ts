@@ -84,6 +84,7 @@ export function canOperateCreator(access: TeamAccess | null, creatorId: string, 
   if (!hasPerm(access, perm)) return false;
   if (!access) return false;
   if (access.role === "owner") return true;
+  // Los chats son comunes: el permiso de mensajes no se recorta por cuenta asignada.
   if (perm === "mensajes") return true;
   return access.creatorIds.includes(creatorId);
 }

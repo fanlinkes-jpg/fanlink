@@ -1,6 +1,6 @@
-/** La persona semilla no tiene mensajes ni ventas de OnlyFans. */
-export function seedEmployeeStat(name: string, computed: string): string {
-  if (name === "Tú") return "Sin datos";
+/** La dueña semilla no tiene mensajes ni ventas de OnlyFans. Se reconoce por rol o id, no por el nombre. */
+export function seedEmployeeStat(person: { role?: string; id?: string }, computed: string): string {
+  if (person.role === "Dueña" || person.role === "owner" || person.id === "e-yo") return "Sin datos";
   return computed;
 }
 
