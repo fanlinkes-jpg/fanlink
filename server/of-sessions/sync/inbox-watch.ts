@@ -31,11 +31,11 @@ export async function runInboxWatch(input: {
   target: () => WatchTarget | null;
   open: (accountId: string) => Promise<WatchSession>;
   save: (creatorId: string, messages: ChatMessage[]) => Promise<void>;
-  onBlock: (accountId: string, reason: string) => void;
+  /** Devuelve los milisegundos de la pausa de la cuenta. La pestaña espera eso, no un fijo de 15 s. */
+  onBlock: (accountId: string, reason: string) => number;
   onNavigate?: (threadKey: string | null) => void;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
-  blockMs?: number;
   fallbackMs?: number;
   idleMs?: number;
 }): Promise<void> {
@@ -99,15 +99,14 @@ export async function runInboxWatch(input: {
           if (id && kept.length) void input.save(id, kept);
         },
         onBlock: (reason) => {
-          blockedUntil = input.now() + (input.blockMs ?? 15_000);
-          if (accountId) input.onBlock(accountId, reason);
+          if (!accountId) return;
+          blockedUntil = input.now() + input.onBlock(accountId, reason);
         },
       });
       input.onNavigate?.(null);
       const status = await session.goto(target.chatsUrl);
       if (status === 403 || status === 429) {
-        blockedUntil = input.now() + (input.blockMs ?? 15_000);
-        input.onBlock(target.accountId, String(status));
+        blockedUntil = input.now() + input.onBlock(target.accountId, String(status));
         await shut();
         await input.sleep(200);
         continue;
@@ -125,8 +124,7 @@ export async function runInboxWatch(input: {
       reloadedAt.set(next, at);
       pageThread = next;
       if (status === 403 || status === 429) {
-        blockedUntil = input.now() + (input.blockMs ?? 15_000);
-        input.onBlock(target.accountId, String(status));
+        blockedUntil = input.now() + input.onBlock(target.accountId, String(status));
         await shut();
       }
     }
