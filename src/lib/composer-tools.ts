@@ -69,3 +69,90 @@ export function authorLabel(name: string | null, automatic: boolean | null): str
   if (!name) return "Cuenta";
   return name.toLocaleUpperCase("es-ES");
 }
+
+/** Colores del formato, en el orden de la paleta de OnlyFans. */
+export const TEXT_COLORS = [
+  { name: "Negro", hex: "#1c2333" },
+  { name: "Rojo", hex: "#e11d48" },
+  { name: "Naranja", hex: "#f97316" },
+  { name: "Amarillo", hex: "#ca8a04" },
+  { name: "Verde", hex: "#16a34a" },
+  { name: "Azul", hex: "#2563eb" },
+  { name: "Morado", hex: "#7c3aed" },
+  { name: "Rosa", hex: "#db2777" },
+] as const;
+
+export type MessagePrice = { ok: true; cents: number | null } | { ok: false };
+
+/** Vacío o «Gratis» es gratis. Cualquier importe por debajo de 3 USD no vale. */
+export function messagePriceCents(raw: string): MessagePrice {
+  const text = raw.trim().toLowerCase().replace(/^\$/, "").replace(/\s/g, "").replace(",", ".");
+  if (text === "" || text === "gratis" || text === "0" || text === "0.0" || text === "0.00") {
+    return { ok: true, cents: null };
+  }
+  if (!/^\d+(\.\d{1,2})?$/.test(text)) return { ok: false };
+  const dollars = Number(text);
+  if (!Number.isFinite(dollars) || dollars < 0) return { ok: false };
+  if (dollars > 0 && dollars < 3) return { ok: false };
+  if (dollars === 0) return { ok: true, cents: null };
+  return { ok: true, cents: Math.round(dollars * 100) };
+}
+
+export type PpvPoint = { sentAt: string; priceCents: number };
+
+/** Solo entran PPV de la creadora que constan como comprados. El resto no se dibuja. */
+export function purchasedPpvSeries(messages: Array<{
+  fromFan: boolean;
+  purchased: boolean | null;
+  priceCents: number | null;
+  sentAt: string;
+}>): { maxCents: number | null; avgCents: number | null; points: PpvPoint[] } {
+  const points = messages
+    .filter((message) => !message.fromFan && message.purchased === true && message.priceCents != null && message.priceCents > 0 && message.sentAt !== "")
+    .map((message) => ({ sentAt: message.sentAt, priceCents: message.priceCents ?? 0 }))
+    .sort((left, right) => left.sentAt.localeCompare(right.sentAt));
+  if (points.length === 0) return { maxCents: null, avgCents: null, points: [] };
+  const total = points.reduce((sum, point) => sum + point.priceCents, 0);
+  return {
+    maxCents: Math.max(...points.map((point) => point.priceCents)),
+    avgCents: Math.round(total / points.length),
+    points,
+  };
+}
+
+export function moneyLabel(cents: number | null): string {
+  if (cents == null) return "Sin datos";
+  return `$${(cents / 100).toFixed(2)}`;
+}
+
+export function priceChartLayout(
+  points: PpvPoint[],
+  width: number,
+  height: number,
+): Array<{ x: number; y: number; label: string; date: string }> {
+  if (points.length === 0 || width <= 0 || height <= 0) return [];
+  const padX = 28;
+  const padY = 18;
+  const max = Math.max(...points.map((point) => point.priceCents));
+  const min = Math.min(...points.map((point) => point.priceCents));
+  const span = max - min;
+  return points.map((point, index) => {
+    const x = points.length === 1 ? width / 2 : padX + (index * (width - padX * 2)) / (points.length - 1);
+    const y = span === 0 ? height / 2 : height - padY - ((point.priceCents - min) / span) * (height - padY * 2);
+    const whole = point.priceCents % 100 === 0;
+    return {
+      x,
+      y,
+      label: `$${(point.priceCents / 100).toFixed(whole ? 0 : 2)}`,
+      date: shortDate(point.sentAt),
+    };
+  });
+}
+
+function shortDate(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  return `${day}/${month}`;
+}
