@@ -8,6 +8,7 @@ import { useOfReads } from "@/lib/use-of-reads";
 import { FanInsights } from "@/features/fan-insights";
 import { MessagePriceDialog } from "@/features/message-price-dialog";
 import { FULL_EMOJIS, QUICK_EMOJIS, TEXT_COLORS, authorLabel, matchScripts, mentionToken, paymentLabel, slashQuery, wrapSelection } from "@/lib/composer-tools";
+import { pendingForThread } from "@/lib/pending-thread";
 
 export function RealChatsPage() {
   const creators = useCrm((s) => s.creators);
@@ -378,7 +379,7 @@ export function RealChatsPage() {
             ) : null}
             <ol className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
               {!selected || messages.length === 0 ? <li className="text-sm text-[#6d7585]">{selected ? "Sin datos" : "Sin sincronizar"}</li> : null}
-              {pendingOut.filter((item) => item.creatorId === selected?.creatorId && item.threadKey === selected?.threadKey).map((item) => (
+              {pendingForThread(pendingOut, selected).map((item) => (
                 <li key={item.id} className="text-right">
                   <p className="inline-block max-w-[70%] rounded-2xl border border-dashed border-[#c5cad6] px-3 py-2 text-sm">{item.body}</p>
                   <p className="mt-1 text-[10px] text-[#8a5a12]">{pendingCaption(item)}</p>
