@@ -20,6 +20,7 @@ import type { CreatorChatList, CreatorReadList, CreatorReadView, CreatorSessionV
 import { parseAccountProxy, proxyLabel, readAccountProxy, removeAccountProxy, writeAccountProxy } from "../../server/of-sessions/proxy.ts";
 import { syncAssignments } from "../../server/of-sessions/metrics/assignments.ts";
 import { dashboardAlerts } from "../../server/of-sessions/metrics/dashboard.ts";
+import { accountPause, blockKind, listAccountPauses, noteAccountBlock } from "../../server/of-sessions/sync/backoff.ts";
 import { presentTeamMetrics } from "../../server/of-sessions/metrics/present-team.ts";
 import { changeRatio, creatorReport } from "@/lib/creator-metrics";
 import { deliverFanAlerts } from "../../server/of-sessions/notify/deliver.ts";
@@ -96,6 +97,8 @@ function bootSyncLoop(sessions: SessionManager): void {
       logCreatorRead(creatorId, read);
       if (read.alreadyRunning) return;
       if (read.loginRequired) await sessions.markLoginRequired(accountId);
+      const blocked = blockKind(0, read.reason ?? "");
+      if (blocked) noteAccountBlock(accountId, blocked);
       if (!account?.creatorId) return;
       const sql = await getSql();
       await saveCreatorRead(sql, account.creatorId, read);
@@ -152,7 +155,8 @@ export function kickInboxWatch(): void {
       await saveChatRead(await getSql(), creatorId, { threads: [], messages, reason: null, jsonPaths: [] });
     },
     onBlock: (accountId, reason) => {
-      console.info(`[fanlink:chat] escucha pausada cuenta=${accountId} motivo=${reason}`);
+      const delay = noteAccountBlock(accountId, reason);
+      console.info(`[fanlink:chat] escucha pausada cuenta=${accountId} motivo=${reason} espera=${delay}`);
     },
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -193,6 +197,8 @@ function bootChatLoop(sessions: SessionManager): void {
       const read = await sessions.readCreatorChats(accountId);
       if (read.alreadyRunning) return;
       if (read.loginRequired) await sessions.markLoginRequired(accountId);
+      const blockedChat = blockKind(0, read.reason ?? "");
+      if (blockedChat) noteAccountBlock(accountId, blockedChat);
       const account = (await sessions.listAccounts()).find((item) => item.id === accountId);
       if (!account?.creatorId) return;
       const sql = await getSql();
@@ -205,9 +211,11 @@ function bootChatLoop(sessions: SessionManager): void {
 async function chatScheduleAccounts(sessions: SessionManager): Promise<ScheduleAccount[]> {
   const [accounts, meta] = await Promise.all([sessions.listAccounts(), listChatMeta(await getSql())]);
   const byCreator = new Map(meta.map((row) => [row.creatorId, row]));
+  const intervalMs = (await readChatIntervalMin(await getSql(), chatIntervalMinFromEnv(process.env.FANLINK_CHAT_SYNC_MIN))) * 60_000;
   return accounts.flatMap((account) => {
     if (!account.creatorId) return [];
     const state = byCreator.get(account.creatorId);
+    const pause = accountPause(account.id);
     return [
       {
         accountId: account.id,
@@ -216,7 +224,7 @@ async function chatScheduleAccounts(sessions: SessionManager): Promise<ScheduleA
         identityState: account.identityState,
         hasStorageState: account.hasStorageState,
         consecutiveFailures: state?.consecutiveFailures ?? 0,
-        lastAttemptAt: state?.lastAttemptAt ?? null,
+        lastAttemptAt: pause ? new Date(pause.until - intervalMs).toISOString() : state?.lastAttemptAt ?? null,
       },
     ];
   });
@@ -588,6 +596,10 @@ export async function listDashboardView(userId: string): Promise<{
       }),
       whalesAtRisk: owner ? whales : [],
       drops,
+      pauses: listAccountPauses().flatMap((pause) => {
+        const account = visible.find((item) => item.id === pause.accountId);
+        return account ? [{ name: account.label, reason: pause.reason }] : [];
+      }),
     }),
   };
 }

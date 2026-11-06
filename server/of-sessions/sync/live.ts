@@ -33,9 +33,9 @@ export function inboxIsOpen(): boolean {
   return openInboxes > 0;
 }
 
-export function chatIntervalMinutes(storedMin: number, inboxOpen: boolean): number {
-  if (!inboxOpen) return storedMin;
-  return Math.min(storedMin, OPEN_INBOX_SYNC_MS / 60_000);
+/** La bandeja abierta no acorta el barrido. El tiempo real lo cubre la pestaña que escucha. */
+export function chatIntervalMinutes(storedMin: number, _inboxOpen = false): number {
+  return storedMin;
 }
 
 export function liveCursorChanged(previous: string | null, next: string | null): boolean {
