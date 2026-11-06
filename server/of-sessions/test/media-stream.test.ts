@@ -67,6 +67,39 @@ test("un PPV no comprado no se reproduce y el propio usa files.full", () => {
   assert.ok(own);
   assert.equal(own?.full, "https://cdn2.onlyfans.com/v.mp4");
   assert.equal(mediaPlay(own!, false, now).play, true);
+  const ownLocked = mediaPlay({ ...own!, locked: true, paid: false }, false, now);
+  assert.equal(ownLocked.play, true);
+  const fanView = parseChatMessages({
+    list: [{
+      id: 10,
+      text: "fan",
+      createdAt: "2026-11-06T12:00:00.000Z",
+      fromUser: { id: 7 },
+      media: [{
+        type: "video",
+        canView: true,
+        isLocked: true,
+        files: { full: { url: "https://cdn2.onlyfans.com/fan.mp4" } },
+      }],
+    }],
+  }, "7", "7", "42");
+  assert.equal(fanView[0]?.media?.[0]?.locked, false);
+  assert.equal(mediaPlay(fanView[0]!.media![0]!, true, now).play, true);
+  const fanHidden = parseChatMessages({
+    list: [{
+      id: 11,
+      text: "oculto",
+      createdAt: "2026-11-06T12:00:00.000Z",
+      fromUser: { id: 7 },
+      price: 5,
+      isOpened: false,
+      media: [{ type: "video", canView: false, files: { full: { url: "https://cdn2.onlyfans.com/no.mp4" } } }],
+    }],
+  }, "7", "7", "42");
+  assert.equal(fanHidden[0]?.media?.[0]?.locked, true);
+  const hiddenPlay = mediaPlay(fanHidden[0]!.media![0]!, true, now);
+  assert.equal(hiddenPlay.play, false);
+  if (!hiddenPlay.play) assert.equal(hiddenPlay.notice, "Vídeo bloqueado");
   const blocked = mediaPlay({ ...own!, paid: false, locked: true }, true, now);
   assert.equal(blocked.play, false);
   if (!blocked.play) assert.equal(blocked.notice, "Vídeo bloqueado");
