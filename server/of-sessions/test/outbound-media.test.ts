@@ -258,7 +258,7 @@ test("el rollback de Postgres deshace el borrador si falla el medio", async (t) 
     await client.query("delete from of_chat_outbound where id = 'out-pg'");
     await client.query("delete from staff_profile where user_id = 'u-pg'");
     await client.query("alter table of_outbound_media drop constraint if exists outbound_media_rollback_fail");
-    await client.query("insert into staff_profile (user_id, display_name, role) values ('u-pg', 'Ana', 'owner')");
+    await client.query("insert into staff_profile (user_id, display_name, role, perms) values ('u-pg', 'Ana', 'owner', '[]'::jsonb)");
     await client.query("alter table of_outbound_media add constraint outbound_media_rollback_fail check (media_id <> 'boom')");
     await assert.rejects(commitOutbound(pgSql(client), pgDraft, ["boom"]));
     const outbound = await client.query<{ n: number }>("select count(*)::int as n from of_chat_outbound where id = 'out-pg'");
