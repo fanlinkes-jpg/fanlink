@@ -33,7 +33,7 @@ export DATABASE_URL="postgres://fanlink:${POSTGRES_PASSWORD}@127.0.0.1:5432/fanl
 npm run db:migrate
 ```
 
-Tiene que listar las migraciones aplicadas, incluida `0019_chat_author.sql`. Los tests de la suite usan PGLite, que ejecuta los mismos SQL. Un test contra Postgres de verdad solo corre si `DATABASE_URL` apunta a una base vacía de pruebas: `node --experimental-strip-types --test server/of-sessions/test/postgres.test.ts`.
+Tiene que listar las migraciones aplicadas, incluida `0019_chat_author.sql` y `0033_outbound_match_unique.sql`. `npm run db:migrate` es el paso que las aplica: la 0033 desempareja los borradores repetidos de un mismo mensaje y después crea el índice único. Los tests de la suite usan PGLite, que ejecuta los mismos SQL. Un test contra Postgres de verdad solo corre si `DATABASE_URL` apunta a una base vacía de pruebas: `node --experimental-strip-types --test server/of-sessions/test/postgres.test.ts`.
 
 ## 3. Proxy por cuenta
 
@@ -78,7 +78,7 @@ Solo esa cuenta (el id `9ikis52` o el handle `@bigpoppa1111`, el que tenga guard
 
 `GET /api/chat-live` es un stream SSE. El proxy no puede acumular la respuesta: nginx necesita `proxy_buffering off;` y la app ya manda `X-Accel-Buffering: no`. El timeout de lectura tiene que aguantar la conexión abierta (minutos, no el timeout corto de una API). Sin eso el navegador se entera del mensaje tarde o la conexión se corta.
 
-`npm run db:migrate` aplica también `0019_chat_author.sql` (autor del mensaje y borradores salientes), `0020_chat_card.sql` (ficha del fan) y `0025_outbound_send.sql` (enviado o error del borrador).
+`npm run db:migrate` aplica también `0019_chat_author.sql` (autor del mensaje y borradores salientes), `0020_chat_card.sql` (ficha del fan), `0025_outbound_send.sql` (enviado o error del borrador) y `0033_outbound_match_unique.sql` (un borrador por mensaje y el índice único). Sin ese comando la 0033 no entra y un despliegue con duplicados antiguos no arranca.
 
 ## 6. Masivos
 

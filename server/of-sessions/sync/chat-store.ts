@@ -509,13 +509,8 @@ async function attachOutboundAuthors(sql: ReadSql, creatorId: string, messages: 
     const draft = pending.find((item) => item.id === decision.id);
     if (!draft) continue;
     if (decision.action === "sent") {
-      const claimedRow = await sql.query<{ id: string }>(
-        `update of_chat_outbound set matched_message_key = $2
-         where id = $1 and matched_message_key is null
-         returning id`,
-        [draft.id, decision.messageKey],
-      );
-      if (claimedRow.length === 0) continue;
+      const claimedOk = await claimOutboundMatch(sql, creatorId, draft.id, decision.messageKey);
+      if (!claimedOk) continue;
       await sql.query(
         `update of_chat_message set author_id = $1
          where creator_id = $2 and message_key = $3 and author_id is null`,
@@ -528,6 +523,49 @@ async function attachOutboundAuthors(sql: ReadSql, creatorId: string, messages: 
     }
     if (decision.action === "missing" && hasSendState) await markOutboundError(sql, draft.id, "no enviado");
   }
+}
+
+/**
+ * Un solo borrador se queda el mensaje. Si otro proceso ya lo casó, esta fila
+ * se descarta y la transacción de la lectura sigue.
+ */
+export async function claimOutboundMatch(
+  sql: ReadSql,
+  creatorId: string,
+  draftId: string,
+  messageKey: string,
+): Promise<boolean> {
+  await sql.query("savepoint claim_outbound");
+  try {
+    const claimed = await sql.query<{ id: string }>(
+      `update of_chat_outbound set matched_message_key = $2
+       where id = $1 and matched_message_key is null
+         and not exists (
+           select 1 from of_chat_outbound other
+           where other.creator_id = $3 and other.matched_message_key = $2
+         )
+       returning id`,
+      [draftId, messageKey, creatorId],
+    );
+    await sql.query("release savepoint claim_outbound");
+    if (claimed.length === 0) {
+      console.info(`[fanlink:chat] emparejamiento descartado creator=${creatorId} borrador=${draftId} mensaje=${messageKey}`);
+      return false;
+    }
+    return true;
+  } catch (error) {
+    await sql.query("rollback to savepoint claim_outbound").catch(() => undefined);
+    if (!uniqueViolation(error)) throw error;
+    console.info(`[fanlink:chat] emparejamiento descartado creator=${creatorId} borrador=${draftId} mensaje=${messageKey} codigo=23505`);
+    return false;
+  }
+}
+
+function uniqueViolation(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  if ("code" in error && error.code === "23505") return true;
+  const message = "message" in error ? String(error.message) : "";
+  return message.includes("23505") || message.toLowerCase().includes("duplicate key");
 }
 
 async function claimedOutboundMessages(sql: ReadSql, creatorId: string, messageKeys: string[]): Promise<Set<string>> {
