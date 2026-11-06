@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parseChatMessages } from "../sync/chats.ts";
 import { mediaPlay } from "../sync/media-play.ts";
-import { MEDIA_MAX_BYTES, acceptMediaRange, capBody, clearPlaylistCache, fetchUpstream, isHlsUrl, loadPlaylistCached, openMediaStream, playlistUrls, rewritePlaylist } from "../sync/media-stream.ts";
+import { MEDIA_MAX_BYTES, PLAYLIST_CACHE_MAX_CHARS, acceptMediaRange, capBody, clearPlaylistCache, fetchUpstream, isHlsUrl, loadPlaylistCached, openMediaStream, playlistUrls, rewritePlaylist } from "../sync/media-stream.ts";
 
 const now = Date.parse("2026-11-06T12:00:00.000Z");
 
@@ -137,6 +137,51 @@ test("el fetch del proxy corta por tiempo y por bytes", async () => {
     },
   }), 2);
   await assert.rejects(new Response(stream).arrayBuffer());
+});
+
+test("el cuerpo lento no lo corta el tiempo de las cabeceras, y el silencio sí", async () => {
+  const slow = await fetchUpstream("https://cdn2.onlyfans.com/v.mp4", new Headers(), async () => new Response(new ReadableStream({
+    async start(controller) {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      controller.enqueue(new Uint8Array([7]));
+      controller.close();
+    },
+  }), { status: 200, headers: { "content-length": "1" } }), 10, 100, 200);
+  assert.equal(slow.status, 200);
+  const bytes = await new Response(slow.body ?? undefined).arrayBuffer();
+  assert.equal(bytes.byteLength, 1);
+
+  const quiet = capBody(new ReadableStream({
+    async pull(controller) {
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      controller.enqueue(new Uint8Array([1]));
+    },
+  }), 10, 20);
+  await assert.rejects(new Response(quiet ?? undefined).arrayBuffer());
+});
+
+test("la caché de playlists tiene tope de entradas y de tamaño", async () => {
+  clearPlaylistCache();
+  await loadPlaylistCached("a", 1, async () => "a", 10_000, 2);
+  await loadPlaylistCached("b", 2, async () => "b", 10_000, 2);
+  await loadPlaylistCached("c", 3, async () => "c", 10_000, 2);
+  let again = 0;
+  await loadPlaylistCached("a", 4, async () => {
+    again += 1;
+    return "a";
+  }, 10_000, 2);
+  assert.equal(again, 1);
+  clearPlaylistCache();
+  let hugeLoads = 0;
+  const huge = "x".repeat(PLAYLIST_CACHE_MAX_CHARS + 1);
+  const loadHuge = async () => {
+    hugeLoads += 1;
+    return huge;
+  };
+  await loadPlaylistCached("grande", 1, loadHuge);
+  await loadPlaylistCached("grande", 2, loadHuge);
+  assert.equal(hugeLoads, 2);
+  clearPlaylistCache();
 });
 
 test("la playlist HLS no se vuelve a pedir dentro del plazo", async () => {

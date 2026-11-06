@@ -55,14 +55,24 @@ export function acceptMediaRange(header: string | null, maxBytes = MEDIA_MAX_BYT
   return { ok: true, header: `bytes=${start}-${end}` };
 }
 
-/** Corta el cuerpo si el origen ignora el Range y manda de más. */
-export function capBody(body: ReadableStream<Uint8Array> | null, maxBytes = MEDIA_MAX_BYTES): ReadableStream<Uint8Array> | null {
+/** Corta el cuerpo si el origen ignora el Range, manda de más o se queda callado. */
+export function capBody(
+  body: ReadableStream<Uint8Array> | null,
+  maxBytes = MEDIA_MAX_BYTES,
+  idleMs = MEDIA_FETCH_TIMEOUT_MS,
+): ReadableStream<Uint8Array> | null {
   if (!body) return null;
   const reader = body.getReader();
   let seen = 0;
   return new ReadableStream({
     async pull(controller) {
-      const next = await reader.read();
+      let next: ReadableStreamReadResult<Uint8Array>;
+      try {
+        next = await readWithIdle(reader.read(), idleMs);
+      } catch (error) {
+        await reader.cancel().catch(() => undefined);
+        throw error;
+      }
       if (next.done) {
         controller.close();
         return;
@@ -81,15 +91,35 @@ export function capBody(body: ReadableStream<Uint8Array> | null, maxBytes = MEDI
   });
 }
 
-/** El fetch del proxy no espera ni lee sin límite. */
+function readWithIdle<T>(work: Promise<T>, idleMs: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("inactivo")), idleMs);
+    work.then((value) => {
+      clearTimeout(timer);
+      resolve(value);
+    }, (error: unknown) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
+
+/**
+ * El tiempo hasta las cabeceras no cuenta el cuerpo.
+ * Entre trozos manda el silencio, no un reloj fijo desde el inicio.
+ */
 export async function fetchUpstream(
   url: string,
   headers: Headers,
   fetchImpl: typeof fetch = fetch,
-  timeoutMs = MEDIA_FETCH_TIMEOUT_MS,
+  headerTimeoutMs = MEDIA_FETCH_TIMEOUT_MS,
   maxBytes = MEDIA_MAX_BYTES,
+  idleMs = MEDIA_FETCH_TIMEOUT_MS,
 ): Promise<UpstreamResponse> {
-  const response = await fetchImpl(url, { headers, redirect: "manual", signal: AbortSignal.timeout(timeoutMs) }).catch(() => null);
+  const controller = new AbortController();
+  const headerTimer = setTimeout(() => controller.abort(), headerTimeoutMs);
+  const response = await fetchImpl(url, { headers, redirect: "manual", signal: controller.signal }).catch(() => null);
+  clearTimeout(headerTimer);
   if (!response) return { status: 0, location: null, headers: new Headers(), body: null };
   const length = Number(response.headers.get("content-length") ?? "");
   if (Number.isFinite(length) && length > maxBytes) {
@@ -100,7 +130,7 @@ export async function fetchUpstream(
     status: response.status,
     location: response.headers.get("location"),
     headers: response.headers,
-    body: capBody(response.body, maxBytes),
+    body: capBody(response.body, maxBytes, idleMs),
   };
 }
 
@@ -197,6 +227,8 @@ export function isHlsUrl(raw: string): boolean {
 
 /** La lista HLS se reutiliza unos segundos. Cada segmento no la vuelve a pedir. */
 export const PLAYLIST_TTL_MS = 10_000;
+export const PLAYLIST_CACHE_MAX = 32;
+export const PLAYLIST_CACHE_MAX_CHARS = 256_000;
 
 const playlists = new Map<string, { body: string; at: number }>();
 
@@ -209,11 +241,20 @@ export async function loadPlaylistCached(
   now: number,
   load: () => Promise<string | null>,
   ttl = PLAYLIST_TTL_MS,
+  max = PLAYLIST_CACHE_MAX,
 ): Promise<string | null> {
   const hit = playlists.get(key);
   if (hit && now - hit.at <= ttl) return hit.body;
   if (hit) playlists.delete(key);
   const body = await load();
-  if (body != null) playlists.set(key, { body, at: now });
+  if (body != null && body.length <= PLAYLIST_CACHE_MAX_CHARS) {
+    playlists.set(key, { body, at: now });
+    const ranked = [...playlists.entries()].sort((left, right) => left[1].at - right[1].at);
+    while (playlists.size > max) {
+      const oldest = ranked.shift();
+      if (!oldest) break;
+      playlists.delete(oldest[0]);
+    }
+  }
   return body;
 }

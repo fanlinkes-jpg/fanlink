@@ -6,9 +6,9 @@ import { DEV_USER_ID, authConfigured, requireUserId } from "@/lib/auth/verify.se
 import { getSql } from "@/lib/db";
 import { ensureStaff } from "@/lib/workspace-store";
 import { loadCrmSessionConfig } from "../../../server/of-sessions/config.ts";
-import { canProxyMedia, decodeMedia, followMedia, mediaHostAllowed } from "../../../server/of-sessions/sync/history.ts";
+import { PREVIEW_MAX_BYTES, PREVIEW_TIMEOUT_MS, canProxyMedia, decodeMedia, followMedia, mediaHostAllowed, readCappedBytes } from "../../../server/of-sessions/sync/history.ts";
 import { chatMediaRouteStatus } from "../../../server/of-sessions/sync/media-access.ts";
-import { pruneMediaCache } from "../../../server/of-sessions/sync/media-cache.ts";
+import { pruneMediaCache, shouldPruneMediaCache } from "../../../server/of-sessions/sync/media-cache.ts";
 import { mediaPlay } from "../../../server/of-sessions/sync/media-play.ts";
 import { fetchUpstream, isHlsUrl, loadPlaylistCached, openMediaStream, playlistUrls, rewritePlaylist, type UpstreamResponse } from "../../../server/of-sessions/sync/media-stream.ts";
 
@@ -150,7 +150,8 @@ async function loadPreview(creatorId: string, messageKey: string, threadKey: str
   if (!bytes) return null;
   await mkdir(path.dirname(cache), { recursive: true });
   await writeFile(cache, bytes);
-  await pruneMediaCache(path.join(loadCrmSessionConfig().dataDir, "media-cache")).catch(() => undefined);
+  const cacheDir = path.join(loadCrmSessionConfig().dataDir, "media-cache");
+  if (shouldPruneMediaCache(cacheDir)) await pruneMediaCache(cacheDir).catch(() => undefined);
   return bytes;
 }
 
@@ -164,12 +165,11 @@ async function downloadPreview(creatorId: string, preview: string): Promise<Uint
     if (!account) return null;
     const ran = await sessions.runQueued(account.id, async (context) => {
       return followMedia(preview, async (current) => {
-        const response = await context.request.get(current, { timeout: 8_000, maxRedirects: 0 });
-        if (response.status() >= 300 && response.status() < 400) {
-          return { status: response.status(), location: response.headers().location ?? null, body: null };
-        }
-        if (!response.ok()) return { status: response.status(), location: null, body: null };
-        return { status: response.status(), location: null, body: new Uint8Array(await response.body()) };
+        const cookies = await context.cookies(current);
+        const headers = new Headers();
+        const cookie = cookies.map((item) => `${item.name}=${item.value}`).join("; ");
+        if (cookie) headers.set("cookie", cookie);
+        return loadCappedPreview(current, headers);
       });
     });
     return ran.ok ? ran.value : null;
@@ -179,15 +179,28 @@ async function downloadPreview(creatorId: string, preview: string): Promise<Uint
 }
 
 async function fetchAllowed(preview: string): Promise<Uint8Array | null> {
-  return followMedia(preview, async (current) => {
-    const response = await fetch(current, { redirect: "manual" }).catch(() => null);
-    if (!response) return { status: 0, location: null, body: null };
-    if (response.status >= 300 && response.status < 400) {
-      return { status: response.status, location: response.headers.get("location"), body: null };
-    }
-    if (!response.ok) return { status: response.status, location: null, body: null };
-    return { status: response.status, location: null, body: new Uint8Array(await response.arrayBuffer()) };
-  });
+  return followMedia(preview, (current) => loadCappedPreview(current, new Headers()));
+}
+
+async function loadCappedPreview(current: string, headers: Headers): Promise<{ status: number; location: string | null; body: Uint8Array | null }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PREVIEW_TIMEOUT_MS);
+  const response = await fetch(current, { redirect: "manual", headers, signal: controller.signal }).catch(() => null);
+  clearTimeout(timer);
+  if (!response) return { status: 0, location: null, body: null };
+  if (response.status >= 300 && response.status < 400) {
+    return { status: response.status, location: response.headers.get("location"), body: null };
+  }
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
+    return { status: response.status, location: null, body: null };
+  }
+  const announced = Number(response.headers.get("content-length") ?? "");
+  if (Number.isFinite(announced) && announced > PREVIEW_MAX_BYTES) {
+    await response.body?.cancel().catch(() => undefined);
+    return { status: response.status, location: null, body: null };
+  }
+  return { status: response.status, location: null, body: await readCappedBytes(response.body) };
 }
 
 function cachePath(creatorId: string, messageKey: string, index: number): string {
