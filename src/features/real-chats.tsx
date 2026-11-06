@@ -5,7 +5,7 @@ import { useCrm } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
 import { useOfReads } from "@/lib/use-of-reads";
 import { FanInsights } from "@/features/fan-insights";
-import { FULL_EMOJIS, QUICK_EMOJIS, emojiRows, matchScripts, mentionToken, slashQuery, wrapSelection } from "@/lib/composer-tools";
+import { FULL_EMOJIS, QUICK_EMOJIS, authorLabel, emojiRows, matchScripts, mentionToken, paymentLabel, slashQuery, wrapSelection } from "@/lib/composer-tools";
 
 export function RealChatsPage() {
   const creators = useCrm((s) => s.creators);
@@ -273,7 +273,7 @@ export function RealChatsPage() {
                 <textarea ref={draftBox} value={draft} onChange={(event) => setDraft(event.target.value)} rows={2} placeholder="Escribe un mensaje" className="min-h-12 min-w-48 flex-1 resize-none rounded-xl border border-[#e6e8ee] px-3 py-2 text-sm" />
                 <input value={draftPrice == null ? "" : (draftPrice / 100).toFixed(2)} onChange={(event) => setDraftPrice(event.target.value.trim() === "" ? null : Math.round(Number(event.target.value) * 100))} placeholder="Precio $" aria-label="Precio" className="h-10 w-24 rounded-xl border border-[#e6e8ee] px-2 text-sm" />
               </div>
-              <div className="mt-1 flex items-center gap-1 overflow-x-auto text-xs">
+              <div className="mt-1 flex flex-wrap items-center gap-1 text-xs">
                 <button type="button" disabled title="Envío real desactivado" className="shrink-0 rounded border border-[#e6e8ee] px-2 py-1 text-[#b0b6c2]">Almacén</button>
                 <button type="button" disabled title="Envío real desactivado" className="shrink-0 rounded border border-[#e6e8ee] px-2 py-1 text-[#b0b6c2]">GIF</button>
                 <button type="button" disabled title="Envío real desactivado" className="shrink-0 rounded border border-[#e6e8ee] px-2 py-1 text-[#b0b6c2]">Galería</button>
@@ -430,12 +430,13 @@ function InsightPane({
   );
 }
 
-function messageCaption(message: { sentAt: string; fromFan: boolean; authorName: string | null; automatic: boolean | null; seen: boolean | null }): string {
+function messageCaption(message: { sentAt: string; fromFan: boolean; authorName: string | null; automatic: boolean | null; seen: boolean | null; priceCents: number | null; purchased: boolean | null }): string {
   const time = message.sentAt.slice(0, 16).replace("T", " ");
   const seen = message.seen == null ? "" : message.seen ? " · ✓" : "";
   if (message.fromFan) return `${time}${seen}`;
-  const who = message.automatic ? "Mensaje automático" : message.authorName ?? "Cuenta";
-  return `${time}${seen} · ${who}`;
+  const pay = paymentLabel(message);
+  const who = authorLabel(message.authorName, message.automatic);
+  return `${time}${seen}${pay ? ` · ${pay}` : ""} · ${who}`;
 }
 
 function emptyChatsLabel(data: CreatorChatList | null): string {
