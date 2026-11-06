@@ -42,6 +42,7 @@ export function RealChatsPage() {
   const draftBox = useRef<HTMLDivElement>(null);
   const fileBox = useRef<HTMLInputElement>(null);
   const savedRange = useRef<Range | null>(null);
+  const sendLock = useRef(false);
 
   async function refresh() {
     try {
@@ -156,13 +157,14 @@ export function RealChatsPage() {
   }
 
   async function sendNow() {
-    if (!selected || !draft.trim() || !realSend || sending) return;
+    if (sendLock.current || !selected || !draft.trim() || !realSend || sending) return;
     if (attachments.length > 0) {
       setError("Los adjuntos siguen pendientes. Este envío es de texto y precio.");
       return;
     }
     const body = draft.trim();
     const price = draftPrice;
+    sendLock.current = true;
     setSending(true);
     try {
       const result = await sendChatMessage({
@@ -185,6 +187,7 @@ export function RealChatsPage() {
     } catch (err) {
       setError(sessionErrorText(err));
     } finally {
+      sendLock.current = false;
       setSending(false);
     }
   }
