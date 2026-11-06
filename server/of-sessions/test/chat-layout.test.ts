@@ -47,11 +47,69 @@ test("el botón Enviar se ve entero sin scroll de página", async () => {
         assert.ok(part.top >= 0 && part.bottom <= viewport.height + 1, `${label}: ${part.label} queda fuera`);
       }
       const composer = page.locator("form");
-      for (const name of ["Almacén", "GIF", "Galería", "Precio", "Mención", "Formato", "Traducción", "Guiones", "Programar"]) {
-        await composer.getByRole("button", { name, exact: true }).click();
-        await page.getByRole("region", { name: `Panel ${name}` }).waitFor();
+      const toolLabels = await page.getByRole("toolbar", { name: "Herramientas del mensaje" }).getByRole("button").evaluateAll((nodes) => (
+        nodes.map((node) => node.getAttribute("aria-label"))
+      ));
+      assert.deepEqual(toolLabels, [
+        "Add media",
+        "GIF",
+        "Add from media vault",
+        "Schedule your message",
+        "Price",
+        "Tag other creator",
+        "Format text",
+        "Translation",
+        "Dejar pendiente",
+        "Enviar",
+      ]);
+      await composer.getByText("Pulsa / + palabra para buscar guiones").waitFor();
+      if (viewport.capture) {
+        await page.screenshot({ path: path.join(shots, `mensajes-${viewport.width}x${viewport.height}.png`) });
       }
-      await composer.getByRole("button", { name: "Programar", exact: true }).click();
+      const file = composer.locator("input[type=file]");
+      assert.equal(await file.getAttribute("accept"), "image/*,video/*");
+      assert.notEqual(await file.getAttribute("multiple"), null);
+      const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+      const [chooser] = await Promise.all([
+        page.waitForEvent("filechooser"),
+        composer.getByRole("button", { name: "Add media", exact: true }).click(),
+      ]);
+      await chooser.setFiles({ name: "foto.png", mimeType: "image/png", buffer: png });
+      await composer.getByRole("img", { name: "foto.png" }).waitFor();
+      await composer.getByRole("button", { name: "Quitar foto.png" }).click();
+      await composer.getByRole("img", { name: "foto.png" }).waitFor({ state: "hidden" });
+      for (const name of ["GIF", "Add from media vault", "Tag other creator", "Format text", "Translation", "Guiones"]) {
+        const region = page.getByRole("region", { name: `Panel ${name}` });
+        await composer.getByRole("button", { name, exact: true }).click();
+        await region.waitFor();
+        if (name === "Add from media vault" || name === "Tag other creator") await region.getByText("Sin datos").waitFor();
+        if (name === "GIF") await region.getByText("Sin datos. Hace falta una clave de API para buscar GIF.").waitFor();
+        if (name === "Format text") await region.getByRole("button", { name: "Color Rojo" }).waitFor();
+        if (name === "Translation") await region.getByText("Sin datos: no hay servicio de traducción.").waitFor();
+        await composer.getByRole("button", { name, exact: true }).click();
+        await region.waitFor({ state: "hidden" });
+      }
+      await composer.getByRole("button", { name: "Schedule your message", exact: true }).click();
+      const schedule = page.getByRole("dialog", { name: "Programar tu mensaje" });
+      await schedule.getByLabel("Fecha programada").waitFor();
+      await schedule.getByRole("button", { name: "Cancelar" }).click();
+      await schedule.waitFor({ state: "hidden" });
+      await composer.getByRole("button", { name: "Price", exact: true }).click();
+      const price = page.getByRole("dialog", { name: "Precio del mensaje" });
+      await price.getByText("Mínimo $3 USD o gratis").waitFor();
+      await price.getByText("Últimos PPV comprados por el fan").waitFor();
+      await price.getByText("Sin datos").first().waitFor();
+      const amount = price.getByRole("textbox", { name: "Precio" });
+      await amount.fill("1");
+      assert.equal(await price.getByRole("button", { name: "Guardar" }).isDisabled(), true);
+      await amount.fill("5");
+      assert.equal(await price.getByRole("button", { name: "Guardar" }).isDisabled(), false);
+      await amount.fill("");
+      if (viewport.capture) {
+        await page.screenshot({ path: path.join(shots, `precio-${viewport.width}x${viewport.height}.png`) });
+      }
+      await price.getByRole("button", { name: "Cancelar" }).click();
+      await price.waitFor({ state: "hidden" });
       const dialog = page.getByRole("dialog", { name: "Ficha del fan" });
       await page.getByRole("button", { name: "Ficha del fan" }).click();
       await dialog.waitFor();
@@ -67,9 +125,6 @@ test("el botón Enviar se ve entero sin scroll de página", async () => {
       const after = await sendButtonBox(page);
       assert.equal(after.found, true, `${label}: el botón desaparece al cerrar la ficha`);
       assert.ok(after.bottom <= viewport.height + 1, `${label}: el botón sale por abajo al cerrar la ficha`);
-      if (viewport.capture) {
-        await page.screenshot({ path: path.join(shots, `mensajes-${viewport.width}x${viewport.height}.png`) });
-      }
       await page.close();
     }
   } finally {
@@ -122,7 +177,7 @@ async function sendButtonBox(page: Page): Promise<{
     const button = [...document.querySelectorAll("button")].find((node) => node.getAttribute("aria-label") === "Enviar");
     const form = document.querySelector("form");
     const formRect = form?.getBoundingClientRect();
-    const parts = ["Traducción", "Guiones", "Galería", "Dejar pendiente", "Almacén", "Programar"].map((label) => {
+    const parts = ["Add media", "GIF", "Add from media vault", "Schedule your message", "Price", "Tag other creator", "Format text", "Translation", "Guiones", "Dejar pendiente"].map((label) => {
       const node = [...document.querySelectorAll("button")].find((item) => item.getAttribute("aria-label") === label || item.textContent?.includes(label));
       const box = node?.getBoundingClientRect();
       return { label, top: box?.top ?? -1, bottom: box?.bottom ?? -1 };
