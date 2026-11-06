@@ -29,6 +29,7 @@ import { chatIntervalMinutes, inboxIsOpen, activeThreadWatches } from "../../ser
 import { openWatchContext, runInboxWatch } from "../../server/of-sessions/sync/inbox-watch.ts";
 import { pickAccountWatch } from "../../server/of-sessions/sync/watch-plan.ts";
 import { listChatMeta, listChats, listPendingOutbounds, recordOutbound, saveChatRead } from "../../server/of-sessions/sync/chat-store.ts";
+import { listFanProfiles, saveFanProfile } from "../../server/of-sessions/sync/fan-profile.ts";
 import { intervalMinFromEnv, startSyncLoop, type ScheduleAccount } from "../../server/of-sessions/sync/schedule.ts";
 import {
   listCreatorReads,
@@ -411,6 +412,7 @@ export async function listCreatorChatViews(userId: string): Promise<CreatorChatL
       subPriceCents: thread.subPriceCents,
       subExpiresAt: thread.subExpiresAt,
       renewAuto: thread.renewAuto,
+      lists: thread.lists ?? null,
     })),
     messages: stored.messages.map((message) => ({
       creatorId: message.creatorId,
@@ -434,6 +436,7 @@ export async function listCreatorChatViews(userId: string): Promise<CreatorChatL
       reason: publicSyncReason(item.reason),
     })),
     pending: await listPendingOutbounds(sql, creatorIds),
+    profiles: await listFanProfiles(sql, creatorIds),
   };
 }
 
@@ -667,6 +670,28 @@ export async function listTeamMetricViews(userId: string): Promise<Array<{
     ],
     nameOf,
   );
+}
+
+export async function saveFanProfileView(
+  userId: string,
+  input: {
+    creatorId: string;
+    fanKey: string;
+    nickname: string | null;
+    birthday: string | null;
+    timezone: string | null;
+    source: string | null;
+    salaryCents: number | null;
+    lastPayDate: string | null;
+  },
+): Promise<{ ok: true }> {
+  const access = await accessFor(userId);
+  if (access.role !== "owner" && !access.perms.includes("mensajes")) {
+    throw new WorkspaceAccessError("No tienes permiso para escribir.");
+  }
+  if (!input.fanKey.trim()) throw new WorkspaceAccessError("Sin datos del fan.");
+  await saveFanProfile(await getSql(), { ...input, updatedBy: access.userId });
+  return { ok: true };
 }
 
 export async function recordChatOutboundView(

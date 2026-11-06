@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { listCreatorChats, recordChatOutbound, syncCreatorChats, type CreatorChatList, type CreatorReadView } from "@/lib/of-sessions";
+import { listCreatorChats, recordChatOutbound, saveFanProfile, syncCreatorChats, type CreatorChatList, type CreatorReadView } from "@/lib/of-sessions";
 import { campaignSendFlag } from "@/lib/of-campaigns";
 import { useCrm } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
@@ -250,7 +250,7 @@ export function RealChatsPage() {
             </div>
             <div className="min-h-0 flex-1 overflow-hidden">
               {selected ? (
-                <InsightPane thread={selected} reads={reads.byCreator} crmFans={crmFans} messages={messages} onNotes={saveNote} />
+                <InsightPane thread={selected} reads={reads.byCreator} crmFans={crmFans} messages={messages} profiles={data?.profiles ?? []} onNotes={saveNote} onProfile={(profile) => { void saveFanProfile({ data: profile }).then(() => refresh()); }} />
               ) : (
                 <FanInsights
                   name={null}
@@ -281,7 +281,9 @@ function InsightPane({
   reads,
   crmFans,
   messages,
+  profiles,
   onNotes,
+  onProfile,
 }: {
   thread: {
     creatorId: string;
@@ -293,11 +295,14 @@ function InsightPane({
     subPriceCents: number | null;
     subExpiresAt: string | null;
     renewAuto: boolean | null;
+    lists?: string[] | null;
   };
   reads: Map<string, CreatorReadView>;
   crmFans: Array<{ id: string; creatorId: string; handle: string; name: string; notes: string }>;
   messages: Array<{ fromFan: boolean; priceCents: number | null; purchased: boolean | null }>;
+  profiles: CreatorChatList["profiles"];
   onNotes: (fanId: string, notes: string) => void;
+  onProfile: (profile: CreatorChatList["profiles"][number]) => void;
 }) {
   const read = reads.get(thread.creatorId);
   const ofFan = read?.fans.find((fan) => fan.fanKey === thread.fanKey) ?? null;
@@ -330,6 +335,9 @@ function InsightPane({
       ppvPrices={messages.flatMap((message) => (
         !message.fromFan && message.purchased === true && message.priceCents != null && message.priceCents > 0 ? [message.priceCents] : []
       ))}
+      lists={thread.lists ?? null}
+      profile={thread.fanKey ? profiles.find((item) => item.creatorId === thread.creatorId && item.fanKey === thread.fanKey) ?? { creatorId: thread.creatorId, fanKey: thread.fanKey, nickname: null, birthday: null, timezone: null, source: null, salaryCents: null, lastPayDate: null } : null}
+      onProfile={onProfile}
     />
   );
 }

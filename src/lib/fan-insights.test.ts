@@ -40,7 +40,10 @@ test("la ficha no inventa gasto, propinas ni suscripción", () => {
   assert.equal(filled.ppvTotal, "$8.00");
   assert.equal(filled.ppvAvg, "$4.00");
   assert.equal(filled.tipTotal, "$2.00");
-  assert.equal(filled.max, "$8.00 · 2026-11-05");
-  assert.equal(filled.renew, "Sí");
+  assert.equal(filled.max, "$8.00 · message · 2026-11-05");
+  assert.match(filled.expires, /^Caduca: /);
+  assert.equal(filled.renew, "On");
+  assert.equal(filled.power, "Datos insuficientes");
+  assert.equal(filled.chargeback, "Desconocido");
   assert.equal(filled.notes, "vip");
 });
