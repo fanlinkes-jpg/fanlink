@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -11,7 +11,7 @@ import { AccountStore } from "../store/account-store.ts";
 const root = path.resolve(import.meta.dirname, "../../..");
 const port = 18741;
 
-test("el hilo pinta el medio, el candado y el pagado", async () => {
+test("el hilo marca el medio y el precio pagado", async () => {
   const dir = path.join(tmpdir(), `fanlink-mirror-${Date.now()}`);
   await seed(dir);
   const server = startDev(dir);
@@ -78,10 +78,6 @@ async function seed(dir: string): Promise<void> {
   const store = new AccountStore(path.join(dir, "accounts.json"));
   await store.init();
   await store.create("Preview", "cpreview");
-  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
-  const cache = path.join(dir, "media-cache", "cpreview", "mmedia", "0");
-  await mkdir(path.dirname(cache), { recursive: true });
-  await writeFile(cache, png);
 }
 
 function startDev(dir: string, port = 18741): ChildProcess {
