@@ -43,6 +43,9 @@ test("el precio del mensaje es gratis o como mínimo 3 USD", () => {
   assert.deepEqual(messagePriceCents("abc"), { ok: false });
   assert.deepEqual(messagePriceCents("3"), { ok: true, cents: 300 });
   assert.deepEqual(messagePriceCents("5,50"), { ok: true, cents: 550 });
+  assert.deepEqual(messagePriceCents("200"), { ok: true, cents: 20000 });
+  assert.deepEqual(messagePriceCents("200.01"), { ok: false });
+  assert.deepEqual(messagePriceCents("201"), { ok: false });
 });
 
 test("la gráfica solo pinta PPV comprados y no rellena huecos", () => {

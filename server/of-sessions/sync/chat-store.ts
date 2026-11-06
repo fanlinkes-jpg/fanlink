@@ -2,6 +2,7 @@ import { matchOutboundAuthor, type OutboundDraft } from "./author-match.ts";
 import { newFanEvents, type ChatMessage, type ChatThread, type FanMessageEvent } from "./chats.ts";
 import { decodeMedia, encodeMedia } from "./history.ts";
 import type { ReadSql } from "./store.ts";
+import { recordOutboundMedia } from "./vault-store.ts";
 
 const ORIGIN = "onlyfans";
 
@@ -385,6 +386,18 @@ export async function listPendingOutbounds(
     threadKey: row.thread_key,
     body: row.body,
   }));
+}
+
+/** El borrador y sus medios entran o no entran. Una escritura a medias no se queda. */
+export async function commitOutbound(
+  sql: ReadSql & { transaction<T>(run: (tx: ReadSql) => Promise<T>): Promise<T> },
+  draft: OutboundDraft & { creatorId: string },
+  mediaIds: string[],
+): Promise<void> {
+  await sql.transaction(async (tx) => {
+    await recordOutbound(tx, draft);
+    await recordOutboundMedia(tx, draft.id, draft.creatorId, mediaIds);
+  });
 }
 
 export async function recordOutbound(sql: ReadSql, draft: OutboundDraft & { creatorId: string }): Promise<void> {

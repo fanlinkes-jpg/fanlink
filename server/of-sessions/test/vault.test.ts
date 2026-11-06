@@ -155,6 +155,10 @@ test("el precio sugerido sigue la banda y el histórico, y no inventa duración"
   assert.equal(inheritedBlock([{ id: "ok", name: "SOLA", parentId: null }], "ok"), null);
   assert.equal(inheritedBlock([{ id: "child", name: "tarde", parentId: "falta" }], "child"), "NO VENDER");
   assert.equal(inheritedBlock([], "falta"), "NO VENDER");
+  assert.equal(inheritedBlock([
+    { id: "a", name: "tarde", parentId: "b" },
+    { id: "b", name: "noche", parentId: "a" },
+  ], "a"), "NO VENDER");
   const hidden = vaultForRole({ sales: 4, priceCents: 1200 }, false);
   assert.equal(hidden.sales, null);
   assert.equal(hidden.priceCents, null);

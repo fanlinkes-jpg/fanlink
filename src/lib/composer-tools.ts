@@ -1,3 +1,5 @@
+import { MAX_PPV_CENTS } from "../../server/of-sessions/sync/composer-draft.ts";
+
 /** Emojis rápidos del compositor. Se cambian aquí, no en la pantalla. */
 export const QUICK_EMOJIS = [
   "🥰", "🤭", "😏", "😮", "😲", "🙈", "👄", "💗", "💋", "🍑", "🍆", "💦",
@@ -82,7 +84,7 @@ export const TEXT_COLORS = [
 
 export type MessagePrice = { ok: true; cents: number | null } | { ok: false };
 
-/** Vacío o «Gratis» es gratis. Cualquier importe por debajo de 3 USD no vale. */
+/** Vacío o «Gratis» es gratis. Por debajo de 3 USD o por encima de 200 USD no vale. */
 export function messagePriceCents(raw: string): MessagePrice {
   const text = raw.trim().toLowerCase().replace(/^\$/, "").replace(/\s/g, "").replace(",", ".");
   if (text === "" || text === "gratis" || text === "0" || text === "0.0" || text === "0.00") {
@@ -93,7 +95,9 @@ export function messagePriceCents(raw: string): MessagePrice {
   if (!Number.isFinite(dollars) || dollars < 0) return { ok: false };
   if (dollars > 0 && dollars < 3) return { ok: false };
   if (dollars === 0) return { ok: true, cents: null };
-  return { ok: true, cents: Math.round(dollars * 100) };
+  const cents = Math.round(dollars * 100);
+  if (cents > MAX_PPV_CENTS) return { ok: false };
+  return { ok: true, cents };
 }
 
 export type PpvPoint = { sentAt: string; priceCents: number };

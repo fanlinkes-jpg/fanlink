@@ -113,7 +113,7 @@ export async function decideMediaAttach(sql: ReadSql, creatorId: string, mediaId
   const folders = await folderChain(sql, creatorId, rows.map((row) => row.folder_id).filter((id): id is string => Boolean(id)));
   const byId = new Map(rows.map((row) => [row.media_id, row]));
   const items: VaultAttachItem[] = [];
-  for (const id of mediaIds) {
+  for (const id of unique) {
     const row = byId.get(id);
     if (!row) return { ok: false, notice: "Sin datos" };
     const stored = row.blocked === "NO VENDER" || row.blocked === "SIN EDITAR" ? row.blocked : null;

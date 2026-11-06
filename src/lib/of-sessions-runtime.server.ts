@@ -28,9 +28,9 @@ import { chatIntervalMinFromEnv } from "../../server/of-sessions/sync/chats.ts";
 import { chatIntervalMinutes, inboxIsOpen, activeThreadWatches } from "../../server/of-sessions/sync/live.ts";
 import { openWatchContext, runInboxWatch } from "../../server/of-sessions/sync/inbox-watch.ts";
 import { pickAccountWatch } from "../../server/of-sessions/sync/watch-plan.ts";
-import { listChatMeta, listChats, listPendingOutbounds, recordOutbound, saveChatRead } from "../../server/of-sessions/sync/chat-store.ts";
+import { commitOutbound, listChatMeta, listChats, listPendingOutbounds, saveChatRead } from "../../server/of-sessions/sync/chat-store.ts";
 import { prepareOutbound, validOutboundPrice } from "../../server/of-sessions/sync/composer-draft.ts";
-import { decideMediaAttach, recordOutboundMedia } from "../../server/of-sessions/sync/vault-store.ts";
+import { decideMediaAttach } from "../../server/of-sessions/sync/vault-store.ts";
 import { mediaForBrowser } from "../../server/of-sessions/sync/media-client.ts";
 import { intervalMinFromEnv, startSyncLoop, type ScheduleAccount } from "../../server/of-sessions/sync/schedule.ts";
 import {
@@ -688,7 +688,7 @@ export async function recordChatOutboundView(
   const prepared = prepareOutbound(input.body, decision.items, null);
   if (!prepared.ok) throw new WorkspaceAccessError(prepared.notice);
   const id = crypto.randomUUID();
-  await recordOutbound(sql, {
+  await commitOutbound(sql, {
     id,
     creatorId: input.creatorId,
     threadKey: input.threadKey,
@@ -698,8 +698,7 @@ export async function recordChatOutboundView(
     priceCents: price.cents,
     createdAt: new Date().toISOString(),
     ofMessageKey: input.ofMessageKey,
-  });
-  await recordOutboundMedia(sql, id, input.creatorId, prepared.mediaIds);
+  }, prepared.mediaIds);
   return { ok: true, sent: false };
 }
 

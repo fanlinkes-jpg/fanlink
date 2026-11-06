@@ -8,7 +8,7 @@ import { ChatBubble } from "@/features/chat-bubble";
 import { FanInsights } from "@/features/fan-insights";
 import { VaultBrowser } from "@/features/vault-browser";
 import { messagePriceCents } from "@/lib/composer-tools";
-import { composerDraft } from "../../server/of-sessions/sync/composer-draft.ts";
+import { prepareOutbound } from "../../server/of-sessions/sync/composer-draft.ts";
 
 const EMOJIS = ["😊", "🔥", "❤️", "😘", "🎁"];
 
@@ -248,7 +248,11 @@ export function RealChatsPage() {
                       setError("Precio no válido");
                       return;
                     }
-                    const prepared = composerDraft(draft, attachments);
+                    const prepared = prepareOutbound(draft, attachments, null);
+                    if (!prepared.ok) {
+                      setError(prepared.notice);
+                      return;
+                    }
                     const keptAttachments = attachments;
                     const keptPrice = priceText;
                     setDraft("");

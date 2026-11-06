@@ -5,8 +5,8 @@ import type { ReadSql } from "../sync/store.ts";
  * El texto solo saldría, y el fan no recibiría la pieza.
  */
 export function mediaSendGate(mediaCount: number): { allowed: boolean; reason: string } {
-  if (mediaCount > 0) return { allowed: false, reason: "El envío de medios no existe" };
-  return { allowed: true, reason: "" };
+  if (mediaCount === 0) return { allowed: true, reason: "" };
+  return { allowed: false, reason: "El envío de medios no existe" };
 }
 
 export async function outboundMediaCount(sql: ReadSql, outboundId: string): Promise<number> {

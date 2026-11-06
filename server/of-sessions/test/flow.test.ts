@@ -107,7 +107,7 @@ test("flujo completo contra el simulador: conectar, comprobar, sincronizar, chat
         flag: "false",
         hostname: new URL(fixture.origin).hostname,
         formUrl: `${fixture.origin}/simulate-send`,
-        drafts: [{ fanKey: "7", body: "Hola Fan Uno", priceCents: 500 }],
+        drafts: [{ fanKey: "7", body: "Hola Fan Uno", priceCents: 500, mediaCount: 0 }],
       });
       assert.equal(blocked.reason, "Envío real desactivado");
       assert.equal(fixture.sent.length, 0);
