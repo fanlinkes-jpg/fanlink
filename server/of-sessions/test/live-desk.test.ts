@@ -1,6 +1,27 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { claimControl, deskCommand, liveLog, liveRequestAllowed, liveViewGate, mapPointer, releaseControl } from "../live/desk.ts";
+import { attributeLiveSend, liveSendAttributable } from "../sync/chat-store.ts";
+import type { ReadSql } from "../sync/store.ts";
+import {
+  LIVE_MAX_PAYLOAD,
+  claimControl,
+  deskCommand,
+  liveControlAllowed,
+  liveFps,
+  liveLog,
+  liveOriginAllowed,
+  liveRequestAllowed,
+  liveRoomKey,
+  liveTypingEnabled,
+  liveUpgradeAllowed,
+  liveViewerAccepted,
+  liveViewGate,
+  mapPointer,
+  parseLiveEvent,
+  releaseControl,
+  releaseIdleController,
+  takeLiveEventSlot,
+} from "../live/desk.ts";
 
 const account = { creatorId: "9ikis52", accountId: "acc", handle: "bigpoppa1111", userId: "42", label: "Prueba" };
 
@@ -17,6 +38,31 @@ test("la pestaña no sale de OnlyFans ni de su CDN", () => {
   assert.equal(liveRequestAllowed("https://example.com/"), false);
   assert.equal(liveRequestAllowed("https://onlyfans.com.evil/x"), false);
   assert.equal(liveRequestAllowed("about:blank"), true);
+});
+
+test("un miembro no llega a statements, estadísticas, banca, pagos ni ajustes", () => {
+  for (const path of ["/my/statements", "/my/statistics", "/my/banking", "/my/payouts", "/my/settings", "/my/settings/profile", "/my/payments"]) {
+    assert.equal(liveRequestAllowed(`https://onlyfans.com${path}`), false, path);
+    assert.equal(liveRequestAllowed(`https://onlyfans.com/api2/v2${path}`), false, path);
+  }
+  assert.equal(liveRequestAllowed("https://onlyfans.com/my/chats/chat/28022478"), true);
+  assert.equal(liveRequestAllowed("https://onlyfans.com/api2/v2/chats/28022478/messages"), true);
+  assert.equal(liveRequestAllowed("https://cdn2.onlyfans.com/my/statements"), false);
+});
+
+test("sin FANLINK_ENABLE_SEND no hay teclado, Enter ni archivos", () => {
+  assert.equal(liveTypingEnabled("false"), false);
+  assert.equal(liveTypingEnabled(undefined), false);
+  assert.equal(liveTypingEnabled("true"), true);
+  const viewport = { width: 800, height: 600 };
+  assert.equal(deskCommand({ type: "key", key: "Enter", code: "Enter", down: true }, viewport, false), null);
+  assert.equal(deskCommand({ type: "text", text: "hola" }, viewport, false), null);
+  assert.equal(deskCommand({ type: "mouse", action: "move", x: 1, y: 1, canvasWidth: 10, canvasHeight: 10 }, viewport, false)?.method, "Input.dispatchMouseEvent");
+  assert.equal(liveControlAllowed(false, "control", "key"), false);
+  assert.equal(liveControlAllowed(false, "control", "text"), false);
+  assert.equal(liveControlAllowed(false, "control", "file"), false);
+  assert.equal(liveControlAllowed(false, "control", "mouse"), true);
+  assert.equal(liveControlAllowed(true, "view", "key"), false);
 });
 
 test("el ratón del canvas cae en el viewport y Enter no es texto", () => {
@@ -44,6 +90,111 @@ test("el ratón del canvas cae en el viewport y Enter no es texto", () => {
   const line = liveLog("control", { accountId: "acc", userId: "ana", fps: 4 });
   assert.equal(line.includes("hola"), false);
   assert.match(line, /\[fanlink:live\] control cuenta=acc control=ana fps=4/);
+});
+
+test("el evento del cliente tiene esquema, tope y límite por segundo", () => {
+  assert.equal(parseLiveEvent("no-json"), null);
+  assert.equal(parseLiveEvent(JSON.stringify({ type: "otro" })), null);
+  assert.equal(parseLiveEvent("x".repeat(LIVE_MAX_PAYLOAD + 1)), null);
+  const enter = parseLiveEvent(JSON.stringify({ type: "key", key: "Enter", code: "Enter", down: true }));
+  assert.equal(enter?.type, "key");
+  const stamps: number[] = [];
+  for (let index = 0; index < 40; index += 1) assert.equal(takeLiveEventSlot(stamps, 1_000), true);
+  assert.equal(takeLiveEventSlot(stamps, 1_000), false);
+  assert.equal(takeLiveEventSlot(stamps, 2_100), true);
+});
+
+test("ceder el control no echa a quien mira y cada hilo va aparte", () => {
+  const idle = releaseIdleController("ana", ["ana", "luis"]);
+  assert.equal(idle.closeViewers, false);
+  assert.equal(idle.holder, "luis");
+  const alone = releaseIdleController("ana", ["ana"]);
+  assert.equal(alone.holder, null);
+  assert.equal(alone.closeViewers, false);
+  assert.notEqual(liveRoomKey("acc", "7"), liveRoomKey("acc", "8"));
+  assert.equal(liveViewerAccepted(3), true);
+  assert.equal(liveViewerAccepted(4), false);
+  assert.equal(liveFps("100"), 4);
+  assert.equal(liveFps("8"), 8);
+});
+
+test("el socket exige el origen de la app y no lleva el ticket en la URL", () => {
+  assert.equal(liveOriginAllowed("http://127.0.0.1:8080", "127.0.0.1:8080"), true);
+  assert.equal(liveOriginAllowed("https://evil.example", "127.0.0.1:8080"), false);
+  assert.equal(liveOriginAllowed(undefined, "127.0.0.1:8080"), false);
+  assert.equal(liveUpgradeAllowed("/api/live-view", "http://127.0.0.1:8080", "127.0.0.1:8080"), true);
+  assert.equal(liveUpgradeAllowed("/api/live-view?ticket=secreto", "http://127.0.0.1:8080", "127.0.0.1:8080"), false);
+  assert.equal(liveUpgradeAllowed("/api/live-view", "https://evil.example", "127.0.0.1:8080"), false);
+});
+
+test("un mensaje viejo no cambia de autor", async () => {
+  assert.equal(liveSendAttributable({
+    messageId: "m-viejo",
+    sentAt: "2020-01-01T00:00:00.000Z",
+    controlSince: "2026-11-06T12:00:00.000Z",
+    existingAuthorId: null,
+  }), false);
+  assert.equal(liveSendAttributable({
+    messageId: "m-nuevo",
+    sentAt: "2026-11-06T12:00:05.000Z",
+    controlSince: "2026-11-06T12:00:00.000Z",
+    existingAuthorId: "otra",
+  }), false);
+  assert.equal(liveSendAttributable({
+    messageId: "m-nuevo",
+    sentAt: "2026-11-06T12:00:05.000Z",
+    controlSince: "2026-11-06T12:00:00.000Z",
+    existingAuthorId: null,
+  }), true);
+
+  const calls: string[] = [];
+  const historical: ReadSql = {
+    async query<T>(text: string): Promise<T[]> {
+      calls.push(text);
+      if (text.includes("select author_id")) return [{ author_id: null, sent_at: "2020-01-01T00:00:00.000Z" }] as T[];
+      return [] as T[];
+    },
+  };
+  assert.equal(await attributeLiveSend(historical, {
+    id: "out-1",
+    creatorId: "c",
+    threadKey: "7",
+    fanKey: "7",
+    authorId: "ana",
+    body: "hola",
+    priceCents: null,
+    messageId: "m-viejo",
+    createdAt: "2026-11-06T12:00:05.000Z",
+    sentAt: "2020-01-01T00:00:00.000Z",
+    controlSince: "2026-11-06T12:00:00.000Z",
+  }), false);
+  assert.equal(calls.some((text) => text.includes("update of_chat_message")), false);
+  assert.equal(calls.some((text) => text.includes("insert into of_chat_outbound")), false);
+
+  const freshCalls: string[] = [];
+  const fresh: ReadSql = {
+    async query<T>(text: string): Promise<T[]> {
+      freshCalls.push(text);
+      return [] as T[];
+    },
+  };
+  assert.equal(await attributeLiveSend(fresh, {
+    id: "out-2",
+    creatorId: "c",
+    threadKey: "7",
+    fanKey: "7",
+    authorId: "ana",
+    body: "hola",
+    priceCents: null,
+    messageId: "m-nuevo",
+    createdAt: "2026-11-06T12:00:05.000Z",
+    sentAt: "2026-11-06T12:00:05.000Z",
+    controlSince: "2026-11-06T12:00:00.000Z",
+  }), true);
+  assert.equal(freshCalls.some((text) => text.includes("insert into of_chat_outbound")), true);
+  const update = freshCalls.find((text) => text.includes("update of_chat_message"));
+  assert.match(update ?? "", /author_id is null/);
+  assert.match(update ?? "", /sent_at >=/);
 });
 
 test("solo un visor tiene el control de la cuenta", () => {

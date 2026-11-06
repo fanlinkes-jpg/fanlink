@@ -2,12 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import { openLiveView } from "@/lib/of-sessions";
 
 type DeskMessage =
+  | { type: "auth"; ticket: string }
   | { type: "mouse"; action: "down" | "up" | "move"; x: number; y: number; canvasWidth: number; canvasHeight: number; button?: "left" | "right" | "middle" }
   | { type: "wheel"; x: number; y: number; canvasWidth: number; canvasHeight: number; deltaX: number; deltaY: number }
   | { type: "key"; key: string; code: string; down: boolean }
   | { type: "text"; text: string }
   | { type: "resize"; width: number; height: number }
-  | { type: "file"; name: string; mime: string; data: string };
+  | { type: "file"; name: string; mime: string; data: string }
+  | { type: "release" }
+  | { type: "claim" };
 
 export function LiveOnlyFans({ creatorId, threadKey, fanKey }: { creatorId: string; threadKey: string; fanKey: string | null }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -15,6 +18,9 @@ export function LiveOnlyFans({ creatorId, threadKey, fanKey }: { creatorId: stri
   const socketRef = useRef<WebSocket | null>(null);
   const [note, setNote] = useState("Conectando…");
   const [control, setControl] = useState(false);
+  const [canType, setCanType] = useState(false);
+  const [holderFree, setHolderFree] = useState(false);
+  const canTypeRef = useRef(false);
 
   useEffect(() => {
     let closed = false;
@@ -26,16 +32,27 @@ export function LiveOnlyFans({ creatorId, threadKey, fanKey }: { creatorId: stri
         return;
       }
       const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-      socket = new WebSocket(`${protocol}://${window.location.host}/api/live-view?ticket=${encodeURIComponent(result.ticket)}`);
+      socket = new WebSocket(`${protocol}://${window.location.host}/api/live-view`);
       socket.binaryType = "arraybuffer";
       socketRef.current = socket;
+      let sized = false;
       socket.onmessage = (event) => {
         if (typeof event.data === "string") {
-          const status = JSON.parse(event.data) as { type?: string; role?: string };
-          if (status.type === "file") fileRef.current?.click();
+          const status = JSON.parse(event.data) as { type?: string; role?: string; send?: boolean; holder?: boolean };
+          const typing = status.role === "control" && status.send !== false;
+          canTypeRef.current = typing;
+          if (status.type === "file" && canTypeRef.current) fileRef.current?.click();
           if (status.role) {
             setControl(status.role === "control");
-            setNote(status.role === "control" ? "Tienes el control" : "Solo lectura");
+            setCanType(typing);
+            setHolderFree(status.holder === false);
+            setNote(typing ? "Tienes el control" : "Solo lectura");
+            if (!sized) {
+              sized = true;
+              const canvas = canvasRef.current;
+              const rect = canvas?.getBoundingClientRect();
+              send({ type: "resize", width: rect?.width ?? 1100, height: rect?.height ?? 720 });
+            }
           }
           return;
         }
@@ -53,9 +70,7 @@ export function LiveOnlyFans({ creatorId, threadKey, fanKey }: { creatorId: stri
         image.src = url;
       };
       socket.onopen = () => {
-        const canvas = canvasRef.current;
-        const rect = canvas?.getBoundingClientRect();
-        send({ type: "resize", width: rect?.width ?? 1100, height: rect?.height ?? 720 });
+        send({ type: "auth", ticket: result.ticket ?? "" });
       };
       socket.onclose = () => {
         if (!closed) setNote("Vista cerrada");
@@ -89,21 +104,31 @@ export function LiveOnlyFans({ creatorId, threadKey, fanKey }: { creatorId: stri
 
   return (
     <div className="relative min-h-0 flex-1 bg-[#111318]" tabIndex={0} onKeyDown={(event) => {
-      if (!control) return;
+      if (!canType) return;
       if (event.key === "Paste") return;
       event.preventDefault();
       send({ type: "key", key: event.key, code: event.code, down: true });
     }} onKeyUp={(event) => {
-      if (!control || event.key.length === 1) return;
+      if (!canType || event.key.length === 1) return;
       send({ type: "key", key: event.key, code: event.code, down: false });
     }} onPaste={(event) => {
-      if (!control) return;
+      if (!canType) return;
       const text = event.clipboardData.getData("text");
       if (!text) return;
       event.preventDefault();
       send({ type: "text", text });
     }}>
       <p className="absolute left-3 top-3 z-10 rounded bg-black/60 px-2 py-1 text-xs text-white">{note}</p>
+      {control ? (
+        <button type="button" className="absolute right-3 top-3 z-10 rounded bg-white/90 px-2 py-1 text-xs text-[#1c2333]" onClick={() => send({ type: "release" })}>
+          Ceder el control
+        </button>
+      ) : null}
+      {!control && holderFree ? (
+        <button type="button" className="absolute right-3 top-3 z-10 rounded bg-white/90 px-2 py-1 text-xs text-[#1c2333]" onClick={() => send({ type: "claim" })}>
+          Tomar el control
+        </button>
+      ) : null}
       <canvas
         ref={canvasRef}
         className="h-full w-full"
@@ -119,7 +144,7 @@ export function LiveOnlyFans({ creatorId, threadKey, fanKey }: { creatorId: stri
       <input ref={fileRef} type="file" className="hidden" aria-label="Archivo de OnlyFans" onChange={(event) => {
         const file = event.target.files?.[0];
         event.target.value = "";
-        if (!file || !control) {
+        if (!file || !canTypeRef.current) {
           send({ type: "file", name: "", mime: "", data: "" });
           return;
         }

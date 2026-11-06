@@ -29,17 +29,72 @@ export function liveViewGate(
   return { allowed: true, reason: "" };
 }
 
-/** Solo OnlyFans y su CDN. data:, blob: y about: son de la propia pestaña. */
+const LIVE_CHAT_PREFIXES = ["/my/chats", "/api2/v2/chats", "/api2/v2/messages"] as const;
+const LIVE_DENIED_SEGMENTS = [
+  "statements", "statistics", "banking", "payouts", "payout", "settings",
+  "payments", "billing", "wallet", "cards", "bank", "earnings", "invoices",
+] as const;
+
+/** Solo el chat y sus mensajes. Statements, estadísticas, banca, pagos y ajustes no pasan. */
 export function liveRequestAllowed(raw: string): boolean {
   if (raw.startsWith("data:") || raw.startsWith("blob:") || raw.startsWith("about:")) return true;
+  let url: URL;
   try {
-    const url = new URL(raw);
-    if (url.protocol !== "https:" && url.protocol !== "http:") return false;
-    const host = url.hostname.toLowerCase();
-    return host === "onlyfans.com" || host.endsWith(".onlyfans.com");
+    url = new URL(raw, "https://onlyfans.com");
   } catch {
     return false;
   }
+  if (url.protocol !== "https:" && url.protocol !== "http:" && url.protocol !== "wss:" && url.protocol !== "ws:") return false;
+  const host = url.hostname.toLowerCase();
+  if (host !== "onlyfans.com" && !host.endsWith(".onlyfans.com")) return false;
+  let path = url.pathname.toLowerCase();
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    return false;
+  }
+  if (path.includes("..") || path.includes("\\")) return false;
+  const segments = path.split("/").filter(Boolean);
+  if (segments.some((part) => (LIVE_DENIED_SEGMENTS as readonly string[]).includes(part))) return false;
+  if (host !== "onlyfans.com" && host !== "www.onlyfans.com") return true;
+  if (path === "/" || LIVE_CHAT_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`))) return true;
+  return /\.(js|css|map|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|mp4|m4s|m3u8|ts|aac|mp3|webm)$/.test(path);
+}
+
+/** El mismo filtro, dentro de la página, para pushState y window.open. */
+export function liveHistoryGuardSource(): string {
+  const allow = JSON.stringify({ prefixes: LIVE_CHAT_PREFIXES, denied: LIVE_DENIED_SEGMENTS });
+  return `(() => {
+    const allow = ${allow};
+    const ok = (raw) => {
+      try {
+        const url = new URL(String(raw), location.origin);
+        const host = url.hostname.toLowerCase();
+        if (host !== "onlyfans.com" && !host.endsWith(".onlyfans.com")) return false;
+        const path = decodeURIComponent(url.pathname).toLowerCase();
+        const parts = path.split("/").filter(Boolean);
+        if (parts.some((part) => allow.denied.includes(part))) return false;
+        if (host !== "onlyfans.com" && host !== "www.onlyfans.com") return true;
+        if (path === "/" || allow.prefixes.some((prefix) => path === prefix || path.startsWith(prefix + "/"))) return true;
+        return /\\.(js|css|map|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|mp4|m4s|m3u8|ts|aac|mp3|webm)$/.test(path);
+      } catch { return false; }
+    };
+    const push = history.pushState.bind(history);
+    const replace = history.replaceState.bind(history);
+    history.pushState = (state, title, url) => {
+      if (url != null && !ok(url)) return;
+      return push(state, title, url);
+    };
+    history.replaceState = (state, title, url) => {
+      if (url != null && !ok(url)) return;
+      return replace(state, title, url);
+    };
+    const open = window.open.bind(window);
+    window.open = (url, target, features) => {
+      if (url != null && !ok(url)) return null;
+      return open(url, target, features);
+    };
+  })();`;
 }
 
 export function mapPointer(
@@ -87,8 +142,9 @@ export type DeskInput =
   | { type: "text"; text: string }
   | { type: "resize"; width: number; height: number };
 
-/** Traduce el canvas al viewport. El texto solo va a insertText, nunca al log. */
-export function deskCommand(input: DeskInput, viewport: { width: number; height: number }): DeskCommand | null {
+/** Traduce el canvas al viewport. Sin envío real no hay teclado ni texto. */
+export function deskCommand(input: DeskInput, viewport: { width: number; height: number }, typing = true): DeskCommand | null {
+  if (!typing && (input.type === "key" || input.type === "text")) return null;
   if (input.type === "resize") {
     const width = Math.min(1920, Math.max(320, Math.round(input.width)));
     const height = Math.min(1200, Math.max(240, Math.round(input.height)));
@@ -155,4 +211,146 @@ export function liveLog(kind: "inicio" | "fin" | "control" | "error", fields: { 
   const fps = fields.fps != null ? ` fps=${fields.fps}` : "";
   const detail = fields.detail ? ` ${fields.detail.slice(0, 120)}` : "";
   return `[fanlink:live] ${kind} cuenta=${fields.accountId}${who}${fps}${detail}`;
+}
+
+/** Teclear y subir archivos solo si el envío real está encendido. */
+export function liveTypingEnabled(flag: string | undefined = process.env.FANLINK_ENABLE_SEND): boolean {
+  return flag === "true";
+}
+
+export const LIVE_MAX_VIEWERS = 4;
+export const LIVE_MAX_PAYLOAD = 1024 * 1024;
+export const LIVE_EVENTS_PER_SECOND = 40;
+
+export function liveRoomKey(accountId: string, threadKey: string): string {
+  return `${accountId}\n${threadKey}`;
+}
+
+export function liveViewerAccepted(count: number, max = LIVE_MAX_VIEWERS): boolean {
+  return count < max;
+}
+
+/** El origen del socket tiene que ser esta misma app. El ticket no viaja en la URL. */
+export function liveOriginAllowed(origin: string | undefined, host: string | undefined): boolean {
+  if (!origin || !host) return false;
+  try {
+    const url = new URL(origin);
+    const expected = host.split(",")[0]?.trim() ?? "";
+    return url.host === expected;
+  } catch {
+    return false;
+  }
+}
+
+export function liveUpgradeAllowed(requestUrl: string, origin: string | undefined, host: string | undefined): boolean {
+  let url: URL;
+  try {
+    url = new URL(requestUrl, "http://127.0.0.1");
+  } catch {
+    return false;
+  }
+  if (url.pathname !== "/api/live-view") return false;
+  if (url.searchParams.has("ticket")) return false;
+  return liveOriginAllowed(origin, host);
+}
+
+export type LiveClientEvent =
+  | DeskInput
+  | { type: "file"; name: string; mime: string; data: string }
+  | { type: "release" }
+  | { type: "claim" }
+  | { type: "auth"; ticket: string };
+
+/** El evento del cliente tiene que encajar en el esquema. Si no, se ignora. */
+export function parseLiveEvent(raw: string): LiveClientEvent | null {
+  if (raw.length === 0 || raw.length > LIVE_MAX_PAYLOAD) return null;
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!value || typeof value !== "object") return null;
+  const event = value as Record<string, unknown>;
+  switch (event.type) {
+    case "auth":
+      if (typeof event.ticket !== "string" || event.ticket.length < 10 || event.ticket.length > 80) return null;
+      return { type: "auth", ticket: event.ticket };
+    case "release":
+      return { type: "release" };
+    case "claim":
+      return { type: "claim" };
+    case "text":
+      if (typeof event.text !== "string" || event.text.length === 0 || event.text.length > 4000) return null;
+      return { type: "text", text: event.text };
+    case "resize":
+      if (!isFiniteNumber(event.width) || !isFiniteNumber(event.height)) return null;
+      return { type: "resize", width: event.width, height: event.height };
+    case "key":
+      if (typeof event.key !== "string" || typeof event.code !== "string" || typeof event.down !== "boolean") return null;
+      if (event.key.length > 20 || event.code.length > 30) return null;
+      return { type: "key", key: event.key, code: event.code, down: event.down };
+    case "wheel":
+      if (!isFiniteNumber(event.x) || !isFiniteNumber(event.y) || !isFiniteNumber(event.canvasWidth) || !isFiniteNumber(event.canvasHeight)) return null;
+      if (!isFiniteNumber(event.deltaX) || !isFiniteNumber(event.deltaY)) return null;
+      return {
+        type: "wheel",
+        x: event.x,
+        y: event.y,
+        canvasWidth: event.canvasWidth,
+        canvasHeight: event.canvasHeight,
+        deltaX: event.deltaX,
+        deltaY: event.deltaY,
+      };
+    case "mouse":
+      if (event.action !== "down" && event.action !== "up" && event.action !== "move") return null;
+      if (!isFiniteNumber(event.x) || !isFiniteNumber(event.y) || !isFiniteNumber(event.canvasWidth) || !isFiniteNumber(event.canvasHeight)) return null;
+      const button = event.button === "left" || event.button === "right" || event.button === "middle" ? event.button : undefined;
+      if (event.button != null && !button) return null;
+      return {
+        type: "mouse",
+        action: event.action,
+        x: event.x,
+        y: event.y,
+        canvasWidth: event.canvasWidth,
+        canvasHeight: event.canvasHeight,
+        button,
+      };
+    case "file":
+      if (typeof event.name !== "string" || typeof event.mime !== "string" || typeof event.data !== "string") return null;
+      if (event.data.length > 700_000) return null;
+      return { type: "file", name: event.name.slice(0, 120), mime: event.mime.slice(0, 80), data: event.data };
+    default:
+      return null;
+  }
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+export function takeLiveEventSlot(stamps: number[], now: number, limit = LIVE_EVENTS_PER_SECOND): boolean {
+  const fresh = stamps.filter((stamp) => now - stamp < 1_000);
+  stamps.length = 0;
+  stamps.push(...fresh);
+  if (stamps.length >= limit) return false;
+  stamps.push(now);
+  return true;
+}
+
+/** Sin el flag de envío, el controlador no teclea, no pulsa Enter y no sube archivos. */
+export function liveControlAllowed(typing: boolean, role: LiveRole, kind: LiveClientEvent["type"]): boolean {
+  if (kind === "auth") return false;
+  if (kind === "release") return role === "control";
+  if (kind === "claim") return role === "view";
+  if (role !== "control") return false;
+  if (!typing && (kind === "key" || kind === "text" || kind === "file")) return false;
+  return true;
+}
+
+/** El timeout suelta el control y deja a quien solo mira. */
+export function releaseIdleController(holder: string | null, waiting: readonly string[]): { holder: string | null; next: string | null; closeViewers: false } {
+  if (!holder) return { holder: null, next: null, closeViewers: false };
+  const freed = releaseControl(holder, holder, waiting);
+  return { holder: freed.holder, next: freed.next, closeViewers: false };
 }

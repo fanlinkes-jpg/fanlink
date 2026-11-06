@@ -83,7 +83,11 @@ export FANLINK_LIVE_VIEW_ENABLED=true
 export FANLINK_SEND_ALLOW_ACCOUNTS=9ikis52,@bigpoppa1111
 ```
 
-En el chat, la pestaña **OnlyFans** muestra `/my/chats/chat/{id}` del fan. **Equipo** sigue siendo el compositor de Fanlink. Solo un usuario tiene el control; el resto ve la imagen sin poder teclear. Con `VITE_AUTH_ENABLED=false` en localhost funciona sin login. Con el acceso encendido hace falta una sesión con permiso de mensajes. La pestaña no navega fuera de `onlyfans.com` ni de su CDN. El log es `[fanlink:live]` y no guarda lo que se escribe.
+En el chat, la pestaña **OnlyFans** muestra `/my/chats/chat/{id}` del fan. **Equipo** sigue siendo el compositor de Fanlink. Solo un usuario tiene el control; el resto ve la imagen. **Ceder el control** lo suelta sin cerrar a quien mira. Si el controlador no toca la pestaña, también lo suelta y los demás siguen viendo. Como máximo hay 4 visores. Los fotogramas van de 1 a 8 (`FANLINK_LIVE_FPS`, por defecto 4).
+
+El WebSocket `/api/live-view` solo se engancha con `npm run dev` (el servidor de Vite). `vite preview` y el build de producción no lo abren: fuera del portátil hay que servir con el servidor de desarrollo. El ticket va en el primer mensaje del socket, no en la URL, y el origen tiene que ser el de esta app.
+
+Teclear, pulsar Enter y subir un archivo exigen además `FANLINK_ENABLE_SEND=true`. Si está apagado, la pestaña es solo lectura. La página no sale de `/my/chats` ni de la API de mensajes: `/my/statements`, `/my/statistics`, banca, pagos y ajustes quedan bloqueados, también si la página intenta cambiar la ruta por dentro. No se abren popups ni descargas. La sincronización y el envío del resto de la cuenta siguen usando el mismo perfil. Con `VITE_AUTH_ENABLED=false` en localhost funciona sin login. Con el acceso encendido hace falta una sesión con permiso de mensajes. El log es `[fanlink:live]` y no guarda lo que se escribe.
 
 ## 7. Tiempo real del chat
 

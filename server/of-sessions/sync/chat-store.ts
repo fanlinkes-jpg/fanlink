@@ -716,6 +716,23 @@ export async function markChatList(sql: ReadSql, creatorId: string, cursor: stri
   );
 }
 
+const LIVE_ATTRIBUTION_SKEW_MS = 2_000;
+
+/** Solo un mensaje enviado durante el control de ese chatter, y nunca uno que ya tiene autor. */
+export function liveSendAttributable(input: {
+  messageId: string;
+  sentAt: string | null;
+  controlSince: string;
+  existingAuthorId: string | null;
+}): boolean {
+  if (!input.messageId || input.existingAuthorId) return false;
+  if (!input.sentAt) return false;
+  const sent = Date.parse(input.sentAt);
+  const since = Date.parse(input.controlSince);
+  if (!Number.isFinite(sent) || !Number.isFinite(since)) return false;
+  return sent + LIVE_ATTRIBUTION_SKEW_MS >= since;
+}
+
 /** Atribuye un envío visto en la pestaña en directo al chatter que tenía el control. */
 export async function attributeLiveSend(sql: ReadSql, input: {
   id: string;
@@ -727,32 +744,50 @@ export async function attributeLiveSend(sql: ReadSql, input: {
   priceCents: number | null;
   messageId: string;
   createdAt: string;
-}): Promise<void> {
+  sentAt: string | null;
+  controlSince: string;
+}): Promise<boolean> {
+  const stored = await sql.query<{ author_id: string | null; sent_at: Date | string | null }>(
+    "select author_id, sent_at from of_chat_message where creator_id = $1 and message_key = $2",
+    [input.creatorId, input.messageId],
+  );
+  const row = stored[0];
+  const sentAt = row?.sent_at == null
+    ? input.sentAt
+    : row.sent_at instanceof Date ? row.sent_at.toISOString() : String(row.sent_at);
+  if (!liveSendAttributable({
+    messageId: input.messageId,
+    sentAt,
+    controlSince: input.controlSince,
+    existingAuthorId: row?.author_id ?? null,
+  })) return false;
   const existing = await sql.query<{ id: string }>(
     "select id from of_chat_outbound where creator_id = $1 and of_message_key = $2",
     [input.creatorId, input.messageId],
   );
-  if (existing.length === 0) {
-    await recordOutbound(sql, {
-      id: input.id,
-      creatorId: input.creatorId,
-      threadKey: input.threadKey,
-      fanKey: input.fanKey,
-      authorId: input.authorId,
-      body: input.body,
-      priceCents: input.priceCents,
-      createdAt: input.createdAt,
-      ofMessageKey: input.messageId,
-    });
-    await sql.query(
-      `update of_chat_outbound set status = 'sent', sent_at = now(), matched_message_key = $2 where id = $1`,
-      [input.id, input.messageId],
-    );
-  }
+  if (existing.length > 0) return false;
+  await recordOutbound(sql, {
+    id: input.id,
+    creatorId: input.creatorId,
+    threadKey: input.threadKey,
+    fanKey: input.fanKey,
+    authorId: input.authorId,
+    body: input.body,
+    priceCents: input.priceCents,
+    createdAt: input.createdAt,
+    ofMessageKey: input.messageId,
+  });
   await sql.query(
-    `update of_chat_message set author_id = $1 where creator_id = $2 and message_key = $3 and author_id is null`,
-    [input.authorId, input.creatorId, input.messageId],
+    `update of_chat_outbound set status = 'sent', sent_at = now(), matched_message_key = $2 where id = $1`,
+    [input.id, input.messageId],
   );
+  const threshold = new Date(Date.parse(input.controlSince) - LIVE_ATTRIBUTION_SKEW_MS).toISOString();
+  await sql.query(
+    `update of_chat_message set author_id = $1
+     where creator_id = $2 and message_key = $3 and author_id is null and sent_at >= $4`,
+    [input.authorId, input.creatorId, input.messageId, threshold],
+  );
+  return true;
 }
 
 export async function recordOutbound(sql: ReadSql, draft: OutboundDraft & { creatorId: string }): Promise<void> {

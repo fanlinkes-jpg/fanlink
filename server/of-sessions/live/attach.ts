@@ -1,6 +1,7 @@
 import type { Server } from "node:http";
 import { WebSocketServer } from "ws";
-import { joinLive } from "./room.ts";
+import { LIVE_MAX_PAYLOAD, liveUpgradeAllowed } from "./desk.ts";
+import { acceptLiveSocket } from "./room.ts";
 
 const attached = new WeakSet<Server>();
 
@@ -8,13 +9,21 @@ const attached = new WeakSet<Server>();
 export function attachLiveView(server: Server): void {
   if (attached.has(server)) return;
   attached.add(server);
-  const sockets = new WebSocketServer({ noServer: true });
+  const sockets = new WebSocketServer({ noServer: true, maxPayload: LIVE_MAX_PAYLOAD });
   server.on("upgrade", (request, socket, head) => {
-    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    let url: URL;
+    try {
+      url = new URL(request.url ?? "/", "http://127.0.0.1");
+    } catch {
+      return;
+    }
     if (url.pathname !== "/api/live-view") return;
+    if (!liveUpgradeAllowed(request.url ?? "/", request.headers.origin, request.headers.host)) {
+      socket.destroy();
+      return;
+    }
     sockets.handleUpgrade(request, socket, head, (ws) => {
-      void joinLive(ws, url.searchParams.get("ticket") ?? "").catch((error: unknown) => {
-        console.info(`[fanlink:live] error ${error instanceof Error ? error.message.slice(0, 120) : "socket"}`);
+      void acceptLiveSocket(ws).catch(() => {
         ws.close();
       });
     });

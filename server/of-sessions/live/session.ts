@@ -2,7 +2,7 @@ import type { BrowserContext, CDPSession, FileChooser, Page } from "playwright";
 import { chatPageUrl } from "../sync/chats.ts";
 import { parseChatMessages } from "../sync/chats.ts";
 import { openWorkPage } from "../sessions/work-page.ts";
-import { deskCommand, liveLog, liveQuality, liveRequestAllowed, type DeskInput } from "./desk.ts";
+import { deskCommand, liveHistoryGuardSource, liveLog, liveQuality, liveRequestAllowed, liveTypingEnabled, type DeskInput } from "./desk.ts";
 
 export type LiveFrame = { jpeg: Buffer; width: number; height: number };
 
@@ -20,20 +20,28 @@ export async function startLiveCast(input: {
   accountUserId: string | null;
   onFrame: (frame: LiveFrame) => void;
   onFile: () => void;
-  onOwnMessage: (message: { messageId: string; body: string; priceCents: number | null }) => void;
+  onOwnMessage: (message: { messageId: string; body: string; priceCents: number | null; sentAt: string }) => void;
 }): Promise<LiveCast> {
   const fps = liveFpsFromEnv();
   const quality = liveQuality(process.env.FANLINK_LIVE_QUALITY);
   const page = await openWorkPage(input.context);
+  const typing = liveTypingEnabled();
   const chatUrl = chatPageUrl("https://onlyfans.com/my/chats", input.threadKey, "onlyfans");
   let viewport = { width: 1100, height: 720 };
   let cdp: CDPSession | null = null;
   let stopped = false;
   let fileWait: ((file: { name: string; mimeType: string; buffer: Buffer } | null) => void) | null = null;
   console.info(liveLog("inicio", { accountId: input.accountId, fps }));
+  await page.addInitScript({ content: liveHistoryGuardSource() });
   await page.route("**/*", (route) => {
     if (liveRequestAllowed(route.request().url())) return route.continue();
     return route.abort();
+  });
+  page.on("popup", (popup) => {
+    void popup.close().catch(() => undefined);
+  });
+  page.on("download", (download) => {
+    void download.cancel().catch(() => undefined);
   });
   page.on("framenavigated", (frame) => {
     if (frame !== page.mainFrame()) return;
@@ -41,6 +49,10 @@ export async function startLiveCast(input: {
     void page.goto(chatUrl, { waitUntil: "domcontentloaded" }).catch(() => undefined);
   });
   page.on("filechooser", (chooser: FileChooser) => {
+    if (!typing) {
+      void chooser.setFiles([]).catch(() => undefined);
+      return;
+    }
     input.onFile();
     const wait = new Promise<{ name: string; mimeType: string; buffer: Buffer } | null>((resolve) => {
       fileWait = resolve;
@@ -62,7 +74,7 @@ export async function startLiveCast(input: {
       const messages = parseChatMessages(JSON.parse(text) as unknown, input.threadKey, input.fanKey, input.accountUserId);
       for (const message of messages) {
         if (message.fromFan) continue;
-        input.onOwnMessage({ messageId: message.messageKey, body: message.body, priceCents: message.priceCents });
+        input.onOwnMessage({ messageId: message.messageKey, body: message.body, priceCents: message.priceCents, sentAt: message.sentAt });
       }
     }).catch(() => undefined);
   });
@@ -85,7 +97,7 @@ export async function startLiveCast(input: {
   return {
     async send(command) {
       if (stopped || !cdp) return;
-      const next = deskCommand(command, viewport);
+      const next = deskCommand(command, viewport, typing);
       if (!next) return;
       if (next.method === "resize") {
         viewport = next.params;
