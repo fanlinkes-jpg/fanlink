@@ -5,8 +5,7 @@ import { useCrm } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
 import { useOfReads } from "@/lib/use-of-reads";
 import { FanInsights } from "@/features/fan-insights";
-
-const EMOJIS = ["😊", "🔥", "❤️", "😘", "🎁"];
+import { FULL_EMOJIS, QUICK_EMOJIS, emojiRows } from "@/lib/composer-tools";
 
 export function RealChatsPage() {
   const creators = useCrm((s) => s.creators);
@@ -25,6 +24,7 @@ export function RealChatsPage() {
   const [menu, setMenu] = useState(false);
   const [draft, setDraft] = useState("");
   const [draftPrice, setDraftPrice] = useState<number | null>(null);
+  const [emojiOpen, setEmojiOpen] = useState(false);
   const [sendEnabled, setSendEnabled] = useState(false);
   const [pendingOut, setPendingOut] = useState<Array<{ id: string; creatorId: string; threadKey: string; body: string }>>([]);
 
@@ -200,14 +200,25 @@ export function RealChatsPage() {
                 </li>
               ))}
             </ol>
-            <form className="shrink-0 border-t border-[#e6e8ee] p-3" onSubmit={(event) => event.preventDefault()}>
-              <div className="mb-2 flex flex-wrap gap-1">
-                {EMOJIS.map((emoji) => (
-                  <button key={emoji} type="button" className="rounded px-1 text-base" onClick={() => setDraft((value) => `${value}${emoji}`)}>{emoji}</button>
-                ))}
-                <button type="button" disabled className="ml-auto rounded px-2 text-xs text-[#b0b6c2]" title="Sin datos">Traducción</button>
-                <button type="button" disabled className="rounded px-2 text-xs text-[#b0b6c2]" title="Sin datos">Guiones</button>
-                <button type="button" disabled className="rounded px-2 text-xs text-[#b0b6c2]" title="Sin datos">Galería</button>
+            <form className="relative shrink-0 border-t border-[#e6e8ee] p-2" onSubmit={(event) => event.preventDefault()}>
+              {emojiOpen ? (
+                <div className="absolute inset-x-2 bottom-full z-20 mb-1 max-h-40 overflow-y-auto rounded-xl border border-[#e6e8ee] bg-white p-2 shadow-lg">
+                  <div className="grid grid-cols-12 gap-0.5 text-base">
+                    {FULL_EMOJIS.map((emoji) => (
+                      <button key={`full-${emoji}`} type="button" className="rounded hover:bg-[#f3f4f6]" onClick={() => setDraft((value) => `${value}${emoji}`)}>{emoji}</button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              <div className="mb-1 max-h-16 overflow-y-auto">
+                <div className="grid grid-cols-12 gap-0.5 text-base leading-none">
+                  {emojiRows(QUICK_EMOJIS).flat().map((emoji) => (
+                    <button key={emoji} type="button" className="rounded hover:bg-[#f3f4f6]" onClick={() => setDraft((value) => `${value}${emoji}`)}>{emoji}</button>
+                  ))}
+                </div>
+              </div>
+              <div className="mb-1 flex justify-end">
+                <button type="button" className="rounded px-2 py-0.5 text-xs text-[#2456c7]" onClick={() => setEmojiOpen((open) => !open)}>{emojiOpen ? "Cerrar emojis" : "Más emojis"}</button>
               </div>
               <div className="flex flex-wrap items-end gap-2">
                 <textarea value={draft} onChange={(event) => setDraft(event.target.value)} rows={2} placeholder="Escribe un mensaje" className="min-h-12 min-w-48 flex-1 resize-none rounded-xl border border-[#e6e8ee] px-3 py-2 text-sm" />
