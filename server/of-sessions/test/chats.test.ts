@@ -5,7 +5,9 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { createSessionRuntime } from "../runtime.ts";
-import { chatFailureReason, chatIntervalMinFromEnv, classifyChatPath, newFanEvents, parseChatList, parseChatMessages } from "../sync/chats.ts";
+import { applyUserDirectory, chatFailureReason, chatIntervalMinFromEnv, classifyChatPath, mergeMessages, mergeThreads, newFanEvents, parseChatList, parseChatMessages, parseUsersDirectory } from "../sync/chats.ts";
+import { preferOutcome } from "../sync/parse.ts";
+import { shapeSummary } from "../sync/shape.ts";
 import { saveChatRead } from "../sync/chat-store.ts";
 import type { ReadSql } from "../sync/store.ts";
 import { startFixture } from "./fixture-site.ts";
@@ -18,6 +20,7 @@ test("los chats se leen de rutas de conversación y el aviso no se repite", () =
   assert.equal(classifyChatPath("https://onlyfans.com/api2/v2/chats?skip=0&token=sekret"), "list");
   assert.equal(classifyChatPath("https://onlyfans.com/api2/v2/chats/7/messages?order=desc"), "messages");
   assert.equal(classifyChatPath("https://onlyfans.com/my/chats"), "other");
+  assert.equal(classifyChatPath("https://onlyfans.com/api2/v2/messages/queue"), "other");
   assert.equal(chatFailureReason({ redirected: false, outcome: "pending", jsonPaths: [] }), "sin datos todavía (chats)");
   assert.equal(chatFailureReason({ redirected: false, outcome: "empty", jsonPaths: [] }), null);
   assert.equal(chatFailureReason({ redirected: false, outcome: "changed", jsonPaths: [] }), "página cambiada (chats)");
@@ -42,6 +45,67 @@ test("los chats se leen de rutas de conversación y el aviso no se repite", () =
   assert.equal(first[0]?.excerpt, "Hola, ¿sigues ahí?");
   const second = newFanEvents("c-alba", new Set(["100"]), messages, new Map());
   assert.equal(second.length, 0);
+});
+
+test("suma todas las respuestas de chats y completa el nombre con users/list", () => {
+  const filtered = { list: [], hasMore: true, nextOffset: 10 };
+  const first = {
+    list: [{
+      withUser: { id: 7 },
+      canSendMessage: true,
+      unreadMessagesCount: 2,
+      lastMessage: {
+        id: 100,
+        text: "<p>Hola</p>",
+        createdAt: "2026-11-05T10:00:00+00:00",
+        price: 0,
+        isFree: true,
+        fromUser: { id: 7 },
+        media: [],
+      },
+    }],
+    hasMore: true,
+  };
+  const second = {
+    list: [{
+      withUser: { id: 8, username: "otro", name: "Otro" },
+      unreadMessagesCount: 0,
+      lastMessage: { id: 200, text: "Hey", createdAt: "2026-11-05T11:00:00.000Z", fromUser: { id: 8 }, price: 3, isFree: false },
+    }],
+    hasMore: false,
+  };
+  assert.equal(parseChatList(filtered).length, 0);
+  const merged = mergeThreads(mergeThreads(parseChatList(filtered), parseChatList(first)), parseChatList(second));
+  assert.equal(merged.length, 2);
+  assert.equal(merged.find((row) => row.threadKey === "7")?.excerpt, "Hola");
+  assert.equal(merged.find((row) => row.threadKey === "7")?.unread, 2);
+  const named = applyUserDirectory(merged, parseUsersDirectory({
+    "7": { id: 7, username: "fanuno", name: "Fan Uno", avatar: "https://cdn.example/secret-avatar.jpg" },
+  }));
+  assert.equal(named.find((row) => row.threadKey === "7")?.fanHandle, "fanuno");
+  assert.equal(named.find((row) => row.threadKey === "7")?.fanName, "Fan Uno");
+  assert.equal(JSON.stringify(named).includes("secret-avatar"), false);
+  const messages = mergeMessages(
+    parseChatMessages({ list: [], hasMore: true }, "7", "7"),
+    parseChatMessages({
+      list: [
+        { id: 100, text: "<p>Hola</p>", createdAt: "2026-11-05T10:00:00+00:00", price: 5, isFree: false, fromUser: { id: 7 }, media: [] },
+        { id: 101, text: "Sí", createdAt: "2026-11-05T10:05:00.000Z", fromUser: { id: 42 }, isFree: true, price: 0 },
+      ],
+      hasMore: false,
+    }, "7", "7"),
+  );
+  assert.equal(messages.find((row) => row.messageKey === "100")?.body, "Hola");
+  assert.equal(messages.find((row) => row.messageKey === "100")?.fromFan, true);
+  assert.equal(messages.find((row) => row.messageKey === "100")?.priceCents, 500);
+  assert.equal(messages.find((row) => row.messageKey === "101")?.fromFan, false);
+  const summary = shapeSummary(first);
+  assert.equal(summary.includes("Hola"), false);
+  assert.equal(summary.includes("fanuno"), false);
+  assert.match(summary, /list=array:1/);
+  assert.match(summary, /withUser/);
+  assert.equal(preferOutcome("empty", "changed"), "changed");
+  assert.equal(preferOutcome("changed", "ok"), "ok");
 });
 
 test("el simulador entrega el chat y solo avisa de mensajes nuevos", { timeout: 60_000 }, async () => {

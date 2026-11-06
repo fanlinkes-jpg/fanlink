@@ -3,15 +3,23 @@ import { isCurrentUserResponseUrl, isLoginChallengeUrl, jsonUrlWithoutSecrets, u
 import { messages } from "../messages.ts";
 import type { SiteAdapter } from "../sessions/site.ts";
 import {
+  applyUserDirectory,
   chatFailureReason,
   classifyChatPath,
+  isUsersDirectoryUrl,
+  mergeMessages,
+  mergeThreads,
+  mergeUsers,
   parseChatDom,
   parseChatList,
   parseChatMessages,
+  parseUsersDirectory,
   type ChatMessage,
   type ChatThread,
+  type ChatUser,
 } from "./chats.ts";
 import { outcomeFromParsed, preferOutcome, type SectionOutcome } from "./parse.ts";
+import { logUnparsed, shapeSummary } from "./shape.ts";
 import { logApiResponse, logSection, sectionWaitMs, settleUntil } from "./wait-for-data.ts";
 
 export type CollectedChats = {
@@ -44,6 +52,12 @@ export async function collectChats(
     listUrl: null as string | null,
     messageOutcome: "pending" as SectionOutcome,
     messageUrl: null as string | null,
+    users: [] as ChatUser[],
+    sawDirectory: false,
+    threadsSeenAt: null as number | null,
+    chatShape: null as string | null,
+    messageShape: null as string | null,
+    userShape: null as string | null,
   };
   const pending: Promise<void>[] = [];
   const onResponse = (response: { url(): string; status(): number; headers(): Record<string, string>; text(): Promise<string> }) => {
@@ -59,7 +73,7 @@ export async function collectChats(
       await openChat(page, site.probeUrl, options, notes, pending, site, () => notes.sawLoggedIn);
       if (notes.sawLoggedIn && !notes.loginRequired) {
         notes.redirected = false;
-        await openChat(page, site.chatsUrl, options, notes, pending, site, () => notes.outcome === "ok" || notes.outcome === "empty");
+        await openChat(page, site.chatsUrl, options, notes, pending, site, () => chatsReady(notes));
         notes.pageLogin = notes.redirected;
         if (notes.pageLogin) notes.redirected = false;
         logSection("chat", "chats", page.url(), notes.listUrl, notes.threads.length);
@@ -67,7 +81,7 @@ export async function collectChats(
         notes.loginRequired = true;
       }
     } else {
-      await openChat(page, site.chatsUrl, options, notes, pending, site, () => notes.outcome === "ok" || notes.outcome === "empty");
+      await openChat(page, site.chatsUrl, options, notes, pending, site, () => chatsReady(notes));
       logSection("chat", "chats", page.url(), notes.listUrl, notes.threads.length);
     }
     const threads = notes.threads.slice(0, 2);
@@ -84,7 +98,7 @@ export async function collectChats(
         notes,
         pending,
         site,
-        () => notes.messageOutcome === "ok" || notes.messageOutcome === "empty" || notes.messages.length > before,
+        () => notes.messages.length > before,
         threadBudget,
       );
       logSection("chat", "mensajes", page.url(), notes.messageUrl, notes.messages.length - before);
@@ -98,6 +112,9 @@ export async function collectChats(
         if (dom.threads.length || dom.messages.length) notes.outcome = preferOutcome(notes.outcome, "ok");
       }
     }
+    logUnparsed("chat", "chats", notes.outcome, notes.chatShape);
+    logUnparsed("chat", "mensajes", notes.messageOutcome, notes.messageShape);
+    if (!notes.sawDirectory && notes.userShape) console.info(`[fanlink:chat] forma usuarios ${notes.userShape}`);
     const loginRequired = site.id === "onlyfans" && !notes.sawLoggedIn && (notes.loginRequired || notes.redirected);
     const reason = loginRequired
       ? messages.loginRequired
@@ -112,8 +129,8 @@ export async function collectChats(
       console.info(`[fanlink:chat] ${reason}${notes.paths.length ? ` | json: ${notes.paths.join(", ")}` : ""}`);
     }
     return {
-      threads: notes.threads.slice(0, 40),
-      messages: notes.messages.slice(0, 80),
+      threads: notes.threads.slice(0, 200),
+      messages: notes.messages.slice(0, 200),
       reason,
       jsonPaths: notes.paths,
       loginRequired,
@@ -167,6 +184,12 @@ async function observe(
     listUrl: string | null;
     messageOutcome: SectionOutcome;
     messageUrl: string | null;
+    users: ChatUser[];
+    sawDirectory: boolean;
+    threadsSeenAt: number | null;
+    chatShape: string | null;
+    messageShape: string | null;
+    userShape: string | null;
     loginRequired: boolean;
     sawLoggedIn: boolean;
   },
@@ -197,35 +220,59 @@ async function observe(
       }
       return;
     }
+    if (isUsersDirectoryUrl(url)) {
+      const rawUsers = await response.text();
+      if (rawUsers.length > 1_500_000) return;
+      const parsedUsers = JSON.parse(rawUsers) as unknown;
+      const users = parseUsersDirectory(parsedUsers);
+      if (users.length) {
+        notes.users = mergeUsers(notes.users, users);
+        notes.sawDirectory = true;
+        notes.threads = applyUserDirectory(notes.threads, notes.users);
+      } else if (!notes.userShape) {
+        notes.userShape = shapeSummary(parsedUsers);
+      }
+      return;
+    }
     if (kind === "other") return;
     const safe = jsonUrlWithoutSecrets(url);
     if (type && !type.includes("json") && !type.includes("text")) {
-      rememberChat(notes, kind, safe, "changed");
+      rememberChat(notes, kind, safe, "changed", null);
       return;
     }
     const raw = await response.text();
     if (raw.length > 1_500_000) {
-      rememberChat(notes, kind, safe, "changed");
+      rememberChat(notes, kind, safe, "changed", null);
       return;
     }
     const parsed = JSON.parse(raw) as unknown;
     if (kind === "list") {
       const threads = parseChatList(parsed);
-      if (threads.length) notes.threads = threads;
-      rememberChat(notes, kind, safe, outcomeFromParsed(threads.length, parsed));
+      if (threads.length) {
+        if (notes.threadsSeenAt == null) notes.threadsSeenAt = Date.now();
+        notes.threads = applyUserDirectory(mergeThreads(notes.threads, threads), notes.users);
+      }
+      rememberChat(notes, kind, safe, outcomeFromParsed(threads.length, parsed), parsed);
       return;
     }
     const threadKey = threadKeyFromUrl(url) ?? notes.threads[0]?.threadKey ?? "chat";
     const fanKey = notes.threads.find((thread) => thread.threadKey === threadKey)?.fanKey ?? notes.threads[0]?.fanKey ?? null;
     const messages = parseChatMessages(parsed, threadKey, fanKey);
-    if (messages.length) notes.messages.push(...messages);
-    rememberChat(notes, kind, safe, outcomeFromParsed(messages.length, parsed));
+    if (messages.length) notes.messages = mergeMessages(notes.messages, messages);
+    rememberChat(notes, kind, safe, outcomeFromParsed(messages.length, parsed), parsed);
   } catch {
     if (!url) return;
     const kind = classifyChatPath(url);
     if (kind === "other") return;
-    rememberChat(notes, kind, jsonUrlWithoutSecrets(url), "changed");
+    rememberChat(notes, kind, jsonUrlWithoutSecrets(url), "changed", null);
   }
+}
+
+function chatsReady(notes: { threads: ChatThread[]; sawDirectory: boolean; threadsSeenAt: number | null }): boolean {
+  if (notes.threads.length === 0) return false;
+  if (notes.sawDirectory || notes.threads.every((thread) => thread.fanName || thread.fanHandle)) return true;
+  if (notes.threadsSeenAt == null) return false;
+  return Date.now() - notes.threadsSeenAt >= 3_000;
 }
 
 function rememberChat(
@@ -234,18 +281,23 @@ function rememberChat(
     listUrl: string | null;
     messageOutcome: SectionOutcome;
     messageUrl: string | null;
+    chatShape: string | null;
+    messageShape: string | null;
   },
   kind: "list" | "messages",
   path: string | null,
   outcome: SectionOutcome,
+  payload: unknown,
 ): void {
   if (kind === "list") {
     notes.outcome = preferOutcome(notes.outcome, outcome);
     if (!notes.listUrl && path) notes.listUrl = path;
+    if (outcome === "changed" && payload != null && !notes.chatShape) notes.chatShape = shapeSummary(payload);
     return;
   }
   notes.messageOutcome = preferOutcome(notes.messageOutcome, outcome);
   if (!notes.messageUrl && path) notes.messageUrl = path;
+  if (outcome === "changed" && payload != null && !notes.messageShape) notes.messageShape = shapeSummary(payload);
 }
 
 export function readChatMarkers(): {
@@ -299,6 +351,6 @@ function delay(ms: number): Promise<void> {
 async function drain(pending: Promise<void>[]): Promise<void> {
   for (let turn = 0; turn < 5 && pending.length > 0; turn += 1) {
     const batch = pending.splice(0, pending.length);
-    await Promise.all(batch);
+    for (const job of batch) await job;
   }
 }

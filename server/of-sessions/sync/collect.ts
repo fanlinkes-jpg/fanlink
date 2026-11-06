@@ -11,6 +11,9 @@ import {
   parseFansJson,
   parseTransactions,
   preferOutcome,
+  mergeEarnings,
+  mergeFans,
+  mergeTransactions,
   takeContiguousTransactions,
   readFailureReason,
   type SectionOutcome,
@@ -19,6 +22,7 @@ import {
   type FanRow,
   type TransactionRow,
 } from "./parse.ts";
+import { logUnparsed, shapeSummary } from "./shape.ts";
 import { fanPageUrls, logApiResponse, logSection, sectionWaitMs, settleUntil, TRANSACTIONS_GRACE_MS } from "./wait-for-data.ts";
 
 export { takeContiguousTransactions };
@@ -63,6 +67,8 @@ export async function collectCreatorRead(
     earningsDataUrl: null as string | null,
     fansDataUrl: null as string | null,
     earningsSeenAt: null as number | null,
+    earningsShape: null as string | null,
+    fansShape: null as string | null,
   };
   const pending: Promise<void>[] = [];
   const onResponse = (response: { url(): string; status(): number; headers(): Record<string, string>; text(): Promise<string> }) => {
@@ -114,6 +120,8 @@ export async function collectCreatorRead(
           fans: notes.fansOutcome,
           jsonPaths: notes.paths,
         });
+    logUnparsed("lectura", "ingresos", notes.earningsOutcome, notes.earningsShape);
+    logUnparsed("lectura", "fans", notes.fansOutcome, notes.fansShape);
     if (reason) {
       console.info(`[fanlink:lectura] ${reason}${notes.paths.length ? ` | json: ${notes.paths.join(", ")}` : ""}`);
     }
@@ -208,10 +216,12 @@ type ReadNotes = {
   earningsDataUrl: string | null;
   fansDataUrl: string | null;
   earningsSeenAt: number | null;
+  earningsShape: string | null;
+  fansShape: string | null;
 };
 
 function earningsSettled(notes: ReadNotes, siteId: string): boolean {
-  if (notes.earningsOutcome !== "ok" && notes.earningsOutcome !== "empty") return false;
+  if (notes.earnings.length === 0 && notes.transactions.length === 0) return false;
   if (siteId !== "onlyfans") return true;
   if (notes.transactions.length > 0) return true;
   if (notes.earningsSeenAt == null) return false;
@@ -239,7 +249,7 @@ async function openFanPages(
       pending,
       true,
       site,
-      () => notes.fansOutcome === "ok" || notes.fansOutcome === "empty",
+      () => notes.fans.length > 0,
       slice,
     );
     notes.fansRedirect = redirected;
@@ -342,31 +352,32 @@ async function observe(
     if (kind === "other") return;
     const safe = jsonUrlWithoutSecrets(url);
     if (type && !type.includes("json") && !type.includes("text")) {
-      rememberSection(notes, kind, safe, "changed");
+      rememberSection(notes, kind, safe, "changed", null);
       return;
     }
     const raw = await response.text();
     if (raw.length > 1_500_000) {
-      rememberSection(notes, kind, safe, "changed");
+      rememberSection(notes, kind, safe, "changed", null);
       return;
     }
     const parsed = JSON.parse(raw) as unknown;
     if (kind === "earnings") {
       const rows = parseEarningsJson(parsed, now);
       const txs = parseTransactions(parsed, now);
-      notes.earnings.push(...rows);
-      notes.transactions.push(...txs);
-      rememberSection(notes, kind, safe, outcomeFromParsed(rows.length + txs.length, parsed));
+      if (rows.length && notes.earningsSeenAt == null) notes.earningsSeenAt = Date.now();
+      notes.earnings = mergeEarnings([...notes.earnings, ...rows]);
+      notes.transactions = mergeTransactions([...notes.transactions, ...txs]);
+      rememberSection(notes, kind, safe, outcomeFromParsed(rows.length + txs.length, parsed), parsed);
       return;
     }
     const fans = parseFansJson(parsed, now);
-    notes.fans.push(...fans);
-    rememberSection(notes, kind, safe, outcomeFromParsed(fans.length, parsed));
+    notes.fans = mergeFans([...notes.fans, ...fans]);
+    rememberSection(notes, kind, safe, outcomeFromParsed(fans.length, parsed), parsed);
   } catch {
     if (!url) return;
     const kind = classifyJsonPath(url);
     if (kind === "other") return;
-    rememberSection(notes, kind, jsonUrlWithoutSecrets(url), "changed");
+    rememberSection(notes, kind, jsonUrlWithoutSecrets(url), "changed", null);
   }
 }
 
@@ -375,15 +386,17 @@ function rememberSection(
   kind: "earnings" | "fans",
   path: string | null,
   outcome: SectionOutcome,
+  payload: unknown,
 ): void {
   if (kind === "earnings") {
     notes.earningsOutcome = preferOutcome(notes.earningsOutcome, outcome);
     if (!notes.earningsDataUrl && path) notes.earningsDataUrl = path;
-    if (notes.earningsSeenAt == null && (outcome === "ok" || outcome === "empty")) notes.earningsSeenAt = Date.now();
+    if (outcome === "changed" && payload != null && !notes.earningsShape) notes.earningsShape = shapeSummary(payload);
     return;
   }
   notes.fansOutcome = preferOutcome(notes.fansOutcome, outcome);
   if (!notes.fansDataUrl && path) notes.fansDataUrl = path;
+  if (outcome === "changed" && payload != null && !notes.fansShape) notes.fansShape = shapeSummary(payload);
 }
 
 export function readSyncMarkers(): {
@@ -420,6 +433,6 @@ function delay(ms: number): Promise<void> {
 async function drain(pending: Promise<void>[]): Promise<void> {
   for (let turn = 0; turn < 5 && pending.length > 0; turn += 1) {
     const batch = pending.splice(0, pending.length);
-    await Promise.all(batch);
+    for (const job of batch) await job;
   }
 }

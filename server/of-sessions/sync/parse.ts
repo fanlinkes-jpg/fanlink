@@ -82,9 +82,12 @@ const SECRET = /password|token|cookie|secret|sess|authorization|csrf/i;
 
 export type SectionOutcome = "ok" | "empty" | "changed" | "pending";
 
-const OUTCOME_RANK: Record<SectionOutcome, number> = { pending: 0, changed: 1, empty: 2, ok: 3 };
+const OUTCOME_RANK: Record<SectionOutcome, number> = { pending: 0, empty: 1, changed: 2, ok: 3 };
 
-/** Una lectura posterior no degrada un resultado mejor. */
+/**
+ * Varias respuestas de la misma sección se suman así: un cuerpo entendido
+ * gana; un cuerpo que no se entiende no queda tapado por una lista vacía previa.
+ */
 export function preferOutcome(current: SectionOutcome, next: SectionOutcome): SectionOutcome {
   return OUTCOME_RANK[next] > OUTCOME_RANK[current] ? next : current;
 }
@@ -482,6 +485,46 @@ function dedupeEarnings(rows: EarningRow[]): EarningRow[] {
     if (!prev) map.set(key, { ...row });
     else prev.amountCents += row.amountCents;
   }
+  return [...map.values()];
+}
+
+/** Entre respuestas distintas no se suman: el mismo día se queda una vez. */
+export function mergeEarnings(rows: EarningRow[]): EarningRow[] {
+  const map = new Map<string, EarningRow>();
+  for (const row of rows) {
+    const key = `${row.day}:${row.kind}:${row.currency}`;
+    const prev = map.get(key);
+    if (!prev || row.amountCents > prev.amountCents) map.set(key, { ...row });
+  }
+  return [...map.values()];
+}
+
+export function mergeFans(rows: FanRow[]): FanRow[] {
+  const map = new Map<string, FanRow>();
+  for (const row of rows) {
+    const prev = map.get(row.fanKey);
+    if (!prev) {
+      map.set(row.fanKey, row);
+      continue;
+    }
+    map.set(row.fanKey, {
+      ...prev,
+      ...row,
+      ofUserId: row.ofUserId ?? prev.ofUserId,
+      handle: row.handle ?? prev.handle,
+      displayName: row.displayName ?? prev.displayName,
+      subscribedAt: row.subscribedAt ?? prev.subscribedAt,
+      spentCents: row.spentCents ?? prev.spentCents,
+      renewAuto: row.renewAuto ?? prev.renewAuto,
+      expiresAt: row.expiresAt ?? prev.expiresAt,
+    });
+  }
+  return [...map.values()];
+}
+
+export function mergeTransactions(rows: TransactionRow[]): TransactionRow[] {
+  const map = new Map<string, TransactionRow>();
+  for (const row of rows) map.set(row.txKey, row);
   return [...map.values()];
 }
 

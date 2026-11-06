@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { createSessionRuntime } from "../runtime.ts";
-import { chartEarnings, classifyJsonPath, isRecognizedEmpty, parseEarningsDom, parseEarningsJson, parseFansJson, parseTransactions, readFailureReason } from "../sync/parse.ts";
+import { chartEarnings, classifyJsonPath, isRecognizedEmpty, mergeEarnings, mergeFans, mergeTransactions, parseEarningsDom, parseEarningsJson, parseFansJson, parseTransactions, preferOutcome, readFailureReason } from "../sync/parse.ts";
+import { shapeSummary } from "../sync/shape.ts";
 import { listCreatorReads, saveCreatorRead, type ReadSql } from "../sync/store.ts";
 import { startFixture } from "./fixture-site.ts";
 import { completeFixtureLogin, recordingFactory, removeDir, tempDataDir, testConfig, testDisplay } from "./helpers.ts";
@@ -80,6 +81,27 @@ test("el JSON inventado de ingresos y fans no copia secretos", () => {
   assert.match(reason ?? "", /sin datos todavía \(ingresos\)/);
   assert.match(reason ?? "", /página cambiada \(fans\)/);
   assert.equal(readFailureReason({ redirected: false, wantEarnings: true, earnings: "empty", fans: "empty", jsonPaths: [] }), null);
+  assert.equal(preferOutcome("empty", "ok"), "ok");
+  const point = parseEarningsJson({ list: [{ date: "2026-11-01", total: 10 }] }, NOW);
+  const repeated = mergeEarnings([...point, ...point]);
+  assert.equal(repeated.length, 1);
+  assert.equal(repeated[0]?.amountCents, 1000);
+  const mergedFans = mergeFans([
+    ...parseFansJson({ list: [] }, NOW),
+    ...parseFansJson({ list: [{ id: 7, username: "fanuno", name: "Fan Uno", subscribedOnData: { totalSumm: 2 } }] }, NOW),
+  ]);
+  assert.equal(mergedFans.length, 1);
+  assert.equal(mergedFans[0]?.spentCents, 200);
+  const mergedTx = mergeTransactions([
+    ...parseTransactions({ transactions: [{ id: "tx-1", createdAt: "2026-11-03T15:00:00.000Z", amount: 10, net: 8, type: "tip", user: { id: 7 } }] }, NOW),
+    ...parseTransactions({ transactions: [{ id: "tx-1", createdAt: "2026-11-03T15:00:00.000Z", amount: 10, net: 8, type: "tip", user: { id: 7 } }] }, NOW),
+  ]);
+  assert.equal(mergedTx.length, 1);
+  const odd = { chartAmount: [1, 2], secretName: "no-mostrar" };
+  assert.equal(parseEarningsJson(odd, NOW).length, 0);
+  const form = shapeSummary(odd);
+  assert.equal(form.includes("no-mostrar"), false);
+  assert.match(form, /chartAmount=array:2/);
   assert.equal(reason?.includes("sekret"), false);
   assert.equal(reason?.includes("?"), false);
 });
