@@ -76,7 +76,7 @@ test("el texto y el precio se confirman con el id y un fallo no se reintenta", a
       confirmMs: 900,
     });
     assert.equal(missed.messageId, null);
-    assert.equal(missed.reason, "No apareció el mensaje propio");
+    assert.equal(missed.reason, "no enviado");
     assert.equal(fixture.composed.length, 1);
     await context.close();
   } finally {

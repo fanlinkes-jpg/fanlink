@@ -144,7 +144,10 @@ export async function saveChatRead(
         ],
       );
     }
-    await attachOutboundAuthors(sql, creatorId, read.messages);
+    const columns = await sql.query<{ column_name: string }>(
+      "select column_name from information_schema.columns where table_name = 'of_chat_outbound' and column_name = 'error_reason'",
+    );
+    await attachOutboundAuthors(sql, creatorId, read.messages, columns.length > 0);
     await noteHistoryCursor(sql, creatorId);
     for (const event of events) {
       await sql.query(
@@ -363,7 +366,7 @@ export function outboundStillMissing(
   });
 }
 
-async function attachOutboundAuthors(sql: ReadSql, creatorId: string, messages: ChatMessage[]): Promise<void> {
+async function attachOutboundAuthors(sql: ReadSql, creatorId: string, messages: ChatMessage[], hasSendState: boolean): Promise<void> {
   const drafts = await sql.query<{
     id: string;
     author_id: string;
@@ -373,10 +376,8 @@ async function attachOutboundAuthors(sql: ReadSql, creatorId: string, messages: 
     thread_key: string | null;
     fan_key: string | null;
     of_message_key: string | null;
-    error_reason: string | null;
-    scheduled_at: Date | string | null;
   }>(
-    `select id, author_id, body, price_cents, created_at, thread_key, fan_key, of_message_key, error_reason, scheduled_at
+    `select id, author_id, body, price_cents, created_at, thread_key, fan_key, of_message_key
      from of_chat_outbound where creator_id = $1 and matched_message_key is null`,
     [creatorId],
   );
@@ -400,12 +401,17 @@ async function attachOutboundAuthors(sql: ReadSql, creatorId: string, messages: 
        where creator_id = $2 and message_key = $3 and author_id is null`,
       [match.authorId, creatorId, message.messageKey],
     );
-    await sql.query(
-      `update of_chat_outbound set matched_message_key = $2, status = 'sent', error_reason = null where id = $1`,
-      [match.draftId, message.messageKey],
-    );
+    await sql.query("update of_chat_outbound set matched_message_key = $2 where id = $1", [match.draftId, message.messageKey]);
+    if (hasSendState) {
+      await sql.query("update of_chat_outbound set status = 'sent', error_reason = null where id = $1", [match.draftId]);
+    }
   }
-  for (const row of drafts) {
+  if (!hasSendState) return;
+  const flags = await sql.query<{ id: string; error_reason: string | null; scheduled_at: Date | string | null; created_at: Date | string }>(
+    `select id, error_reason, scheduled_at, created_at from of_chat_outbound where creator_id = $1 and matched_message_key is null`,
+    [creatorId],
+  );
+  for (const row of flags) {
     if (used.has(row.id)) continue;
     const createdAt = row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at);
     const scheduledAt = row.scheduled_at == null ? null : row.scheduled_at instanceof Date ? row.scheduled_at.toISOString() : String(row.scheduled_at);
