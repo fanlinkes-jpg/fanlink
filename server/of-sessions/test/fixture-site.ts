@@ -91,7 +91,36 @@ function dashboardHtml(mode: FixtureMode): string {
   }
 }
 
-function ofChatHtml(mode: "live" | "slow" | "late" | "verylate" | "hang" | "enter" | "stuck" = "live", chatId = "9"): string {
+function ofChatHtml(mode: "live" | "slow" | "late" | "verylate" | "hang" | "posting" | "reject" | "enter" | "stuck" = "live", chatId = "9"): string {
+  if (mode === "posting" || mode === "reject") {
+    const sendScript = `const box = document.querySelector("[at-attr='chat_input']");
+       const send = document.querySelector("[at-attr='send_btn']");
+       send.disabled = true;
+       box.addEventListener("input", () => { send.disabled = box.value.trim() === ""; });
+       send.onclick = async () => {
+         const body = box.value;
+         await fetch("/fixture/compose", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ body, price: "", file: "" }) });
+         box.value = "\\n";
+         const item = document.createElement("div");
+         item.className = "b-chat__message m-sending";
+         item.textContent = body;
+         document.querySelector(".b-chat").appendChild(item);
+         const response = await fetch("/api2/v2/chats/${chatId}/messages", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+         if (response.ok) item.className = "b-chat__message";
+       };`;
+    return pageHtml(
+      "Hilo",
+      "",
+      `<div class="b-chat">
+         <textarea at-attr="chat_input" placeholder="Type a message..."></textarea>
+         <button at-attr="send_btn" type="button">Send</button>
+         <button at-attr="price_btn" type="button">Price</button>
+         <input at-attr="price_input" />
+         <button at-attr="vault_btn" type="button">Vault</button>
+       </div>
+       <script>${sendScript}</script>`,
+    );
+  }
   const sendScript = mode === "stuck"
     ? `document.querySelector("[at-attr='send_btn']").disabled = true;`
     : `const box = document.querySelector("[at-attr='chat_input']");
@@ -517,6 +546,41 @@ async function handle(
       return;
     }
     html(res, ofChatHtml("stuck"));
+    return;
+  }
+  if (req.method === "POST" && /^\/api2\/v2\/chats\/(?:0|5)\/messages$/.test(url.pathname)) {
+    if (url.pathname.endsWith("/chats/0/messages")) {
+      res.writeHead(500, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "no" }));
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      list: composed.map((item, index) => ({
+        id: 300 + index,
+        text: item.body,
+        createdAt: new Date().toISOString(),
+        fromUser: { id: 42 },
+        isMine: true,
+      })),
+    }));
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/my/chats/chat/0") {
+    if (!accepted(req, epoch())) {
+      redirect(res, "/login");
+      return;
+    }
+    html(res, ofChatHtml("reject", "0"));
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/my/chats/chat/5") {
+    if (!accepted(req, epoch())) {
+      redirect(res, "/login");
+      return;
+    }
+    html(res, ofChatHtml("posting", "5"));
     return;
   }
   if (req.method === "GET" && url.pathname === "/my/chats/chat/1") {

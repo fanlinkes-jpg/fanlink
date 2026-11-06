@@ -4,10 +4,18 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
-import { listPendingOutbounds, markOutboundAwaiting, markOutboundSent, recordOutbound } from "../sync/chat-store.ts";
+import { listPendingOutbounds, markOutboundAwaiting, markOutboundSent, outboundStillMissing, recordOutbound } from "../sync/chat-store.ts";
 import type { ReadSql } from "../sync/store.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+
+test("sin el mensaje en la sincronización posterior queda como no enviado", () => {
+  const created = "2026-11-06T12:00:00.000Z";
+  const draft = { createdAt: created, errorReason: "Pendiente de confirmar", scheduledAt: null };
+  assert.equal(outboundStillMissing(draft, [{ sentAt: "2026-11-06T11:00:00.000Z" }]), false);
+  assert.equal(outboundStillMissing(draft, [{ sentAt: "2026-11-06T12:00:05.000Z" }]), true);
+  assert.equal(outboundStillMissing({ ...draft, errorReason: null }, [{ sentAt: "2026-11-06T12:00:05.000Z" }]), false);
+});
 
 test("un envío visto sin id queda pendiente de confirmar", async () => {
   const db = new PGlite();

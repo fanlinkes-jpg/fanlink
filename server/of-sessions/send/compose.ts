@@ -49,6 +49,13 @@ export function createPendingNet(ttlMs = PENDING_NET_TTL_MS) {
   };
 }
 
+/** El resto de la caja: vacío, códigos si solo hay blanco, o texto si queda el mensaje. */
+export function boxRemainder(raw: string): string {
+  if (raw.length === 0) return "vacio";
+  if (raw.trim().length === 0) return [...raw].map((char) => String(char.charCodeAt(0))).join(",");
+  return "texto";
+}
+
 export type ComposeRequest = {
   chatsUrl: string;
   siteId: string;
@@ -84,17 +91,34 @@ export async function composeChat(context: BrowserContext, request: ComposeReque
   const page = await openWorkPage(context);
   const payloads: string[] = [];
   const pending = createPendingNet();
-  const trackNet = (delta: number, request: { url(): string }) => {
+  const messagePosts: Array<{ status: number | null }> = [];
+  const postOf = new Map<object, { status: number | null }>();
+  const trackNet = (delta: number, request: { url(): string; method?: () => string }) => {
     const path = pathOf(request.url());
     if (!path.includes("message") && !path.includes("chat")) return;
     if (delta > 0) pending.start(request);
     else pending.finish(request);
   };
-  page.on("request", (request) => trackNet(1, request));
+  const rememberPost = (request: { url(): string; method(): string }) => {
+    if (!isMessageWrite(request.method(), request.url())) return;
+    const post = { status: null as number | null };
+    messagePosts.push(post);
+    postOf.set(request, post);
+  };
+  page.on("request", (request) => {
+    rememberPost(request);
+    trackNet(1, request);
+  });
   page.on("requestfinished", (request) => trackNet(-1, request));
-  page.on("requestfailed", (request) => trackNet(-1, request));
+  page.on("requestfailed", (request) => {
+    const post = postOf.get(request);
+    if (post && post.status == null) post.status = 0;
+    trackNet(-1, request);
+  });
   page.on("close", () => pending.reset());
-  const onResponse = (response: { url(): string; status(): number; text(): Promise<string> }) => {
+  const onResponse = (response: { url(): string; status(): number; text(): Promise<string>; request?: () => object }) => {
+    const post = response.request ? postOf.get(response.request()) : undefined;
+    if (post && post.status == null) post.status = response.status();
     if (response.status() < 200 || response.status() >= 300) return;
     const path = pathOf(response.url());
     if (!path.includes("message") && !path.includes("chat")) return;
@@ -111,20 +135,42 @@ export async function composeChat(context: BrowserContext, request: ComposeReque
       if (payload.length <= 1_500_000) payloads.push(payload);
     });
   });
+  const net = {
+    postOpen: () => messagePosts.some((post) => post.status == null),
+    postStatus: () => {
+      const done = messagePosts.filter((post) => post.status != null);
+      return done.length === 0 ? null : done[done.length - 1]?.status ?? null;
+    },
+    postLabel: () => {
+      const last = messagePosts[messagePosts.length - 1];
+      if (!last) return "no";
+      if (last.status == null) return "abierto";
+      return String(last.status);
+    },
+  };
+  let result: ComposeResult = { messageId: null, reason: "No se envió" };
+  let payloadFrom = 0;
   try {
     const url = chatPageUrl(request.chatsUrl, request.threadKey, request.siteId);
     console.info(`[fanlink:send] inicio hilo=${request.threadKey} origen=${threadIdKind(request.threadKey, request.fanKey)}`);
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
     const landed = navigationNote(url, page.url());
     console.info(`[fanlink:send] navegado url=${landed.url} redirigido=${landed.redirected ? "si" : "no"}`);
-    if (page.url() === "about:blank") return await giveUp(page, "no se abrió el hilo");
+    if (page.url() === "about:blank") {
+      result = await giveUp("no se abrió el hilo");
+      return result;
+    }
     if (/\/login(?:\/|$)/i.test(new URL(page.url()).pathname)) {
-      return await giveUp(page, "OnlyFans pide iniciar sesión: pulsa Reconectar");
+      result = await giveUp("OnlyFans pide iniciar sesión: pulsa Reconectar");
+      return result;
     }
     await page.locator(MESSAGE_LIST_SELECTOR).first().waitFor({ timeout: 20_000 }).catch(() => undefined);
     const box = await firstReady(page, COMPOSER_SELECTORS, 20_000);
     const roleBox = box ?? await roleTextbox(page);
-    if (!roleBox) return await giveUp(page, "no está la caja del chat");
+    if (!roleBox) {
+      result = await giveUp("no está la caja del chat");
+      return result;
+    }
     await roleBox.click();
     await typeBody(roleBox, request.body, request.typeDelayMs);
     const sendForLog = await firstReady(page, SEND_SELECTORS, 1_000);
@@ -141,7 +187,10 @@ export async function composeChat(context: BrowserContext, request: ComposeReque
     }
     if (request.priceCents != null && request.priceCents > 0) {
       const opened = await setNativePrice(page, request.priceCents, request.typeDelayMs);
-      if (!opened) return await giveUp(page, "No está el precio nativo");
+      if (!opened) {
+        result = await giveUp("No está el precio nativo");
+        return result;
+      }
     }
     if (request.files && request.files.length > 0) {
       const input = page.locator("input[type='file']").first();
@@ -159,54 +208,68 @@ export async function composeChat(context: BrowserContext, request: ComposeReque
       await page.getByRole("button", { name: /^(Save|Guardar)$/ }).click();
     }
     const before = payloads.length;
+    payloadFrom = before;
     const netAtClick = Date.now();
     const beforeDom = await messageCount(page);
     const send = await firstReady(page, SEND_SELECTORS, 8_000);
-    if (!send) return await giveUp(page, "no está el botón Send");
+    if (!send) {
+      result = await giveUp("no está el botón Send");
+      return result;
+    }
     const enabled = await waitEnabled(send, 4_000);
     if ((request.typeDelayMs ?? 1) > 0) await delay(280 + Math.floor(Math.random() * 220));
     console.info(`[fanlink:send] click disabled=${enabled ? "no" : "si"} dom=${beforeDom}`);
     if (enabled) await send.click({ timeout: 5_000 }).catch(() => undefined);
     const settleMs = request.settleMs ?? 12_000;
-    const first = await watchSend(roleBox, page, payloads, before, request, beforeDom, settleMs);
+    const first = await watchSend(roleBox, page, payloads, before, request, beforeDom, settleMs, net);
+    const rawBox = await boxText(roleBox);
     const afterDom = await messageCount(page);
-    console.info(`[fanlink:send] despues caracteres=${(await boxText(roleBox)).length} dom=${afterDom} antes=${beforeDom}`);
-    if (first.kind === "id") {
-      console.info("[fanlink:send] confirmado via=json");
-      return { messageId: first.id, reason: null };
-    }
-    if (first.kind === "visto") {
-      console.info("[fanlink:send] confirmado via=pendiente");
-      return { messageId: null, reason: null, awaitingId: true };
-    }
-    const missed = await clickMissed(roleBox, page, payloads, before, request, beforeDom, () => pending.openedSince(netAtClick));
-    if (!missed) {
-      const lateId = idFromPayloads(payloads, before, request);
-      if (lateId) {
-        console.info("[fanlink:send] confirmado via=json");
-        return { messageId: lateId, reason: null };
-      }
-      console.info("[fanlink:send] confirmado via=pendiente");
-      return { messageId: null, reason: null, awaitingId: true };
-    }
-    console.info("[fanlink:send] enter");
-    await roleBox.press("Enter").catch(() => undefined);
-    const second = await watchSend(roleBox, page, payloads, before, request, beforeDom, request.confirmMs ?? 8_000);
-    if (second.kind === "id") {
-      console.info("[fanlink:send] confirmado via=json");
-      return { messageId: second.id, reason: null };
-    }
-    if (second.kind === "visto") {
-      console.info("[fanlink:send] confirmado via=pendiente");
-      return { messageId: null, reason: null, awaitingId: true };
-    }
-    return await giveUp(page, "No apareció el mensaje propio");
+    console.info(`[fanlink:send] despues caracteres=${rawBox.length} resto=${boxRemainder(rawBox)} dom=${afterDom} antes=${beforeDom} post=${net.postLabel()}`);
+    result = await finishAttempt(first, roleBox, page, payloads, before, request, beforeDom, () => pending.openedSince(netAtClick), net);
+    return result;
   } catch (error) {
     const reason = error instanceof Error ? error.message : "No se envió";
-    return await giveUp(page, publicSendReason(reason));
+    result = await giveUp(publicSendReason(reason));
+    return result;
   } finally {
+    const limit = Date.now() + 20_000;
+    let quietSince: number | null = null;
+    while (Date.now() < limit) {
+      const seen = idFromPayloads(payloads, payloadFrom, request);
+      if (seen) {
+        result.messageId = seen;
+        result.reason = null;
+        result.awaitingId = false;
+        break;
+      }
+      if (net.postOpen()) quietSince = null;
+      else quietSince ??= Date.now();
+      if (quietSince != null && Date.now() - quietSince >= 1_000) break;
+      await delay(50);
+    }
+    const late = idFromPayloads(payloads, payloadFrom, request);
+    if (late && !result.messageId) {
+      result.messageId = late;
+      result.reason = null;
+      result.awaitingId = false;
+    }
+    if (result.messageId) {
+      console.info(`[fanlink:send] confirmado via=json post=${net.postLabel()}`);
+    } else {
+      const files = await writeSendFailure(page).catch(() => null);
+      const where = files ? ` volcado=${files.json} captura=${files.png ?? "no"}` : "";
+      const estado = result.awaitingId ? "pendiente" : "no-enviado";
+      if (!result.awaitingId && !result.reason) result.reason = "no enviado";
+      console.info(`[fanlink:send] estado=${estado} post=${net.postLabel()}${where}`);
+    }
     page.off("response", onResponse);
     await page.close().catch(() => undefined);
+  }
+
+  async function giveUp(reason: string): Promise<ComposeResult> {
+    const motivo = publicSendReason(reason);
+    console.info(`[fanlink:send] error motivo=${motivo}`);
+    return { messageId: null, reason: motivo };
   }
 }
 
@@ -281,30 +344,98 @@ async function logBox(label: string, box: Locator, body: string, send: Locator |
 
 type SendWatch = { kind: "id"; id: string } | { kind: "visto" } | { kind: "no" };
 
-/** Espera a que el intento salga. No pulsa otra vez. */
+type PostNet = {
+  postOpen: () => boolean;
+  postStatus: () => number | null;
+  postLabel: () => string;
+};
+
+/** Espera al id o a que la burbuja deje de estar en envío. Una caja vacía no basta. */
 async function watchSend(
-  box: Locator,
+  _box: Locator,
   page: Page,
   payloads: string[],
   from: number,
   request: ComposeRequest,
   beforeDom: number,
   timeoutMs: number,
+  net: PostNet,
 ): Promise<SendWatch> {
-  const deadline = Date.now() + timeoutMs;
-  let left = false;
-  while (Date.now() <= deadline) {
+  const started = Date.now();
+  const hard = timeoutMs + 20_000;
+  while (Date.now() - started <= timeoutMs || (net.postOpen() && Date.now() - started <= hard)) {
     const id = idFromPayloads(payloads, from, request);
     if (id) return { kind: "id", id };
-    const text = (await boxText(box)).trim();
-    const dom = await messageCount(page);
-    const bubble = dom > beforeDom && await threadHasBody(page, request.body);
-    if (!text || bubble) left = true;
+    const status = net.postStatus();
+    if (status != null && status >= 400 && !net.postOpen()) return { kind: "no" };
+    const phase = await bubblePhase(page, beforeDom, request.body);
+    if (!net.postOpen() && phase === "listo") {
+      const late = idFromPayloads(payloads, from, request);
+      if (late) return { kind: "id", id: late };
+      return { kind: "visto" };
+    }
     await delay(100);
   }
   const id = idFromPayloads(payloads, from, request);
   if (id) return { kind: "id", id };
-  return left ? { kind: "visto" } : { kind: "no" };
+  const status = net.postStatus();
+  if (status != null && status >= 400) return { kind: "no" };
+  if (!net.postOpen() && await bubblePhase(page, beforeDom, request.body) === "listo") return { kind: "visto" };
+  if (status != null && status >= 200 && status < 300) return { kind: "visto" };
+  return { kind: "no" };
+}
+
+async function finishAttempt(
+  first: SendWatch,
+  box: Locator,
+  page: Page,
+  payloads: string[],
+  from: number,
+  request: ComposeRequest,
+  beforeDom: number,
+  networkOpen: () => boolean,
+  net: PostNet,
+): Promise<ComposeResult> {
+  if (first.kind === "id") return { messageId: first.id, reason: null };
+  const status = net.postStatus();
+  if (status != null && status >= 400) return { messageId: null, reason: "no enviado" };
+  if (first.kind === "visto") return { messageId: null, reason: null, awaitingId: true };
+  if ((await boxText(box)).trim()) {
+    const missed = await clickMissed(box, page, payloads, from, request, beforeDom, () => networkOpen() || net.postOpen());
+    const late = idFromPayloads(payloads, from, request);
+    if (late) return { messageId: late, reason: null };
+    if (!missed) {
+      const phase = await bubblePhase(page, beforeDom, request.body);
+      if (phase !== "no" || net.postOpen() || (status != null && status < 400)) {
+        return { messageId: null, reason: null, awaitingId: true };
+      }
+      return { messageId: null, reason: "no enviado" };
+    }
+    if (!net.postOpen()) {
+      console.info("[fanlink:send] enter");
+      await box.press("Enter").catch(() => undefined);
+      const second = await watchSend(box, page, payloads, from, request, beforeDom, request.confirmMs ?? 8_000, net);
+      if (second.kind === "id") return { messageId: second.id, reason: null };
+      if (second.kind === "visto") return { messageId: null, reason: null, awaitingId: true };
+      const after = idFromPayloads(payloads, from, request);
+      if (after) return { messageId: after, reason: null };
+      if ((net.postStatus() ?? 0) >= 400) return { messageId: null, reason: "no enviado" };
+    }
+  }
+  const late = idFromPayloads(payloads, from, request);
+  if (late) return { messageId: late, reason: null };
+  const phase = await bubblePhase(page, beforeDom, request.body);
+  if (phase !== "no" || net.postOpen()) return { messageId: null, reason: null, awaitingId: true };
+  return { messageId: null, reason: "no enviado" };
+}
+
+async function bubblePhase(page: Page, beforeDom: number, body: string): Promise<"no" | "pending" | "listo"> {
+  if (await messageCount(page) <= beforeDom || !(await threadHasBody(page, body))) return "no";
+  const pending = await page.locator(".b-chat__item, .b-chat__message").last().evaluate((node) => {
+    const classes = [node, ...node.querySelectorAll("*")].map((item) => String(item.className || "")).join(" ");
+    return /sending|enviando|pending|unsended|not-sent|spinner|loading|clock/i.test(classes);
+  }).catch(() => false);
+  return pending ? "pending" : "listo";
 }
 
 /** Enter solo si la red y la burbuja confirman que el click no salió. */
@@ -386,12 +517,10 @@ async function roleTextbox(page: Page): Promise<Locator | null> {
   return null;
 }
 
-async function giveUp(page: Page, reason: string): Promise<ComposeResult> {
-  const motivo = publicSendReason(reason);
-  const files = await writeSendFailure(page).catch(() => null);
-  const where = files ? ` volcado=${files.json} captura=${files.png ?? "no"}` : "";
-  console.info(`[fanlink:send] error motivo=${motivo}${where}`);
-  return { messageId: null, reason: motivo };
+function isMessageWrite(method: string, url: string): boolean {
+  const verb = method.toUpperCase();
+  if (verb !== "POST" && verb !== "PUT") return false;
+  return pathOf(url).includes("message");
 }
 
 function delay(ms: number): Promise<void> {

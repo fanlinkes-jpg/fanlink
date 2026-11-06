@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { chromium } from "playwright";
-import { composeChat, createPendingNet } from "../send/compose.ts";
+import { boxRemainder, composeChat, createPendingNet } from "../send/compose.ts";
 import { navigationNote, pruneSendFailures, publicChatUrl, readFooterNodes, threadIdKind, writeSendFailure } from "../send/targets.ts";
 import { startFixture } from "./fixture-site.ts";
 
@@ -105,6 +105,28 @@ test("un click que vacía la caja tarde no se reenvía con Enter", async () => {
   assert.equal(sent.enters, 0);
 });
 
+test("un salto de línea no cuenta como texto que quedó en la caja", () => {
+  assert.equal(boxRemainder(""), "vacio");
+  assert.equal(boxRemainder("\n"), "10");
+  assert.equal(boxRemainder("hola"), "texto");
+});
+
+test("el POST lento de mensajes se espera y un 500 no queda como enviado", async () => {
+  const posted = await sendOnce("5", "hola");
+  assert.equal(posted.composed, 1);
+  assert.equal(posted.messageId, "300");
+  assert.equal(posted.enters, 0);
+  assert.equal(posted.lines.some((line) => line.includes("post=200")), true);
+  assert.equal(posted.lines.some((line) => line.includes("resto=10")), true);
+
+  const rejected = await sendOnce("0", "hola");
+  assert.equal(rejected.messageId, null);
+  assert.equal(rejected.reason, "no enviado");
+  assert.equal(rejected.lines.some((line) => line.includes("post=500")), true);
+  assert.equal(rejected.lines.some((line) => line.includes("volcado=")), true);
+  assert.equal(rejected.lines.some((line) => line.includes("estado=pendiente")), false);
+});
+
 test("el contador de red se vacía al cerrar o al caducar", () => {
   const pending = createPendingNet(1_000);
   const first = {};
@@ -187,7 +209,7 @@ test("los volcados viejos se borran y no se guardan más de 20", async () => {
   }
 });
 
-async function sendOnce(threadKey: string, body: string, settleMs?: number): Promise<{ composed: number; messageId: string | null; enters: number }> {
+async function sendOnce(threadKey: string, body: string, settleMs?: number): Promise<{ composed: number; messageId: string | null; enters: number; reason: string | null; lines: string[] }> {
   const fixture = await startFixture();
   const browser = await chromium.launch({ headless: true });
   const lines: string[] = [];
@@ -218,6 +240,8 @@ async function sendOnce(threadKey: string, body: string, settleMs?: number): Pro
       composed: fixture.composed.length,
       messageId: sent.messageId,
       enters: lines.filter((line) => line.includes("[fanlink:send] enter")).length,
+      reason: sent.reason,
+      lines,
     };
   } finally {
     console.info = previous;
