@@ -4,7 +4,9 @@ import { assertWorkspaceChange, emptyWorkspace, WorkspaceAccessError, type TeamA
 import { pct } from "./format.ts";
 import {
   alertsInScope,
+  creatorIdsForReads,
   dashboardCreatorIds,
+  readsScopeFor,
   buildSummary,
   defaultDashboardConfig,
   moveWidget,
@@ -93,6 +95,14 @@ test("el servidor del dashboard recorta las cuentas del chatter", () => {
   assert.deepEqual(dashboardCreatorIds(chatter, accounts), ["c-alba"]);
   assert.deepEqual(dashboardCreatorIds(owner, accounts), ["c-alba", "c-nora"]);
   assert.deepEqual(dashboardCreatorIds(null, accounts), []);
+  assert.equal(readsScopeFor(chatter, "chat"), "dashboard");
+  assert.equal(readsScopeFor(chatter, "dashboard"), "dashboard");
+  assert.equal(readsScopeFor(null, "chat"), "dashboard");
+  assert.equal(readsScopeFor(owner, "chat"), "chat");
+  assert.equal(readsScopeFor(owner, undefined), "dashboard");
+  assert.deepEqual(creatorIdsForReads(chatter, accounts, "chat"), ["c-alba"]);
+  assert.deepEqual(creatorIdsForReads(owner, accounts, "chat"), ["c-alba", "c-nora"]);
+  assert.deepEqual(creatorIdsForReads(chatter, accounts, "dashboard"), ["c-alba"]);
 });
 
 test("las alertas se quedan en las cuentas visibles", () => {

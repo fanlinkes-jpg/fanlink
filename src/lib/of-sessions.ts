@@ -206,7 +206,8 @@ export const listCreatorReads = createServerFn({ method: "GET" })
   .validator((input: { scope?: "dashboard" | "chat" } | undefined) => input ?? {})
   .handler(async ({ context, data }): Promise<CreatorReadList> => {
     const { listCreatorReadViews } = await import("./of-sessions-runtime.server");
-    return listCreatorReadViews(context.userId, data.scope === "chat" ? "chat" : "dashboard");
+    // El rol decide el alcance. Un chatter que pida "chat" no sale de sus cuentas.
+    return listCreatorReadViews(context.userId, data.scope);
   });
 
 export const setSyncInterval = createServerFn({ method: "POST" })

@@ -193,6 +193,65 @@ test("el chatter no recibe páginas vacías ni la cuenta de otra persona", async
   }
 });
 
+test("una 0032 anterior recibe first_seen_at", async () => {
+  const pg = new PGlite();
+  try {
+    await pg.exec(`
+      create table of_notification (
+        creator_id text not null,
+        notification_key text not null,
+        kind text not null,
+        body text,
+        fan_key text,
+        fan_name text,
+        thread_key text,
+        amount_cents integer,
+        occurred_at timestamptz,
+        pending boolean not null default false,
+        synced_at timestamptz not null,
+        origin text not null default 'onlyfans',
+        primary key (creator_id, notification_key)
+      );
+    `);
+    await pg.exec(
+      "insert into of_notification (creator_id, notification_key, kind, synced_at) values ('c-alba', 'vieja', 'like', '2026-08-01T00:00:00Z')",
+    );
+    await pg.exec(await readFile(path.join(root, "migrations/0032_notifications.sql"), "utf8"));
+    await pg.exec(await readFile(path.join(root, "migrations/0032_notifications.sql"), "utf8"));
+    const row = await pg.query<{ first_seen_at: Date | string }>(
+      "select first_seen_at from of_notification where notification_key = 'vieja'",
+    );
+    assert.equal(new Date(row.rows[0]?.first_seen_at ?? "").toISOString(), "2026-08-01T00:00:00.000Z");
+  } finally {
+    await pg.close();
+  }
+});
+
+test("0034 añade first_seen_at a una tabla que ya existía", async () => {
+  const pg = new PGlite();
+  try {
+    await pg.exec(`
+      create table of_notification (
+        creator_id text not null,
+        notification_key text not null,
+        kind text not null,
+        synced_at timestamptz not null,
+        primary key (creator_id, notification_key)
+      );
+    `);
+    await pg.exec(
+      "insert into of_notification (creator_id, notification_key, kind, synced_at) values ('c-alba', 'vieja', 'like', '2026-08-01T00:00:00Z')",
+    );
+    await pg.exec(await readFile(path.join(root, "migrations/0034_notification_first_seen.sql"), "utf8"));
+    const row = await pg.query<{ first_seen_at: Date | string }>(
+      "select first_seen_at from of_notification where notification_key = 'vieja'",
+    );
+    assert.equal(new Date(row.rows[0]?.first_seen_at ?? "").toISOString(), "2026-08-01T00:00:00.000Z");
+  } finally {
+    await pg.close();
+  }
+});
+
 test("un aviso sin fecha caduca desde la primera vez que se vio", async () => {
   const { pg, sql } = await database();
   try {

@@ -92,7 +92,7 @@ Fragilidad: si OnlyFans cambia la ruta del chat, la caja, el botón Send o los c
 
 ## Notificaciones de cada cuenta
 
-Un bucle aparte abre `https://onlyfans.com/my/notifications` cada 30 minutos, una cuenta cada vez, y escucha el JSON que esa página pide. No llama a un endpoint por su cuenta. Hace un solo desplazamiento, con 8 segundos de pausa. Si otra lectura usa el perfil, espera el turno. La migración `0032_notifications.sql` guarda el aviso y quién lo marcó leído. Un chatter ve compras, propinas y suscripciones de los fans de sus cuentas, con el importe del fan. Las ganancias, el payout y el saldo de la agencia, y los tipos desconocidos, solo los ve la dueña. Lo que tiene fecha y supera 90 días se borra en la siguiente pasada. Abrir la campana no lanza la visita.
+Un bucle aparte abre `https://onlyfans.com/my/notifications` cada 30 minutos, una cuenta cada vez, y escucha el JSON que esa página pide. No llama a un endpoint por su cuenta. Hace un solo desplazamiento, con 8 segundos de pausa. Si otra lectura usa el perfil, espera el turno. La migración `0032_notifications.sql` guarda el aviso y quién lo marcó leído. Un chatter ve compras, propinas y suscripciones de los fans de sus cuentas, con el importe del fan. Las ganancias, el payout y el saldo de la agencia, y los tipos desconocidos, solo los ve la dueña. Lo que tiene fecha y supera 90 días se borra en la siguiente pasada. Un aviso sin fecha cuenta esos 90 días desde `first_seen_at`, la primera vez que se guardó. Esa marca no se mueve si el aviso vuelve. Abrir la campana no lanza la visita.
 
 ## Avisos de WhatsApp
 

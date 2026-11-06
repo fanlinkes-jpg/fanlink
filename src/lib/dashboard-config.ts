@@ -274,7 +274,31 @@ export function alertLabelsFor(
   return [...labels];
 }
 
-/** El dashboard recorta por cuenta asignada. El chat no: eso sigue en creatorIdsForChats. */
+/**
+ * Alcance de las lecturas. El navegador puede pedir "chat", pero solo la dueña
+ * lo recibe. Un chatter se queda en las cuentas asignadas.
+ */
+export function readsScopeFor(
+  access: { role: "owner" | "member" } | null,
+  requested: "dashboard" | "chat" | undefined,
+): "dashboard" | "chat" {
+  if (access?.role !== "owner") return "dashboard";
+  return requested === "chat" ? "chat" : "dashboard";
+}
+
+/** Ids que devuelve listCreatorReadViews. Un chatter que pide "chat" no sale de sus cuentas. */
+export function creatorIdsForReads(
+  access: { role: "owner" | "member"; creatorIds: string[] } | null,
+  accounts: Array<{ creatorId: string | null }>,
+  requested: "dashboard" | "chat" | undefined,
+): string[] {
+  if (readsScopeFor(access, requested) === "chat") {
+    return [...new Set(accounts.flatMap((account) => (account.creatorId ? [account.creatorId] : [])))];
+  }
+  return dashboardCreatorIds(access, accounts);
+}
+
+/** El dashboard y un chatter recortan por cuenta asignada. */
 export function dashboardCreatorIds(
   access: { role: "owner" | "member"; creatorIds: string[] } | null,
   accounts: Array<{ creatorId: string | null }>,

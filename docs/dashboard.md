@@ -70,6 +70,8 @@ En esta fase el menú abre la pantalla, enseña los widgets configurados y deja 
 
 La pantalla Fans usará los segmentos ya definidos en `fanProfiles`. La de Chatters usará la atribución de `chatterReports` (una venta con un solo autor) y la media de primera respuesta. Hasta que esas pantallas lean esas funciones, no muestran un número.
 
+Analítica (`AnalyticsPage` en `src/features/control-pages.tsx`) y Creadoras (`CreatorsPage`, en el mismo fichero) llaman a `useOfReads()` sin argumento. Ese es el alcance del dashboard, no el de la bandeja. El servidor lo decide por el rol: un chatter solo recibe fans, gasto del fan y estado de sincronización de las cuentas asignadas, aunque el navegador pida `scope: "chat"`. La dueña sí puede pedir el alcance del chat, que cubre todas las cuentas. Las cifras de la agencia siguen en null para un chatter. La bandeja de mensajes pide el alcance de chat, y el servidor no se lo amplía a un chatter.
+
 ## Configuración
 
 La dueña, en Ajustes del dashboard, cambia tres cosas por widget:
@@ -112,7 +114,7 @@ Un chatter ve las notificaciones de las cuentas que tiene asignadas, y en el ser
 
 Marcar como leída es de cada persona, no de la cuenta: si un chatter la marca, la dueña sigue viéndola nueva. El listado va de 50 en 50, y el recorte por rol se hace en la consulta, antes del límite. Lo que tiene fecha y pasa de 90 días se borra en la siguiente escucha. Un aviso sin fecha cuenta esos 90 días desde la primera vez que se vio. Si el filtro de fechas deja fuera avisos sin fecha, salen aparte con el aviso «Sin fecha».
 
-La clave de un aviso sin id es la fecha, el tipo, el fan y el hilo. No usa el texto: si OnlyFans lo cambia, no sale un duplicado. Si la clave pasa de 120 caracteres, el resto es un SHA-256 recortado. Un aviso de agencia o desconocido no pasa después a un tipo que vea el chatter.
+La clave de un aviso sin id es la fecha, el tipo, el fan, el hilo y un SHA-256 recortado del texto normalizado (espacios recortados y unidos, sin cambiar mayúsculas). No guarda el texto entero. Así dos avisos distintos con la misma fecha, tipo, fan e hilo no se juntan. Si OnlyFans edita el texto, la clave cambia y se acepta un duplicado. Sin id y sin fecha no hay clave. Si la clave pasa de 120 caracteres, el resto es otro SHA-256 recortado. La huella sale de `createHash('sha256')` de Node; la campana no la calcula. Un aviso de agencia o desconocido no pasa después a un tipo que vea el chatter.
 
 ### Escucha
 

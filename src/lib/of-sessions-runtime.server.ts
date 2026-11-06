@@ -1,5 +1,5 @@
 import path from "node:path";
-import { assertOwnerForce, canOperateCreator, canSeeAgencyEarnings, creatorIdsForChats, WorkspaceAccessError } from "@/lib/access-policy";
+import { assertOwnerForce, canOperateCreator, creatorIdsForChats, WorkspaceAccessError } from "@/lib/access-policy";
 import { DEV_USER_ID, authConfigured } from "@/lib/auth/verify.server";
 import { getSql } from "@/lib/db";
 import { ensureStaff } from "@/lib/workspace-store";
@@ -19,11 +19,10 @@ import type { Account } from "../../server/of-sessions/types.ts";
 import type { CreatorChatList, CreatorReadList, CreatorReadView, CreatorSessionView } from "./of-sessions.ts";
 import { parseAccountProxy, proxyLabel, readAccountProxy, removeAccountProxy, writeAccountProxy } from "../../server/of-sessions/proxy.ts";
 import { syncAssignments } from "../../server/of-sessions/metrics/assignments.ts";
-import { dashboardAlerts } from "../../server/of-sessions/metrics/dashboard.ts";
+import { dashboardViewFor } from "../../server/of-sessions/metrics/dashboard.ts";
 import { accountPause, blockKind, listAccountPauses, noteAccountBlock } from "../../server/of-sessions/sync/backoff.ts";
 import { presentTeamMetrics } from "../../server/of-sessions/metrics/present-team.ts";
-import { changeRatio, creatorReport } from "@/lib/creator-metrics";
-import { dashboardCreatorIds } from "@/lib/dashboard-config";
+import { creatorIdsForReads } from "@/lib/dashboard-config";
 import { deliverFanAlerts } from "../../server/of-sessions/notify/deliver.ts";
 import { chatIntervalMinFromEnv } from "../../server/of-sessions/sync/chats.ts";
 import { chatIntervalMinutes, inboxIsOpen, activeThreadWatches } from "../../server/of-sessions/sync/live.ts";
@@ -457,12 +456,14 @@ export async function inspectCreatorSession(userId: string, creatorId: string): 
   return view;
 }
 
-export async function listCreatorReadViews(userId: string, scope: "dashboard" | "chat" = "dashboard"): Promise<CreatorReadList> {
+export async function listCreatorReadViews(
+  userId: string,
+  requested: "dashboard" | "chat" | undefined = "dashboard",
+): Promise<CreatorReadList> {
   const access = await accessFor(userId);
   const sessions = await getOfSessionManager();
   const accounts = await sessions.listAccounts();
-  const allIds = accounts.flatMap((account) => (account.creatorId ? [account.creatorId] : []));
-  const creatorIds = scope === "chat" ? creatorIdsForChats(access, allIds) : dashboardCreatorIds(access, accounts);
+  const creatorIds = creatorIdsForReads(access, accounts, requested);
   const sql = await getSql();
   const rows = await listCreatorReads(sql, creatorIds);
   const running = new Set((await getOfSessionManager()).readingIds());
@@ -677,65 +678,15 @@ export async function listDashboardView(userId: string): Promise<{
 }> {
   const access = await accessFor(userId);
   const accounts = await (await getOfSessionManager()).listAccounts();
-  const ids = dashboardCreatorIds(access, accounts);
-  const visible = accounts.filter((account) => account.creatorId && ids.includes(account.creatorId));
+  const ids = creatorIdsForReads(access, accounts, "dashboard");
   const reads = await listCreatorReads(await getSql(), ids);
-  const byCreator = new Map(reads.map((row) => [row.creatorId, row]));
-  const owner = access.role === "owner";
-  const now = new Date();
-  const bundle = {
-    now,
-    earningsSynced: reads.some((row) => row.earningsSyncedAt),
-    fansSynced: reads.some((row) => row.fansSyncedAt),
-    transactions: owner ? reads.flatMap((row) => row.transactions) : [],
-    earnings: owner ? reads.flatMap((row) => row.earnings) : [],
-    fans: reads.flatMap((row) => row.fans),
-  };
-  const day = creatorReport({ ...bundle, period: "day" });
-  const month = creatorReport({ ...bundle, period: "month" });
-  const whales = reads.flatMap((row) =>
-    row.fans
-      .filter((fan) => fan.renewAuto === false && fan.spentCents != null && fan.spentCents >= 10_000)
-      .map((fan) => fan.displayName ?? fan.handle ?? fan.fanKey),
-  );
-  const drops = owner
-    ? visible.flatMap((account) => {
-        const read = account.creatorId ? byCreator.get(account.creatorId) : undefined;
-        if (!read) return [];
-        const report = creatorReport({
-          now,
-          period: "month",
-          earningsSynced: Boolean(read.earningsSyncedAt),
-          fansSynced: Boolean(read.fansSyncedAt),
-          transactions: read.transactions,
-          earnings: read.earnings,
-          fans: read.fans,
-        });
-        const ratio = changeRatio(report.grossCents, report.previousGrossCents);
-        if (ratio == null || ratio >= 0) return [];
-        return [{ name: account.label }];
-      })
-    : [];
-  return {
-    role: access.role,
-    dayGrossCents: canSeeAgencyEarnings(access) ? day.grossCents : null,
-    monthGrossCents: canSeeAgencyEarnings(access) ? month.grossCents : null,
-    activeFans: month.activeFans,
-    alerts: dashboardAlerts({
-      sessions: visible.map((account) => ({ name: account.label, status: account.status, connection: account.connection })),
-      syncs: visible.flatMap((account) => {
-        const read = account.creatorId ? byCreator.get(account.creatorId) : undefined;
-        if (!read) return [];
-        return [{ name: account.label, status: read.lastStatus, reason: read.lastReason }];
-      }),
-      whalesAtRisk: owner ? whales : [],
-      drops,
-      pauses: listAccountPauses().flatMap((pause) => {
-        const account = visible.find((item) => item.id === pause.accountId);
-        return account ? [{ name: account.label, reason: pause.reason }] : [];
-      }),
-    }),
-  };
+  return dashboardViewFor({
+    access,
+    accounts,
+    reads,
+    pauses: listAccountPauses(),
+    now: new Date(),
+  });
 }
 
 export async function listTeamMetricViews(userId: string): Promise<Array<{

@@ -9,6 +9,7 @@ import {
   mergeNotifications,
   notificationKey,
   notificationLabels,
+  notificationSha256,
   notificationReadBusy,
   notificationScrolls,
   parseNotificationPayload,
@@ -115,15 +116,44 @@ test("filtra por pestaña, texto y fechas, y cuenta no leídas", () => {
     list: [
       { type: "like", text: "uno", createdAt: "2026-11-05T10:00:00.000Z", user: { id: 7 } },
       { type: "like", text: "dos", createdAt: "2026-11-05T10:00:00.000Z", user: { id: 7 } },
+      { type: "like", text: "  uno  ", createdAt: "2026-11-05T10:00:00.000Z", user: { id: 7 } },
     ],
   });
-  assert.equal(sameTime.length, 1);
+  assert.equal(sameTime.length, 2);
+  assert.equal(sameTime.some((row) => row.key.includes("uno") || row.key.includes("dos")), false);
+  const spaced = notificationKey({
+    id: null,
+    kind: "like",
+    rawType: "like",
+    occurredAt: "2026-11-05T10:00:00.000Z",
+    fanKey: "7",
+    threadKey: null,
+    body: "uno   dos",
+  });
+  const tight = notificationKey({
+    id: null,
+    kind: "like",
+    rawType: "like",
+    occurredAt: "2026-11-05T10:00:00.000Z",
+    fanKey: "7",
+    threadKey: null,
+    body: "uno dos",
+  });
+  assert.equal(spaced, tight);
+  assert.equal(spaced?.includes("uno"), false);
+  const edited = parseNotificationPayload({
+    list: [{ type: "like", text: "uno retocado", createdAt: "2026-11-05T10:00:00.000Z", user: { id: 7 } }],
+  });
+  assert.notEqual(edited[0]?.key, sameTime.find((row) => row.body === "uno")?.key);
   const longId = `${"a".repeat(130)}x`;
   const longA = notificationKey({ id: longId, kind: "like", rawType: "like", occurredAt: null, fanKey: null, threadKey: null });
   const longB = notificationKey({ id: `${"a".repeat(130)}y`, kind: "like", rawType: "like", occurredAt: null, fanKey: null, threadKey: null });
   const digest = createHash("sha256").update(longId).digest("hex").slice(0, 32);
   assert.equal(longA, `${longId.slice(0, 80)}\u001f${digest}`);
-  assert.equal(createHash("sha256").update("abc").digest("hex"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+  assert.equal(notificationSha256("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+  assert.equal(notificationSha256(""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+  assert.equal(notificationSha256("abc"), createHash("sha256").update("abc").digest("hex"));
+  assert.equal(notificationSha256(""), createHash("sha256").update("").digest("hex"));
   assert.notEqual(longA, longB);
   assert.equal(decodeNotificationCursor("no-es-json"), null);
   assert.equal(decodeNotificationCursor('{"at":"ayer","key":"x"}'), null);
