@@ -14,13 +14,16 @@ export const BROWSER_FINGERPRINT = {
   timezoneId: "Europe/Madrid",
 } as const;
 
+export type BrowserProxy = { server: string; username?: string; password?: string };
+
 export interface ManagedBrowser {
-  newContext(options: { storageState: string }): Promise<BrowserContext>;
+  newContext(options: { storageState: string; proxy?: BrowserProxy | null }): Promise<BrowserContext>;
   close(): Promise<void>;
 }
 
 export interface PersistentLaunchOptions {
   headless: boolean;
+  proxy?: BrowserProxy | null;
 }
 
 export interface BrowserFactory {
@@ -40,6 +43,7 @@ export function createPlaywrightFactory(): BrowserFactory {
         viewport: BROWSER_FINGERPRINT.viewport,
         locale: BROWSER_FINGERPRINT.locale,
         timezoneId: BROWSER_FINGERPRINT.timezoneId,
+        ...(options.proxy ? { proxy: options.proxy } : {}),
       });
     },
     async launch() {
@@ -52,6 +56,7 @@ export function createPlaywrightFactory(): BrowserFactory {
             viewport: BROWSER_FINGERPRINT.viewport,
             locale: BROWSER_FINGERPRINT.locale,
             timezoneId: BROWSER_FINGERPRINT.timezoneId,
+            ...(options.proxy ? { proxy: options.proxy } : {}),
           });
         },
         close() {

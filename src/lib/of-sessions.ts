@@ -30,6 +30,7 @@ export type CreatorSessionView = {
   readsBlocked: boolean;
   lastCheckedAt: string | null;
   lastError: string | null;
+  proxyLabel: string | null;
 };
 
 export type ConnectCreatorInput = {
@@ -195,6 +196,14 @@ export type DashboardView = {
   activeFans: number | null;
   alerts: Array<{ kind: "session" | "sync" | "whale" | "drop"; text: string }>;
 };
+
+export const setCreatorProxy = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string; proxy: { server: string; username?: string; password?: string } | null }) => input)
+  .handler(async ({ context, data }): Promise<CreatorSessionView> => {
+    const { setCreatorProxy: save } = await import("./of-sessions-runtime.server");
+    return save(context.userId, data.creatorId, data.proxy);
+  });
 
 export const listDashboard = createServerFn({ method: "GET" })
   .middleware([authMiddleware])

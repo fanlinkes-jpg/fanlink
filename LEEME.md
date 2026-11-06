@@ -146,6 +146,8 @@ Con Postgres (`DATABASE_URL`) la tabla persiste. Sin esa variable el CRM usa el 
 
 La ventana de login no es headless. Comprobar, Sincronizar y Chats reabren el mismo perfil de Chromium (`data/profiles/<cuenta>`) con el mismo user agent, viewport, idioma `es-ES` y zona `Europe/Madrid`, y el mismo modo visible o headless que Conectar. No basta el archivo de cookies: OnlyFans puede tratar un navegador distinto como invitado y pedir login (`users/me` sin username, `webauthn/login` o `/posts/login`). La sesión solo se guarda cuando `users/me` trae un username. Si pide iniciar sesión, Conexión pasa a **Caducada** y el texto es «OnlyFans pide iniciar sesión: pulsa Reconectar». Las rutas vistas quedan en el log del servidor.
 
+El proxy de cada cuenta, Postgres y WhatsApp en un VPS están en `DEPLOY.md`.
+
 ## Pruebas
 
 ```bash

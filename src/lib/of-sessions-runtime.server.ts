@@ -17,6 +17,7 @@ import { DbAccountStore } from "../../server/of-sessions/store/db-account-store.
 import { createMirroringStore } from "../../server/of-sessions/store/mirroring-store.ts";
 import type { Account } from "../../server/of-sessions/types.ts";
 import type { CreatorChatList, CreatorReadList, CreatorReadView, CreatorSessionView } from "./of-sessions.ts";
+import { parseAccountProxy, proxyLabel, readAccountProxy, removeAccountProxy, writeAccountProxy } from "../../server/of-sessions/proxy.ts";
 import { syncAssignments } from "../../server/of-sessions/metrics/assignments.ts";
 import { dashboardAlerts } from "../../server/of-sessions/metrics/dashboard.ts";
 import { chatterReports } from "../../server/of-sessions/metrics/team.ts";
@@ -191,12 +192,36 @@ export async function listCreatorSessionViews(userId: string): Promise<CreatorSe
   const access = await accessFor(userId);
   const sessions = await getOfSessionManager();
   const accounts = await sessions.listAccounts();
-  return accounts.flatMap((account) => {
+  const config = loadCrmSessionConfig();
+  const views = accounts.flatMap((account) => {
     const view = toView(account);
     if (!view) return [];
     if (access.role !== "owner" && !access.creatorIds.includes(view.creatorId)) return [];
     return [view];
   });
+  if (!config.sessionKey) return views;
+  return Promise.all(views.map(async (view) => {
+    const stored = await readAccountProxy(path.join(config.dataDir, "proxies", `${view.accountId}.bin`), config.sessionKey!);
+    return { ...view, proxyLabel: proxyLabel(stored) };
+  }));
+}
+
+export async function setCreatorProxy(userId: string, creatorId: string, input: unknown): Promise<CreatorSessionView> {
+  const access = await accessFor(userId);
+  if (access.role !== "owner") throw new WorkspaceAccessError("Solo la dueña guarda el proxy.");
+  const id = parseCreatorId(creatorId);
+  const sessions = await getOfSessionManager();
+  const account = (await sessions.listAccounts()).find((item) => item.creatorId === id);
+  if (!account) throw new Error("No hay sesión para esa creadora.");
+  const config = loadCrmSessionConfig();
+  if (!config.sessionKey) throw new Error("Falta FANLINK_SESSION_KEY.");
+  const file = path.join(config.dataDir, "proxies", `${account.id}.bin`);
+  if (input == null) await removeAccountProxy(file);
+  else await writeAccountProxy(file, parseAccountProxy(input), config.sessionKey);
+  const view = toView(account);
+  if (!view) throw new Error("La sesión no está ligada a una creadora");
+  const stored = await readAccountProxy(file, config.sessionKey);
+  return { ...view, proxyLabel: proxyLabel(stored) };
 }
 
 export async function connectCreator(userId: string, input: unknown): Promise<CreatorSessionView> {
@@ -582,5 +607,6 @@ function toView(account: Account): CreatorSessionView | null {
     readsBlocked: account.identityState === "mismatch",
     lastCheckedAt: account.lastCheckedAt,
     lastError: publicSyncReason(account.lastError),
+    proxyLabel: null,
   };
 }

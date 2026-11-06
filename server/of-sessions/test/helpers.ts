@@ -44,6 +44,7 @@ export function recordingFactory(events: string[]): BrowserFactory {
       events.push(
         `persistent:${String(options.headless)}:${path.basename(userDataDir)}`,
       );
+      if (options.proxy) events.push(`proxy:${options.proxy.server}`);
       return chromium.launchPersistentContext(userDataDir, {
         headless: options.headless,
         viewport: { width: 1100, height: 700 },
@@ -55,6 +56,7 @@ export function recordingFactory(events: string[]): BrowserFactory {
       return {
         async newContext(options) {
           events.push(`context:${path.basename(options.storageState)}`);
+          if (options.proxy) events.push(`proxy:${options.proxy.server}`);
           return browser.newContext({ storageState: options.storageState });
         },
         async close() {

@@ -37,6 +37,7 @@ import {
   type ManagedBrowser,
 } from "./browser-factory.ts";
 import { assertLoginDisplay } from "./display.ts";
+import { readAccountProxy } from "../proxy.ts";
 import { preparePrivateDir } from "./private-dir.ts";
 import type { SiteAdapter } from "./site.ts";
 import { hasLiveCookies } from "./site.ts";
@@ -549,6 +550,7 @@ export class SessionManager {
         profileDir,
         {
           headless: this.options.config.headlessLogin,
+          proxy: await this.accountProxy(accountId),
         },
       );
       await chmod(profileDir, 0o700);
@@ -914,9 +916,11 @@ export class SessionManager {
       const info = await stat(profile);
       if (info.isDirectory()) {
         const headless = this.options.config.headlessLogin;
-        console.info(`[fanlink:navegador] perfil=${accountId} headless=${String(headless)}`);
+        const proxy = await this.accountProxy(accountId);
+        console.info(`[fanlink:navegador] perfil=${accountId} headless=${String(headless)} proxy=${proxy ? "si" : "no"}`);
         const context = await this.options.browsers.launchPersistentContext(profile, {
           headless,
+          proxy,
         });
         await this.seedPersistentProfile(context, accountId);
         this.openContexts.add(context);
@@ -928,7 +932,7 @@ export class SessionManager {
     const browser = await this.backgroundBrowser();
     const plainPath = await this.materializePlainStorage(accountId);
     try {
-      const context = await browser.newContext({ storageState: plainPath });
+      const context = await browser.newContext({ storageState: plainPath, proxy: await this.accountProxy(accountId) });
       this.openContexts.add(context);
       return context;
     } finally {
@@ -1018,6 +1022,18 @@ export class SessionManager {
       if (error instanceof SessionCryptoError) throw error;
       return "expired";
     }
+  }
+
+  private async accountProxy(accountId: string) {
+    const key = this.options.config.sessionKey;
+    if (!key) return null;
+    const stored = await readAccountProxy(path.join(this.options.config.dataDir, "proxies", `${accountId}.bin`), key);
+    if (!stored) return null;
+    return {
+      server: stored.server,
+      ...(stored.username ? { username: stored.username } : {}),
+      ...(stored.password ? { password: stored.password } : {}),
+    };
   }
 
   private profileDir(accountId: string): string {
