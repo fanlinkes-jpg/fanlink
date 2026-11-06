@@ -173,6 +173,8 @@ export type CreatorChatList = {
     body: string;
     scheduledAt: string | null;
     authorName: string | null;
+    status: "pending" | "error";
+    errorReason: string | null;
   }>;
   notes: Array<{
     creatorId: string;
@@ -280,6 +282,21 @@ export const saveFanProfile = createServerFn({ method: "POST" })
   .handler(async ({ context, data }) => {
     const { saveFanProfileView } = await import("./of-sessions-runtime.server");
     return saveFanProfileView(context.userId, data);
+  });
+
+export const chatSendAccess = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }): Promise<{ creatorIds: string[] }> => {
+    const { chatSendAccessView } = await import("./of-sessions-runtime.server");
+    return chatSendAccessView(context.userId);
+  });
+
+export const sendChatMessage = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null }) => input)
+  .handler(async ({ context, data }) => {
+    const { sendChatMessageView } = await import("./of-sessions-runtime.server");
+    return sendChatMessageView(context.userId, data);
   });
 
 export const recordChatOutbound = createServerFn({ method: "POST" })

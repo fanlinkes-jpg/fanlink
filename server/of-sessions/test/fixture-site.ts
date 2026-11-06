@@ -24,6 +24,8 @@ export interface Fixture {
   invalidate(): void;
   pushFanMessage(text: string): void;
   sent: Array<{ fan: string; body: string; price: string }>;
+  composed: Array<{ body: string; price: string; file: string }>;
+  confirmSends: { on: boolean };
   close(): Promise<void>;
 }
 
@@ -88,6 +90,36 @@ function dashboardHtml(mode: FixtureMode): string {
   }
 }
 
+function chatComposerHtml(): string {
+  return pageHtml(
+    "Hilo",
+    "",
+    `<textarea data-fanlink-composer aria-label="Message"></textarea>
+     <button type="button" data-fanlink-price aria-label="Price">Price</button>
+     <button type="button" data-fanlink-send aria-label="Send">Send</button>
+     <input data-fanlink-file type="file" aria-label="Add media" />
+     <div id="price-box" role="dialog" aria-label="Message price" hidden>
+       <input data-fanlink-amount aria-label="Price amount" placeholder="Free" />
+       <button type="button" data-fanlink-price-save>Save</button>
+     </div>
+     <input type="hidden" data-fanlink-price-value value="" />
+     <script>
+       document.querySelector("[data-fanlink-price]").onclick = () => { document.getElementById("price-box").hidden = false; };
+       document.querySelector("[data-fanlink-price-save]").onclick = () => {
+         document.querySelector("[data-fanlink-price-value]").value = document.querySelector("[data-fanlink-amount]").value;
+         document.getElementById("price-box").hidden = true;
+       };
+       document.querySelector("[data-fanlink-send]").onclick = async () => {
+         const body = document.querySelector("[data-fanlink-composer]").value;
+         const price = document.querySelector("[data-fanlink-price-value]").value;
+         const file = document.querySelector("[data-fanlink-file]").files[0];
+         await fetch("/fixture/compose", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ body, price, file: file ? file.name : "" }) });
+         await fetch("/api2/v2/chats/7/messages?order=desc");
+       };
+     </script>`,
+  );
+}
+
 const blankHtml = `<!doctype html>
 <html lang="es"><head><meta charset="utf-8"><title>Blank</title></head><body>blank</body></html>`;
 
@@ -96,8 +128,10 @@ export async function startFixture(mode: FixtureMode = "users-me"): Promise<Fixt
   const hits: FixtureHits = { login: 0, session: 0, dashboard: 0 };
   const extraMessages: Array<{ id: number; text: string; at: string }> = [];
   const sent: Array<{ fan: string; body: string; price: string }> = [];
+  const composed: Array<{ body: string; price: string; file: string }> = [];
+  const confirmSends = { on: true };
   const server = createServer((req, res) => {
-    void handle(req, res, () => epoch, hits, mode, extraMessages, sent).catch(() => {
+    void handle(req, res, () => epoch, hits, mode, extraMessages, sent, composed, confirmSends).catch(() => {
       if (!res.headersSent) res.writeHead(500);
       res.end();
     });
@@ -118,6 +152,8 @@ export async function startFixture(mode: FixtureMode = "users-me"): Promise<Fixt
       epoch += 1;
     },
     sent,
+    composed,
+    confirmSends,
     pushFanMessage(text: string) {
       extraMessages.push({
         id: 200 + extraMessages.length,
@@ -140,6 +176,8 @@ async function handle(
   mode: FixtureMode,
   extraMessages: Array<{ id: number; text: string; at: string }>,
   sent: Array<{ fan: string; body: string; price: string }>,
+  composed: Array<{ body: string; price: string; file: string }>,
+  confirmSends: { on: boolean },
 ): Promise<void> {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   if (req.method === "GET" && url.pathname === "/login") {
@@ -331,9 +369,33 @@ async function handle(
             createdAt: item.at,
             fromUser: { id: 7 },
           })),
+          ...(confirmSends.on ? composed.map((item, index) => ({
+            id: 300 + index,
+            text: item.body,
+            createdAt: "2026-11-06T12:00:00.000Z",
+            fromUser: { id: 42 },
+            price: item.price ? Number(item.price) : undefined,
+            isMine: true,
+          })) : []),
         ],
       }),
     );
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/my/chats/chat/7") {
+    if (!accepted(req, epoch())) {
+      redirect(res, "/login");
+      return;
+    }
+    html(res, chatComposerHtml());
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/fixture/compose") {
+    const raw = await readBodyText(req);
+    const body = JSON.parse(raw) as { body?: string; price?: string; file?: string };
+    composed.push({ body: body.body ?? "", price: body.price ?? "", file: body.file ?? "" });
+    res.writeHead(204);
+    res.end();
     return;
   }
   if (req.method === "GET" && url.pathname === "/my/chats") {

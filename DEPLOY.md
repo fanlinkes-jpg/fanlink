@@ -62,11 +62,23 @@ export FANLINK_WHATSAPP_PHONE_ID=
 
 `FANLINK_ALERT_QUIET_MIN` es el mínimo entre avisos del mismo fan. `FANLINK_ALERT_MODE` vale `all` (defecto: todos los chatters con avisos), `assigned` (solo quien tiene la cuenta) o `users` (la lista `FANLINK_ALERT_USERS`, ids separados por comas). El teléfono de cada miembro se guarda en Equipo.
 
-## 5. Tiempo real del chat
+## 5. Envío real de un chat
+
+Sigue apagado si no pones las dos variables. No cambia `FANLINK_SESSION_KEY`. Los masivos de Campañas no usan esta puerta: siguen sin salir a OnlyFans.
+
+```bash
+export FANLINK_ENABLE_SEND=true
+export FANLINK_SEND_ALLOW_ACCOUNTS=9ikis52,@bigpoppa1111
+export FANLINK_SEND_PER_MINUTE=4
+```
+
+Solo esa cuenta (el id `9ikis52` o el handle `@bigpoppa1111`, el que tenga guardado la ficha o la comprobación) puede pulsar Enviar. El servidor rechaza cualquier otra aunque la petición llegue igual. Hace falta el perfil de Chromium de Conectar. El envío abre `/my/chats/chat/{id}`, escribe en la caja y pulsa Send; el precio pasa por el modal nativo. No llama `api2` firmado. Si OnlyFans no devuelve el mensaje propio, el borrador queda en error y no se reintenta.
+
+## 6. Tiempo real del chat
 
 `GET /api/chat-live` es un stream SSE. El proxy no puede acumular la respuesta: nginx necesita `proxy_buffering off;` y la app ya manda `X-Accel-Buffering: no`. El timeout de lectura tiene que aguantar la conexión abierta (minutos, no el timeout corto de una API). Sin eso el navegador se entera del mensaje tarde o la conexión se corta.
 
-`npm run db:migrate` aplica también `0019_chat_author.sql` (autor del mensaje y borradores salientes) y `0020_chat_card.sql` (ficha del fan).
+`npm run db:migrate` aplica también `0019_chat_author.sql` (autor del mensaje y borradores salientes), `0020_chat_card.sql` (ficha del fan) y `0025_outbound_send.sql` (enviado o error del borrador).
 
 ## 6. Masivos
 
