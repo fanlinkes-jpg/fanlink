@@ -67,6 +67,8 @@ test("sin FANLINK_ENABLE_SEND no hay teclado, Enter ni archivos", () => {
   assert.equal(liveControlAllowed(false, "control", "wheel", "scroll"), true);
   assert.equal(liveControlAllowed(true, "view", "key"), false);
   assert.equal(liveRequestAllowed("https://onlyfans.com/api2/v2/chats/1/messages", "POST", false), false);
+  assert.equal(liveRequestAllowed("https://onlyfans.com/api2/v2/chats/1/users", "POST", false), false);
+  assert.equal(liveRequestAllowed("https://onlyfans.com/api2/v2/chats/1/users", "PUT", false), false);
   assert.equal(liveRequestAllowed("https://onlyfans.com/api2/v2/chats/1/messages", "DELETE", false), false);
   assert.equal(liveRequestAllowed("https://onlyfans.com/api2/v2/chats/1/likes", "PUT", false), false);
   assert.equal(liveRequestAllowed("https://onlyfans.com/api2/v2/chats/1/messages", "POST", true), true);
@@ -163,6 +165,8 @@ test("un mensaje viejo no cambia de autor", async () => {
     existingAuthorId: null,
     gestureAt: null,
     now: "2026-11-06T12:00:06.000Z",
+    body: "hola",
+    draftBody: "hola",
   }), false);
   assert.equal(liveSendMatchesGesture({
     messageId: "m-nuevo",
@@ -171,6 +175,18 @@ test("un mensaje viejo no cambia de autor", async () => {
     existingAuthorId: null,
     gestureAt: "2026-11-06T12:00:04.000Z",
     now: "2026-11-06T12:00:06.000Z",
+    body: "hola",
+    draftBody: "adios",
+  }), false);
+  assert.equal(liveSendMatchesGesture({
+    messageId: "m-nuevo",
+    sentAt: "2026-11-06T12:00:05.000Z",
+    controlSince: "2026-11-06T12:00:00.000Z",
+    existingAuthorId: null,
+    gestureAt: "2026-11-06T12:00:04.000Z",
+    now: "2026-11-06T12:00:06.000Z",
+    body: "hola",
+    draftBody: "Hola",
   }), true);
 
   const calls: string[] = [];
@@ -195,6 +211,7 @@ test("un mensaje viejo no cambia de autor", async () => {
     controlSince: "2026-11-06T12:00:00.000Z",
     gestureAt: "2026-11-06T12:00:04.000Z",
     observedAt: "2026-11-06T12:00:06.000Z",
+    draftBody: "hola",
   }), false);
   assert.equal(calls.some((text) => text.includes("update of_chat_message")), false);
   assert.equal(calls.some((text) => text.includes("insert into of_chat_outbound")), false);
@@ -220,6 +237,7 @@ test("un mensaje viejo no cambia de autor", async () => {
     controlSince: "2026-11-06T12:00:00.000Z",
     gestureAt: "2026-11-06T12:00:04.000Z",
     observedAt: "2026-11-06T12:00:06.000Z",
+    draftBody: "hola",
   }), true);
   assert.equal(freshCalls.some((text) => text.includes("insert into of_chat_outbound")), true);
   const update = freshCalls.find((text) => text.includes("update of_chat_message"));

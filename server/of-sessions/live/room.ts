@@ -28,6 +28,7 @@ type Room = {
   holder: string | null;
   heldSince: string | null;
   lastGestureAt: string | null;
+  draftBody: string;
   holderUsedAt: number;
   cast: LiveCast | null;
   release: (() => Promise<void>) | null;
@@ -143,6 +144,7 @@ async function ensureRoom(ticket: LiveTicket): Promise<Room> {
     holder: null,
     heldSince: null,
     lastGestureAt: null,
+    draftBody: "",
     holderUsedAt: Date.now(),
     cast: null,
     release: null,
@@ -182,6 +184,8 @@ async function ensureRoom(ticket: LiveTicket): Promise<Room> {
         existingAuthorId: null,
         gestureAt: room.lastGestureAt,
         now: observedAt,
+        body: message.body,
+        draftBody: room.draftBody,
       })) return;
       void import("../../../src/lib/db.ts").then(async ({ getSql }) => attributeLiveSend(await getSql(), {
         id: crypto.randomUUID(),
@@ -197,6 +201,7 @@ async function ensureRoom(ticket: LiveTicket): Promise<Room> {
         controlSince: since,
         gestureAt: room.lastGestureAt,
         observedAt,
+        draftBody: room.draftBody,
       })).catch(() => undefined);
     },
   }).catch(async (error: unknown) => {
@@ -223,6 +228,7 @@ async function onClientMessage(room: Room, viewer: Viewer, raw: string): Promise
   }
   if (!liveControlAllowed(typing, viewer.role, event.type)) return;
   if (typing && event.type === "key" && event.key === "Enter") room.lastGestureAt = new Date().toISOString();
+  if (typing && event.type === "text") room.draftBody = event.text;
   if (event.type === "release") {
     const freed = releaseControl(room.holder, viewer.userId, room.viewers.map((item) => item.userId));
     applyHolder(room, freed.holder);
@@ -252,6 +258,7 @@ function applyHolder(room: Room, holder: string | null): void {
   room.holder = holder;
   room.heldSince = holder ? new Date().toISOString() : null;
   room.lastGestureAt = null;
+  room.draftBody = "";
   room.holderUsedAt = Date.now();
   for (const viewer of room.viewers) {
     viewer.role = holder != null && viewer.userId === holder ? "control" : "view";

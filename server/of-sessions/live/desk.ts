@@ -81,7 +81,9 @@ function liveHostPathAllowed(host: string, path: string): boolean {
 
 function liveWriteBlocked(method: string, path: string, typing: boolean): boolean {
   if (typing || !LIVE_WRITES.has(method.toUpperCase())) return false;
-  return /\/messages(\/|$)/.test(path) || /\/likes?(\/|$)/.test(path) || /ppv|purchase|\/tips?(\/|$)/.test(path);
+  return path === "/my/chats" || path.startsWith("/my/chats/")
+    || path === "/api2/v2/chats" || path.startsWith("/api2/v2/chats/")
+    || path === "/api2/v2/messages" || path.startsWith("/api2/v2/messages/");
 }
 
 /** El mismo filtro, dentro de la página, para pushState, window.open y vistas que no cambian la ruta. */

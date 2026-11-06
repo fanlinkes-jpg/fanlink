@@ -1,4 +1,4 @@
-import { outboundTextDelta, OUTBOUND_TIE_MS, type OutboundDraft } from "./author-match.ts";
+import { normalizeOutboundText, outboundTextDelta, OUTBOUND_TIE_MS, type OutboundDraft } from "./author-match.ts";
 import { newFanEvents, type ChatMessage, type ChatThread, type FanMessageEvent } from "./chats.ts";
 import { decodeMedia, encodeMedia, oldestCursor } from "./history.ts";
 import type { ReadSql } from "./store.ts";
@@ -735,7 +735,7 @@ export function liveSendAttributable(input: {
 
 export const LIVE_GESTURE_WINDOW_MS = 20_000;
 
-/** El mensaje solo se atribuye si el controlador pulsó Enter o hizo clic en esa ventana. */
+/** El mensaje solo se atribuye si el texto coincide y el controlador pulsó Enter o hizo clic en esa ventana. */
 export function liveSendMatchesGesture(input: {
   messageId: string;
   sentAt: string | null;
@@ -743,10 +743,14 @@ export function liveSendMatchesGesture(input: {
   existingAuthorId: string | null;
   gestureAt: string | null;
   now: string;
+  body: string;
+  draftBody: string;
   windowMs?: number;
 }): boolean {
   if (!liveSendAttributable(input)) return false;
   if (!input.gestureAt) return false;
+  const text = normalizeOutboundText(input.body);
+  if (!text || text !== normalizeOutboundText(input.draftBody)) return false;
   const gesture = Date.parse(input.gestureAt);
   const sent = Date.parse(input.sentAt ?? "");
   const now = Date.parse(input.now);
@@ -772,6 +776,7 @@ export async function attributeLiveSend(sql: ReadSql, input: {
   controlSince: string;
   gestureAt: string | null;
   observedAt?: string;
+  draftBody: string;
 }): Promise<boolean> {
   const stored = await sql.query<{ author_id: string | null; sent_at: Date | string | null }>(
     "select author_id, sent_at from of_chat_message where creator_id = $1 and message_key = $2",
@@ -788,6 +793,8 @@ export async function attributeLiveSend(sql: ReadSql, input: {
     existingAuthorId: row?.author_id ?? null,
     gestureAt: input.gestureAt,
     now: input.observedAt ?? input.createdAt,
+    body: input.body,
+    draftBody: input.draftBody,
   })) return false;
   const existing = await sql.query<{ id: string }>(
     "select id from of_chat_outbound where creator_id = $1 and of_message_key = $2",
