@@ -46,6 +46,47 @@ export function matchOutboundAuthor(message: MatchableMessage, drafts: OutboundD
   return { draftId: best.draft.id, authorId: best.draft.authorId };
 }
 
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: "\"",
+  apos: "'",
+  nbsp: " ",
+  hellip: "...",
+  mdash: "-",
+  ndash: "-",
+};
+
+/** Texto comparable: etiquetas, entidades (&amp; y similares) y la variante del emoji. */
+export function normalizeOutboundText(value: string): string {
+  const stripped = value.replace(/<[^>]*>/g, " ");
+  let decoded = stripped;
+  for (let pass = 0; pass < 2; pass += 1) {
+    const next = decoded.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (entity, body: string) => {
+      const token = body.toLowerCase();
+      const code = token.startsWith("#x")
+        ? Number.parseInt(token.slice(2), 16)
+        : token.startsWith("#")
+          ? Number.parseInt(token.slice(1), 10)
+          : null;
+      if (code != null) {
+        if (!Number.isInteger(code) || code < 0 || code > 0x10ffff) return entity;
+        return String.fromCodePoint(code);
+      }
+      return NAMED_ENTITIES[token] ?? entity;
+    });
+    if (next === decoded) break;
+    decoded = next;
+  }
+  return decoded
+    .normalize("NFC")
+    .replace(/[\uFE0E\uFE0F]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
 function normalize(value: string): string {
-  return value.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+  return normalizeOutboundText(value);
 }

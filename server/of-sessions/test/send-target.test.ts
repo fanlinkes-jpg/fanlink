@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { chromium } from "playwright";
-import { boxRemainder, composeChat, createPendingNet, isMessageWrite } from "../send/compose.ts";
+import { boxRemainder, composeChat, createPendingNet, isMessageWrite, sendRouteWarning } from "../send/compose.ts";
 import { navigationNote, pruneSendFailures, publicChatUrl, readFooterNodes, threadIdKind, writeSendFailure } from "../send/targets.ts";
 import { startFixture } from "./fixture-site.ts";
 
@@ -110,6 +110,9 @@ test("marcar como leído no es el POST que envía el mensaje", () => {
   assert.equal(isMessageWrite("POST", "https://onlyfans.com/api2/v2/chats/412874293/messages/read"), false);
   assert.equal(isMessageWrite("PUT", "https://onlyfans.com/api2/v2/chats/412874293/messages"), false);
   assert.equal(isMessageWrite("GET", "https://onlyfans.com/api2/v2/chats/412874293/messages"), false);
+  assert.equal(sendRouteWarning("no"), "ruta-desconocida");
+  assert.equal(sendRouteWarning("200"), null);
+  assert.equal(sendRouteWarning("abierto"), null);
 });
 
 test("un 400 al marcar leído no tira el envío", async () => {

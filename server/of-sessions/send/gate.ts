@@ -1,3 +1,4 @@
+import { normalizeOutboundText } from "../sync/author-match.ts";
 import type { ChatMessage } from "../sync/chats.ts";
 
 export type SendAccount = {
@@ -108,5 +109,5 @@ function normalizeToken(value: string): string {
 }
 
 function normalizeBody(value: string): string {
-  return value.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+  return normalizeOutboundText(value);
 }

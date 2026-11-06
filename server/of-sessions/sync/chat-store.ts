@@ -338,6 +338,57 @@ export type OutboundSyncMessage = {
   priceCents: number | null;
 };
 
+export type OutboundReconcile =
+  | { id: string; action: "sent"; messageKey: string }
+  | { id: string; action: "missing" | "keep" };
+
+/**
+ * Empareja 1 a 1 en todo el lote. El id de OnlyFans gana; el texto desempata
+ * por cercanía y, si dos autores quedan a menos de 60 s, no se lo queda ninguno.
+ * Un mensaje ya casado en la base no vuelve a usarse.
+ */
+export function reconcileOutboundBatch(
+  drafts: ReadonlyArray<OutboundDraft & { errorReason?: string | null }>,
+  messages: readonly OutboundSyncMessage[],
+  now = Date.now(),
+  claimedMessageKeys: ReadonlySet<string> = new Set(),
+): OutboundReconcile[] {
+  const assignments = new Map<string, string>();
+  const used = new Set<string>();
+  const own = messages.filter((message) => !message.fromFan && !claimedMessageKeys.has(message.messageKey));
+  for (const message of own) {
+    const exact = drafts.find((draft) => (
+      !used.has(draft.id)
+      && draft.ofMessageKey != null
+      && draft.ofMessageKey === message.messageKey
+      && draft.threadKey === message.threadKey
+    ));
+    if (!exact) continue;
+    used.add(exact.id);
+    assignments.set(exact.id, message.messageKey);
+  }
+  for (const message of own) {
+    if ([...assignments.values()].includes(message.messageKey)) continue;
+    const pool = drafts.filter((draft) => !used.has(draft.id) && draft.threadKey === message.threadKey);
+    const match = matchOutboundAuthor({
+      messageKey: message.messageKey,
+      threadKey: message.threadKey,
+      fanKey: null,
+      body: message.body,
+      sentAt: message.sentAt,
+      priceCents: message.priceCents,
+    }, pool);
+    if (!match) continue;
+    used.add(match.draftId);
+    assignments.set(match.draftId, message.messageKey);
+  }
+  return drafts.map((draft) => {
+    const messageKey = assignments.get(draft.id);
+    if (messageKey) return { id: draft.id, action: "sent", messageKey };
+    return { id: draft.id, action: outboundMiss(draft, messages, now) };
+  });
+}
+
 /**
  * Primero casa por texto y fecha en el mismo hilo y solo con mensajes propios.
  * Un hilo distinto o un mensaje del fan no lo marcan. Si no casa y el hilo
@@ -348,24 +399,25 @@ export function reconcilePendingOutbound(
   messages: readonly OutboundSyncMessage[],
   now = Date.now(),
 ): { action: "sent"; messageKey: string } | { action: "missing" } | { action: "keep" } {
-  const own = messages.filter((message) => !message.fromFan && message.threadKey === draft.threadKey);
-  const matched = own.find((message) => matchOutboundAuthor({
-    messageKey: message.messageKey,
-    threadKey: message.threadKey,
-    fanKey: null,
-    body: message.body,
-    sentAt: message.sentAt,
-    priceCents: message.priceCents,
-  }, [draft]));
-  if (matched) return { action: "sent", messageKey: matched.messageKey };
-  if (draft.errorReason !== "Pendiente de confirmar" || draft.scheduledAt) return { action: "keep" };
+  const [decision] = reconcileOutboundBatch([draft], messages, now);
+  if (!decision || decision.action !== "sent") return { action: decision?.action ?? "keep" };
+  return { action: "sent", messageKey: decision.messageKey };
+}
+
+function outboundMiss(
+  draft: OutboundDraft & { errorReason?: string | null },
+  messages: readonly OutboundSyncMessage[],
+  now: number,
+): "missing" | "keep" {
+  if (draft.errorReason !== "Pendiente de confirmar" || draft.scheduledAt) return "keep";
   const created = Date.parse(draft.createdAt);
-  if (!Number.isFinite(created) || now < created + OUTBOUND_MISS_MARGIN_MS) return { action: "keep" };
-  const sawLater = own.some((message) => {
+  if (!Number.isFinite(created) || now < created + OUTBOUND_MISS_MARGIN_MS) return "keep";
+  const sawLater = messages.some((message) => {
+    if (message.fromFan || message.threadKey !== draft.threadKey) return false;
     const sent = Date.parse(message.sentAt);
     return Number.isFinite(sent) && sent >= created + OUTBOUND_MISS_MARGIN_MS;
   });
-  return sawLater ? { action: "missing" } : { action: "keep" };
+  return sawLater ? "missing" : "keep";
 }
 
 /** Si la sincronización ya pasó por ese hilo y el mensaje propio no está, no se envió. */
@@ -417,16 +469,17 @@ async function attachOutboundAuthors(sql: ReadSql, creatorId: string, messages: 
     sentAt: message.sentAt,
     priceCents: message.priceCents,
   }));
-  for (const draft of pending) {
+  const claimed = await claimedOutboundMessages(sql, creatorId, synced.map((message) => message.messageKey));
+  const ready = pending.map((draft) => {
     const flag = flagOf.get(draft.id);
     const scheduledAt = flag?.scheduled_at == null
       ? null
       : flag.scheduled_at instanceof Date ? flag.scheduled_at.toISOString() : String(flag.scheduled_at);
-    const decision = reconcilePendingOutbound({
-      ...draft,
-      scheduledAt,
-      errorReason: flag?.error_reason ?? null,
-    }, synced);
+    return { ...draft, scheduledAt, errorReason: flag?.error_reason ?? null };
+  });
+  for (const decision of reconcileOutboundBatch(ready, synced, Date.now(), claimed)) {
+    const draft = pending.find((item) => item.id === decision.id);
+    if (!draft) continue;
     if (decision.action === "sent") {
       await sql.query(
         `update of_chat_message set author_id = $1
@@ -443,17 +496,30 @@ async function attachOutboundAuthors(sql: ReadSql, creatorId: string, messages: 
   }
 }
 
+async function claimedOutboundMessages(sql: ReadSql, creatorId: string, messageKeys: string[]): Promise<Set<string>> {
+  if (messageKeys.length === 0) return new Set();
+  const slots = messageKeys.map((_, index) => `$${index + 2}`).join(", ");
+  const rows = await sql.query<{ message_key: string | null }>(
+    `select matched_message_key as message_key from of_chat_outbound
+     where creator_id = $1 and matched_message_key in (${slots})
+     union
+     select message_key from of_chat_message
+     where creator_id = $1 and author_id is not null and message_key in (${slots})`,
+    [creatorId, ...messageKeys],
+  );
+  return new Set(rows.flatMap((row) => row.message_key ? [row.message_key] : []));
+}
+
 const outboundSendState = new WeakMap<object, boolean>();
 
-/** La columna se mira una vez por conexión. */
+/** Si la columna existe se recuerda. Si la migración aún no llegó, se vuelve a mirar. */
 export async function outboundSendStateReady(sql: ReadSql): Promise<boolean> {
-  const cached = outboundSendState.get(sql);
-  if (cached != null) return cached;
+  if (outboundSendState.get(sql) === true) return true;
   const columns = await sql.query<{ column_name: string }>(
     "select column_name from information_schema.columns where table_name = 'of_chat_outbound' and column_name = 'error_reason'",
   );
   const ready = columns.length > 0;
-  outboundSendState.set(sql, ready);
+  if (ready) outboundSendState.set(sql, true);
   return ready;
 }
 

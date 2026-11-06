@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { matchOutboundAuthor } from "../sync/author-match.ts";
+import { matchOutboundAuthor, normalizeOutboundText } from "../sync/author-match.ts";
 import { presentTeamMetrics } from "../metrics/present-team.ts";
 import type { TeamAccess } from "../../../src/lib/access-policy.ts";
 
@@ -88,6 +88,31 @@ test("el mensaje sincronizado hereda al chatter que lo escribió en el CRM", () 
     ],
   );
   assert.equal(tie, null);
+  assert.equal(normalizeOutboundText("Tom &amp; Jerry"), normalizeOutboundText("tom & jerry"));
+  assert.equal(normalizeOutboundText("hola ❤\uFE0F"), normalizeOutboundText("Hola ❤"));
+  const encoded = matchOutboundAuthor(
+    {
+      messageKey: "m-amp",
+      threadKey: "fan-7",
+      fanKey: "fan-7",
+      body: "Tom &amp; Jerry ❤\uFE0F",
+      sentAt: "2026-11-06T10:05:00.000Z",
+      priceCents: null,
+    },
+    [
+      {
+        id: "out-amp",
+        authorId: "e-1",
+        body: "tom & jerry ❤",
+        priceCents: null,
+        createdAt: "2026-11-06T10:04:00.000Z",
+        threadKey: "fan-7",
+        fanKey: "fan-7",
+        ofMessageKey: null,
+      },
+    ],
+  );
+  assert.equal(encoded?.draftId, "out-amp");
 });
 
 test("un chatter ve su cifra y no la de otro ni un total de creadora", () => {

@@ -400,7 +400,10 @@ async function finishAttempt(
   if (first.kind === "id") return { messageId: first.id, reason: null };
   const status = net.postStatus();
   if (status != null && status >= 400) return { messageId: null, reason: "no enviado" };
-  if (first.kind === "visto") return { messageId: null, reason: null, awaitingId: true };
+  if (first.kind === "visto") {
+    noteDomDecision(net);
+    return { messageId: null, reason: null, awaitingId: true };
+  }
   if ((await boxText(box)).trim()) {
     const missed = await clickMissed(box, page, payloads, from, request, beforeDom, () => networkOpen() || net.postOpen());
     const late = idFromPayloads(payloads, from, request);
@@ -417,7 +420,10 @@ async function finishAttempt(
       await box.press("Enter").catch(() => undefined);
       const second = await watchSend(box, page, payloads, from, request, beforeDom, request.confirmMs ?? 8_000, net);
       if (second.kind === "id") return { messageId: second.id, reason: null };
-      if (second.kind === "visto") return { messageId: null, reason: null, awaitingId: true };
+      if (second.kind === "visto") {
+        noteDomDecision(net);
+        return { messageId: null, reason: null, awaitingId: true };
+      }
       const after = idFromPayloads(payloads, from, request);
       if (after) return { messageId: after, reason: null };
       if ((net.postStatus() ?? 0) >= 400) return { messageId: null, reason: "no enviado" };
@@ -426,8 +432,19 @@ async function finishAttempt(
   const late = idFromPayloads(payloads, from, request);
   if (late) return { messageId: late, reason: null };
   const phase = await bubblePhase(page, beforeDom, request.body);
+  if (phase === "listo") noteDomDecision(net);
   if (phase !== "no" || net.postOpen()) return { messageId: null, reason: null, awaitingId: true };
   return { messageId: null, reason: "no enviado" };
+}
+
+/** Si el POST de envío no apareció, el DOM no basta para darlo por bueno en silencio. */
+export function sendRouteWarning(postLabel: string): "ruta-desconocida" | null {
+  return postLabel === "no" ? "ruta-desconocida" : null;
+}
+
+function noteDomDecision(net: PostNet): void {
+  if (sendRouteWarning(net.postLabel()) == null) return;
+  console.info("[fanlink:send] aviso=ruta-desconocida decision=dom");
 }
 
 async function bubblePhase(page: Page, beforeDom: number, body: string): Promise<"no" | "pending" | "listo"> {
