@@ -9,7 +9,7 @@ El borrador antiguo de Campañas (`of_campaign_draft`) sigue igual. Esta fase no
 - No firma peticiones ni llama a la API de OnlyFans.
 - No lee ni escribe la clave de cifrado de la sesión.
 - El envío real está apagado. Hace falta `FANLINK_ENABLE_SEND=true`, `FANLINK_ENABLE_MASS_SEND=true` y que la cuenta esté en `FANLINK_SEND_ALLOW_ACCOUNTS` (ids separados por comas). Cualquier otro valor deja la compuerta cerrada.
-- Lanzarlo son dos peticiones de un admin. La primera guarda un token que caduca a los dos minutos. La segunda lo presenta. Sin ese token, o si caducó, el estado no pasa a `sent`. Crear el borrador lo puede hacer la dueña o quien tenga el permiso `masivos`.
+- Lanzarlo son dos peticiones del mismo admin. La primera guarda el hash del token, quién lo pidió y una caducidad de 2 minutos según `now()` de la base. La segunda lo consume en la misma sentencia que pasa a `sent`. Un token vivo no se pisa. `updateMassStatus` no puede marcar `sent`. Crear el borrador lo puede hacer la dueña o quien tenga el permiso `masivos`.
 - Aunque la compuerta se abra, `dryRunMass` devuelve `delivered: false` y `network: "sin-llamada"`. No hay transporte.
 
 ## Modelo

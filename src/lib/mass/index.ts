@@ -33,7 +33,8 @@ export {
   canLaunchMass,
   confirmMassLaunch,
 } from "./access.ts";
-export type { LaunchChallenge, MassActor } from "./access.ts";
+export { hashLaunchToken, tokenHashEquals } from "./access.ts";
+export type { MassActor } from "./access.ts";
 export {
   MASS_ALLOW_ACCOUNTS,
   MASS_SEND_FLAG,

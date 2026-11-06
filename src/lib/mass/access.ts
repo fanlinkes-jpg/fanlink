@@ -1,17 +1,14 @@
+import { createHash, timingSafeEqual } from "node:crypto";
+
 export const MASS_PERMISSION = "masivos";
 
-/** Caduca a los dos minutos. No abre el envío real. */
+/** Caduca a los dos minutos, medidos por el reloj de la base. No abre el envío real. */
 export const LAUNCH_TOKEN_TTL_MS = 120_000;
 
 export type MassActor = {
+  id: string;
   role: "owner" | "member";
   perms: readonly string[];
-};
-
-export type LaunchChallenge = {
-  draftId: string;
-  token: string;
-  expiresAt: number;
 };
 
 export function canCreateMass(actor: MassActor | null): boolean {
@@ -21,42 +18,40 @@ export function canCreateMass(actor: MassActor | null): boolean {
 }
 
 export function canLaunchMass(actor: MassActor | null): boolean {
-  return actor?.role === "owner";
+  return actor?.role === "owner" && actor.id.trim().length > 0;
 }
 
-/** Primera petición. Devuelve el token y no cambia el estado. */
+/** Primera petición. Devuelve el token en claro una sola vez. La base guarda el hash. */
 export function beginMassLaunch(input: {
   actor: MassActor | null;
   draftId: string;
-  now: Date;
-  ttlMs?: number;
   createToken?: () => string;
-}): { ok: true; challenge: LaunchChallenge } | { ok: false; reason: string } {
+}):
+  | { ok: true; token: string; tokenHash: string }
+  | { ok: false; reason: string } {
   if (!canLaunchMass(input.actor)) {
     return {
       ok: false,
       reason: "Solo un admin confirma el envío de un masivo.",
     };
   }
-  const draftId = input.draftId.trim();
-  if (!draftId) return { ok: false, reason: "Falta el masivo." };
+  if (!input.draftId.trim()) return { ok: false, reason: "Falta el masivo." };
   const token = (input.createToken ?? defaultToken)();
   if (!token.trim())
     return { ok: false, reason: "No se ha podido crear el token." };
-  const ttl = input.ttlMs ?? LAUNCH_TOKEN_TTL_MS;
-  return {
-    ok: true,
-    challenge: { draftId, token, expiresAt: input.now.getTime() + ttl },
-  };
+  return { ok: true, token, tokenHash: hashLaunchToken(token) };
 }
 
-/** Segunda petición. Sin un token ya emitido, o si caducó, no confirma. */
+/**
+ * Segunda petición. El hash y `tokenLive` salen de la base (`expires_at > now()`).
+ * No compara el token en claro.
+ */
 export function confirmMassLaunch(input: {
   actor: MassActor | null;
-  draftId: string;
-  token: string;
-  challenge: LaunchChallenge | null;
-  now: Date;
+  presentedToken: string;
+  storedHash: string | null;
+  issuedBy: string | null;
+  tokenLive: boolean;
 }): { ok: true } | { ok: false; reason: string } {
   if (!canLaunchMass(input.actor)) {
     return {
@@ -64,20 +59,33 @@ export function confirmMassLaunch(input: {
       reason: "Solo un admin confirma el envío de un masivo.",
     };
   }
-  if (input.challenge == null) {
+  if (input.storedHash == null || input.issuedBy == null) {
     return { ok: false, reason: "Falta el token de la primera confirmación." };
   }
-  if (
-    input.token.trim() === "" ||
-    input.token !== input.challenge.token ||
-    input.challenge.draftId !== input.draftId
-  ) {
-    return { ok: false, reason: "El token no coincide con el masivo." };
+  if (input.actor?.id !== input.issuedBy) {
+    return {
+      ok: false,
+      reason: "El token lo tiene que usar el admin que lo pidió.",
+    };
   }
-  if (input.now.getTime() >= input.challenge.expiresAt) {
+  if (!input.tokenLive) {
     return { ok: false, reason: "El token de confirmación ha caducado." };
   }
+  if (!tokenHashEquals(input.storedHash, input.presentedToken)) {
+    return { ok: false, reason: "El token no coincide con el masivo." };
+  }
   return { ok: true };
+}
+
+export function hashLaunchToken(token: string): string {
+  return createHash("sha256").update(token, "utf8").digest("hex");
+}
+
+export function tokenHashEquals(storedHex: string, presented: string): boolean {
+  const stored = Buffer.from(storedHex, "hex");
+  const hash = createHash("sha256").update(presented, "utf8").digest();
+  if (stored.length !== hash.length) return false;
+  return timingSafeEqual(stored, hash);
 }
 
 function defaultToken(): string {

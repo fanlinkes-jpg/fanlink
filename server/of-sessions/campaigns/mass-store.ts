@@ -2,6 +2,7 @@ import {
   beginMassLaunch as issueLaunchChallenge,
   canCreateMass,
   confirmMassLaunch,
+  hashLaunchToken,
   type MassActor,
 } from "../../../src/lib/mass/access.ts";
 import { canTransitionMass } from "../../../src/lib/mass/status.ts";
@@ -39,8 +40,9 @@ type MassRow = {
   exclude_bought: boolean | string;
   status: string;
   flag: string | null;
-  launch_token: string | null;
+  launch_token_hash: string | null;
   launch_token_expires_at: Date | string | null;
+  launch_issued_by: string | null;
 };
 
 /** Guarda el borrador. La misma clave y el mismo contenido devuelven la fila. Otro contenido es conflicto. No envía. */
@@ -48,13 +50,12 @@ export async function saveMassDraft(
   sql: ReadSql,
   draft: MassDraft,
   actor: MassActor | null,
-  launch?: { token: string; now: Date },
+  launch?: { token: string },
 ): Promise<MassDraft> {
   if (!canCreateMass(actor)) {
     throw new MassAccessError("No tienes permiso para los masivos.");
   }
-  if (launch)
-    return commitLaunch(sql, draft.id, actor, launch.token, launch.now);
+  if (launch) return commitLaunch(sql, draft.id, actor, launch.token);
   if (
     draft.status !== "draft" &&
     draft.status !== "scheduled" &&
@@ -120,50 +121,55 @@ export async function openMassLaunch(
   input: {
     draftId: string;
     actor: MassActor | null;
-    now: Date;
-    ttlMs?: number;
     createToken?: () => string;
   },
-): Promise<{ token: string; expiresAt: number }> {
+): Promise<{ token: string }> {
   const current = await readMassDraft(sql, input.draftId);
   if (!current) throw new MassTransitionError("No está el masivo.");
   if (!canTransitionMass(current.status, "sent")) {
     throw new MassTransitionError("Transición no permitida.");
   }
-  const issued = issueLaunchChallenge(input);
+  const issued = issueLaunchChallenge({ ...input, draftId: input.draftId });
   if (!issued.ok) throw new MassAccessError(issued.reason);
   const rows = await sql.query<{ id: string }>(
     `update of_mass_message
-     set launch_token = $2, launch_token_expires_at = $3
-     where id = $1 and status = $4
+     set launch_token_hash = $2,
+         launch_token_expires_at = now() + interval '2 minutes',
+         launch_issued_by = $3
+     where id = $1
+       and status = $4
+       and (launch_token_expires_at is null or launch_token_expires_at <= now())
      returning id`,
-    [
-      input.draftId,
-      issued.challenge.token,
-      new Date(issued.challenge.expiresAt).toISOString(),
-      current.status,
-    ],
+    [input.draftId, issued.tokenHash, input.actor?.id ?? "", current.status],
   );
-  if (!rows.length)
+  if (!rows.length) {
+    const live = await sql.query<{ token_live: boolean | string | null }>(
+      `select (launch_token_expires_at > now()) as token_live
+       from of_mass_message where id = $1`,
+      [input.draftId],
+    );
+    if (isLive(live[0]?.token_live)) {
+      throw new MassConflictError("Ya hay una confirmación abierta.");
+    }
     throw new MassTransitionError("No se ha podido abrir la confirmación.");
-  return {
-    token: issued.challenge.token,
-    expiresAt: issued.challenge.expiresAt,
-  };
+  }
+  return { token: issued.token };
 }
 
+/** No pasa un masivo a enviado. Eso solo lo hace commitLaunch. */
 export async function updateMassStatus(
   sql: ReadSql,
   id: string,
   to: MassStatus,
   actor: MassActor | null,
-  options?: { confirmed?: boolean },
 ): Promise<MassDraft> {
+  if (to === "sent") {
+    throw new MassTransitionError(
+      "Enviar solo lo hace la confirmación del admin.",
+    );
+  }
   if (!canCreateMass(actor))
     throw new MassAccessError("No tienes permiso para los masivos.");
-  if (to === "sent" && !options?.confirmed) {
-    throw new MassTransitionError("Enviar exige la segunda confirmación.");
-  }
   const current = await readMassDraft(sql, id);
   if (!current) throw new MassTransitionError("No está el masivo.");
   if (!canTransitionMass(current.status, to)) {
@@ -171,7 +177,7 @@ export async function updateMassStatus(
   }
   const rows = await sql.query<{ id: string }>(
     `update of_mass_message
-     set status = $2, launch_token = null, launch_token_expires_at = null
+     set status = $2
      where id = $1 and status = $3
      returning id`,
     [id, to, current.status],
@@ -243,29 +249,53 @@ async function commitLaunch(
   id: string,
   actor: MassActor | null,
   token: string,
-  now: Date,
 ): Promise<MassDraft> {
-  const rows = await sql.query<MassRow>(
-    "select * from of_mass_message where id = $1",
+  const rows = await sql.query<{
+    status: string;
+    launch_token_hash: string | null;
+    launch_issued_by: string | null;
+    token_live: boolean | string | null;
+  }>(
+    `select status, launch_token_hash, launch_issued_by,
+            (launch_token_expires_at > now()) as token_live
+     from of_mass_message where id = $1`,
     [id],
   );
   const row = rows[0];
-  const expires =
-    row?.launch_token_expires_at == null
-      ? null
-      : new Date(row.launch_token_expires_at).getTime();
+  if (!row || !canTransitionMass(statusOf(row.status), "sent")) {
+    throw new MassTransitionError("Transición no permitida.");
+  }
   const check = confirmMassLaunch({
     actor,
-    draftId: id,
-    token,
-    challenge:
-      row?.launch_token && expires != null && Number.isFinite(expires)
-        ? { draftId: id, token: row.launch_token, expiresAt: expires }
-        : null,
-    now,
+    presentedToken: token,
+    storedHash: row.launch_token_hash,
+    issuedBy: row.launch_issued_by,
+    tokenLive: isLive(row.token_live),
   });
   if (!check.ok) throw new MassTransitionError(check.reason);
-  return updateMassStatus(sql, id, "sent", actor, { confirmed: true });
+  const consumed = await sql.query<{ id: string }>(
+    `update of_mass_message
+     set status = 'sent',
+         launch_token_hash = null,
+         launch_token_expires_at = null,
+         launch_issued_by = null
+     where id = $1
+       and launch_token_hash = $2
+       and launch_issued_by = $3
+       and launch_token_expires_at > now()
+       and status = $4
+     returning id`,
+    [id, hashLaunchToken(token), actor?.id ?? "", row.status],
+  );
+  if (!consumed.length)
+    throw new MassTransitionError("El token de confirmación ha caducado.");
+  const stored = await readMassDraft(sql, id);
+  if (!stored) throw new MassTransitionError("No está el masivo.");
+  return stored;
+}
+
+function isLive(value: boolean | string | null | undefined): boolean {
+  return value === true || value === "t" || value === "true";
 }
 
 function sameContent(stored: MassDraft, draft: MassDraft): boolean {

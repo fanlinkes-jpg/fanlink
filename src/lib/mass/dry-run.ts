@@ -1,9 +1,4 @@
-import {
-  canCreateMass,
-  confirmMassLaunch,
-  type LaunchChallenge,
-  type MassActor,
-} from "./access.ts";
+import { canCreateMass, confirmMassLaunch, type MassActor } from "./access.ts";
 import { massSendGate, type MassEnv } from "./gates.ts";
 import { formattedText, personalize, plainText } from "./text.ts";
 import {
@@ -64,7 +59,7 @@ export type DryRunResult = {
   };
 };
 
-export function dryRunMass(input: {
+export async function dryRunMass(input: {
   draft: MassDraft;
   snapshot: MassSnapshot;
   now: Date;
@@ -73,8 +68,10 @@ export function dryRunMass(input: {
   pace?: PaceLimits;
   stopWords?: readonly string[];
   deliveries?: readonly MassDelivery[] | null;
-  launch?: { token: string; challenge: LaunchChallenge | null };
-}): DryRunResult {
+  /** Solo el token en claro. El hash, quién lo emitió y si sigue vivo se leen de la base. */
+  launchToken?: string;
+  sql?: MassSql;
+}): Promise<DryRunResult> {
   const env = input.env ?? {};
   const gate = massSendGate(input.draft.accountId, env);
   const pace = input.pace ?? DEFAULT_PACE;
@@ -89,14 +86,13 @@ export function dryRunMass(input: {
   if (!canCreateMass(input.actor)) {
     return blocked(gate, ["No tienes permiso para los masivos."], stats, pace);
   }
-  if (input.launch) {
-    const launch = confirmMassLaunch({
-      actor: input.actor,
-      draftId: input.draft.id,
-      token: input.launch.token,
-      challenge: input.launch.challenge,
-      now: input.now,
-    });
+  if (input.launchToken != null) {
+    const launch = await confirmLaunchFromDb(
+      input.sql,
+      input.draft.id,
+      input.actor,
+      input.launchToken,
+    );
     if (!launch.ok) return blocked(gate, [launch.reason], stats, pace);
   }
   if (input.draft.accountId !== input.snapshot.accountId)
@@ -258,6 +254,40 @@ function followUpOf(
     text: plainText(draft.followUp.body),
     recipients: followUpRecipients(deliveries),
   };
+}
+
+export type MassSql = {
+  query<T>(text: string, params?: unknown[]): Promise<T[]>;
+};
+
+async function confirmLaunchFromDb(
+  sql: MassSql | undefined,
+  draftId: string,
+  actor: MassActor | null,
+  presentedToken: string,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  if (!sql) return { ok: false, reason: "Sin datos: confirmación" };
+  const rows = await sql.query<{
+    launch_token_hash: string | null;
+    launch_issued_by: string | null;
+    token_live: boolean | string | null;
+  }>(
+    `select launch_token_hash, launch_issued_by,
+            (launch_token_expires_at > now()) as token_live
+     from of_mass_message where id = $1`,
+    [draftId],
+  );
+  const row = rows[0];
+  return confirmMassLaunch({
+    actor,
+    presentedToken,
+    storedHash: row?.launch_token_hash ?? null,
+    issuedBy: row?.launch_issued_by ?? null,
+    tokenLive:
+      row?.token_live === true ||
+      row?.token_live === "t" ||
+      row?.token_live === "true",
+  });
 }
 
 function stopHit(

@@ -20,7 +20,13 @@ import {
   updateMassStatus,
 } from "./mass-store.ts";
 
-const OWNER = { role: "owner" as const, perms: [] as const };
+const OWNER = { id: "admin-1", role: "owner" as const, perms: [] as const };
+const OTHER = { id: "admin-2", role: "owner" as const, perms: [] as const };
+const CHATTER = {
+  id: "ch-1",
+  role: "member" as const,
+  perms: ["masivos"] as const,
+};
 
 test("el borrador se guarda y se vuelve a leer, y el dry-run sigue sin enviar", async () => {
   const pg = new PGlite();
@@ -79,6 +85,7 @@ test("el borrador se guarda y se vuelve a leer, y el dry-run sigue sin enviar", 
     await assert.rejects(
       () =>
         saveMassDraft(sql, composed.draft, {
+          id: "m-1",
           role: "member",
           perms: ["campanas"],
         }),
@@ -125,7 +132,7 @@ test("el borrador se guarda y se vuelve a leer, y el dry-run sigue sin enviar", 
       sendUsage: { sentLastHour: 0, sentLastDay: 0 },
       timeZone: "UTC",
     };
-    const run = dryRunMass({
+    const run = await dryRunMass({
       draft: stored ?? composed.draft,
       snapshot,
       now: new Date("2026-11-06T10:00:00.000Z"),
@@ -157,23 +164,63 @@ test("el borrador se guarda y se vuelve a leer, y el dry-run sigue sin enviar", 
       () => updateMassStatus(sql, "mass-1", "sent", OWNER),
       MassTransitionError,
     );
+    await assert.rejects(
+      () => updateMassStatus(sql, "mass-1", "sent", CHATTER),
+      MassTransitionError,
+    );
     const opened = await openMassLaunch(sql, {
       draftId: "mass-1",
       actor: OWNER,
-      now: new Date("2026-11-06T10:00:00.000Z"),
       createToken: () => "tok",
     });
     await assert.rejects(
       () =>
-        saveMassDraft(sql, composed.draft, OWNER, {
-          token: "tok",
-          now: new Date(opened.expiresAt + 5),
+        openMassLaunch(sql, {
+          draftId: "mass-1",
+          actor: OWNER,
+          createToken: () => "otro",
         }),
+      MassConflictError,
+    );
+    await assert.rejects(
+      () => saveMassDraft(sql, composed.draft, OTHER, { token: opened.token }),
       MassTransitionError,
     );
-    const sent = await saveMassDraft(sql, composed.draft, OWNER, {
-      token: opened.token,
+    const preview = await dryRunMass({
+      draft: stored ?? composed.draft,
+      snapshot,
       now: new Date("2026-11-06T10:00:00.000Z"),
+      actor: OWNER,
+      env: {},
+      launchToken: opened.token,
+      sql,
+    });
+    assert.equal(preview.ok, true);
+    const wrongPreview = await dryRunMass({
+      draft: stored ?? composed.draft,
+      snapshot,
+      now: new Date("2026-11-06T10:00:00.000Z"),
+      actor: OWNER,
+      env: {},
+      launchToken: "no-es",
+      sql,
+    });
+    assert.equal(wrongPreview.ok, false);
+    await sql.query(
+      "update of_mass_message set launch_token_expires_at = now() - interval '1 second' where id = $1",
+      ["mass-1"],
+    );
+    await assert.rejects(
+      () => saveMassDraft(sql, composed.draft, OWNER, { token: opened.token }),
+      MassTransitionError,
+    );
+    const renewed = await openMassLaunch(sql, {
+      draftId: "mass-1",
+      actor: OWNER,
+      createToken: () => "tok-2",
+    });
+    const sent = await saveMassDraft(sql, composed.draft, OWNER, {
+      token: renewed.token,
     });
     assert.equal(sent.status, "sent");
     await assert.rejects(
