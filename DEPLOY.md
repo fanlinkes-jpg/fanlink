@@ -74,7 +74,22 @@ export FANLINK_SEND_PER_MINUTE=4
 
 Solo esa cuenta (el id `9ikis52` o el handle `@bigpoppa1111`, el que tenga guardado la ficha o la comprobación) puede pulsar Enviar. El servidor rechaza cualquier otra aunque la petición llegue igual. Hace falta el perfil de Chromium de Conectar. El envío abre `/my/chats/chat/{id}`, escribe en la caja y pulsa Send; el precio pasa por el modal nativo. No llama `api2` firmado. Si OnlyFans no devuelve el mensaje propio, el borrador queda en error y no se reintenta.
 
-## 6. Tiempo real del chat
+## 6. OnlyFans en directo
+
+Sigue apagado si no pones el flag. Usa la misma allowlist que el envío, porque el teclado de esa pestaña escribe en OnlyFans de verdad. No cambia `FANLINK_SESSION_KEY`. No abre una ventana visible ni un segundo Chromium: reutiliza el perfil persistente de la cuenta.
+
+```bash
+export FANLINK_LIVE_VIEW_ENABLED=true
+export FANLINK_SEND_ALLOW_ACCOUNTS=9ikis52,@bigpoppa1111
+```
+
+En el chat, la pestaña **OnlyFans** muestra `/my/chats/chat/{id}` del fan. **Equipo** sigue siendo el compositor de Fanlink. Solo un usuario tiene el control; el resto ve la imagen. **Ceder el control** lo suelta sin cerrar a quien mira. Si el controlador no toca la pestaña, también lo suelta y los demás siguen viendo. Como máximo hay 4 visores. Los fotogramas van de 1 a 8 (`FANLINK_LIVE_FPS`, por defecto 4).
+
+El WebSocket `/api/live-view` solo se engancha con `npm run dev` (el servidor de Vite). `vite preview` y el build de producción no lo abren: fuera del portátil hay que servir con el servidor de desarrollo. El ticket va en el primer mensaje del socket, no en la URL, y el origen tiene que ser el de esta app.
+
+Teclear, pulsar Enter y subir un archivo exigen además `FANLINK_ENABLE_SEND=true`. Si está apagado, la pestaña es solo lectura. La página no sale de `/my/chats` ni de la API de mensajes: `/my/statements`, `/my/statistics`, banca, pagos y ajustes quedan bloqueados, también si la página intenta cambiar la ruta por dentro. No se abren popups ni descargas. La sincronización y el envío del resto de la cuenta siguen usando el mismo perfil. Con `VITE_AUTH_ENABLED=false` en localhost funciona sin login. Con el acceso encendido hace falta una sesión con permiso de mensajes. El log es `[fanlink:live]` y no guarda lo que se escribe.
+
+## 7. Tiempo real del chat
 
 `GET /api/chat-live` es un stream SSE. El proxy no puede acumular la respuesta: nginx necesita `proxy_buffering off;` y la app ya manda `X-Accel-Buffering: no`. El timeout de lectura tiene que aguantar la conexión abierta (minutos, no el timeout corto de una API). Sin eso el navegador se entera del mensaje tarde o la conexión se corta.
 
@@ -82,7 +97,7 @@ Solo esa cuenta (el id `9ikis52` o el handle `@bigpoppa1111`, el que tenga guard
 
 El espejo del hilo no incluye el reproductor ni la caché de medios. `0022_message_media.sql` y `0026_chat_history.sql` solo guardan metadatos (si hay archivo, duración, vista previa, me gusta, cita). No se descarga el archivo y en el hilo se pinta el marcador Medio.
 
-## 6. Masivos
+## 8. Masivos
 
 `FANLINK_ENABLE_MASS_SEND` no se define, o no vale `true`. Igual que `FANLINK_ENABLE_SEND`. Las dos tienen que ser `true` y la cuenta tiene que estar en `FANLINK_SEND_ALLOW_ACCOUNTS` para que la compuerta del masivo se abra. En este despliegue no se abren: no hay transporte a OnlyFans. La migración del borrador es `0027_mass_messages.sql`.
 

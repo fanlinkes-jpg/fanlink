@@ -146,6 +146,7 @@ Usa la clave que ya tienes. No generes otra. Misma terminal: Control+C, `git pul
 5. **Equipo.** Teléfono `+34…`, interruptor Avisos y minutos entre avisos. Sin claves de WhatsApp, el aviso sale como `simulado` en la terminal cuando un fan escribe.
 6. **Campañas.** Borrador con fans sincronizados: vista previa y guardar. El botón dice «Envío real desactivado» y no se pulsa.
 7. **Inicio, listas, vault y enlaces.** No son cifras de OnlyFans. Deben decir que están sin sincronizar o que son ejemplo local.
+8. **Pestaña OnlyFans.** En el mismo `npm run dev`, exporta `FANLINK_LIVE_VIEW_ENABLED=true` y `FANLINK_SEND_ALLOW_ACCOUNTS=9ikis52,@bigpoppa1111`. Abre un hilo de la cuenta de prueba y entra en la pestaña OnlyFans: se ve el chat real. Sin `FANLINK_ENABLE_SEND=true` no se puede teclear. Con el envío encendido, solo esa cuenta teclea. El socket no sale en `vite preview`.
 
 ## Datos
 
@@ -164,7 +165,11 @@ Con Postgres (`DATABASE_URL`) la tabla persiste. Sin esa variable el CRM usa el 
 
 - `FANLINK_SESSION_KEY` — 32 bytes en base64 o hex. Obligatoria para guardar la sesión. No generes otra si ya hay `data/sessions`.
 - `FANLINK_ENABLE_SEND` — `true` solo si vas a enviar chats de verdad. Sin esta variable, o con otro valor, no se envía nada.
-- `FANLINK_SEND_ALLOW_ACCOUNTS` — ids o handles de las creadoras que sí pueden enviar. Ejemplo de la cuenta de prueba: `9ikis52,@bigpoppa1111`. El resto sigue apagado.
+- `FANLINK_SEND_ALLOW_ACCOUNTS` — ids o handles de las creadoras que sí pueden enviar. Ejemplo de la cuenta de prueba: `9ikis52,@bigpoppa1111`. El resto sigue apagado. La misma lista abre la pestaña OnlyFans en directo.
+- `FANLINK_LIVE_VIEW_ENABLED` — `true` solo para ver la página real de OnlyFans dentro del CRM. Sin esta variable sigue apagada. Teclear y subir archivos exigen también `FANLINK_ENABLE_SEND=true`; si no, la pestaña es solo lectura. El socket solo existe con `npm run dev`.
+- `FANLINK_LIVE_FPS` — fotogramas del screencast, de 1 a 8. Por defecto 4. Hay como máximo 4 visores.
+- `FANLINK_LIVE_QUALITY` — calidad JPEG, de 20 a 80. Por defecto 40.
+- `FANLINK_LIVE_IDLE_MS` — suelta el control si quien lo tiene no toca la pestaña. Quien solo mira sigue dentro. Por defecto 90 segundos.
 - `FANLINK_SEND_PER_MINUTE` — tope de envíos de una cuenta en un minuto. Por defecto 4. Entre 1 y 30.
 - `FANLINK_DATA_DIR` — por defecto `./data`.
 - `FANLINK_LOGIN_TIMEOUT_MS` — por defecto 15 minutos.

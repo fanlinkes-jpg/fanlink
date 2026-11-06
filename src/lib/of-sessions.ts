@@ -320,6 +320,14 @@ export const readChatVault = createServerFn({ method: "POST" })
     return readChatVaultView(context.userId, data);
   });
 
+export const openLiveView = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string; threadKey: string; fanKey: string | null }) => input)
+  .handler(async ({ context, data }) => {
+    const { openLiveViewTicket } = await import("./of-sessions-runtime.server");
+    return openLiveViewTicket(context.userId, data);
+  });
+
 export const sendChatMessage = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; vaultTitle?: string | null }) => input)

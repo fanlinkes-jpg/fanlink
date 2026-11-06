@@ -6,6 +6,7 @@ import { useCrm, type VaultItem } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
 import { useOfReads } from "@/lib/use-of-reads";
 import { FanInsights } from "@/features/fan-insights";
+import { LiveOnlyFans } from "@/features/live-onlyfans";
 import { MessagePriceDialog } from "@/features/message-price-dialog";
 import { FULL_EMOJIS, QUICK_EMOJIS, TEXT_COLORS, authorLabel, matchScripts, mentionToken, paymentLabel, slashQuery, wrapSelection } from "@/lib/composer-tools";
 import { pendingForThread } from "@/lib/pending-thread";
@@ -73,6 +74,7 @@ export function RealChatsPage() {
   const [libraryQuery, setLibraryQuery] = useState("");
   const [tagQuery, setTagQuery] = useState("");
   const [ofVault, setOfVault] = useState<Array<{ id: string; title: string; kind: "foto" | "video" | "audio" | null }>>([]);
+  const [surface, setSurface] = useState<"equipo" | "onlyfans">("equipo");
 
   async function refresh() {
     try {
@@ -407,7 +409,13 @@ export function RealChatsPage() {
       </section>
       <section className="hidden h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden md:flex">
         <header className="flex shrink-0 items-center justify-between gap-3 border-b border-[#e6e8ee] px-4 py-3">
-              <p className="truncate font-medium">{selected ? (selected.fanName ?? selected.fanHandle ?? "Fan") : "Sin sincronizar"}</p>
+              <div className="flex min-w-0 items-center gap-2">
+                <p className="truncate font-medium">{selected ? (selected.fanName ?? selected.fanHandle ?? "Fan") : "Sin sincronizar"}</p>
+                <div className="flex shrink-0 rounded-lg bg-[#f3f4f6] p-0.5 text-xs">
+                  <button type="button" className={`rounded-md px-2 py-1 ${surface === "equipo" ? "bg-white font-medium" : "text-[#6d7585]"}`} onClick={() => setSurface("equipo")}>Equipo</button>
+                  <button type="button" className={`rounded-md px-2 py-1 ${surface === "onlyfans" ? "bg-white font-medium" : "text-[#6d7585]"}`} onClick={() => setSurface("onlyfans")}>OnlyFans</button>
+                </div>
+              </div>
               <div className="flex items-center gap-2">
                 <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => void refresh()}>Recargar</button>
                 <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => setInsightsOpen(true)}>Ficha del fan</button>
@@ -436,7 +444,10 @@ export function RealChatsPage() {
                 ) : null}
               </div>
             ) : null}
-            <ol className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4" onScroll={(event) => {
+            {surface === "onlyfans" && selected ? (
+              <LiveOnlyFans creatorId={selected.creatorId} threadKey={selected.threadKey} fanKey={selected.fanKey} />
+            ) : null}
+            <ol className={`min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4 ${surface === "onlyfans" ? "hidden" : ""}`} onScroll={(event) => {
               if (event.currentTarget.scrollTop > 24 || !selected || olderLock.current) return;
               olderLock.current = true;
               void loadOlderMessages({ data: { creatorId: selected.creatorId, threadKey: selected.threadKey } }).then(() => refresh()).catch(() => undefined).finally(() => {
@@ -455,7 +466,7 @@ export function RealChatsPage() {
               ))}
               {messages.some((message) => message.fromFan) && fanTranslation ? <li className="text-[10px] text-[#6d7585]">Traducción: Sin datos</li> : null}
             </ol>
-            <form className="relative shrink-0 border-t border-[#e6e8ee] p-2" onSubmit={(event) => event.preventDefault()}>
+            <form className={`relative shrink-0 border-t border-[#e6e8ee] p-2 ${surface === "onlyfans" ? "hidden" : ""}`} onSubmit={(event) => event.preventDefault()}>
               {panel && panel !== "guiones" ? (
                 <div role="region" aria-label={panelLabel(panel)} className="absolute inset-x-2 bottom-full z-20 mb-1 max-h-52 overflow-y-auto rounded-xl border border-[#e6e8ee] bg-white p-3 text-sm shadow-lg">
                   <ComposerPanelBody

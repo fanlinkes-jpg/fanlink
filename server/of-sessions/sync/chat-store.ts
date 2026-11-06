@@ -1,4 +1,4 @@
-import { outboundTextDelta, OUTBOUND_TIE_MS, type OutboundDraft } from "./author-match.ts";
+import { normalizeOutboundText, outboundTextDelta, OUTBOUND_TIE_MS, type OutboundDraft } from "./author-match.ts";
 import { newFanEvents, type ChatMessage, type ChatThread, type FanMessageEvent } from "./chats.ts";
 import { decodeMedia, encodeMedia, oldestCursor } from "./history.ts";
 import type { ReadSql } from "./store.ts";
@@ -714,6 +714,115 @@ export async function markChatList(sql: ReadSql, creatorId: string, cursor: stri
      on conflict (creator_id) do update set chat_list_cursor = excluded.chat_list_cursor, chat_list_done = excluded.chat_list_done`,
     [creatorId, ORIGIN, cursor, done],
   );
+}
+
+const LIVE_ATTRIBUTION_SKEW_MS = 2_000;
+
+/** Solo un mensaje enviado durante el control de ese chatter, y nunca uno que ya tiene autor. */
+export function liveSendAttributable(input: {
+  messageId: string;
+  sentAt: string | null;
+  controlSince: string;
+  existingAuthorId: string | null;
+}): boolean {
+  if (!input.messageId || input.existingAuthorId) return false;
+  if (!input.sentAt) return false;
+  const sent = Date.parse(input.sentAt);
+  const since = Date.parse(input.controlSince);
+  if (!Number.isFinite(sent) || !Number.isFinite(since)) return false;
+  return sent + LIVE_ATTRIBUTION_SKEW_MS >= since;
+}
+
+export const LIVE_GESTURE_WINDOW_MS = 20_000;
+
+/** El mensaje solo se atribuye si el texto coincide y el controlador pulsó Enter o hizo clic en esa ventana. */
+export function liveSendMatchesGesture(input: {
+  messageId: string;
+  sentAt: string | null;
+  controlSince: string;
+  existingAuthorId: string | null;
+  gestureAt: string | null;
+  now: string;
+  body: string;
+  draftBody: string;
+  windowMs?: number;
+}): boolean {
+  if (!liveSendAttributable(input)) return false;
+  if (!input.gestureAt) return false;
+  const text = normalizeOutboundText(input.body);
+  if (!text || text !== normalizeOutboundText(input.draftBody)) return false;
+  const gesture = Date.parse(input.gestureAt);
+  const sent = Date.parse(input.sentAt ?? "");
+  const now = Date.parse(input.now);
+  const windowMs = input.windowMs ?? LIVE_GESTURE_WINDOW_MS;
+  if (![gesture, sent, now].every(Number.isFinite)) return false;
+  if (gesture + LIVE_ATTRIBUTION_SKEW_MS < Date.parse(input.controlSince)) return false;
+  if (now < gesture || now - gesture > windowMs) return false;
+  return Math.abs(sent - gesture) <= windowMs;
+}
+
+/** Atribuye un envío visto en la pestaña en directo al chatter que tenía el control. */
+export async function attributeLiveSend(sql: ReadSql, input: {
+  id: string;
+  creatorId: string;
+  threadKey: string;
+  fanKey: string | null;
+  authorId: string;
+  body: string;
+  priceCents: number | null;
+  messageId: string;
+  createdAt: string;
+  sentAt: string | null;
+  controlSince: string;
+  gestureAt: string | null;
+  observedAt?: string;
+  draftBody: string;
+}): Promise<boolean> {
+  const stored = await sql.query<{ author_id: string | null; sent_at: Date | string | null }>(
+    "select author_id, sent_at from of_chat_message where creator_id = $1 and message_key = $2",
+    [input.creatorId, input.messageId],
+  );
+  const row = stored[0];
+  const sentAt = row?.sent_at == null
+    ? input.sentAt
+    : row.sent_at instanceof Date ? row.sent_at.toISOString() : String(row.sent_at);
+  if (!liveSendMatchesGesture({
+    messageId: input.messageId,
+    sentAt,
+    controlSince: input.controlSince,
+    existingAuthorId: row?.author_id ?? null,
+    gestureAt: input.gestureAt,
+    now: input.observedAt ?? input.createdAt,
+    body: input.body,
+    draftBody: input.draftBody,
+  })) return false;
+  const existing = await sql.query<{ id: string }>(
+    "select id from of_chat_outbound where creator_id = $1 and of_message_key = $2",
+    [input.creatorId, input.messageId],
+  );
+  if (existing.length > 0) return false;
+  await recordOutbound(sql, {
+    id: input.id,
+    creatorId: input.creatorId,
+    threadKey: input.threadKey,
+    fanKey: input.fanKey,
+    authorId: input.authorId,
+    body: input.body,
+    priceCents: input.priceCents,
+    createdAt: input.createdAt,
+    ofMessageKey: input.messageId,
+  });
+  await sql.query(
+    `update of_chat_outbound set status = 'sent', sent_at = now(), matched_message_key = $2 where id = $1`,
+    [input.id, input.messageId],
+  );
+  const threshold = new Date(Date.parse(input.controlSince) - LIVE_ATTRIBUTION_SKEW_MS).toISOString();
+  await sql.query(
+    `update of_chat_message set author_id = $1
+     where creator_id = $2 and message_key = $3 and author_id is null and sent_at >= $4`,
+    [input.authorId, input.creatorId, input.messageId, threshold],
+  );
+  return true;
 }
 
 export async function recordOutbound(sql: ReadSql, draft: OutboundDraft & { creatorId: string }): Promise<void> {
