@@ -52,6 +52,33 @@ test("sin socket solo se recarga el hilo pasado el mínimo de 15 s", async () =>
   assert.equal(early, "hold");
 });
 
+test("un frame sin chatId no se asigna al hilo de la pestaña si el usuario no coincide", () => {
+  const foreign = parseLivePayload(
+    JSON.stringify({
+      list: [{ id: 3, text: "ajeno", createdAt: "2026-11-06T10:00:00.000Z", fromUser: { id: "9" } }],
+    }),
+    "7",
+    "7",
+  );
+  assert.equal(foreign.messages.length, 0);
+  const checked = parseLivePayload(
+    JSON.stringify({
+      list: [{
+        id: 4,
+        text: "de este hilo",
+        createdAt: "2026-11-06T10:00:00.000Z",
+        fromUser: { id: "cuenta" },
+        withUser: { id: "7" },
+      }],
+    }),
+    "7",
+    "7",
+  );
+  assert.equal(checked.messages.length, 1);
+  assert.equal(checked.messages[0]?.threadKey, "7");
+  assert.equal(checked.messages[0]?.body, "de este hilo");
+});
+
 test("un frame reparte cada mensaje a su chat aunque la pestaña sea de la cuenta", () => {
   const parsed = parseLivePayload(
     JSON.stringify({

@@ -12,7 +12,7 @@ export function parseLivePayload(text: string, threadKey: string, fanKey: string
   if (parsed == null) return { messages: [], typing: false, read: false };
   const chunks = Array.isArray(parsed) ? parsed : [parsed];
   const messages = chunks.flatMap((chunk) => [
-    ...parseChatMessages(chunk, threadKey, fanKey),
+    ...parseChatMessages(chunk, threadKey, fanKey, null, "socket"),
     ...parsePreviewMessages(chunk),
   ]);
   return {
