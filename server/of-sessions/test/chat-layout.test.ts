@@ -59,9 +59,12 @@ test("el botón Enviar se ve entero sin scroll de página", async () => {
         "Tag other creator",
         "Format text",
         "Translation",
-        "Dejar pendiente",
         "Enviar",
       ]);
+      const send = composer.getByRole("button", { name: "Enviar", exact: true });
+      assert.equal(await send.isDisabled(), true);
+      assert.equal(await send.getAttribute("title"), "Envío real desactivado en esta cuenta");
+      assert.equal(await composer.getByRole("button", { name: "Dejar pendiente" }).count(), 0);
       await composer.getByText("Pulsa / + palabra para buscar guiones").waitFor();
       if (viewport.capture) {
         await page.screenshot({ path: path.join(shots, `mensajes-${viewport.width}x${viewport.height}.png`) });
@@ -177,7 +180,7 @@ async function sendButtonBox(page: Page): Promise<{
     const button = [...document.querySelectorAll("button")].find((node) => node.getAttribute("aria-label") === "Enviar");
     const form = document.querySelector("form");
     const formRect = form?.getBoundingClientRect();
-    const parts = ["Add media", "GIF", "Add from media vault", "Schedule your message", "Price", "Tag other creator", "Format text", "Translation", "Guiones", "Dejar pendiente"].map((label) => {
+    const parts = ["Add media", "GIF", "Add from media vault", "Schedule your message", "Price", "Tag other creator", "Format text", "Translation", "Guiones", "Enviar"].map((label) => {
       const node = [...document.querySelectorAll("button")].find((item) => item.getAttribute("aria-label") === label || item.textContent?.includes(label));
       const box = node?.getBoundingClientRect();
       return { label, top: box?.top ?? -1, bottom: box?.bottom ?? -1 };
