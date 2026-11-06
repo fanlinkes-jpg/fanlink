@@ -6,6 +6,22 @@ export const OPEN_INBOX_SYNC_MS = 45_000;
 
 let openInboxes = 0;
 
+export type InboxWatch = { creatorId: string; threadKey: string | null };
+
+const threadWatches = new Map<string, InboxWatch>();
+
+export function noteThreadWatch(creatorId: string | null, threadKey: string | null): () => void {
+  const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  if (creatorId) threadWatches.set(id, { creatorId, threadKey });
+  return () => {
+    threadWatches.delete(id);
+  };
+}
+
+export function activeThreadWatches(): InboxWatch[] {
+  return [...threadWatches.values()];
+}
+
 export function noteInboxOpen(): () => void {
   openInboxes += 1;
   return () => {

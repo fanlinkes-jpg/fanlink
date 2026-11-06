@@ -38,11 +38,6 @@ export function RealChatsPage() {
   useEffect(() => {
     void refresh();
     void campaignSendFlag().then((flag) => setSendEnabled(flag.sendEnabled)).catch(() => setSendEnabled(false));
-    const source = new EventSource("/api/chat-live");
-    source.addEventListener("chats", () => {
-      void refresh();
-    });
-    return () => source.close();
   }, []);
 
   const threads = (data?.threads ?? []).filter(
@@ -61,6 +56,16 @@ export function RealChatsPage() {
   const meta = data?.meta.find((item) => item.creatorId === selected?.creatorId);
   const running = selected ? data?.runningCreatorIds.includes(selected.creatorId) : false;
   const canForce = teamAccess?.role === "owner" && selected != null;
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (selected?.creatorId) params.set("creatorId", selected.creatorId);
+    if (selected?.threadKey) params.set("threadKey", selected.threadKey);
+    const source = new EventSource(`/api/chat-live?${params.toString()}`);
+    source.addEventListener("chats", () => {
+      void refresh();
+    });
+    return () => source.close();
+  }, [selected?.creatorId, selected?.threadKey]);
   const creatorName = creatorId === "all"
     ? "Todas las cuentas"
     : creators.find((creator) => creator.id === creatorId)?.name ?? "Cuenta";

@@ -24,7 +24,8 @@ import { presentTeamMetrics } from "../../server/of-sessions/metrics/present-tea
 import { changeRatio, creatorReport } from "@/lib/creator-metrics";
 import { deliverFanAlerts } from "../../server/of-sessions/notify/deliver.ts";
 import { chatIntervalMinFromEnv } from "../../server/of-sessions/sync/chats.ts";
-import { chatIntervalMinutes, inboxIsOpen } from "../../server/of-sessions/sync/live.ts";
+import { chatIntervalMinutes, inboxIsOpen, activeThreadWatches } from "../../server/of-sessions/sync/live.ts";
+import { openWatchContext, runInboxWatch } from "../../server/of-sessions/sync/inbox-watch.ts";
 import { listChatMeta, listChats, recordOutbound, saveChatRead } from "../../server/of-sessions/sync/chat-store.ts";
 import { intervalMinFromEnv, startSyncLoop, type ScheduleAccount } from "../../server/of-sessions/sync/schedule.ts";
 import {
@@ -101,6 +102,78 @@ function bootSyncLoop(sessions: SessionManager): void {
       await syncAssignments(sql, account.creatorId);
     },
   });
+}
+
+const threadRef = { key: "chat" };
+let watchLoop: Promise<void> | null = null;
+
+export function kickInboxWatch(): void {
+  if (watchLoop || process.execArgv.includes("--test")) return;
+  watchLoop = runInboxWatch({
+    stopped: () => false,
+    target: () => {
+      const watch = activeThreadWatches()[0];
+      if (!watch) return null;
+      const accountId = accountForCreator(watch.creatorId);
+      if (!accountId) return null;
+      return {
+        accountId,
+        creatorId: watch.creatorId,
+        threadKey: watch.threadKey,
+        watchers: activeThreadWatches().length,
+        chatsUrl: onlyFansSite.chatsUrl ?? "https://onlyfans.com/my/chats",
+        siteId: onlyFansSite.id,
+      };
+    },
+    open: async (accountId) => {
+      const sessions = await getOfSessionManager();
+      return new Promise((resolve, reject) => {
+        let finish: () => void = () => undefined;
+        const closed = new Promise<void>((done) => {
+          finish = done;
+        });
+        void sessions.holdWatch(accountId, async (context) => {
+          const session = await openWatchContext(context, () => threadRef.key);
+          resolve({
+            goto: (url) => session.goto(url),
+            listen: (handlers) => session.listen(handlers),
+            close: async () => {
+              await session.close();
+              finish();
+            },
+          });
+          await closed;
+        }).then((ran) => {
+          if (!ran) reject(new Error("perfil ocupado"));
+        }).catch(reject);
+      });
+    },
+    save: async (creatorId, messages) => {
+      await saveChatRead(await getSql(), creatorId, { threads: [], messages, reason: null, jsonPaths: [] });
+    },
+    onBlock: (accountId, reason) => {
+      console.info(`[fanlink:chat] escucha pausada cuenta=${accountId} motivo=${reason}`);
+    },
+    now: () => Date.now(),
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  }).finally(() => {
+    watchLoop = null;
+  });
+}
+
+function accountForCreator(creatorId: string): string | null {
+  const cached = creatorAccounts.get(creatorId);
+  return cached ?? null;
+}
+
+const creatorAccounts = new Map<string, string>();
+
+export async function rememberCreatorAccounts(): Promise<void> {
+  const accounts = await (await getOfSessionManager()).listAccounts();
+  creatorAccounts.clear();
+  for (const account of accounts) {
+    if (account.creatorId) creatorAccounts.set(account.creatorId, account.id);
+  }
 }
 
 function bootChatLoop(sessions: SessionManager): void {

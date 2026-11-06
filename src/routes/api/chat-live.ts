@@ -1,14 +1,19 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { requireUserId } from "@/lib/auth/verify.server";
 import { getSql } from "@/lib/db";
-import { LIVE_PUSH_MS, liveCursorChanged, noteInboxOpen } from "../../../server/of-sessions/sync/live.ts";
+import { LIVE_PUSH_MS, liveCursorChanged, noteInboxOpen, noteThreadWatch } from "../../../server/of-sessions/sync/live.ts";
 
 export const Route = createFileRoute("/api/chat-live")({
   server: {
     handlers: {
       GET: async ({ request }) => {
         await requireUserId();
+        const url = new URL(request.url);
         const closeInbox = noteInboxOpen();
+        const closeThread = noteThreadWatch(url.searchParams.get("creatorId"), url.searchParams.get("threadKey"));
+        const { kickInboxWatch, rememberCreatorAccounts } = await import("@/lib/of-sessions-runtime.server");
+        await rememberCreatorAccounts();
+        kickInboxWatch();
         const encoder = new TextEncoder();
         let cursor: string | null = null;
         let timer: ReturnType<typeof setInterval> | null = null;
@@ -38,6 +43,7 @@ export const Route = createFileRoute("/api/chat-live")({
             request.signal.addEventListener("abort", () => {
               if (timer) clearInterval(timer);
               closeInbox();
+              closeThread();
               try {
                 controller.close();
               } catch {
@@ -48,6 +54,7 @@ export const Route = createFileRoute("/api/chat-live")({
           cancel() {
             if (timer) clearInterval(timer);
             closeInbox();
+            closeThread();
           },
         });
         return new Response(stream, {

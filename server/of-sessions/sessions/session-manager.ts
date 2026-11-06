@@ -340,6 +340,25 @@ export class SessionManager {
     return job;
   }
 
+  /** Mantiene el perfil abierto para escuchar. Cede si otra lectura ya lo usa. */
+  holdWatch(accountId: string, run: (context: BrowserContext) => Promise<void>): Promise<boolean> {
+    const job = this.readTail.then(async () => {
+      if (this.reading.size > 0) return false;
+      this.reading.add(accountId);
+      try {
+        await this.withSession(accountId, run);
+        return true;
+      } finally {
+        this.reading.delete(accountId);
+      }
+    });
+    this.readTail = job.then(
+      () => undefined,
+      () => undefined,
+    );
+    return job;
+  }
+
   private async readChatsNow(accountId: string): Promise<CollectedChats> {
     const empty: CollectedChats = { threads: [], messages: [], reason: null, jsonPaths: [] };
     const account = await this.options.store.get(accountId);
