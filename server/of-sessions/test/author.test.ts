@@ -55,6 +55,39 @@ test("el mensaje sincronizado hereda al chatter que lo escribió en el CRM", () 
     ],
   );
   assert.equal(byId?.authorId, "e-2");
+  const tie = matchOutboundAuthor(
+    {
+      messageKey: "m-tie",
+      threadKey: "fan-7",
+      fanKey: "fan-7",
+      body: "hola",
+      sentAt: "2026-11-06T10:05:00.000Z",
+      priceCents: null,
+    },
+    [
+      {
+        id: "a",
+        authorId: "e-1",
+        body: "hola",
+        priceCents: null,
+        createdAt: "2026-11-06T10:04:30.000Z",
+        threadKey: null,
+        fanKey: null,
+        ofMessageKey: null,
+      },
+      {
+        id: "b",
+        authorId: "e-2",
+        body: "hola",
+        priceCents: null,
+        createdAt: "2026-11-06T10:04:40.000Z",
+        threadKey: null,
+        fanKey: null,
+        ofMessageKey: null,
+      },
+    ],
+  );
+  assert.equal(tie, null);
 });
 
 test("un chatter ve su cifra y no la de otro ni un total de creadora", () => {

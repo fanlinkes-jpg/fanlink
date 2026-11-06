@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { listCreatorChats, syncCreatorChats, type CreatorChatList, type CreatorReadView } from "@/lib/of-sessions";
+import { listCreatorChats, recordChatOutbound, syncCreatorChats, type CreatorChatList, type CreatorReadView } from "@/lib/of-sessions";
 import { campaignSendFlag } from "@/lib/of-campaigns";
 import { useCrm } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
@@ -25,6 +25,7 @@ export function RealChatsPage() {
   const [menu, setMenu] = useState(false);
   const [draft, setDraft] = useState("");
   const [sendEnabled, setSendEnabled] = useState(false);
+  const [pendingOut, setPendingOut] = useState<Array<{ id: string; threadKey: string; body: string }>>([]);
 
   async function refresh() {
     try {
@@ -171,6 +172,12 @@ export function RealChatsPage() {
             ) : null}
             <ol className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
               {messages.length === 0 ? <li className="text-sm text-[#6d7585]">Sin datos</li> : null}
+              {pendingOut.filter((item) => item.threadKey === selected.threadKey).map((item) => (
+                <li key={item.id} className="text-right">
+                  <p className="inline-block max-w-[70%] rounded-2xl border border-dashed border-[#c5cad6] px-3 py-2 text-sm">{item.body}</p>
+                  <p className="mt-1 text-[10px] text-[#8a5a12]">Pendiente · no enviado</p>
+                </li>
+              ))}
               {messages.map((message) => (
                 <li key={message.messageKey} className={message.fromFan ? "text-left" : "text-right"}>
                   <p className={`inline-block max-w-[70%] rounded-2xl px-3 py-2 text-sm ${message.fromFan ? "bg-[#f4f6fb]" : "bg-[#e7f0ff]"}`}>
@@ -191,7 +198,30 @@ export function RealChatsPage() {
               </div>
               <div className="flex items-end gap-2">
                 <textarea value={draft} onChange={(event) => setDraft(event.target.value)} rows={2} placeholder="Escribe un mensaje" className="min-h-12 flex-1 resize-none rounded-xl border border-[#e6e8ee] px-3 py-2 text-sm" />
-                <button type="button" disabled={!sendEnabled} title="Envío real desactivado" className="rounded-full bg-[#3b6cff] px-4 py-2 text-sm text-white disabled:bg-[#d7dbe3]">
+                <button
+                  type="button"
+                  disabled={!draft.trim()}
+                  onClick={() => {
+                    if (!selected || !draft.trim()) return;
+                    const body = draft.trim();
+                    setPendingOut((items) => [...items, { id: crypto.randomUUID(), threadKey: selected.threadKey, body }]);
+                    setDraft("");
+                    void recordChatOutbound({
+                      data: {
+                        creatorId: selected.creatorId,
+                        fanKey: selected.fanKey,
+                        threadKey: selected.threadKey,
+                        body,
+                        priceCents: null,
+                        ofMessageKey: null,
+                      },
+                    }).catch((err: unknown) => setError(sessionErrorText(err)));
+                  }}
+                  className="rounded-full border border-[#e6e8ee] px-4 py-2 text-sm disabled:opacity-50"
+                >
+                  Dejar pendiente
+                </button>
+                <button type="button" disabled title="Envío real desactivado" className="rounded-full bg-[#d7dbe3] px-4 py-2 text-sm text-white">
                   {sendEnabled ? "Enviar" : "Envío real desactivado"}
                 </button>
               </div>

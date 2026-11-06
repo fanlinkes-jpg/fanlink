@@ -21,7 +21,11 @@ export type MatchableMessage = {
 const WINDOW_MS = 2 * 60 * 60 * 1000;
 const TIE_MS = 60_000;
 
-/** Casa un mensaje leído de OnlyFans con el borrador del chatter que lo escribió en el CRM. */
+/**
+ * Casa un mensaje leído de OnlyFans con el borrador del chatter.
+ * Si dos autores quedan a menos de 60 s con el mismo texto, no se atribuye
+ * a ninguno: el orden de la lista no desempata.
+ */
 export function matchOutboundAuthor(message: MatchableMessage, drafts: OutboundDraft[]): { draftId: string; authorId: string } | null {
   const byId = drafts.find((draft) => draft.ofMessageKey != null && draft.ofMessageKey === message.messageKey);
   if (byId) return { draftId: byId.id, authorId: byId.authorId };
