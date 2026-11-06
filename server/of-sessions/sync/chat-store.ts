@@ -349,6 +349,20 @@ function iso(value: Date | string | null | undefined): string | null {
   return parsed.toISOString();
 }
 
+/** Si la sincronización ya pasó por ese momento y el mensaje no está, no se envió. */
+export function outboundStillMissing(
+  draft: { createdAt: string; errorReason: string | null; scheduledAt: string | null },
+  messages: ReadonlyArray<{ sentAt: string }>,
+): boolean {
+  if (draft.errorReason !== "Pendiente de confirmar" || draft.scheduledAt) return false;
+  const created = Date.parse(draft.createdAt);
+  if (!Number.isFinite(created)) return false;
+  return messages.some((message) => {
+    const sent = Date.parse(message.sentAt);
+    return Number.isFinite(sent) && sent >= created - 15_000;
+  });
+}
+
 async function attachOutboundAuthors(sql: ReadSql, creatorId: string, messages: ChatMessage[]): Promise<void> {
   const drafts = await sql.query<{
     id: string;
@@ -359,8 +373,10 @@ async function attachOutboundAuthors(sql: ReadSql, creatorId: string, messages: 
     thread_key: string | null;
     fan_key: string | null;
     of_message_key: string | null;
+    error_reason: string | null;
+    scheduled_at: Date | string | null;
   }>(
-    `select id, author_id, body, price_cents, created_at, thread_key, fan_key, of_message_key
+    `select id, author_id, body, price_cents, created_at, thread_key, fan_key, of_message_key, error_reason, scheduled_at
      from of_chat_outbound where creator_id = $1 and matched_message_key is null`,
     [creatorId],
   );
@@ -384,7 +400,17 @@ async function attachOutboundAuthors(sql: ReadSql, creatorId: string, messages: 
        where creator_id = $2 and message_key = $3 and author_id is null`,
       [match.authorId, creatorId, message.messageKey],
     );
-    await sql.query("update of_chat_outbound set matched_message_key = $2 where id = $1", [match.draftId, message.messageKey]);
+    await sql.query(
+      `update of_chat_outbound set matched_message_key = $2, status = 'sent', error_reason = null where id = $1`,
+      [match.draftId, message.messageKey],
+    );
+  }
+  for (const row of drafts) {
+    if (used.has(row.id)) continue;
+    const createdAt = row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at);
+    const scheduledAt = row.scheduled_at == null ? null : row.scheduled_at instanceof Date ? row.scheduled_at.toISOString() : String(row.scheduled_at);
+    if (!outboundStillMissing({ createdAt, errorReason: row.error_reason, scheduledAt }, messages)) continue;
+    await markOutboundError(sql, row.id, "no enviado");
   }
 }
 
