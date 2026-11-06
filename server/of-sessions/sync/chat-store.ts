@@ -733,6 +733,30 @@ export function liveSendAttributable(input: {
   return sent + LIVE_ATTRIBUTION_SKEW_MS >= since;
 }
 
+export const LIVE_GESTURE_WINDOW_MS = 20_000;
+
+/** El mensaje solo se atribuye si el controlador pulsó Enter o hizo clic en esa ventana. */
+export function liveSendMatchesGesture(input: {
+  messageId: string;
+  sentAt: string | null;
+  controlSince: string;
+  existingAuthorId: string | null;
+  gestureAt: string | null;
+  now: string;
+  windowMs?: number;
+}): boolean {
+  if (!liveSendAttributable(input)) return false;
+  if (!input.gestureAt) return false;
+  const gesture = Date.parse(input.gestureAt);
+  const sent = Date.parse(input.sentAt ?? "");
+  const now = Date.parse(input.now);
+  const windowMs = input.windowMs ?? LIVE_GESTURE_WINDOW_MS;
+  if (![gesture, sent, now].every(Number.isFinite)) return false;
+  if (gesture + LIVE_ATTRIBUTION_SKEW_MS < Date.parse(input.controlSince)) return false;
+  if (now < gesture || now - gesture > windowMs) return false;
+  return Math.abs(sent - gesture) <= windowMs;
+}
+
 /** Atribuye un envío visto en la pestaña en directo al chatter que tenía el control. */
 export async function attributeLiveSend(sql: ReadSql, input: {
   id: string;
@@ -746,6 +770,8 @@ export async function attributeLiveSend(sql: ReadSql, input: {
   createdAt: string;
   sentAt: string | null;
   controlSince: string;
+  gestureAt: string | null;
+  observedAt?: string;
 }): Promise<boolean> {
   const stored = await sql.query<{ author_id: string | null; sent_at: Date | string | null }>(
     "select author_id, sent_at from of_chat_message where creator_id = $1 and message_key = $2",
@@ -755,11 +781,13 @@ export async function attributeLiveSend(sql: ReadSql, input: {
   const sentAt = row?.sent_at == null
     ? input.sentAt
     : row.sent_at instanceof Date ? row.sent_at.toISOString() : String(row.sent_at);
-  if (!liveSendAttributable({
+  if (!liveSendMatchesGesture({
     messageId: input.messageId,
     sentAt,
     controlSince: input.controlSince,
     existingAuthorId: row?.author_id ?? null,
+    gestureAt: input.gestureAt,
+    now: input.observedAt ?? input.createdAt,
   })) return false;
   const existing = await sql.query<{ id: string }>(
     "select id from of_chat_outbound where creator_id = $1 and of_message_key = $2",

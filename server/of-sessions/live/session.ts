@@ -2,7 +2,7 @@ import type { BrowserContext, CDPSession, FileChooser, Page } from "playwright";
 import { chatPageUrl } from "../sync/chats.ts";
 import { parseChatMessages } from "../sync/chats.ts";
 import { openWorkPage } from "../sessions/work-page.ts";
-import { deskCommand, liveHistoryGuardSource, liveLog, liveQuality, liveRequestAllowed, liveTypingEnabled, type DeskInput } from "./desk.ts";
+import { deskCommand, liveControlAllowed, liveHistoryGuardSource, liveLog, liveQuality, liveRequestAllowed, liveThreadClick, liveTypingEnabled, mapPointer, type DeskInput } from "./desk.ts";
 
 export type LiveFrame = { jpeg: Buffer; width: number; height: number };
 
@@ -32,13 +32,18 @@ export async function startLiveCast(input: {
   let stopped = false;
   let fileWait: ((file: { name: string; mimeType: string; buffer: Buffer } | null) => void) | null = null;
   console.info(liveLog("inicio", { accountId: input.accountId, fps }));
-  await page.addInitScript({ content: liveHistoryGuardSource() });
+  await page.addInitScript({ content: liveHistoryGuardSource(chatUrl) });
+  cdp = await input.context.newCDPSession(page);
+  await cdp.send("Network.enable").catch(() => undefined);
+  await cdp.send("Network.setBypassServiceWorker", { bypass: true }).catch(() => undefined);
   await page.route("**/*", (route) => {
-    if (liveRequestAllowed(route.request().url())) return route.continue();
+    if (liveRequestAllowed(route.request().url(), route.request().method(), typing)) return route.continue();
     return route.abort();
   });
   page.on("popup", (popup) => {
-    void popup.close().catch(() => undefined);
+    void popup.route("**/*", (inner) => inner.abort()).finally(() => {
+      void popup.close().catch(() => undefined);
+    });
   });
   page.on("download", (download) => {
     void download.cancel().catch(() => undefined);
@@ -80,7 +85,6 @@ export async function startLiveCast(input: {
   });
   await page.setViewportSize(viewport);
   await page.goto(chatUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
-  cdp = await input.context.newCDPSession(page);
   let lastFrame = 0;
   cdp.on("Page.screencastFrame", (event: { data: string; sessionId: number; metadata?: { deviceWidth?: number; deviceHeight?: number } }) => {
     void cdp?.send("Page.screencastFrameAck", { sessionId: event.sessionId }).catch(() => undefined);
@@ -97,6 +101,18 @@ export async function startLiveCast(input: {
   return {
     async send(command) {
       if (stopped || !cdp) return;
+      if (!typing && command.type === "mouse" && command.action !== "move") {
+        const point = mapPointer(command.x, command.y, { width: command.canvasWidth, height: command.canvasHeight }, viewport);
+        const href = await page.evaluate(({ x, y }) => {
+          const node = document.elementFromPoint(x, y);
+          const link = node?.closest?.("a[href]");
+          return link?.getAttribute("href") ?? null;
+        }, point).catch(() => null);
+        const pointer = liveThreadClick(href) ? "thread" : "click";
+        if (!liveControlAllowed(false, "control", "mouse", pointer)) return;
+      }
+      if (!typing && command.type === "mouse" && command.action === "move" && !liveControlAllowed(false, "control", "mouse", "scroll")) return;
+      if (!typing && command.type === "wheel" && !liveControlAllowed(false, "control", "wheel", "scroll")) return;
       const next = deskCommand(command, viewport, typing);
       if (!next) return;
       if (next.method === "resize") {

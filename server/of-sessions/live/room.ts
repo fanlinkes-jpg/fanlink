@@ -1,7 +1,6 @@
+import type { BrowserContext } from "playwright";
 import type { RawData, WebSocket } from "ws";
-import { getSql } from "../../../src/lib/db.ts";
-import { getOfSessionManager } from "../../../src/lib/of-sessions-runtime.server.ts";
-import { attributeLiveSend, liveSendAttributable } from "../sync/chat-store.ts";
+import { attributeLiveSend, liveSendMatchesGesture } from "../sync/chat-store.ts";
 import {
   claimControl,
   liveControlAllowed,
@@ -28,6 +27,7 @@ type Room = {
   viewers: Viewer[];
   holder: string | null;
   heldSince: string | null;
+  lastGestureAt: string | null;
   holderUsedAt: number;
   cast: LiveCast | null;
   release: (() => Promise<void>) | null;
@@ -36,6 +36,27 @@ type Room = {
 };
 
 const rooms = new Map<string, Room>();
+
+type LiveOpener = {
+  borrow: (accountId: string) => Promise<{ context: BrowserContext; release: () => Promise<void> }>;
+  open: typeof startLiveCast;
+};
+
+let liveOpener: LiveOpener | null = null;
+
+/** El test de la sala sustituye el Chromium. En producción queda vacío. */
+export function useLiveOpener(opener: LiveOpener | null): void {
+  liveOpener = opener;
+}
+
+export async function stopLiveRooms(): Promise<void> {
+  await Promise.all([...rooms.values()].map((room) => stopRoom(room)));
+}
+
+async function borrowAccount(accountId: string): Promise<{ context: BrowserContext; release: () => Promise<void> }> {
+  const { getOfSessionManager } = await import("../../../src/lib/of-sessions-runtime.server.ts");
+  return (await getOfSessionManager()).borrowProfile(accountId);
+}
 
 /** El ticket llega en el primer mensaje, no en la URL. */
 export function acceptLiveSocket(socket: WebSocket): Promise<void> {
@@ -121,6 +142,7 @@ async function ensureRoom(ticket: LiveTicket): Promise<Room> {
     viewers: [],
     holder: null,
     heldSince: null,
+    lastGestureAt: null,
     holderUsedAt: Date.now(),
     cast: null,
     release: null,
@@ -128,10 +150,12 @@ async function ensureRoom(ticket: LiveTicket): Promise<Room> {
     idle: null,
   };
   rooms.set(key, room);
-  const sessions = await getOfSessionManager();
-  const borrowed = await sessions.borrowProfile(ticket.accountId);
+  const borrowed = liveOpener
+    ? await liveOpener.borrow(ticket.accountId)
+    : await borrowAccount(ticket.accountId);
   room.release = borrowed.release;
-  room.cast = await startLiveCast({
+  const openCast = liveOpener?.open ?? startLiveCast;
+  room.cast = await openCast({
     context: borrowed.context,
     accountId: ticket.accountId,
     threadKey: ticket.threadKey,
@@ -150,8 +174,16 @@ async function ensureRoom(ticket: LiveTicket): Promise<Room> {
       const holder = room.holder;
       const since = room.heldSince;
       if (!holder || !since) return;
-      if (!liveSendAttributable({ messageId: message.messageId, sentAt: message.sentAt, controlSince: since, existingAuthorId: null })) return;
-      void getSql().then((sql) => attributeLiveSend(sql, {
+      const observedAt = new Date().toISOString();
+      if (!liveSendMatchesGesture({
+        messageId: message.messageId,
+        sentAt: message.sentAt,
+        controlSince: since,
+        existingAuthorId: null,
+        gestureAt: room.lastGestureAt,
+        now: observedAt,
+      })) return;
+      void import("../../../src/lib/db.ts").then(async ({ getSql }) => attributeLiveSend(await getSql(), {
         id: crypto.randomUUID(),
         creatorId: room.ticket.creatorId,
         threadKey: room.ticket.threadKey,
@@ -163,6 +195,8 @@ async function ensureRoom(ticket: LiveTicket): Promise<Room> {
         createdAt: new Date().toISOString(),
         sentAt: message.sentAt,
         controlSince: since,
+        gestureAt: room.lastGestureAt,
+        observedAt,
       })).catch(() => undefined);
     },
   }).catch(async (error: unknown) => {
@@ -178,7 +212,17 @@ async function onClientMessage(room: Room, viewer: Viewer, raw: string): Promise
   if (!event || event.type === "auth") return;
   if (!takeLiveEventSlot(viewer.stamps, Date.now())) return;
   const typing = liveTypingEnabled();
+  if ((event.type === "mouse" || event.type === "wheel") && viewer.role === "control" && room.cast) {
+    if (event.type === "wheel" || (event.type === "mouse" && event.action === "move")) {
+      if (!liveControlAllowed(typing, viewer.role, event.type, "scroll")) return;
+    }
+    if (typing && event.type === "mouse" && event.action === "down") room.lastGestureAt = new Date().toISOString();
+    noteControl(room);
+    await room.cast.send(event);
+    return;
+  }
   if (!liveControlAllowed(typing, viewer.role, event.type)) return;
+  if (typing && event.type === "key" && event.key === "Enter") room.lastGestureAt = new Date().toISOString();
   if (event.type === "release") {
     const freed = releaseControl(room.holder, viewer.userId, room.viewers.map((item) => item.userId));
     applyHolder(room, freed.holder);
@@ -207,6 +251,7 @@ async function onClientMessage(room: Room, viewer: Viewer, raw: string): Promise
 function applyHolder(room: Room, holder: string | null): void {
   room.holder = holder;
   room.heldSince = holder ? new Date().toISOString() : null;
+  room.lastGestureAt = null;
   room.holderUsedAt = Date.now();
   for (const viewer of room.viewers) {
     viewer.role = holder != null && viewer.userId === holder ? "control" : "view";
@@ -236,6 +281,7 @@ function armControlTimer(room: Room): void {
 }
 
 function scheduleStop(room: Room): void {
+  if (rooms.get(room.key) !== room) return;
   if (room.idle) clearTimeout(room.idle);
   room.idle = setTimeout(() => {
     if (room.viewers.length === 0) void stopRoom(room);

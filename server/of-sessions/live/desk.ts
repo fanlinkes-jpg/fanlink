@@ -35,8 +35,13 @@ const LIVE_DENIED_SEGMENTS = [
   "payments", "billing", "wallet", "cards", "bank", "earnings", "invoices",
 ] as const;
 
-/** Solo el chat y sus mensajes. Statements, estadísticas, banca, pagos y ajustes no pasan. */
-export function liveRequestAllowed(raw: string): boolean {
+const LIVE_MEDIA_HOST = /^(cdn\d*|static|public|media|thumbs|assets|files|upload|stream)\.onlyfans\.com$/;
+const LIVE_API_HOST = /^(api\d*|ws\d*|socket)\.onlyfans\.com$/;
+const LIVE_STATIC = /\.(js|css|map|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|mp4|m4s|m3u8|ts|aac|mp3|webm)$/;
+const LIVE_WRITES = new Set(["POST", "PUT", "DELETE", "PATCH"]);
+
+/** Solo el chat y sus mensajes. En solo lectura no salen POST, PUT ni DELETE de mensajes, likes o PPV. */
+export function liveRequestAllowed(raw: string, method = "GET", typing = false): boolean {
   if (raw.startsWith("data:") || raw.startsWith("blob:") || raw.startsWith("about:")) return true;
   let url: URL;
   try {
@@ -54,16 +59,39 @@ export function liveRequestAllowed(raw: string): boolean {
     return false;
   }
   if (path.includes("..") || path.includes("\\")) return false;
-  const segments = path.split("/").filter(Boolean);
-  if (segments.some((part) => (LIVE_DENIED_SEGMENTS as readonly string[]).includes(part))) return false;
-  if (host !== "onlyfans.com" && host !== "www.onlyfans.com") return true;
-  if (path === "/" || LIVE_CHAT_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`))) return true;
-  return /\.(js|css|map|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|mp4|m4s|m3u8|ts|aac|mp3|webm)$/.test(path);
+  if (!liveHostPathAllowed(host, path)) return false;
+  return !liveWriteBlocked(method, path, typing);
 }
 
-/** El mismo filtro, dentro de la página, para pushState y window.open. */
-export function liveHistoryGuardSource(): string {
-  const allow = JSON.stringify({ prefixes: LIVE_CHAT_PREFIXES, denied: LIVE_DENIED_SEGMENTS });
+function liveHostPathAllowed(host: string, path: string): boolean {
+  const segments = path.split("/").filter(Boolean);
+  if (host === "onlyfans.com" || host === "www.onlyfans.com") {
+    if (segments.some((part) => (LIVE_DENIED_SEGMENTS as readonly string[]).includes(part))) return false;
+    if (path === "/" || LIVE_CHAT_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`))) return true;
+    return LIVE_STATIC.test(path);
+  }
+  if (LIVE_MEDIA_HOST.test(host)) return LIVE_STATIC.test(path) || path.startsWith("/files/") || path.startsWith("/media/");
+  if (LIVE_API_HOST.test(host)) {
+    return LIVE_CHAT_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`))
+      || path.startsWith("/ws")
+      || path.startsWith("/socket");
+  }
+  return false;
+}
+
+function liveWriteBlocked(method: string, path: string, typing: boolean): boolean {
+  if (typing || !LIVE_WRITES.has(method.toUpperCase())) return false;
+  return /\/messages(\/|$)/.test(path) || /\/likes?(\/|$)/.test(path) || /ppv|purchase|\/tips?(\/|$)/.test(path);
+}
+
+/** El mismo filtro, dentro de la página, para pushState, window.open y vistas que no cambian la ruta. */
+export function liveHistoryGuardSource(chatUrl = ""): string {
+  const allow = JSON.stringify({
+    prefixes: LIVE_CHAT_PREFIXES,
+    denied: LIVE_DENIED_SEGMENTS,
+    media: LIVE_MEDIA_HOST.source,
+    api: LIVE_API_HOST.source,
+  });
   return `(() => {
     const allow = ${allow};
     const ok = (raw) => {
@@ -73,10 +101,17 @@ export function liveHistoryGuardSource(): string {
         if (host !== "onlyfans.com" && !host.endsWith(".onlyfans.com")) return false;
         const path = decodeURIComponent(url.pathname).toLowerCase();
         const parts = path.split("/").filter(Boolean);
+        const staticFile = /\\.(js|css|map|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|mp4|m4s|m3u8|ts|aac|mp3|webm)$/.test(path);
+        if (host !== "onlyfans.com" && host !== "www.onlyfans.com") {
+          if (new RegExp(allow.media).test(host)) return staticFile || path.startsWith("/files/") || path.startsWith("/media/");
+          if (new RegExp(allow.api).test(host)) {
+            return allow.prefixes.some((prefix) => path === prefix || path.startsWith(prefix + "/")) || path.startsWith("/ws") || path.startsWith("/socket");
+          }
+          return false;
+        }
         if (parts.some((part) => allow.denied.includes(part))) return false;
-        if (host !== "onlyfans.com" && host !== "www.onlyfans.com") return true;
         if (path === "/" || allow.prefixes.some((prefix) => path === prefix || path.startsWith(prefix + "/"))) return true;
-        return /\\.(js|css|map|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|mp4|m4s|m3u8|ts|aac|mp3|webm)$/.test(path);
+        return staticFile;
       } catch { return false; }
     };
     const push = history.pushState.bind(history);
@@ -94,7 +129,44 @@ export function liveHistoryGuardSource(): string {
       if (url != null && !ok(url)) return null;
       return open(url, target, features);
     };
+    const chatUrl = ${JSON.stringify(chatUrl)};
+    const banned = /^(statements|statistics|banking|payouts|settings|earnings|payments)$/i;
+    const watch = () => {
+      const heading = document.querySelector("h1");
+      const text = (heading && heading.textContent ? heading.textContent : "").trim();
+      if (chatUrl && banned.test(text)) location.replace(chatUrl);
+    };
+    const arm = () => {
+      const root = document.documentElement;
+      if (!root || root.dataset.fanlinkLiveWatch === "1") return;
+      root.dataset.fanlinkLiveWatch = "1";
+      new MutationObserver(watch).observe(root, { childList: true, subtree: true, characterData: true });
+      watch();
+    };
+    arm();
+    document.addEventListener("DOMContentLoaded", arm);
+    const workers = navigator.serviceWorker;
+    if (workers) {
+      workers.getRegistrations?.().then((list) => list.forEach((item) => item.unregister()));
+      workers.register = () => Promise.reject(new Error("blocked"));
+    }
+    document.addEventListener("click", (event) => {
+      const node = event.target;
+      const link = node && node.closest ? node.closest("a[target=_blank]") : null;
+      if (link) event.preventDefault();
+    }, true);
   })();`;
+}
+
+/** Un clic en solo lectura solo vale si abre otro hilo del chat. */
+export function liveThreadClick(href: string | null): boolean {
+  if (!href) return false;
+  try {
+    const url = new URL(href, "https://onlyfans.com");
+    return liveRequestAllowed(url.toString()) && url.pathname.toLowerCase().startsWith("/my/chats");
+  } catch {
+    return false;
+  }
 }
 
 export function mapPointer(
@@ -338,13 +410,22 @@ export function takeLiveEventSlot(stamps: number[], now: number, limit = LIVE_EV
   return true;
 }
 
-/** Sin el flag de envío, el controlador no teclea, no pulsa Enter y no sube archivos. */
-export function liveControlAllowed(typing: boolean, role: LiveRole, kind: LiveClientEvent["type"]): boolean {
+/** Sin el flag de envío solo quedan el scroll y el clic que abre otro hilo. */
+export function liveControlAllowed(
+  typing: boolean,
+  role: LiveRole,
+  kind: LiveClientEvent["type"],
+  pointer: "scroll" | "thread" | "click" = "click",
+): boolean {
   if (kind === "auth") return false;
   if (kind === "release") return role === "control";
   if (kind === "claim") return role === "view";
   if (role !== "control") return false;
-  if (!typing && (kind === "key" || kind === "text" || kind === "file")) return false;
+  if (!typing && kind === "wheel") return true;
+  if (!typing && kind === "mouse" && pointer === "scroll") return true;
+  if (!typing && kind === "mouse" && pointer === "thread") return true;
+  if (!typing && (kind === "mouse" || kind === "key" || kind === "text" || kind === "file")) return false;
+  if (!typing && kind === "resize") return true;
   return true;
 }
 

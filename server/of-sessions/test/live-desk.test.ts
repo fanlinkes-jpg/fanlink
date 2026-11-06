@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { attributeLiveSend, liveSendAttributable } from "../sync/chat-store.ts";
+import { attributeLiveSend, liveSendAttributable, liveSendMatchesGesture } from "../sync/chat-store.ts";
 import type { ReadSql } from "../sync/store.ts";
 import {
   LIVE_MAX_PAYLOAD,
@@ -61,8 +61,18 @@ test("sin FANLINK_ENABLE_SEND no hay teclado, Enter ni archivos", () => {
   assert.equal(liveControlAllowed(false, "control", "key"), false);
   assert.equal(liveControlAllowed(false, "control", "text"), false);
   assert.equal(liveControlAllowed(false, "control", "file"), false);
-  assert.equal(liveControlAllowed(false, "control", "mouse"), true);
+  assert.equal(liveControlAllowed(false, "control", "mouse"), false);
+  assert.equal(liveControlAllowed(false, "control", "mouse", "scroll"), true);
+  assert.equal(liveControlAllowed(false, "control", "mouse", "thread"), true);
+  assert.equal(liveControlAllowed(false, "control", "wheel", "scroll"), true);
   assert.equal(liveControlAllowed(true, "view", "key"), false);
+  assert.equal(liveRequestAllowed("https://onlyfans.com/api2/v2/chats/1/messages", "POST", false), false);
+  assert.equal(liveRequestAllowed("https://onlyfans.com/api2/v2/chats/1/messages", "DELETE", false), false);
+  assert.equal(liveRequestAllowed("https://onlyfans.com/api2/v2/chats/1/likes", "PUT", false), false);
+  assert.equal(liveRequestAllowed("https://onlyfans.com/api2/v2/chats/1/messages", "POST", true), true);
+  assert.equal(liveRequestAllowed("https://onlyfans.com/api2/v2/chats/1/messages", "GET", false), true);
+  assert.equal(liveRequestAllowed("https://unknown.onlyfans.com/secret"), false);
+  assert.equal(liveRequestAllowed("https://api2.onlyfans.com/api2/v2/chats/1/messages"), true);
 });
 
 test("el ratón del canvas cae en el viewport y Enter no es texto", () => {
@@ -146,6 +156,22 @@ test("un mensaje viejo no cambia de autor", async () => {
     controlSince: "2026-11-06T12:00:00.000Z",
     existingAuthorId: null,
   }), true);
+  assert.equal(liveSendMatchesGesture({
+    messageId: "m-nuevo",
+    sentAt: "2026-11-06T12:00:05.000Z",
+    controlSince: "2026-11-06T12:00:00.000Z",
+    existingAuthorId: null,
+    gestureAt: null,
+    now: "2026-11-06T12:00:06.000Z",
+  }), false);
+  assert.equal(liveSendMatchesGesture({
+    messageId: "m-nuevo",
+    sentAt: "2026-11-06T12:00:05.000Z",
+    controlSince: "2026-11-06T12:00:00.000Z",
+    existingAuthorId: null,
+    gestureAt: "2026-11-06T12:00:04.000Z",
+    now: "2026-11-06T12:00:06.000Z",
+  }), true);
 
   const calls: string[] = [];
   const historical: ReadSql = {
@@ -167,6 +193,8 @@ test("un mensaje viejo no cambia de autor", async () => {
     createdAt: "2026-11-06T12:00:05.000Z",
     sentAt: "2020-01-01T00:00:00.000Z",
     controlSince: "2026-11-06T12:00:00.000Z",
+    gestureAt: "2026-11-06T12:00:04.000Z",
+    observedAt: "2026-11-06T12:00:06.000Z",
   }), false);
   assert.equal(calls.some((text) => text.includes("update of_chat_message")), false);
   assert.equal(calls.some((text) => text.includes("insert into of_chat_outbound")), false);
@@ -190,6 +218,8 @@ test("un mensaje viejo no cambia de autor", async () => {
     createdAt: "2026-11-06T12:00:05.000Z",
     sentAt: "2026-11-06T12:00:05.000Z",
     controlSince: "2026-11-06T12:00:00.000Z",
+    gestureAt: "2026-11-06T12:00:04.000Z",
+    observedAt: "2026-11-06T12:00:06.000Z",
   }), true);
   assert.equal(freshCalls.some((text) => text.includes("insert into of_chat_outbound")), true);
   const update = freshCalls.find((text) => text.includes("update of_chat_message"));

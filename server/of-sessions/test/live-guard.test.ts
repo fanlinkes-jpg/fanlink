@@ -46,3 +46,48 @@ test("la página en directo no abre statements, ajustes, un popup ni una descarg
     await browser.close();
   }
 });
+
+test("el filtro de la pestaña no corta el POST de otra página de la cuenta", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext();
+  const live = await context.newPage();
+  const sync = await context.newPage();
+  try {
+    await live.route("**/*", (route) => {
+      if (!liveRequestAllowed(route.request().url(), route.request().method(), false)) return route.abort();
+      return route.fulfill({ status: 200, contentType: "text/html", body: "<!doctype html><html><body>live</body></html>" });
+    });
+    await sync.route("**/*", (route) => route.fulfill({ status: 200, body: "sync" }));
+    const blocked = await live.evaluate(async () => {
+      try {
+        const response = await fetch("https://onlyfans.com/api2/v2/chats/7/messages", { method: "POST" });
+        return response.status;
+      } catch {
+        return 0;
+      }
+    });
+    const sent = await sync.evaluate(async () => {
+      const response = await fetch("https://onlyfans.com/api2/v2/chats/7/messages", { method: "POST" });
+      return response.status;
+    });
+    assert.equal(blocked, 0);
+    assert.equal(sent, 200);
+    await live.addInitScript({ content: liveHistoryGuardSource("https://onlyfans.com/my/chats/chat/9") });
+    await live.goto("https://onlyfans.com/my/chats/chat/7", { waitUntil: "domcontentloaded" });
+    await live.evaluate(() => {
+      document.body.innerHTML = "<h1>Statements</h1>";
+    });
+    await live.waitForURL("**/my/chats/chat/9", { waitUntil: "commit", timeout: 5_000 });
+    const workerBlocked = await live.evaluate(async () => {
+      try {
+        await navigator.serviceWorker.register("/sw.js");
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    assert.equal(workerBlocked, true);
+  } finally {
+    await browser.close();
+  }
+});
