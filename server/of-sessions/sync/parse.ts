@@ -115,7 +115,7 @@ const TX_KINDS: Record<string, TxKind> = {
 export function parseTransactions(value: unknown, now = new Date()): TransactionRow[] {
   const rows: TransactionRow[] = [];
   walkTransactions(value, rows, 0, now);
-  return dedupeTransactions(rows).slice(0, 400);
+  return dedupeTransactions(rows);
 }
 
 export function parseEarningsJson(value: unknown, now = new Date()): EarningRow[] {
@@ -176,6 +176,18 @@ export function isAfterTxCursor(
   if (row.occurredAt > cursor.at) return true;
   if (row.occurredAt < cursor.at) return false;
   return row.txKey !== cursor.key;
+}
+
+/** Los 400 más antiguos todavía no guardados. El cursor solo llega hasta el último de ese tramo. */
+export function takeContiguousTransactions<T extends { occurredAt: string; txKey: string }>(
+  rows: T[],
+  cursor: TxCursor | null,
+  cap = 400,
+): T[] {
+  return rows
+    .filter((row) => isAfterTxCursor(row, cursor))
+    .sort((left, right) => left.occurredAt.localeCompare(right.occurredAt) || left.txKey.localeCompare(right.txKey))
+    .slice(0, cap);
 }
 
 export function readFailureReason(input: {

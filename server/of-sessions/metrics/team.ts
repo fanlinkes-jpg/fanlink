@@ -39,7 +39,7 @@ export function chatterReports(input: {
   return users.map((userId) => {
     const spans = input.assignments.filter((row) => row.userId === userId);
     const sales = input.sales.filter((sale) => soleUser(input.assignments, sale.creatorId, sale.at) === userId);
-    const messages = input.messages.filter((message) => covers(spans, message.creatorId, message.at));
+    const messages = input.messages.filter((message) => soleUser(input.assignments, message.creatorId, message.at) === userId);
     const sent = messages.filter((message) => !message.fromFan && message.priceCents != null && message.priceCents > 0);
     const replies = firstReplies(messages);
     return {

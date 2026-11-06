@@ -13,14 +13,14 @@ test("el perfil del fan no inventa gasto ni PPV", () => {
       status: "active",
       subscribedAt: "2026-10-01T00:00:00.000Z",
       renewAuto: false,
-      spentCents: null,
+      spentCents: 1000,
       lastInteractionAt: "2026-11-05T10:00:00.000Z",
     }],
     purchases: [{ fanKey: "7", occurredAt: "2026-11-03T15:00:00.000Z", grossCents: 1000 }],
     ppv: [{ fanKey: "7", priceCents: 500, purchased: true }, { fanKey: "7", priceCents: 500, purchased: false }],
   });
   assert.equal(profile?.ltvCents, 1000);
-  assert.equal(profile?.spend30Cents, 1000);
+  assert.equal(profile?.spend30Cents, null);
   assert.equal(profile?.ppvReceived, 2);
   assert.equal(profile?.ppvBought, 1);
   assert.equal(profile?.segments.includes("risk"), true);

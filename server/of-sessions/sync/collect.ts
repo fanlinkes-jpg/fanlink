@@ -8,14 +8,16 @@ import {
   parseEarningsJson,
   parseFansDom,
   parseFansJson,
-  isAfterTxCursor,
   parseTransactions,
+  takeContiguousTransactions,
   readFailureReason,
   type TxCursor,
   type EarningRow,
   type FanRow,
   type TransactionRow,
 } from "./parse.ts";
+
+export { takeContiguousTransactions };
 
 export type CollectedRead = {
   earnings: EarningRow[];
@@ -51,6 +53,7 @@ export async function collectCreatorRead(
     sawLoggedIn: false,
     earningsRedirect: false,
     fansRedirect: false,
+    fanScrollStable: false,
     earningsUrl: false,
     fansUrl: false,
   };
@@ -99,8 +102,12 @@ export async function collectCreatorRead(
     return {
       earnings: notes.earnings,
       fans: notes.fans.slice(0, 5000),
-      transactions: notes.transactions.filter((row) => isAfterTxCursor(row, options.sinceTx ?? null)).slice(0, 400),
-      fansComplete: Boolean(site.subscribersUrl) && !notes.redirected && !loginRequired && !notes.fansRedirect,
+      transactions: takeContiguousTransactions(notes.transactions, options.sinceTx ?? null),
+      fansComplete: fanListSettled({
+        stable: notes.fanScrollStable,
+        count: notes.fans.length,
+        hadError: loginRequired || notes.redirected || notes.fansRedirect,
+      }),
       reason,
       jsonPaths: notes.paths,
       earningsCaptured: notes.earnings.length > 0,
@@ -130,6 +137,7 @@ async function warmOnlyFans(
     earningsRedirect: boolean;
     fansRedirect: boolean;
     fans: { length: number };
+    fanScrollStable: boolean;
   },
   pending: Promise<void>[],
 ): Promise<void> {
@@ -148,6 +156,15 @@ async function warmOnlyFans(
     }
 }
 
+export const FAN_LIST_CAP = 5000;
+
+/** El scroll solo cuenta como lista completa si el recuento dejó de crecer antes del tope. */
+export function fanListSettled(input: { stable: boolean; count: number; hadError: boolean }): boolean {
+  if (input.hadError || !input.stable) return false;
+  if (input.count >= FAN_LIST_CAP) return false;
+  return true;
+}
+
 function pageLoginReason(earnings: boolean, fans: boolean): string {
   if (earnings && fans) return "las páginas de ingresos y fans pidieron login";
   if (earnings) return "la página de ingresos pidió login";
@@ -158,7 +175,7 @@ async function openPage(
   page: Page,
   url: string,
   options: { paceMs: number; waitMs: number },
-  notes: { redirected: boolean },
+  notes: { redirected: boolean; fanScrollStable?: boolean },
   pending: Promise<void>[],
   scroll: boolean,
   site: SiteAdapter,
@@ -177,15 +194,20 @@ async function openPage(
   if (login > 0) redirected = true;
   if (redirected) notes.redirected = true;
   if (scroll && !redirected) {
-    let previous = -1;
+    let previous = fanCount?.() ?? 0;
+    let stable = false;
     for (let step = 0; step < 12; step += 1) {
-      const seen = fanCount?.() ?? 0;
-      if (step > 0 && seen === previous) break;
-      previous = seen;
       await page.mouse.wheel(0, 900).catch(() => undefined);
       await delay(options.paceMs);
       await drain(pending);
+      const seen = fanCount?.() ?? 0;
+      if (seen === previous) {
+        stable = true;
+        break;
+      }
+      previous = seen;
     }
+    notes.fanScrollStable = stable;
   }
   await delay(options.paceMs);
   await drain(pending);

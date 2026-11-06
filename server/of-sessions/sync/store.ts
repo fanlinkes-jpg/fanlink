@@ -31,6 +31,21 @@ export function unseenFanKeys(stored: string[], seen: string[], complete: boolea
   return stored.filter((key) => !live.has(key));
 }
 
+/** No caduca a nadie si la lista está cortada o si caerían más del 30 % de los activos. */
+export function planFanExpiry(
+  activeKeys: string[],
+  seen: string[],
+  complete: boolean,
+): { expire: string[]; warning: string | null } {
+  if (!complete) return { expire: [], warning: null };
+  const live = new Set(seen);
+  const expire = activeKeys.filter((key) => !live.has(key));
+  if (activeKeys.length > 0 && expire.length / activeKeys.length > 0.3) {
+    return { expire: [], warning: "no se marcan fans expirados: la lectura habría caducado demasiados" };
+  }
+  return { expire, warning: null };
+}
+
 export type SyncMeta = {
   creatorId: string;
   consecutiveFailures: number;
@@ -55,6 +70,7 @@ export async function saveCreatorRead(
   now = new Date(),
 ): Promise<void> {
   const syncedAt = now.toISOString();
+  let fanWarning: string | null = null;
   await sql.query("begin");
   try {
     if (read.earningsCaptured) {
@@ -100,8 +116,15 @@ export async function saveCreatorRead(
         );
       }
       if (read.fansComplete) {
-        const existing = await sql.query<{ fan_key: string }>("select fan_key from of_fan_read where creator_id = $1", [creatorId]);
-        for (const key of unseenFanKeys(existing.map((row) => row.fan_key), read.fans.map((row) => row.fanKey), true)) {
+        const existing = await sql.query<{ fan_key: string; status: string }>(
+          "select fan_key, status from of_fan_read where creator_id = $1",
+          [creatorId],
+        );
+        const active = existing.filter((row) => row.status === "active").map((row) => row.fan_key);
+        const decision = planFanExpiry(active, read.fans.map((row) => row.fanKey), true);
+        fanWarning = decision.warning;
+        if (decision.warning) console.info(`[fanlink:lectura] ${decision.warning}`);
+        for (const key of decision.expire) {
           await sql.query(
             "update of_fan_read set status = 'expired', synced_at = $3 where creator_id = $1 and fan_key = $2",
             [creatorId, key, syncedAt],
@@ -149,7 +172,7 @@ export async function saveCreatorRead(
         creatorId,
         read.earningsCaptured ? syncedAt : null,
         read.fansCaptured ? syncedAt : null,
-        publicSyncReason(read.reason),
+        fanWarning && !failed ? fanWarning : publicSyncReason(read.reason),
         read.jsonPaths.filter((path) => !path.includes("?")).slice(0, 8).join("\n"),
         ORIGIN,
         syncedAt,

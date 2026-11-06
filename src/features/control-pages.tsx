@@ -12,6 +12,7 @@ import { useOfReads } from "@/lib/use-of-reads";
 import type { CreatorEarningView, CreatorReadView } from "@/lib/of-sessions";
 import { changeRatio, creatorReport, type MetricPeriod } from "@/lib/creator-metrics";
 import { fanProfiles, rankFans } from "@/lib/fan-metrics";
+import { seedEmployeeStat } from "@/lib/employee-metrics";
 import { listCreatorChats, listTeamMetrics, setCreatorProxy, type TeamMetricView } from "@/lib/of-sessions";
 import { PLATFORMS } from "@/features/growth-pages";
 import { Badge, Button, Field, Panel, Select } from "@/components/ui";
@@ -20,22 +21,27 @@ export function AnalyticsPage() {
   const [view, setView] = useState<"creadoras" | "equipo" | "fans">("creadoras");
   const [period, setPeriod] = useState<MetricPeriod>("month");
   const [teamRows, setTeamRows] = useState<TeamMetricView[]>([]);
-  const [ppvSynced, setPpvSynced] = useState(false);
+  const [chatOkCreators, setChatOkCreators] = useState<string[]>([]);
   const [ppvRows, setPpvRows] = useState<Array<{ creatorId: string; fanKey: string | null; sentAt: string; priceCents: number | null; purchased: boolean | null }>>([]);
   useEffect(() => {
     void listTeamMetrics().then(setTeamRows).catch(() => setTeamRows([]));
     void listCreatorChats()
       .then((data) => {
-        setPpvRows(data.messages.map((message) => ({
+        const ok = data.meta.filter((item) => item.status === "ok").map((item) => item.creatorId);
+        setChatOkCreators(ok);
+        const allowed = new Set(ok);
+        setPpvRows(data.messages.filter((message) => allowed.has(message.creatorId)).map((message) => ({
           creatorId: message.creatorId,
           fanKey: message.fanKey,
           sentAt: message.sentAt,
           priceCents: message.priceCents,
           purchased: message.purchased,
         })));
-        setPpvSynced(true);
       })
-      .catch(() => setPpvSynced(false));
+      .catch(() => {
+        setChatOkCreators([]);
+        setPpvRows([]);
+      });
   }, []);
   const creators = useCrm((s) => s.creators);
   const creatorId = useCrm((s) => s.creatorId);
@@ -139,7 +145,7 @@ export function AnalyticsPage() {
             if (!read?.fansSyncedAt) return [];
             return rankFans(fanProfiles({
               now: new Date(),
-              ppvSynced,
+              ppvSynced: chatOkCreators.includes(creator.id),
               fans: read.fans.map((fan) => ({
                 fanKey: fan.fanKey,
                 name: fan.displayName ?? fan.handle,
@@ -283,11 +289,11 @@ export function TeamPage() {
                   </td>
                   <td className="px-3 py-3">{e.role}</td>
                   <td className="px-3 py-3 tabular-nums">{e.shifts.reduce((n, shift) => n + (shift === "libre" ? 0 : 8), 0)} h</td>
-                  <td className="px-3 py-3 tabular-nums">{mine.length}</td>
-                  <td className="px-3 py-3 tabular-nums">{money(sales)}</td>
-                  <td className="px-3 py-3 tabular-nums">{ppv}</td>
-                  <td className="px-3 py-3 tabular-nums">{money(tips)}</td>
-                  <td className="px-3 py-3">{e.replyMin ? `${e.replyMin} min` : "—"}</td>
+                  <td className="px-3 py-3 tabular-nums">{seedEmployeeStat(e.name, String(mine.length))}</td>
+                  <td className="px-3 py-3 tabular-nums">{seedEmployeeStat(e.name, money(sales))}</td>
+                  <td className="px-3 py-3 tabular-nums">{seedEmployeeStat(e.name, String(ppv))}</td>
+                  <td className="px-3 py-3 tabular-nums">{seedEmployeeStat(e.name, money(tips))}</td>
+                  <td className="px-3 py-3">{seedEmployeeStat(e.name, e.replyMin ? `${e.replyMin} min` : "—")}</td>
                   <td className="px-3 py-3">
                     <span className={`rounded-lg px-2 py-1 text-xs capitalize ${SHIFT_STYLE[e.shifts[today]]}`}>{e.shifts[today]}</span>
                   </td>
