@@ -17,6 +17,8 @@ import { DbAccountStore } from "../../server/of-sessions/store/db-account-store.
 import { createMirroringStore } from "../../server/of-sessions/store/mirroring-store.ts";
 import type { Account } from "../../server/of-sessions/types.ts";
 import type { CreatorChatList, CreatorReadList, CreatorReadView, CreatorSessionView } from "./of-sessions.ts";
+import { syncAssignments } from "../../server/of-sessions/metrics/assignments.ts";
+import { chatterReports } from "../../server/of-sessions/metrics/team.ts";
 import { deliverFanAlerts } from "../../server/of-sessions/notify/deliver.ts";
 import { chatIntervalMinFromEnv } from "../../server/of-sessions/sync/chats.ts";
 import { listChatMeta, listChats, saveChatRead } from "../../server/of-sessions/sync/chat-store.ts";
@@ -90,7 +92,9 @@ function bootSyncLoop(sessions: SessionManager): void {
       if (read.alreadyRunning) return;
       if (read.loginRequired) await sessions.markLoginRequired(accountId);
       if (!account?.creatorId) return;
-      await saveCreatorRead(await getSql(), account.creatorId, read);
+      const sql = await getSql();
+      await saveCreatorRead(sql, account.creatorId, read);
+      await syncAssignments(sql, account.creatorId);
     },
   });
 }
@@ -328,7 +332,10 @@ export async function syncCreatorReadView(userId: string, creatorId: string): Pr
   const read = await sessions.readCreatorData(account.id, true, prior[0]?.txCursor ?? null);
   logCreatorRead(id, read);
   if (read.loginRequired) await sessions.markLoginRequired(account.id);
-  if (!read.alreadyRunning) await saveCreatorRead(sql, id, read);
+  if (!read.alreadyRunning) {
+    await saveCreatorRead(sql, id, read);
+    await syncAssignments(sql, id);
+  }
   const [stored] = await listCreatorReads(sql, [id]);
   if (!stored) {
     return {
@@ -400,6 +407,76 @@ function visibleRunning(
     if (allowed && !allowed.has(account.creatorId)) return [];
     return [account.creatorId];
   });
+}
+
+export async function listTeamMetricViews(userId: string): Promise<Array<{
+  userId: string;
+  name: string;
+  grossCents: number | null;
+  ppvSent: number | null;
+  ppvBought: number | null;
+  firstReplyMinutes: number | null;
+  threads: number | null;
+}>> {
+  const access = await accessFor(userId);
+  const sql = await getSql();
+  const assignments = await sql.query<{ creator_id: string; user_id: string; started_at: Date | string; ended_at: Date | string | null }>(
+    "select creator_id, user_id, started_at, ended_at from of_assignment",
+  );
+  const allowed = new Set(access.role === "owner" ? assignments.map((row) => row.creator_id) : access.creatorIds);
+  const spans = assignments
+    .filter((row) => allowed.has(row.creator_id) && (access.role === "owner" || row.user_id === access.userId))
+    .map((row) => ({
+      creatorId: row.creator_id,
+      userId: row.user_id,
+      startedAt: row.started_at instanceof Date ? row.started_at.toISOString() : String(row.started_at),
+      endedAt: row.ended_at == null ? null : row.ended_at instanceof Date ? row.ended_at.toISOString() : String(row.ended_at),
+    }));
+  const sales = await sql.query<{ creator_id: string; occurred_at: Date | string; gross_cents: number | string }>(
+    "select creator_id, occurred_at, gross_cents from of_transaction where kind = 'tip'",
+  );
+  const messages = await sql.query<{
+    creator_id: string;
+    thread_key: string;
+    sent_at: Date | string;
+    from_fan: boolean | string;
+    price_cents: number | string | null;
+    purchased: boolean | string | null;
+  }>("select creator_id, thread_key, sent_at, from_fan, price_cents, purchased from of_chat_message");
+  const names = await sql.query<{ user_id: string; display_name: string }>("select user_id, display_name from staff_profile");
+  const nameOf = new Map(names.map((row) => [row.user_id, row.display_name]));
+  const asIso = (value: Date | string) => (value instanceof Date ? value.toISOString() : String(value));
+  const chatRows = messages
+    .filter((row) => allowed.has(row.creator_id))
+    .map((row) => ({
+      creatorId: row.creator_id,
+      threadKey: row.thread_key,
+      at: asIso(row.sent_at),
+      fromFan: row.from_fan === true || row.from_fan === "t" || row.from_fan === "true",
+      priceCents: row.price_cents == null ? null : Number(row.price_cents),
+      purchased: row.purchased == null ? null : row.purchased === true || row.purchased === "t" || row.purchased === "true",
+    }));
+  const ppvSales = chatRows
+    .filter((row) => !row.fromFan && row.purchased === true && row.priceCents != null)
+    .map((row) => ({ creatorId: row.creatorId, at: row.at, grossCents: row.priceCents ?? 0, kind: "ppv" as const }));
+  return chatterReports({
+    assignments: spans,
+    sales: [
+      ...sales
+        .filter((row) => allowed.has(row.creator_id))
+        .map((row) => ({ creatorId: row.creator_id, at: asIso(row.occurred_at), grossCents: Number(row.gross_cents), kind: "tip" as const })),
+      ...ppvSales,
+    ],
+    messages: chatRows,
+  }).map((row) => ({
+    userId: row.userId,
+    name: nameOf.get(row.userId) ?? row.userId,
+    grossCents: access.role === "owner" || row.userId === access.userId ? row.grossCents : null,
+    ppvSent: row.ppvSent,
+    ppvBought: row.ppvBought,
+    firstReplyMinutes: row.firstReplyMinutes,
+    threads: row.threads,
+  }));
 }
 
 function logCreatorRead(

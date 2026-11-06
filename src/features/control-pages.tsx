@@ -12,16 +12,18 @@ import { useOfReads } from "@/lib/use-of-reads";
 import type { CreatorEarningView, CreatorReadView } from "@/lib/of-sessions";
 import { changeRatio, creatorReport, type MetricPeriod } from "@/lib/creator-metrics";
 import { fanProfiles, rankFans } from "@/lib/fan-metrics";
-import { listCreatorChats } from "@/lib/of-sessions";
+import { listCreatorChats, listTeamMetrics, type TeamMetricView } from "@/lib/of-sessions";
 import { PLATFORMS } from "@/features/growth-pages";
 import { Badge, Button, Field, Panel, Select } from "@/components/ui";
 
 export function AnalyticsPage() {
   const [view, setView] = useState<"creadoras" | "equipo" | "fans">("creadoras");
   const [period, setPeriod] = useState<MetricPeriod>("month");
+  const [teamRows, setTeamRows] = useState<TeamMetricView[]>([]);
   const [ppvSynced, setPpvSynced] = useState(false);
   const [ppvRows, setPpvRows] = useState<Array<{ creatorId: string; fanKey: string | null; priceCents: number | null; purchased: boolean | null }>>([]);
   useEffect(() => {
+    void listTeamMetrics().then(setTeamRows).catch(() => setTeamRows([]));
     void listCreatorChats()
       .then((data) => {
         setPpvRows(data.messages.map((message) => ({
@@ -145,14 +147,15 @@ export function AnalyticsPage() {
                     <td className="px-3 py-3">{e.name}{e.online ? " · en línea" : ""}</td>
                     <td className="px-3 py-3">{e.role}</td>
                     <td className="px-3 py-3 tabular-nums">{mine.length}</td>
-                    <td className="px-3 py-3 text-muted">Sin sincronizar</td>
-                    <td className="px-3 py-3">{e.replyMin ? `${e.replyMin} min` : "—"}</td>
+                    <td className="px-3 py-3 text-muted">Sin datos</td>
+                    <td className="px-3 py-3 text-muted">Sin datos</td>
                     <td className="px-3 py-3 capitalize">{e.shifts[day]}</td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
+          <TeamBoard rows={teamRows} />
         </div>
       )}
 
@@ -482,6 +485,32 @@ function Metric({ label, value, hint }: { label: string; value: string; hint: st
       <p className="text-xs text-muted">{label}</p>
       <p className="mt-1 text-sm font-medium">{value}</p>
       <p className="text-xs text-muted">{hint}</p>
+    </div>
+  );
+}
+
+function TeamBoard({ rows }: { rows: TeamMetricView[] }) {
+  return (
+    <div className="mt-4">
+      <p className="mb-2 text-sm text-muted">Cifras de los chats y propinas sincronizados. Un chatter solo ve las suyas. El turno de arriba no sale de OnlyFans.</p>
+      {rows.length === 0 ? <p className="text-sm text-muted">Sin datos</p> : (
+        <table className="w-full text-left text-sm">
+          <thead className="text-xs text-muted">
+            <tr>{["Persona", "Ingresos atribuidos", "PPV", "Primera respuesta", "Conversaciones"].map((h) => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.userId} className="border-t border-line">
+                <td className="px-3 py-3">{row.name}</td>
+                <td className="px-3 py-3">{row.grossCents == null ? "Sin datos" : centsLabel(row.grossCents, "USD")}</td>
+                <td className="px-3 py-3">{row.ppvSent == null ? "Sin datos" : `${row.ppvBought ?? 0}/${row.ppvSent}`}</td>
+                <td className="px-3 py-3">{row.firstReplyMinutes == null ? "Sin datos" : `${row.firstReplyMinutes} min`}</td>
+                <td className="px-3 py-3">{row.threads == null ? "Sin datos" : String(row.threads)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }

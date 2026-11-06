@@ -178,6 +178,23 @@ export const syncCreatorChats = createServerFn({ method: "POST" })
     await syncCreatorChatView(context.userId, data.creatorId);
   });
 
+export type TeamMetricView = {
+  userId: string;
+  name: string;
+  grossCents: number | null;
+  ppvSent: number | null;
+  ppvBought: number | null;
+  firstReplyMinutes: number | null;
+  threads: number | null;
+};
+
+export const listTeamMetrics = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }): Promise<TeamMetricView[]> => {
+    const { listTeamMetricViews } = await import("./of-sessions-runtime.server");
+    return listTeamMetricViews(context.userId);
+  });
+
 export const syncCreatorRead = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((input: { creatorId: string }) => input)
