@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { chromium } from "playwright";
 import { parseChatMessages } from "../sync/chats.ts";
-import { canProxyMedia, listPageDone, nextHistoryThread, oldestCursor, pageFinished, paidLabel, purchaseLine } from "../sync/history.ts";
+import { canProxyMedia, listPageDone, nextHistoryThread, nextMediaUrl, oldestCursor, pageFinished, paidLabel, purchaseLine } from "../sync/history.ts";
 import { captureChatListPage, captureOlderMessages } from "../sync/history-scroll.ts";
 import { startFixture } from "./fixture-site.ts";
 
@@ -42,8 +42,11 @@ test("el histórico, el medio y la compra salen del JSON y no se inventan", () =
   assert.equal(pageFinished("1", [{ messageKey: "0", sentAt: "2026-10-01T10:00:00.000Z" }]), false);
   assert.equal(nextHistoryThread([{ threadKey: "a", cursor: "1", done: true }, { threadKey: "b", cursor: null, done: false }])?.threadKey, "b");
   assert.equal(listPageDone(["7"], [{ threadKey: "7", fanKey: null, fanHandle: null, fanName: null, lastMessageAt: null, excerpt: null, unread: 0, lastFromUserId: null, lastFromFan: null, spentCents: null, subscribesCents: null, tipsCents: null, postsCents: null, messagesCents: null, avatarUrl: null, online: null, subPriceCents: null, subExpiresAt: null, renewAuto: null }]), true);
-  assert.equal(canProxyMedia("https://cdn.example/a.jpg"), true);
+  assert.equal(canProxyMedia("https://cdn2.onlyfans.com/a.jpg"), true);
+  assert.equal(canProxyMedia("https://cdn.example/a.jpg"), false);
   assert.equal(canProxyMedia("https://onlyfans.com/api2/v2/chats"), false);
+  assert.equal(nextMediaUrl("https://cdn2.onlyfans.com/a.jpg", "https://evil.example/a.jpg"), null);
+  assert.equal(nextMediaUrl("https://cdn2.onlyfans.com/a.jpg", "https://cdn3.onlyfans.com/b.jpg"), "https://cdn3.onlyfans.com/b.jpg");
 });
 
 test("el scroll del hilo y de la lista captura la página que pide el sitio", async () => {

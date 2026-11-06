@@ -16,6 +16,7 @@ export type BubbleMedia = {
 export type BubbleMessage = {
   creatorId: string;
   messageKey: string;
+  threadKey?: string;
   fromFan: boolean;
   body: string;
   sentAt: string;
@@ -48,7 +49,7 @@ export function ChatBubble({ message, avatarUrl = null }: { message: BubbleMessa
           {slide ? (
             <figure className="relative mb-1 h-52 overflow-hidden rounded-lg bg-[#d7dbe3]">
               {slide.preview ? (
-                <img src={`/api/chat-media?creatorId=${encodeURIComponent(message.creatorId)}&messageKey=${encodeURIComponent(message.messageKey)}&index=${index}`} alt="" className="h-full w-full object-cover" />
+                <img src={`/api/chat-media?creatorId=${encodeURIComponent(message.creatorId)}&threadKey=${encodeURIComponent(message.threadKey ?? "")}&messageKey=${encodeURIComponent(message.messageKey)}&index=${index}`} alt="" className="h-full w-full object-cover" />
               ) : (
                 <span className="grid h-full place-items-center text-[10px] text-[#6d7585]">Sin datos</span>
               )}

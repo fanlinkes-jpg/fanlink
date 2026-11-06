@@ -82,16 +82,32 @@ export function decodeMedia(raw: string | null): ChatMedia[] | null {
   }
 }
 
-export function canProxyMedia(url: string): boolean {
+/** Hosts de OnlyFans y su CDN. Un redirect a otro sitio no se sigue. */
+export function mediaHostAllowed(raw: string): boolean {
   try {
-    const parsed = new URL(url);
+    const parsed = new URL(raw);
     if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
+    const host = parsed.hostname.toLowerCase();
+    if (host !== "onlyfans.com" && !host.endsWith(".onlyfans.com")) return false;
     const path = parsed.pathname.toLowerCase();
-    if (path.includes("/api2/") || path.includes("/api/")) return false;
-    return true;
+    return !path.includes("/api2/") && !path.includes("/api/");
   } catch {
     return false;
   }
+}
+
+export function nextMediaUrl(current: string, location: string | null): string | null {
+  if (!location) return null;
+  try {
+    const next = new URL(location, current).toString();
+    return mediaHostAllowed(next) ? next : null;
+  } catch {
+    return null;
+  }
+}
+
+export function canProxyMedia(url: string): boolean {
+  return mediaHostAllowed(url);
 }
 
 export function olderThan(messages: ChatMessage[], cursorSentAt: string | null, limit: number): ChatMessage[] {

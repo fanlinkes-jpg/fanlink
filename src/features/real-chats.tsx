@@ -195,7 +195,7 @@ export function RealChatsPage() {
         setError(null);
       }
       await refresh();
-      if (!result.sent) setError(result.reason ?? "No se envió");
+      if (!result.sent && result.reason !== "Pendiente de confirmar") setError(result.reason ?? "No se envió");
     } catch (err) {
       setError(sessionErrorText(err));
     } finally {
@@ -875,6 +875,7 @@ function selectionOffsets(root: HTMLElement): { start: number; end: number } {
 function pendingCaption(item: { scheduledAt: string | null; authorName: string | null; status: "pending" | "error"; errorReason: string | null }): string {
   if (item.status === "error") return `Error · ${item.errorReason ?? "No se envió"} · sin reintento`;
   if (item.scheduledAt) return `Pendiente · programado ${item.scheduledAt.slice(0, 16).replace("T", " ")} · ${item.authorName ?? "Sin datos"} · no enviado`;
+  if (item.errorReason === "Pendiente de confirmar") return "Pendiente de confirmar";
   return "Pendiente · no enviado";
 }
 

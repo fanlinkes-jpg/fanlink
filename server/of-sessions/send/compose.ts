@@ -29,9 +29,16 @@ export type ComposeRequest = {
   /** 0 en pruebas. En real, cada tecla espera un retardo humano. */
   typeDelayMs?: number | null;
   confirmMs?: number;
+  /** Espera del primer click antes de probar Enter una sola vez. */
+  settleMs?: number;
 };
 
-export type ComposeResult = { messageId: string | null; reason: string | null };
+export type ComposeResult = {
+  messageId: string | null;
+  reason: string | null;
+  /** El texto salió, pero la página no dio un id de OnlyFans. */
+  awaitingId?: boolean;
+};
 
 /**
  * Abre el hilo, escribe en la caja y pulsa Send. No pide api2:
@@ -112,21 +119,30 @@ export async function composeChat(context: BrowserContext, request: ComposeReque
     if ((request.typeDelayMs ?? 1) > 0) await delay(280 + Math.floor(Math.random() * 220));
     console.info(`[fanlink:send] click disabled=${enabled ? "no" : "si"} dom=${beforeDom}`);
     if (enabled) await send.click({ timeout: 5_000 }).catch(() => undefined);
-    await delay(350);
-    let afterText = await boxText(roleBox);
-    let afterDom = await messageCount(page);
-    if (afterText.trim() && afterDom <= beforeDom) {
-      console.info("[fanlink:send] enter");
-      await roleBox.press("Enter").catch(() => undefined);
-      await delay(350);
-      afterText = await boxText(roleBox);
-      afterDom = await messageCount(page);
+    const settleMs = request.settleMs ?? 3_000;
+    const first = await watchSend(roleBox, page, payloads, before, request, beforeDom, settleMs);
+    const afterDom = await messageCount(page);
+    console.info(`[fanlink:send] despues caracteres=${(await boxText(roleBox)).length} dom=${afterDom} antes=${beforeDom}`);
+    if (first.kind === "id") {
+      console.info("[fanlink:send] confirmado via=json");
+      return { messageId: first.id, reason: null };
     }
-    console.info(`[fanlink:send] despues caracteres=${afterText.length} dom=${afterDom} antes=${beforeDom}`);
-    const messageId = await waitForOwnMessage(payloads, before, request, page, beforeDom);
-    if (!messageId) return await giveUp(page, "No apareció el mensaje propio");
-    console.info(`[fanlink:send] confirmado via=${messageId === "dom" ? "dom" : "json"}`);
-    return { messageId, reason: null };
+    if (first.kind === "visto") {
+      console.info("[fanlink:send] confirmado via=pendiente");
+      return { messageId: null, reason: null, awaitingId: true };
+    }
+    console.info("[fanlink:send] enter");
+    await roleBox.press("Enter").catch(() => undefined);
+    const second = await watchSend(roleBox, page, payloads, before, request, beforeDom, request.confirmMs ?? 8_000);
+    if (second.kind === "id") {
+      console.info("[fanlink:send] confirmado via=json");
+      return { messageId: second.id, reason: null };
+    }
+    if (second.kind === "visto") {
+      console.info("[fanlink:send] confirmado via=pendiente");
+      return { messageId: null, reason: null, awaitingId: true };
+    }
+    return await giveUp(page, "No apareció el mensaje propio");
   } catch (error) {
     const reason = error instanceof Error ? error.message : "No se envió";
     return await giveUp(page, publicSendReason(reason));
@@ -201,23 +217,43 @@ async function logBox(label: string, box: Locator, body: string, send: Locator |
   const igual = text === body.trim();
   const disabled = send ? await isDisabled(send) : null;
   const dom = await messageCount(page);
-  const muestra = igual ? "" : ` muestra=${text.slice(0, 24)}`;
   const flag = disabled == null ? "na" : disabled ? "si" : "no";
-  console.info(`[fanlink:send] ${label} caracteres=${text.length} igual=${igual ? "si" : "no"} disabled=${flag} dom=${dom}${muestra}`);
+  console.info(`[fanlink:send] ${label} caracteres=${text.length} igual=${igual ? "si" : "no"} disabled=${flag} dom=${dom}`);
 }
 
-async function waitForOwnMessage(payloads: string[], from: number, request: ComposeRequest, page: Page, beforeDom: number): Promise<string | null> {
-  const budget = request.confirmMs ?? 12_000;
-  const deadline = Date.now() + budget;
+type SendWatch = { kind: "id"; id: string } | { kind: "visto" } | { kind: "no" };
+
+/** Espera a que el intento salga. No pulsa otra vez. */
+async function watchSend(
+  box: Locator,
+  page: Page,
+  payloads: string[],
+  from: number,
+  request: ComposeRequest,
+  beforeDom: number,
+  timeoutMs: number,
+): Promise<SendWatch> {
+  const deadline = Date.now() + timeoutMs;
+  let left = false;
   while (Date.now() <= deadline) {
-    for (const payload of payloads.slice(from)) {
-      if (!payload) continue;
-      const id = messageIdFromPayload(payload, request);
-      if (id) return id;
-    }
+    const id = idFromPayloads(payloads, from, request);
+    if (id) return { kind: "id", id };
+    const text = (await boxText(box)).trim();
     const dom = await messageCount(page);
-    if (dom > beforeDom && await threadHasBody(page, request.body)) return "dom";
-    await delay(150);
+    const bubble = dom > beforeDom && await threadHasBody(page, request.body);
+    if (!text || bubble) left = true;
+    await delay(100);
+  }
+  const id = idFromPayloads(payloads, from, request);
+  if (id) return { kind: "id", id };
+  return left ? { kind: "visto" } : { kind: "no" };
+}
+
+function idFromPayloads(payloads: string[], from: number, request: ComposeRequest): string | null {
+  for (const payload of payloads.slice(from)) {
+    if (!payload) continue;
+    const id = messageIdFromPayload(payload, request);
+    if (id) return id;
   }
   return null;
 }
