@@ -54,7 +54,7 @@ export function ChatBubble({ message, avatarUrl = null }: { message: BubbleMessa
           {slide ? (
             <figure className="relative mb-1 h-52 overflow-hidden rounded-lg bg-[#d7dbe3]">
               {slide.preview ? (
-                <img src={`/api/chat-media?creatorId=${encodeURIComponent(message.creatorId)}&threadKey=${encodeURIComponent(message.threadKey ?? "")}&messageKey=${encodeURIComponent(message.messageKey)}&index=${index}`} alt="" className="h-full w-full object-cover" />
+                <img src={`/api/chat-media?creatorId=${encodeURIComponent(message.creatorId)}&threadKey=${encodeURIComponent(message.threadKey ?? "")}&messageKey=${encodeURIComponent(message.messageKey)}&index=${index}`} alt="" className={`h-full w-full object-cover ${decision && !decision.play ? "scale-110 blur-md" : ""}`} />
               ) : (
                 <span className="grid h-full place-items-center text-[10px] text-[#6d7585]">Sin datos</span>
               )}
@@ -65,14 +65,16 @@ export function ChatBubble({ message, avatarUrl = null }: { message: BubbleMessa
                 </>
               ) : null}
               {slide.kind === "video" || slide.kind === "audio" ? <Film className="absolute right-2 top-2 h-4 w-4 text-white" aria-label="Vídeo" /> : null}
-              <button
-                type="button"
-                aria-label={slide.kind === "foto" ? "Ver foto" : "Reproducir"}
-                className="absolute inset-y-0 left-10 right-10 grid place-items-center"
-                onClick={() => setOpen(true)}
-              >
-                {slide.kind === "video" || slide.kind === "audio" ? <Play className="h-8 w-8 text-white" /> : null}
-              </button>
+              {decision?.play ? (
+                <button
+                  type="button"
+                  aria-label={slide.kind === "foto" ? "Ver foto" : "Reproducir"}
+                  className="absolute inset-y-0 left-10 right-10 grid place-items-center"
+                  onClick={() => setOpen(true)}
+                >
+                  {slide.kind === "video" || slide.kind === "audio" ? <Play className="h-8 w-8 text-white" /> : null}
+                </button>
+              ) : null}
               {slide.locked ? <Lock className="absolute left-2 top-2 h-4 w-4 text-white" aria-label="Bloqueado" /> : null}
               <span className="absolute bottom-1 left-1/2 -translate-x-1/2 rounded bg-black/55 px-1.5 text-[10px] text-white">{index + 1}/{media.length}</span>
               {paidLabel(slide.priceCents, slide.paid) ? (

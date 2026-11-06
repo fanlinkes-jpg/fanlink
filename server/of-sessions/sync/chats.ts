@@ -520,7 +520,7 @@ export function mediaItems(record: Record<string, unknown>): ChatMedia[] {
     const secondsValue = row.duration ?? row.durationSeconds;
     const seconds = typeof secondsValue === "number" && Number.isFinite(secondsValue) && secondsValue >= 0 ? Math.round(secondsValue) : null;
     const ownPrice = priceCents(row.price);
-    const locked = row.canView === false || row.isLocked === true ? true : row.canView === true || row.isLocked === false ? false : null;
+    const locked = typeof row.canView === "boolean" ? row.canView === false : typeof row.isLocked === "boolean" ? row.isLocked === true : null;
     const opened = typeof row.isOpened === "boolean" ? row.isOpened : null;
     return [{
       kind: mediaKind(row.type ?? row.mediaType),
