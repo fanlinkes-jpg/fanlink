@@ -46,6 +46,24 @@ export type ChatMessage = {
   seen: boolean | null;
   /** Null si no dice si salió de una automatización. */
   automatic: boolean | null;
+  mediaCount?: number | null;
+  mediaSeconds?: number | null;
+  mediaPreview?: string | null;
+  media?: ChatMedia[] | null;
+};
+
+export type ChatMedia = {
+  kind: "foto" | "video" | "audio" | null;
+  seconds: number | null;
+  preview: string | null;
+  /** Archivo completo si el JSON lo trae. No sale al navegador si el del fan está bloqueado. */
+  full: string | null;
+  locked: boolean | null;
+  priceCents: number | null;
+  paid: boolean | null;
+  opened: boolean | null;
+  /** Id en la bóveda, si el JSON del mensaje lo trae. Sirve para el historial por fan. */
+  vaultId?: string | null;
 };
 
 export type FanMessageEvent = {
@@ -398,10 +416,11 @@ function messageFrom(
   fanKey: string | null,
   accountId: string | null,
 ): ChatMessage | null {
-  const body = visibleText(record.text ?? record.body, 2000);
+  const body = visibleText(record.text ?? record.body, 2000) ?? "";
   const sentAt = iso(record.createdAt ?? record.created_at ?? record.at);
   const messageKey = clean(record.id, 40);
-  if (!body || !sentAt || !messageKey) return null;
+  const media = mediaItems(record);
+  if ((!body && media.length === 0) || !sentAt || !messageKey) return null;
   const chat = nested(record.chat);
   const ownThread = clean(record.chatId, 40) ?? clean(record.chat_id, 40) ?? clean(chat?.id, 40);
   const thread = ownThread ?? threadKey;
@@ -420,6 +439,8 @@ function messageFrom(
     sentAt,
     priceCents: priceCents(record.price ?? record.ppvPrice),
     purchased: purchasedFlag(record),
+    ...mediaFacts(media),
+    media,
   };
 }
 
@@ -432,6 +453,87 @@ function priceCents(value: unknown): number | null {
 function purchasedFlag(record: Record<string, unknown>): boolean | null {
   if (typeof record.purchased === "boolean") return record.purchased;
   return null;
+}
+
+function mediaFacts(items: ChatMedia[]): { mediaCount: number | null; mediaSeconds: number | null; mediaPreview: string | null } {
+  if (items.length === 0) return { mediaCount: null, mediaSeconds: null, mediaPreview: null };
+  const seconds = items.reduce((sum, item) => sum + (item.seconds ?? 0), 0);
+  return {
+    mediaCount: items.length,
+    mediaSeconds: items.some((item) => item.seconds != null) ? Math.round(seconds) : null,
+    mediaPreview: items.find((item) => item.preview)?.preview ?? null,
+  };
+}
+
+export function mediaItems(record: Record<string, unknown>): ChatMedia[] {
+  const raw = record.media ?? record.previews ?? record.attachments;
+  if (!Array.isArray(raw)) return [];
+  const messagePrice = priceCents(record.price ?? record.ppvPrice);
+  const messagePaid = mediaPaid(record, messagePrice);
+  return raw.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const row = item as Record<string, unknown>;
+    const files = nested(row.files);
+    const preview = mediaUrl(row.thumb ?? row.preview ?? files?.thumb ?? nested(files?.thumb)?.url ?? files?.squarePreview);
+    const full = fullMediaUrl(row, files);
+    const secondsValue = row.duration ?? row.durationSeconds;
+    const seconds = typeof secondsValue === "number" && Number.isFinite(secondsValue) && secondsValue >= 0 ? Math.round(secondsValue) : null;
+    const ownPrice = priceCents(row.price);
+    const locked = typeof row.canView === "boolean" ? row.canView === false : typeof row.isLocked === "boolean" ? row.isLocked === true : null;
+    const opened = typeof row.isOpened === "boolean" ? row.isOpened : null;
+    const vaultId = clean(row.id, 40);
+    return [{
+      kind: mediaKind(row.type ?? row.mediaType),
+      seconds,
+      preview,
+      full,
+      locked,
+      priceCents: ownPrice ?? messagePrice,
+      paid: opened ?? messagePaid,
+      opened,
+      vaultId,
+    }];
+  });
+}
+
+function mediaKind(value: unknown): ChatMedia["kind"] {
+  const text = clean(value, 20)?.toLowerCase() ?? "";
+  if (text === "photo" || text === "image" || text === "foto") return "foto";
+  if (text === "video") return "video";
+  if (text === "audio") return "audio";
+  return null;
+}
+
+function mediaPaid(record: Record<string, unknown>, price: number | null): boolean | null {
+  if (typeof record.isPurchased === "boolean") return record.isPurchased;
+  if (typeof record.purchased === "boolean") return record.purchased;
+  if (price == null || price <= 0) return null;
+  if (typeof record.canPurchase === "boolean") return !record.canPurchase;
+  if (typeof record.isOpened === "boolean") return record.isOpened;
+  return null;
+}
+
+function fullMediaUrl(row: Record<string, unknown>, files: Record<string, unknown> | null): string | null {
+  const sources = nested(row.videoSources);
+  const ranked = sources
+    ? Object.entries(sources).sort((left, right) => Number(right[0]) - Number(left[0])).map((entry) => mediaUrl(entry[1]))
+    : [];
+  const drm = nested(files?.drm);
+  const manifest = nested(drm?.manifest);
+  return mediaUrl(files?.full)
+    ?? mediaUrl(files?.source)
+    ?? mediaUrl(row.source)
+    ?? mediaUrl(row.src)
+    ?? ranked.find((item): item is string => item != null)
+    ?? mediaUrl(manifest?.hls)
+    ?? mediaUrl(files?.hls)
+    ?? null;
+}
+
+function mediaUrl(value: unknown): string | null {
+  const nestedUrl = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>).url : value;
+  if (typeof nestedUrl !== "string" || !/^https?:\/\//.test(nestedUrl) || nestedUrl.length > 2000) return null;
+  return nestedUrl;
 }
 
 export function fromFanFlag(fromUserId: string | null, fanKey: string | null, accountId: string | null): boolean | null {

@@ -155,6 +155,17 @@ export type CreatorChatList = {
     authorName: string | null;
     seen: boolean | null;
     automatic: boolean | null;
+    media: Array<{
+      kind: "foto" | "video" | "audio" | null;
+      seconds: number | null;
+      preview: string | null;
+      full: string | null;
+      locked: boolean | null;
+      priceCents: number | null;
+      paid: boolean | null;
+      opened: boolean | null;
+      vaultId?: string | null;
+    }> | null;
   }>;
   meta: Array<{
     creatorId: string;
@@ -235,7 +246,7 @@ export const listDashboard = createServerFn({ method: "GET" })
 
 export const recordChatOutbound = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; ofMessageKey: string | null }) => input)
+  .validator((input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; ofMessageKey: string | null; mediaIds?: string[] }) => input)
   .handler(async ({ context, data }) => {
     const { recordChatOutboundView } = await import("./of-sessions-runtime.server");
     return recordChatOutboundView(context.userId, data);

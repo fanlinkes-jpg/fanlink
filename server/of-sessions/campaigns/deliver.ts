@@ -1,10 +1,12 @@
 import type { Page } from "playwright";
+import { mediaSendGate } from "../send/media-gate.ts";
 import { sendGate } from "./segment.ts";
 
 export type DraftDelivery = {
   fanKey: string;
   body: string;
   priceCents: number | null;
+  mediaCount: number;
 };
 
 /** Rellena el formulario del simulador. No abre OnlyFans. */
@@ -16,6 +18,8 @@ export async function deliverDrafts(
   if (!gate.allowed) return { delivered: 0, reason: gate.reason };
   let delivered = 0;
   for (const draft of input.drafts) {
+    const media = mediaSendGate(draft.mediaCount);
+    if (!media.allowed) return { delivered, reason: media.reason };
     await page.goto(input.formUrl, { waitUntil: "domcontentloaded" });
     await page.fill('input[name="fan"]', draft.fanKey);
     await page.fill('textarea[name="body"]', draft.body);

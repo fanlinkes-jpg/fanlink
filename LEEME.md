@@ -72,6 +72,30 @@ Los hilos y los mensajes se guardan por creadora y por fan, y los ve todo el equ
 
 Fragilidad: si OnlyFans cambia la ruta del chat o los campos `withUser`, `lastMessage`, `text` y `createdAt`, la lista puede quedar vacía y la razón será `sin respuesta de chats` o `página cambiada (chats)`. El envío no existe en esta versión.
 
+## Vídeo del hilo
+
+El mensaje guarda foto, vídeo o audio: duración, miniatura, candado, precio y si se pagó. Hace falta `npm run db:migrate` para `0028_message_media.sql`. El reproductor no envía nada y no toca `FANLINK_ENABLE_SEND`. El compositor deja el texto como pendiente. El botón de envío real sigue apagado. Adjuntar desde la bóveda guarda el id del medio, aparte del texto. Si el chatter pega el título o el acto, el borrador se rechaza y el aviso nombra la palabra: un título «tarde» bloquea «esta tarde». La pareja no se toca. Una línea que empieza por `[adjunto]` también se rechaza.
+
+Lo que envía la cuenta se reproduce si hay URL completa, aunque OnlyFans marque `locked`. Lo del fan sigue `canView`: si está bloqueado, la miniatura sale borrosa, con candado y precio (o «Sin datos» si el precio no vino). Esa URL completa no se manda al navegador. El play pide `/api/chat-media?variant=full` y el servidor lee la URL guardada.
+
+La miniatura de una cuenta con sesión activa se pide con `context.request` del navegador de esa sesión: mismo proxy, mismas cookies del perfil y la misma huella (`user-agent` de Chrome 131). No se copian cookies a un `fetch` del servidor. Si no hay sesión, el GET va sin Cookie y solo a `*.onlyfans.com`, sin `/api2/` ni `/api/`. Un redirect fuera de OnlyFans no se sigue.
+
+Con `VITE_AUTH_ENABLED=false` (solo localhost y sin `DATABASE_URL`), un miembro también ve las miniaturas del hilo que existe. Con el login real hace falta ser owner o tener el permiso `mensajes`. Sin permiso, o con un `threadKey` que no es el del mensaje, `/api/chat-media` responde 404.
+
+La miniatura se corta a 5 MB, con 8 s de silencio y 20 s de reloj total. El vídeo se reenvía de trozo en trozo: solo un `bytes=N-M` de como máximo 8 MB, con tiempo de cabeceras y de inactividad separados (12 s). La playlist HLS se reutiliza 10 s, con tope de 32 entradas y 256 KB. La caché de miniaturas no pasa de 200 ficheros ni de 50 MB, se borra a la semana y no se poda en cada escritura (como mucho cada 60 s).
+
+## Bóveda
+
+`Add from media vault` abre la bóveda de la cuenta. No envía. Adjuntar deja la pieza en el compositor y permite un precio PPV (vacío es gratis; menos de 3 USD o más de 200 USD no vale). El servidor vuelve a validar ese precio. Si el texto contiene el título o el acto como palabras completas, no se reescribe: se avisa con la palabra y no se guarda. Un título «tarde» bloquea «esta tarde». La pareja no cuenta. Una línea que empieza por `[adjunto]` se rechaza. **Dejar pendiente** guarda el borrador y sus medios en una sola transacción. El botón de envío real sigue apagado. Un borrador con filas en `of_outbound_media` no se envía: `deliverIfNoMedia` lo niega hasta que exista el envío real de medios. `compose` y `deliverChatSend` tienen que llamar a `deliverIfNoMedia(` antes de escribir en el formulario. Al juntarlos hace falta un test de `deliverChatSend` con un Page falso en el que `fill`, `type`, `press`, `keyboard.insertText`, `keyboard.down`, `keyboard.up`, `pressSequentially`, `evaluate`, `click`, `dispatchEvent` y `setInputFiles` queden a 0. La llamada a `deliverIfNoMedia(` tiene que ir antes de cada una de esas escrituras, dentro de la misma función. El conteo de medios del envío es obligatorio: si falta, no se envía.
+
+La lectura abre `https://onlyfans.com/my/vault` y guarda el JSON que esa página pide. No se construye ni se firma una llamada a `api2`. Va de una página en una, con al menos 5 segundos de espera (`FANLINK_VAULT_PACE_MS` no puede bajar de eso). **Sync now** empieza. **Continue** solo sigue si el JSON anterior trajo cursor; si no, dice «Sin datos». Hace falta `0029_vault_media.sql`.
+
+Si falta el título, la duración, el precio, la pareja o el historial, se muestra «Sin datos». La cifra que dice **Regla** no es un dato de OnlyFans: es la regla por defecto (sola $12–17, unos $1.08 por minuto; pareja $19–29; anal o película en el techo). Se puede cambiar con `FANLINK_PRICE_RULE`, un JSON con `soloMin`, `soloMax`, `soloPerMinute`, `coupleMin`, `coupleMax`, `couplePerMinute` y `step`. El escalón solo mira compras reales (`purchased`), no un envío que lleve precio. `NO VENDER` y `SIN EDITAR` (también `No-vender` o `no vender`) no se adjuntan, y una subcarpeta hereda el bloqueo. Si falta una carpeta de la cadena, se trata como bloqueada. Un id que no está en la bóveda de esa creadora no se guarda. El servidor lo rechaza aunque la pantalla lo deje pasar. Un ciclo de carpetas también queda en `NO VENDER`. El título y el acto se leen de la base: si están en el texto, el borrador no se guarda y el aviso dice la palabra. Las ventas y el precio de cada pieza solo los ve la dueña.
+
+«Ya enviado» sale de los mensajes guardados de ese fan, no solo del hilo que está abierto. El id del medio en el chat es el mismo que el de la bóveda. Si no hay fan, «Sin datos».
+
+Las listas quedan a la izquierda y el grid a la derecha. Se puede buscar en la carpeta abierta o en toda la bóveda, por texto, tipo, pareja, gratis o PPV, enviado a este fan y el resto de filtros. El orden es fecha, duración, ventas (solo la dueña) o precio. Cada chatter recuerda los suyos en este navegador. Una playlist HLS master se reescribe hacia la variante, y la variante hacia los segmentos.
+
 ## Avisos de WhatsApp
 
 Cuando entra un `new_fan_message`, Fanlink avisa a los miembros asignados a esa creadora que tengan el interruptor de avisos encendido y un teléfono en formato internacional. El texto lleva el nombre de la cuenta, el fan y el extracto. Varios fans del mismo momento salen en un solo mensaje. El mismo fan no se repite hasta que pasan los minutos guardados en su ficha (por defecto 15, `FANLINK_ALERT_QUIET_MIN`).

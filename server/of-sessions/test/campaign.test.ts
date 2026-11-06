@@ -40,7 +40,7 @@ test("el simulador recibe el borrador solo con el flag y fuera de OnlyFans", { t
       flag: "false",
       hostname: "127.0.0.1",
       formUrl: `${fixture.origin}/simulate-send`,
-      drafts: [{ fanKey: "7", body: "Hola Fan Uno", priceCents: 500 }],
+      drafts: [{ fanKey: "7", body: "Hola Fan Uno", priceCents: 500, mediaCount: 0 }],
     });
     assert.equal(blocked.delivered, 0);
     assert.equal(blocked.reason, "Envío real desactivado");
@@ -50,7 +50,7 @@ test("el simulador recibe el borrador solo con el flag y fuera de OnlyFans", { t
       flag: "true",
       hostname: "onlyfans.com",
       formUrl: `${fixture.origin}/simulate-send`,
-      drafts: [{ fanKey: "7", body: "no", priceCents: 500 }],
+      drafts: [{ fanKey: "7", body: "no", priceCents: 500, mediaCount: 0 }],
     });
     assert.equal(real.delivered, 0);
     assert.equal(fixture.sent.length, 0);
@@ -59,7 +59,7 @@ test("el simulador recibe el borrador solo con el flag y fuera de OnlyFans", { t
       flag: "true",
       hostname: "127.0.0.1",
       formUrl: `${fixture.origin}/simulate-send`,
-      drafts: [{ fanKey: "7", body: "Hola Fan Uno", priceCents: 500 }],
+      drafts: [{ fanKey: "7", body: "Hola Fan Uno", priceCents: 500, mediaCount: 0 }],
     });
     assert.equal(ok.delivered, 1);
     assert.equal(fixture.sent[0]?.fan, "7");

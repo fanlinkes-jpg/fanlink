@@ -28,7 +28,10 @@ import { chatIntervalMinFromEnv } from "../../server/of-sessions/sync/chats.ts";
 import { chatIntervalMinutes, inboxIsOpen, activeThreadWatches } from "../../server/of-sessions/sync/live.ts";
 import { openWatchContext, runInboxWatch } from "../../server/of-sessions/sync/inbox-watch.ts";
 import { pickAccountWatch } from "../../server/of-sessions/sync/watch-plan.ts";
-import { listChatMeta, listChats, listPendingOutbounds, recordOutbound, saveChatRead } from "../../server/of-sessions/sync/chat-store.ts";
+import { commitOutbound, listChatMeta, listChats, listPendingOutbounds, saveChatRead } from "../../server/of-sessions/sync/chat-store.ts";
+import { prepareOutbound, validOutboundPrice } from "../../server/of-sessions/sync/composer-draft.ts";
+import { decideMediaAttach } from "../../server/of-sessions/sync/vault-store.ts";
+import { mediaForBrowser } from "../../server/of-sessions/sync/media-client.ts";
 import { intervalMinFromEnv, startSyncLoop, type ScheduleAccount } from "../../server/of-sessions/sync/schedule.ts";
 import {
   listCreatorReads,
@@ -425,6 +428,7 @@ export async function listCreatorChatViews(userId: string): Promise<CreatorChatL
       authorName: message.authorName,
       seen: message.seen,
       automatic: message.automatic,
+      media: mediaForBrowser(message.media, message.fromFan),
     })),
     meta: stored.meta.map((item) => ({
       creatorId: item.creatorId,
@@ -670,25 +674,31 @@ export async function listTeamMetricViews(userId: string): Promise<Array<{
 
 export async function recordChatOutboundView(
   userId: string,
-  input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; ofMessageKey: string | null },
+  input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; ofMessageKey: string | null; mediaIds?: string[] },
 ): Promise<{ ok: true; sent: false }> {
   const access = await accessFor(userId);
   if (access.role !== "owner" && !access.perms.includes("mensajes")) {
     throw new WorkspaceAccessError("No tienes permiso para escribir.");
   }
-  const body = input.body.replace(/\s+/g, " ").trim();
-  if (!body) throw new WorkspaceAccessError("Escribe un mensaje.");
-  await recordOutbound(await getSql(), {
-    id: crypto.randomUUID(),
+  const sql = await getSql();
+  const price = validOutboundPrice(input.priceCents);
+  if (!price.ok) throw new WorkspaceAccessError(price.notice);
+  const decision = await decideMediaAttach(sql, input.creatorId, input.mediaIds ?? []);
+  if (!decision.ok) throw new WorkspaceAccessError(decision.notice);
+  const prepared = prepareOutbound(input.body, decision.items, null);
+  if (!prepared.ok) throw new WorkspaceAccessError(prepared.notice);
+  const id = crypto.randomUUID();
+  await commitOutbound(sql, {
+    id,
     creatorId: input.creatorId,
     threadKey: input.threadKey,
     fanKey: input.fanKey,
     authorId: access.userId,
-    body,
-    priceCents: input.priceCents,
+    body: prepared.body,
+    priceCents: price.cents,
     createdAt: new Date().toISOString(),
     ofMessageKey: input.ofMessageKey,
-  });
+  }, prepared.mediaIds);
   return { ok: true, sent: false };
 }
 
