@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { chromium } from "playwright";
-import { composeChat } from "../send/compose.ts";
+import { composeChat, createPendingNet } from "../send/compose.ts";
 import { navigationNote, pruneSendFailures, publicChatUrl, readFooterNodes, threadIdKind, writeSendFailure } from "../send/targets.ts";
 import { startFixture } from "./fixture-site.ts";
 
@@ -103,6 +103,30 @@ test("un click que vacía la caja tarde no se reenvía con Enter", async () => {
   assert.equal(sent.composed, 1);
   assert.equal(sent.messageId, "300");
   assert.equal(sent.enters, 0);
+});
+
+test("el contador de red se vacía al cerrar o al caducar", () => {
+  const pending = createPendingNet(1_000);
+  const first = {};
+  pending.start(first, 0);
+  assert.equal(pending.count(500), 1);
+  assert.equal(pending.openedSince(0, 500), true);
+  pending.finish(first, 500);
+  assert.equal(pending.count(500), 0);
+  const stuck = {};
+  pending.start(stuck, 0);
+  assert.equal(pending.count(1_000), 0);
+  assert.equal(pending.openedSince(0, 1_000), false);
+  pending.start(stuck, 2_000);
+  pending.reset();
+  assert.equal(pending.count(2_000), 0);
+});
+
+test("una petición que no termina no pulsa Enter", async () => {
+  const sent = await sendOnce("1", "colgado");
+  assert.equal(sent.composed, 1);
+  assert.equal(sent.enters, 0);
+  assert.equal(sent.messageId, null);
 });
 
 test("si la red confirma después de 12 s no se pulsa Enter", async () => {

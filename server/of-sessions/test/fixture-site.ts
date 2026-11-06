@@ -3,6 +3,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
+import type { Socket } from "node:net";
 import { InvalidArgumentError } from "../types.ts";
 import { messages } from "../messages.ts";
 import type { SiteAdapter } from "../sessions/site.ts";
@@ -90,7 +91,7 @@ function dashboardHtml(mode: FixtureMode): string {
   }
 }
 
-function ofChatHtml(mode: "live" | "slow" | "late" | "verylate" | "enter" | "stuck" = "live", chatId = "9"): string {
+function ofChatHtml(mode: "live" | "slow" | "late" | "verylate" | "hang" | "enter" | "stuck" = "live", chatId = "9"): string {
   const sendScript = mode === "stuck"
     ? `document.querySelector("[at-attr='send_btn']").disabled = true;`
     : `const box = document.querySelector("[at-attr='chat_input']");
@@ -103,7 +104,8 @@ function ofChatHtml(mode: "live" | "slow" | "late" | "verylate" | "enter" | "stu
            const price = document.querySelector("[at-attr='price_input']").dataset.saved || "";
            await fetch("/fixture/compose", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ body, price, file: "" }) });
            const slow = "${mode}" === "verylate" && waitMs !== 0 ? "&slow=1" : "";
-           await fetch("/api2/v2/chats/${chatId}/messages?order=desc" + slow);
+           const hang = "${mode}" === "hang" ? "&hang=1" : "";
+           await fetch("/api2/v2/chats/${chatId}/messages?order=desc" + slow + hang);
            box.value = "";
            send.disabled = true;
          };
@@ -196,11 +198,16 @@ export async function startFixture(mode: FixtureMode = "users-me"): Promise<Fixt
   const sent: Array<{ fan: string; body: string; price: string }> = [];
   const composed: Array<{ body: string; price: string; file: string }> = [];
   const confirmSends = { on: true };
+  const sockets = new Set<Socket>();
   const server = createServer((req, res) => {
     void handle(req, res, () => epoch, hits, mode, extraMessages, sent, composed, confirmSends).catch(() => {
       if (!res.headersSent) res.writeHead(500);
       res.end();
     });
+  });
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -229,6 +236,7 @@ export async function startFixture(mode: FixtureMode = "users-me"): Promise<Fixt
     },
     close: () =>
       new Promise((resolve, reject) => {
+        for (const socket of sockets) socket.destroy();
         server.close((error) => (error ? reject(error) : resolve()));
       }),
   };
@@ -473,13 +481,17 @@ async function handle(
     );
     return;
   }
-  if (req.method === "GET" && /^\/api2\/v2\/chats\/(?:2|3|4|6|9)\/messages$/.test(url.pathname)) {
+  if (req.method === "GET" && /^\/api2\/v2\/chats\/(?:1|2|3|4|6|9)\/messages$/.test(url.pathname)) {
     if (!accepted(req, epoch())) {
       res.writeHead(401, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "no" }));
       return;
     }
     const slow = url.searchParams.get("slow") === "1";
+    if (url.searchParams.get("hang") === "1") {
+      res.writeHead(200, { "content-type": "application/json" });
+      return;
+    }
     res.writeHead(200, { "content-type": "application/json" });
     if (slow) await new Promise((resolve) => setTimeout(resolve, 13_000));
     res.end(JSON.stringify({
@@ -505,6 +517,14 @@ async function handle(
       return;
     }
     html(res, ofChatHtml("stuck"));
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/my/chats/chat/1") {
+    if (!accepted(req, epoch())) {
+      redirect(res, "/login");
+      return;
+    }
+    html(res, ofChatHtml("hang", "1"));
     return;
   }
   if (req.method === "GET" && url.pathname === "/my/chats/chat/2") {
