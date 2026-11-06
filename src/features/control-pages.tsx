@@ -10,11 +10,13 @@ import { listTeam, updateStaffAccess, updateStaffAlert } from "@/lib/workspace";
 import { useCreatorSessions } from "@/lib/use-creator-sessions";
 import { useOfReads } from "@/lib/use-of-reads";
 import type { CreatorEarningView, CreatorReadView } from "@/lib/of-sessions";
+import { changeRatio, creatorReport, type MetricPeriod } from "@/lib/creator-metrics";
 import { PLATFORMS } from "@/features/growth-pages";
 import { Badge, Button, Field, Panel, Select } from "@/components/ui";
 
 export function AnalyticsPage() {
   const [view, setView] = useState<"creadoras" | "equipo" | "fans">("creadoras");
+  const [period, setPeriod] = useState<MetricPeriod>("month");
   const creators = useCrm((s) => s.creators);
   const employees = useCrm((s) => s.employees);
   const messages = useCrm((s) => s.messages);
@@ -24,7 +26,8 @@ export function AnalyticsPage() {
   const owner = reads.role === "owner" || teamAccess?.role === "owner";
   const scopedCreators = creators.filter((c) => creatorId === "all" || c.id === creatorId);
   const recent = messages.filter((m) => isLast24h(m.at) && m.from === "team" && m.status === "enviado" && !m.unsent);
-  const chart = owner ? earningsChart(scopedCreators.map((c) => c.id), reads.byCreator) : [];
+  const report = owner ? scopedReport(scopedCreators.map((c) => c.id), reads.byCreator, period) : null;
+  const chart = report?.series.map((point) => ({ day: point.label, amountCents: point.grossCents, currency: "USD" })) ?? [];
   const fanRows = scopedCreators.flatMap((creator) => {
     const read = reads.byCreator.get(creator.id);
     if (!read?.fansSyncedAt) return [];
@@ -57,6 +60,7 @@ export function AnalyticsPage() {
 
       {view === "creadoras" && owner && (
         <>
+          {report ? <CreatorPeriod report={report} period={period} onPeriod={setPeriod} /> : null}
           {chart.length === 0 ? (
             <p className="rounded-lg border border-line px-4 py-8 text-sm text-muted">Sin sincronizar</p>
           ) : (
@@ -400,24 +404,73 @@ function kindSummary(rows: CreatorEarningView[]): string {
   return seen.length ? seen.join(", ") : "—";
 }
 
-function earningsChart(creatorIds: string[], byCreator: Map<string, { earnings: CreatorEarningView[] | null }>): Array<{ day: string; amountCents: number; currency: string }> {
-  const days = new Map<string, { parts: number; total: number; currency: string }>();
-  for (const id of creatorIds) {
-    for (const row of byCreator.get(id)?.earnings ?? []) {
-      const slot = days.get(row.day) ?? { parts: 0, total: 0, currency: row.currency };
-      if (row.kind === "total") slot.total += row.amountCents;
-      else slot.parts += row.amountCents;
-      days.set(row.day, slot);
-    }
-  }
-  return [...days.entries()]
-    .sort((left, right) => left[0].localeCompare(right[0]))
-    .map(([day, slot]) => ({ day, amountCents: slot.parts > 0 ? slot.parts : slot.total, currency: slot.currency }));
-}
-
 function lastSyncAt(read: { earningsSyncedAt: string | null; fansSyncedAt: string | null } | undefined): string | null {
   const times = [read?.earningsSyncedAt, read?.fansSyncedAt].filter((value): value is string => Boolean(value));
   return times.sort().at(-1) ?? null;
+}
+
+const KIND_LABEL: Record<string, string> = {
+  subscription: "Suscripción",
+  renewal: "Renovación",
+  tip: "Propina",
+  message: "Mensaje",
+  post: "Post",
+  stream: "Stream",
+  referral: "Referido",
+};
+
+function scopedReport(ids: string[], reads: Map<string, CreatorReadView>, period: MetricPeriod) {
+  const rows = ids.map((id) => reads.get(id)).filter((row): row is CreatorReadView => Boolean(row));
+  return creatorReport({
+    now: new Date(),
+    period,
+    earningsSynced: rows.some((row) => row.earningsSyncedAt),
+    fansSynced: rows.some((row) => row.fansSyncedAt),
+    transactions: rows.flatMap((row) => row.transactions ?? []),
+    earnings: rows.flatMap((row) => row.earnings ?? []),
+    fans: rows.flatMap((row) => row.fans),
+  });
+}
+
+function CreatorPeriod({
+  report,
+  period,
+  onPeriod,
+}: {
+  report: ReturnType<typeof creatorReport>;
+  period: MetricPeriod;
+  onPeriod: (period: MetricPeriod) => void;
+}) {
+  const delta = changeRatio(report.grossCents, report.previousGrossCents);
+  return (
+    <Panel title="Periodo">
+      <div className="mb-3 flex gap-1">
+        {(["day", "week", "month"] as const).map((item) => (
+          <button key={item} type="button" onClick={() => onPeriod(item)} className={`rounded-md px-2 py-1 text-xs ${period === item ? "bg-raised text-fg" : "text-muted"}`}>
+            {item === "day" ? "Día" : item === "week" ? "Semana" : "Mes"}
+          </button>
+        ))}
+      </div>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Metric label="Bruto" value={report.grossCents == null ? "Sin datos" : centsLabel(report.grossCents, "USD")} hint={delta == null ? "Sin comparación" : `${delta > 0 ? "+" : ""}${Math.round(delta * 100)}% vs anterior`} />
+        <Metric label="Neto" value={report.netCents == null ? "Sin datos" : centsLabel(report.netCents, "USD")} hint={report.previousNetCents == null ? "Sin comparación" : `Anterior ${centsLabel(report.previousNetCents, "USD")}`} />
+        <Metric label="ARPU" value={report.arpuCents == null ? "Sin datos" : centsLabel(report.arpuCents, "USD")} hint="Ingreso medio por fan activo" />
+        <Metric label="Fans activos" value={report.activeFans == null ? "Sin datos" : String(report.activeFans)} hint={`Nuevos ${report.newFans ?? "Sin datos"} · expirados ${report.expiredFans ?? "Sin datos"}`} />
+        <Metric label="Renovación" value={report.renewalRatio == null ? "Sin datos" : `${Math.round(report.renewalRatio * 100)}%`} hint="Sobre fans con el dato" />
+        <Metric label="Tipos" value={report.byKind.length === 0 ? "Sin datos" : report.byKind.map((item) => `${KIND_LABEL[item.kind] ?? item.kind} ${centsLabel(item.grossCents, "USD")}`).join(" · ")} hint="Desglose del periodo" />
+      </div>
+    </Panel>
+  );
+}
+
+function Metric({ label, value, hint }: { label: string; value: string; hint: string }) {
+  return (
+    <div>
+      <p className="text-xs text-muted">{label}</p>
+      <p className="mt-1 text-sm font-medium">{value}</p>
+      <p className="text-xs text-muted">{hint}</p>
+    </div>
+  );
 }
 
 function TransactionList({
