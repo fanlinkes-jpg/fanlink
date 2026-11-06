@@ -27,9 +27,11 @@ export async function serveChatMedia(request: Request, deps: ChatMediaDeps): Pro
   const indexRaw = url.searchParams.get("index");
   const index = Number(indexRaw ?? "");
   const row = creatorId && messageKey ? await deps.findRow(creatorId, messageKey) : null;
+  // media-access.ts es el del hilo: sin permiso mensajes solo pasa el owner.
+  // Con el login local apagado, un miembro también ve la miniatura.
   const reader = {
     localOpen: deps.localOpen,
-    role: deps.role,
+    role: deps.localOpen ? "owner" as const : deps.role,
     perms: deps.perms,
     creatorId,
     threadKey,

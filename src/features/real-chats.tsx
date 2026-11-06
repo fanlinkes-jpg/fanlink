@@ -187,7 +187,18 @@ export function RealChatsPage() {
                 </li>
               ))}
               {messages.map((message) => (
-                <ChatBubble key={message.messageKey} message={message} avatarUrl={selected.avatarUrl} />
+                <ChatBubble
+                  key={message.messageKey}
+                  avatarUrl={selected.avatarUrl}
+                  message={{
+                    ...message,
+                    media: message.media ?? null,
+                    liked: null,
+                    replyBody: null,
+                    eventKind: null,
+                    eventCents: null,
+                  }}
+                />
               ))}
             </ol>
             <form className="border-t border-[#e6e8ee] p-3" onSubmit={(event) => event.preventDefault()}>

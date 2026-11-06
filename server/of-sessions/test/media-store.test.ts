@@ -5,14 +5,14 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { listChats, saveChatRead } from "../sync/chat-store.ts";
-import { mediaForBrowser } from "../sync/media-play.ts";
+import { mediaForBrowser } from "../sync/media-client.ts";
 import type { ReadSql } from "../sync/store.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
 test("la base guarda la URL completa y la vista del fan bloqueado no", async () => {
   const db = new PGlite();
-  const files = ["0007_of_reads.sql", "0008_sync_schedule.sql", "0009_of_chats.sql", "0013_chat_price.sql", "0018_chat_preview.sql", "0019_chat_author.sql", "0020_chat_card.sql", "0021_message_media.sql"];
+  const files = ["0007_of_reads.sql", "0008_sync_schedule.sql", "0009_of_chats.sql", "0013_chat_price.sql", "0018_chat_preview.sql", "0019_chat_author.sql", "0020_chat_card.sql", "0028_message_media.sql"];
   for (const file of files) await db.exec(await readFile(path.join(root, "migrations", file), "utf8"));
   const sql: ReadSql = {
     async query<T>(text: string, params?: unknown[]): Promise<T[]> {

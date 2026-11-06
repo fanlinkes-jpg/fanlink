@@ -13,7 +13,7 @@ import { loadPreviewBytes, openPlayable, type SessionRun } from "../../../server
 import { mediaPlay } from "../../../server/of-sessions/sync/media-play.ts";
 import { playwrightSessionRequest } from "../../../server/of-sessions/sync/media-session.ts";
 import { isHlsUrl, loadPlaylistCached, playlistUrls, rewritePlaylist } from "../../../server/of-sessions/sync/media-stream.ts";
-import { decodeMedia, mediaHostAllowed } from "../../../server/of-sessions/sync/media-url.ts";
+import { decodeMedia, mediaHostAllowed } from "../../../server/of-sessions/sync/history.ts";
 
 export const Route = createFileRoute("/api/chat-media")({
   server: {

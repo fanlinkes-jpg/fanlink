@@ -1,4 +1,4 @@
-import { mediaHostAllowed, nextMediaUrl } from "./media-url.ts";
+import { mediaHostAllowed, nextMediaUrl } from "./history.ts";
 
 export function linkExpired(raw: string, now = Date.now()): boolean {
   try {
@@ -24,7 +24,7 @@ export type StreamOpen =
   | { ok: true; status: number; headers: Record<string, string>; body: ReadableStream<Uint8Array> | null }
   | { ok: false; status: number; reason: "host" | "caducado" | "vacio" | "rango" };
 
-/** Un solo trozo de vídeo o de segmento. La miniatura tiene su propio tope de 5 MB. */
+/** Un solo trozo. Ni el vídeo ni un segmento pueden vaciar el proceso. */
 export const MEDIA_MAX_BYTES = 8 * 1024 * 1024;
 export const MEDIA_FETCH_TIMEOUT_MS = 12_000;
 
@@ -37,7 +37,8 @@ export type MediaRange = { ok: true; header: string } | { ok: false; status: 416
 export function acceptMediaRange(header: string | null, maxBytes = MEDIA_MAX_BYTES): MediaRange {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) return { ok: false, status: 416 };
   if (header == null || header.trim() === "") return { ok: true, header: `bytes=0-${maxBytes - 1}` };
-  const open = /^bytes=(\d+)-$/.exec(header.trim());
+  const text = header.trim();
+  const open = /^bytes=(\d+)-$/.exec(text);
   if (open) {
     const start = Number(open[1]);
     if (!Number.isSafeInteger(start)) return { ok: false, status: 416 };
@@ -45,7 +46,7 @@ export function acceptMediaRange(header: string | null, maxBytes = MEDIA_MAX_BYT
     if (!Number.isSafeInteger(end)) return { ok: false, status: 416 };
     return { ok: true, header: `bytes=${start}-${end}` };
   }
-  const closed = /^bytes=(\d+)-(\d+)$/.exec(header.trim());
+  const closed = /^bytes=(\d+)-(\d+)$/.exec(text);
   if (!closed) return { ok: false, status: 416 };
   const start = Number(closed[1]);
   const end = Number(closed[2]);

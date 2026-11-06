@@ -12,7 +12,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../.
 
 test("un pendiente de la bandeja queda atribuido en el hilo y en Equipo al sincronizar", async () => {
   const db = new PGlite();
-  const files = ["0007_of_reads.sql", "0008_sync_schedule.sql", "0009_of_chats.sql", "0013_chat_price.sql", "0018_chat_preview.sql", "0019_chat_author.sql", "0020_chat_card.sql", "0021_message_media.sql"];
+  const files = ["0007_of_reads.sql", "0008_sync_schedule.sql", "0009_of_chats.sql", "0013_chat_price.sql", "0018_chat_preview.sql", "0019_chat_author.sql", "0020_chat_card.sql", "0028_message_media.sql"];
   for (const file of files) await db.exec(await readFile(path.join(root, "migrations", file), "utf8"));
   const sql: ReadSql = {
     async query<T>(text: string, params?: unknown[]): Promise<T[]> {

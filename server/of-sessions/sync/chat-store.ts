@@ -1,6 +1,6 @@
 import { matchOutboundAuthor, type OutboundDraft } from "./author-match.ts";
 import { newFanEvents, type ChatMessage, type ChatThread, type FanMessageEvent } from "./chats.ts";
-import { decodeMedia, encodeMedia } from "./media-url.ts";
+import { decodeMedia, encodeMedia } from "./history.ts";
 import type { ReadSql } from "./store.ts";
 
 const ORIGIN = "onlyfans";

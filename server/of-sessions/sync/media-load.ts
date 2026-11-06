@@ -1,5 +1,5 @@
-import { previewSource, readSessionMedia, sessionUpstream, type SessionRequest } from "./media-session.ts";
-import { canProxyMedia, followMedia, readCappedBytes, PREVIEW_MAX_BYTES, PREVIEW_TIMEOUT_MS } from "./media-url.ts";
+import { canProxyMedia, followMedia, PREVIEW_MAX_BYTES, PREVIEW_TIMEOUT_MS } from "./history.ts";
+import { PREVIEW_TOTAL_TIMEOUT_MS, previewSource, readSessionMedia, sessionUpstream, type SessionRequest } from "./media-session.ts";
 import { fetchUpstream, openMediaStream, type StreamOpen } from "./media-stream.ts";
 
 /** Ejecuta la lectura dentro del navegador de la sesión, con el contexto aún abierto. */
@@ -43,5 +43,56 @@ async function loadCappedPreview(current: string): Promise<{ status: number; loc
     await response.body?.cancel().catch(() => undefined);
     return { status: response.status, location: null, body: null };
   }
-  return { status: response.status, location: null, body: await readCappedBytes(response.body) };
+  return { status: response.status, location: null, body: await readPreviewBody(response.body) };
+}
+
+/** Lee como mucho el tope. El silencio corta, y también el reloj total. */
+export async function readPreviewBody(
+  body: ReadableStream<Uint8Array> | null,
+  maxBytes = PREVIEW_MAX_BYTES,
+  idleMs = PREVIEW_TIMEOUT_MS,
+  totalMs = PREVIEW_TOTAL_TIMEOUT_MS,
+): Promise<Uint8Array | null> {
+  if (!body) return null;
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let seen = 0;
+  const started = Date.now();
+  try {
+    for (;;) {
+      const remaining = totalMs - (Date.now() - started);
+      const next = await readWithLimit(reader.read(), Math.min(idleMs, remaining));
+      if (next.done) break;
+      seen += next.value.byteLength;
+      if (seen > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        return null;
+      }
+      chunks.push(next.value);
+    }
+  } catch {
+    await reader.cancel().catch(() => undefined);
+    return null;
+  }
+  const out = new Uint8Array(seen);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
+}
+
+function readWithLimit(work: Promise<ReadableStreamReadResult<Uint8Array>>, limitMs: number): Promise<ReadableStreamReadResult<Uint8Array>> {
+  if (limitMs <= 0) return Promise.reject(new Error("total"));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("inactivo")), limitMs);
+    work.then((value) => {
+      clearTimeout(timer);
+      resolve(value);
+    }, (error: unknown) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
 }

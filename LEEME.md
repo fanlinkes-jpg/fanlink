@@ -74,7 +74,7 @@ Fragilidad: si OnlyFans cambia la ruta del chat o los campos `withUser`, `lastMe
 
 ## Vídeo del hilo
 
-El mensaje guarda foto, vídeo o audio: duración, miniatura, candado, precio y si se pagó. Hace falta `npm run db:migrate` para `0021_message_media.sql`. El reproductor no envía nada y no toca `FANLINK_ENABLE_SEND`. El compositor sigue dejando el texto como pendiente; el botón de envío real sigue apagado. Adjuntar desde la bóveda llega en otra fase y, cuando exista, solo adjuntará: el envío real sigue en la rama del chat, detrás de ese flag.
+El mensaje guarda foto, vídeo o audio: duración, miniatura, candado, precio y si se pagó. Hace falta `npm run db:migrate` para `0028_message_media.sql`. El reproductor no envía nada y no toca `FANLINK_ENABLE_SEND`. El compositor sigue dejando el texto como pendiente; el botón de envío real sigue apagado. Adjuntar desde la bóveda llega en otra fase y, cuando exista, solo adjuntará: el envío real sigue en la rama del chat, detrás de ese flag.
 
 Lo que envía la cuenta se reproduce si hay URL completa, aunque OnlyFans marque `locked`. Lo del fan sigue `canView`: si está bloqueado, la miniatura sale borrosa, con candado y precio (o «Sin datos» si el precio no vino). Esa URL completa no se manda al navegador. El play pide `/api/chat-media?variant=full` y el servidor lee la URL guardada.
 
@@ -88,7 +88,7 @@ La miniatura se corta a 5 MB, con 8 s de silencio y 20 s de reloj total. El víd
 
 `Add from media vault` abre la bóveda de la cuenta. No envía. Adjuntar deja la pieza en el compositor; **Dejar pendiente** guarda el borrador que ya existía. El botón de envío real sigue apagado.
 
-La lectura abre `https://onlyfans.com/my/vault` y guarda el JSON que esa página pide. No se construye ni se firma una llamada a `api2`. Va de una página en una, con al menos 5 segundos de espera (`FANLINK_VAULT_PACE_MS` no puede bajar de eso). **Sync now** empieza. **Continue** solo sigue si el JSON anterior trajo cursor; si no, dice «Sin datos». Hace falta `0022_vault_media.sql`.
+La lectura abre `https://onlyfans.com/my/vault` y guarda el JSON que esa página pide. No se construye ni se firma una llamada a `api2`. Va de una página en una, con al menos 5 segundos de espera (`FANLINK_VAULT_PACE_MS` no puede bajar de eso). **Sync now** empieza. **Continue** solo sigue si el JSON anterior trajo cursor; si no, dice «Sin datos». Hace falta `0029_vault_media.sql`.
 
 Si falta el título, la duración, el precio, la pareja o el historial, se muestra «Sin datos». El precio sugerido solo sale con duración y carpeta: sola o individual entre $12 y $17 (unos $1.08 por minuto), pareja entre $19 y $29, anal o película en el techo, y un dólar por encima de la última compra de ese fan dentro de la banda. `NO VENDER` y `SIN EDITAR` no se adjuntan. Si un mensaje de la cuenta ya guardó el id de esa pieza para ese fan, se avisa con fecha, precio, compra y chatter.
 

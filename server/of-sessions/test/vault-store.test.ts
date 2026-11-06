@@ -12,7 +12,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../.
 
 test("la bóveda guarda la URL en el servidor y no la devuelve al navegador", async () => {
   const db = new PGlite();
-  await db.exec(await readFile(path.join(root, "migrations", "0022_vault_media.sql"), "utf8"));
+  await db.exec(await readFile(path.join(root, "migrations", "0029_vault_media.sql"), "utf8"));
   const sql: ReadSql = {
     async query<T>(text: string, params?: unknown[]): Promise<T[]> {
       const result = await db.query<T>(text, params);

@@ -1,6 +1,9 @@
 import { BROWSER_FINGERPRINT } from "../sessions/browser-factory.ts";
-import { PREVIEW_MAX_BYTES, PREVIEW_TOTAL_TIMEOUT_MS, mediaHostAllowed, nextMediaUrl } from "./media-url.ts";
+import { PREVIEW_MAX_BYTES, mediaHostAllowed, nextMediaUrl } from "./history.ts";
 import { MEDIA_FETCH_TIMEOUT_MS, MEDIA_MAX_BYTES, type UpstreamResponse } from "./media-stream.ts";
+
+/** Reloj de toda la miniatura. history.ts del hilo solo corta por silencio. */
+export const PREVIEW_TOTAL_TIMEOUT_MS = 20_000;
 
 /**
  * `context.request` de la sesión. Comparte proxy, cookies y huella del perfil.
