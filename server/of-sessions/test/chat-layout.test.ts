@@ -34,13 +34,18 @@ test("el botón Enviar se ve entero sin scroll de página", async () => {
         }
       });
       const seen = await sendButtonBox(page);
-      assert.equal(seen.found, true, `${viewport.width}x${viewport.height}: no está el botón`);
-      assert.ok(seen.top >= 0, `${viewport.width}x${viewport.height}: el botón sale por arriba`);
-      assert.ok(seen.bottom <= viewport.height + 1, `${viewport.width}x${viewport.height}: el botón sale por abajo`);
-      assert.ok(seen.left >= 0 && seen.right <= viewport.width + 1, `${viewport.width}x${viewport.height}: el botón sale por un lado`);
-      assert.equal(seen.hit, true, `${viewport.width}x${viewport.height}: el botón está tapado`);
+      const label = `${viewport.width}x${viewport.height}`;
+      assert.equal(seen.found, true, `${label}: no está el botón`);
+      assert.ok(seen.top >= 0, `${label}: el botón sale por arriba`);
+      assert.ok(seen.bottom <= viewport.height + 1, `${label}: el botón sale por abajo`);
+      assert.ok(seen.left >= 0 && seen.right <= viewport.width + 1, `${label}: el botón sale por un lado`);
+      assert.equal(seen.hit, true, `${label}: el botón está tapado`);
       assert.equal(seen.scrollY, 0);
-      assert.ok(seen.scrollHeight <= seen.innerHeight + 1, `${viewport.width}x${viewport.height}: la página hace scroll`);
+      assert.ok(seen.scrollHeight <= seen.innerHeight + 1, `${label}: la página hace scroll`);
+      assert.ok(seen.formTop >= 0 && seen.formBottom <= viewport.height + 1, `${label}: el compositor no cabe`);
+      for (const part of seen.parts) {
+        assert.ok(part.top >= 0 && part.bottom <= viewport.height + 1, `${label}: ${part.label} queda fuera`);
+      }
       if (viewport.capture) {
         await page.screenshot({ path: path.join(shots, `mensajes-${viewport.width}x${viewport.height}.png`) });
       }
@@ -88,11 +93,24 @@ async function sendButtonBox(page: Page): Promise<{
   scrollY: number;
   scrollHeight: number;
   innerHeight: number;
+  formTop: number;
+  formBottom: number;
+  parts: Array<{ label: string; top: number; bottom: number }>;
 }> {
   return page.evaluate(() => {
     const button = [...document.querySelectorAll("button")].find((node) => node.getAttribute("aria-label") === "Enviar");
+    const form = document.querySelector("form");
+    const formRect = form?.getBoundingClientRect();
+    const parts = ["Traducción", "Guiones", "Galería", "Dejar pendiente"].map((label) => {
+      const node = [...document.querySelectorAll("button")].find((item) => item.textContent?.includes(label));
+      const box = node?.getBoundingClientRect();
+      return { label, top: box?.top ?? -1, bottom: box?.bottom ?? -1 };
+    });
     if (!button) {
-      return { found: false, top: 0, bottom: 0, left: 0, right: 0, hit: false, scrollY: 0, scrollHeight: 0, innerHeight: 0 };
+      return {
+        found: false, top: 0, bottom: 0, left: 0, right: 0, hit: false, scrollY: 0, scrollHeight: 0, innerHeight: 0,
+        formTop: formRect?.top ?? -1, formBottom: formRect?.bottom ?? -1, parts,
+      };
     }
     const rect = button.getBoundingClientRect();
     const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
@@ -106,6 +124,9 @@ async function sendButtonBox(page: Page): Promise<{
       scrollY: window.scrollY,
       scrollHeight: document.documentElement.scrollHeight,
       innerHeight: window.innerHeight,
+      formTop: formRect?.top ?? -1,
+      formBottom: formRect?.bottom ?? -1,
+      parts,
     };
   });
 }

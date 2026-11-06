@@ -282,7 +282,7 @@ function ShellFrame({
 }) {
 
   return (
-    <div className="flex h-dvh overflow-hidden bg-bg text-fg">
+    <div className="flex h-dvh max-h-dvh min-h-0 overflow-hidden bg-bg text-fg">
       <aside className="relative z-50 hidden w-14 shrink-0 flex-col items-center gap-1 border-r border-line bg-surface py-3 md:flex">
         <Logo className="mb-2" />
         <Link
@@ -341,7 +341,7 @@ function ShellFrame({
       )}
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <header className="flex items-center gap-2 bg-[#1d2433] px-2 py-1.5 text-white">
+        <header className="flex shrink-0 items-center gap-2 bg-[#1d2433] px-2 py-1.5 text-white">
           <button className="rounded-md p-2 md:hidden" onClick={() => setMobile(true)} aria-label="Abrir menú">
             <Menu className="h-4 w-4" />
           </button>
@@ -402,7 +402,7 @@ function ShellFrame({
             <p className="shrink-0 bg-[#fff6e8] px-4 py-2 text-xs text-[#8a5a12]">Modo local de un solo operador. Solo vale en localhost y no aísla a un equipo.</p>
           )}
           {workspaceNotice && <p className="shrink-0 bg-amber-50 px-4 py-2 text-xs text-amber-800">{workspaceNotice}</p>}
-          <div className={bleed ? "min-h-0 flex-1 overflow-hidden" : "shrink-0"}>
+          <div className={bleed ? "relative min-h-0 flex-1 overflow-hidden" : "shrink-0"}>
             {currentOk ? children : (
               <div className="grid h-full place-items-center p-6 text-center">
                 <p className="text-sm text-muted">{teamAccess.displayName} no tiene acceso a esta sección.</p>
