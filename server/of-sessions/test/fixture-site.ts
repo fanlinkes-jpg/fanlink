@@ -90,27 +90,28 @@ function dashboardHtml(mode: FixtureMode): string {
   }
 }
 
-function ofChatHtml(live = true): string {
-  const sendScript = live
-    ? `const box = document.querySelector("[at-attr='chat_input']");
+function ofChatHtml(mode: "live" | "slow" | "enter" | "stuck" = "live", chatId = "9"): string {
+  const sendScript = mode === "stuck"
+    ? `document.querySelector("[at-attr='send_btn']").disabled = true;`
+    : `const box = document.querySelector("[at-attr='chat_input']");
        const send = document.querySelector("[at-attr='send_btn']");
-       const post = async () => {
+       const post = async (late) => {
          if (send.disabled) return;
          const body = box.value;
          const price = document.querySelector("[at-attr='price_input']").dataset.saved || "";
          await fetch("/fixture/compose", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ body, price, file: "" }) });
-         await fetch("/api2/v2/chats/9/messages?order=desc");
-         box.value = "";
-         send.disabled = true;
+         await fetch("/api2/v2/chats/${chatId}/messages?order=desc");
+         const clear = () => { box.value = ""; send.disabled = true; };
+         if (late) setTimeout(clear, 800);
+         else clear();
        };
        send.disabled = true;
        box.addEventListener("input", () => { send.disabled = box.value.trim() === ""; });
-       send.onclick = () => { void post(); };
+       send.onclick = () => { if ("${mode}" === "enter") return; void post("${mode}" === "slow"); };
        box.addEventListener("keydown", (event) => {
-         if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void post(); }
+         if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void post(false); }
        });
-       document.querySelector("[at-attr='vault_btn']").onclick = () => { void fetch("/fixture/vault"); };`
-    : `document.querySelector("[at-attr='send_btn']").disabled = true;`;
+       document.querySelector("[at-attr='vault_btn']").onclick = () => { void fetch("/fixture/vault"); };`;
   return pageHtml(
     "Hilo",
     "",
@@ -467,7 +468,7 @@ async function handle(
     );
     return;
   }
-  if (req.method === "GET" && url.pathname === "/api2/v2/chats/9/messages") {
+  if (req.method === "GET" && /^\/api2\/v2\/chats\/(?:4|6|9)\/messages$/.test(url.pathname)) {
     if (!accepted(req, epoch())) {
       res.writeHead(401, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "no" }));
@@ -496,7 +497,23 @@ async function handle(
       redirect(res, "/login");
       return;
     }
-    html(res, ofChatHtml(false));
+    html(res, ofChatHtml("stuck"));
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/my/chats/chat/6") {
+    if (!accepted(req, epoch())) {
+      redirect(res, "/login");
+      return;
+    }
+    html(res, ofChatHtml("slow", "6"));
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/my/chats/chat/4") {
+    if (!accepted(req, epoch())) {
+      redirect(res, "/login");
+      return;
+    }
+    html(res, ofChatHtml("enter", "4"));
     return;
   }
   if (req.method === "GET" && url.pathname === "/my/chats/chat/9") {

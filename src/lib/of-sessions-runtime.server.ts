@@ -28,7 +28,7 @@ import { chatIntervalMinFromEnv } from "../../server/of-sessions/sync/chats.ts";
 import { chatIntervalMinutes, inboxIsOpen, activeThreadWatches } from "../../server/of-sessions/sync/live.ts";
 import { openWatchContext, runInboxWatch } from "../../server/of-sessions/sync/inbox-watch.ts";
 import { pickAccountWatch } from "../../server/of-sessions/sync/watch-plan.ts";
-import { listChatMeta, listChats, listPendingOutbounds, markOutboundError, markOutboundSent, recordOutbound, saveChatRead } from "../../server/of-sessions/sync/chat-store.ts";
+import { listChatMeta, listChats, listPendingOutbounds, markOutboundAwaiting, markOutboundError, markOutboundSent, recordOutbound, saveChatRead } from "../../server/of-sessions/sync/chat-store.ts";
 import { chatSendGate, publicSendReason, type SendAccount } from "../../server/of-sessions/send/gate.ts";
 import { deliverChatSend, sendLimitFromEnv } from "../../server/of-sessions/send/deliver.ts";
 import { composeChat } from "../../server/of-sessions/send/compose.ts";
@@ -812,6 +812,10 @@ export async function sendChatMessageView(
     if (result.sent && result.messageId) {
       await markOutboundSent(sql, id, result.messageId);
       return { sent: true, reason: null, messageId: result.messageId };
+    }
+    if (result.awaitingId) {
+      await markOutboundAwaiting(sql, id);
+      return { sent: false, reason: "Pendiente de confirmar", messageId: null };
     }
     const reason = result.reason ?? "No se envió";
     await markOutboundError(sql, id, reason);
