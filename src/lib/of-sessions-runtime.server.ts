@@ -1,5 +1,5 @@
 import path from "node:path";
-import { assertOwnerForce, canOperateCreator, canSeeAgencyEarnings, creatorIdsForChats, WorkspaceAccessError } from "@/lib/access-policy";
+import { assertOwnerForce, canOperateCreator, creatorIdsForChats, WorkspaceAccessError } from "@/lib/access-policy";
 import { DEV_USER_ID, authConfigured } from "@/lib/auth/verify.server";
 import { getSql } from "@/lib/db";
 import { ensureStaff } from "@/lib/workspace-store";
@@ -19,10 +19,11 @@ import type { Account } from "../../server/of-sessions/types.ts";
 import type { CreatorChatList, CreatorReadList, CreatorReadView, CreatorSessionView } from "./of-sessions.ts";
 import { parseAccountProxy, proxyLabel, readAccountProxy, removeAccountProxy, writeAccountProxy } from "../../server/of-sessions/proxy.ts";
 import { syncAssignments } from "../../server/of-sessions/metrics/assignments.ts";
-import { dashboardAlerts } from "../../server/of-sessions/metrics/dashboard.ts";
+import { dashboardViewFor } from "../../server/of-sessions/metrics/dashboard.ts";
 import { accountPause, blockKind, listAccountPauses, noteAccountBlock } from "../../server/of-sessions/sync/backoff.ts";
 import { presentTeamMetrics } from "../../server/of-sessions/metrics/present-team.ts";
-import { changeRatio, creatorReport } from "@/lib/creator-metrics";
+import { creatorIdsForReads } from "@/lib/dashboard-config";
+import { assertChatFanCardThreadLimit, chatFanCardsFrom, type ChatFanCard } from "@/lib/chat-fan-cards";
 import { deliverFanAlerts } from "../../server/of-sessions/notify/deliver.ts";
 import { chatIntervalMinFromEnv } from "../../server/of-sessions/sync/chats.ts";
 import { chatIntervalMinutes, inboxIsOpen, activeThreadWatches } from "../../server/of-sessions/sync/live.ts";
@@ -42,7 +43,9 @@ import { liveViewGate } from "../../server/of-sessions/live/desk.ts";
 import { issueLiveTicket } from "../../server/of-sessions/live/tickets.ts";
 import { listFanProfiles, saveFanProfile } from "../../server/of-sessions/sync/fan-profile.ts";
 import { listFanNotes, saveFanNote } from "../../server/of-sessions/sync/fan-note.ts";
+import { NOTIFICATION_INTERVAL_MIN } from "@/lib/notifications";
 import { intervalMinFromEnv, startSyncLoop, type ScheduleAccount } from "../../server/of-sessions/sync/schedule.ts";
+import { listNotificationMeta, saveNotificationRead } from "../../server/of-sessions/sync/notification-store.ts";
 import {
   listCreatorReads,
   listSyncMeta,
@@ -57,6 +60,7 @@ const globalRef = globalThis as typeof globalThis & {
   __ofSessionManager__?: Promise<SessionManager>;
   __ofSyncLoop__?: { stop: () => void };
   __ofChatLoop__?: { stop: () => void };
+  __ofNotificationLoop__?: { stop: () => void };
 };
 
 export function ensureSyncScheduler(): void {
@@ -93,6 +97,7 @@ async function createManager(): Promise<SessionManager> {
   bootSyncLoop(runtime.sessions);
   bootChatLoop(runtime.sessions);
   bootHistoryLoop(runtime.sessions);
+  bootNotificationLoop(runtime.sessions);
   return runtime.sessions;
 }
 
@@ -281,6 +286,50 @@ function bootChatLoop(sessions: SessionManager): void {
   });
 }
 
+function bootNotificationLoop(sessions: SessionManager): void {
+  if (process.env.FANLINK_SYNC_ENABLED === "false") return;
+  if (process.execArgv.includes("--test")) return;
+  if (globalRef.__ofNotificationLoop__) return;
+  globalRef.__ofNotificationLoop__ = startSyncLoop({
+    intervalMin: async () => NOTIFICATION_INTERVAL_MIN,
+    inProgressIds: () => new Set(sessions.readingIds()),
+    accounts: () => notificationScheduleAccounts(sessions),
+    marginMinMs: 20_000,
+    marginMaxMs: 60_000,
+    firstDelayMs: 90_000,
+    sync: async (accountId) => {
+      const read = await sessions.readNotifications(accountId);
+      if (read.alreadyRunning) return;
+      if (read.loginRequired) await sessions.markLoginRequired(accountId);
+      const account = (await sessions.listAccounts()).find((item) => item.id === accountId);
+      if (!account?.creatorId) return;
+      await saveNotificationRead(await getSql(), account.creatorId, read);
+    },
+  });
+}
+
+async function notificationScheduleAccounts(sessions: SessionManager): Promise<ScheduleAccount[]> {
+  const [accounts, meta] = await Promise.all([sessions.listAccounts(), listNotificationMeta(await getSql())]);
+  const byCreator = new Map(meta.map((row) => [row.creatorId, row]));
+  const intervalMs = NOTIFICATION_INTERVAL_MIN * 60_000;
+  return accounts.flatMap((account) => {
+    if (!account.creatorId) return [];
+    const state = byCreator.get(account.creatorId);
+    const pause = accountPause(account.id);
+    return [
+      {
+        accountId: account.id,
+        creatorId: account.creatorId,
+        status: account.status,
+        identityState: account.identityState,
+        hasStorageState: account.hasStorageState,
+        consecutiveFailures: state?.consecutiveFailures ?? 0,
+        lastAttemptAt: pause ? new Date(pause.until - intervalMs).toISOString() : state?.lastAttemptAt ?? null,
+      },
+    ];
+  });
+}
+
 async function chatScheduleAccounts(sessions: SessionManager): Promise<ScheduleAccount[]> {
   const [accounts, meta] = await Promise.all([sessions.listAccounts(), listChatMeta(await getSql())]);
   const byCreator = new Map(meta.map((row) => [row.creatorId, row]));
@@ -408,14 +457,14 @@ export async function inspectCreatorSession(userId: string, creatorId: string): 
   return view;
 }
 
-export async function listCreatorReadViews(userId: string): Promise<CreatorReadList> {
+export async function listCreatorReadViews(
+  userId: string,
+  requested: "dashboard" | "chat" | undefined = "dashboard",
+): Promise<CreatorReadList> {
   const access = await accessFor(userId);
   const sessions = await getOfSessionManager();
   const accounts = await sessions.listAccounts();
-  const creatorIds = creatorIdsForChats(
-    access,
-    accounts.flatMap((account) => (account.creatorId ? [account.creatorId] : [])),
-  );
+  const creatorIds = creatorIdsForReads(access, accounts, requested);
   const sql = await getSql();
   const rows = await listCreatorReads(sql, creatorIds);
   const running = new Set((await getOfSessionManager()).readingIds());
@@ -423,9 +472,27 @@ export async function listCreatorReadViews(userId: string): Promise<CreatorReadL
     role: access.role,
     intervalMin: await readSyncIntervalMin(sql, intervalMinFromEnv(process.env.FANLINK_SYNC_INTERVAL_MIN)),
     chatIntervalMin: await readChatIntervalMin(sql, chatIntervalMinFromEnv(process.env.FANLINK_CHAT_SYNC_MIN)),
-    runningCreatorIds: visibleRunning(accounts, null, running),
+    runningCreatorIds: visibleRunning(accounts, new Set(creatorIds), running),
     creators: rows.map((row) => presentRead(access.role, row)),
   };
+}
+
+/** Fichas de los hilos pedidos. Sin lista, no carga todos los fans. */
+export async function listChatFanCardViews(
+  userId: string,
+  threads?: ReadonlyArray<{ creatorId: string; fanKey: string }>,
+): Promise<{ fans: ChatFanCard[] }> {
+  assertChatFanCardThreadLimit(threads?.length ?? 0);
+  const wanted = (threads ?? []).filter((thread) => thread.creatorId && thread.fanKey);
+  if (wanted.length === 0) return { fans: [] };
+  const access = await accessFor(userId);
+  const accounts = await (await getOfSessionManager()).listAccounts();
+  const allIds = accounts.flatMap((account) => (account.creatorId ? [account.creatorId] : []));
+  const allowed = creatorIdsForChats(access, allIds);
+  const creatorIds = allowed.filter((id) => wanted.some((thread) => thread.creatorId === id));
+  if (creatorIds.length === 0) return { fans: [] };
+  const rows = await listCreatorReads(await getSql(), creatorIds);
+  return { fans: chatFanCardsFrom(rows, creatorIds, wanted) };
 }
 
 export async function setSyncIntervalView(
@@ -630,65 +697,15 @@ export async function listDashboardView(userId: string): Promise<{
 }> {
   const access = await accessFor(userId);
   const accounts = await (await getOfSessionManager()).listAccounts();
-  const visible = accounts.filter((account) => account.creatorId && (canSeeAgencyEarnings(access) || creatorIdsForChats(access, [account.creatorId]).length > 0));
-  const ids = visible.flatMap((account) => (account.creatorId ? [account.creatorId] : []));
+  const ids = creatorIdsForReads(access, accounts, "dashboard");
   const reads = await listCreatorReads(await getSql(), ids);
-  const byCreator = new Map(reads.map((row) => [row.creatorId, row]));
-  const owner = access.role === "owner";
-  const now = new Date();
-  const bundle = {
-    now,
-    earningsSynced: reads.some((row) => row.earningsSyncedAt),
-    fansSynced: reads.some((row) => row.fansSyncedAt),
-    transactions: owner ? reads.flatMap((row) => row.transactions) : [],
-    earnings: owner ? reads.flatMap((row) => row.earnings) : [],
-    fans: reads.flatMap((row) => row.fans),
-  };
-  const day = creatorReport({ ...bundle, period: "day" });
-  const month = creatorReport({ ...bundle, period: "month" });
-  const whales = reads.flatMap((row) =>
-    row.fans
-      .filter((fan) => fan.renewAuto === false && fan.spentCents != null && fan.spentCents >= 10_000)
-      .map((fan) => fan.displayName ?? fan.handle ?? fan.fanKey),
-  );
-  const drops = owner
-    ? visible.flatMap((account) => {
-        const read = account.creatorId ? byCreator.get(account.creatorId) : undefined;
-        if (!read) return [];
-        const report = creatorReport({
-          now,
-          period: "month",
-          earningsSynced: Boolean(read.earningsSyncedAt),
-          fansSynced: Boolean(read.fansSyncedAt),
-          transactions: read.transactions,
-          earnings: read.earnings,
-          fans: read.fans,
-        });
-        const ratio = changeRatio(report.grossCents, report.previousGrossCents);
-        if (ratio == null || ratio >= 0) return [];
-        return [{ name: account.label }];
-      })
-    : [];
-  return {
-    role: access.role,
-    dayGrossCents: canSeeAgencyEarnings(access) ? day.grossCents : null,
-    monthGrossCents: canSeeAgencyEarnings(access) ? month.grossCents : null,
-    activeFans: month.activeFans,
-    alerts: dashboardAlerts({
-      sessions: visible.map((account) => ({ name: account.label, status: account.status, connection: account.connection })),
-      syncs: visible.flatMap((account) => {
-        const read = account.creatorId ? byCreator.get(account.creatorId) : undefined;
-        if (!read) return [];
-        return [{ name: account.label, status: read.lastStatus, reason: read.lastReason }];
-      }),
-      whalesAtRisk: owner ? whales : [],
-      drops,
-      pauses: listAccountPauses().flatMap((pause) => {
-        const account = visible.find((item) => item.id === pause.accountId);
-        return account ? [{ name: account.label, reason: pause.reason }] : [];
-      }),
-    }),
-  };
+  return dashboardViewFor({
+    access,
+    accounts,
+    reads,
+    pauses: listAccountPauses(),
+    now: new Date(),
+  });
 }
 
 export async function listTeamMetricViews(userId: string): Promise<Array<{

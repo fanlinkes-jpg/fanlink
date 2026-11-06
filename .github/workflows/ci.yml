@@ -10,6 +10,7 @@ on:
       - cursor/chat-followups-617f
       - cursor/chat-mirror-617f
       - cursor/of-live-view-617f
+      - cursor/dashboard-617f
 
 concurrency:
   # El push y el pull request no comparten grupo: uno no cancela al otro.

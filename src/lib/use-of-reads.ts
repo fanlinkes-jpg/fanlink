@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { listCreatorReads, setSyncInterval, syncCreatorRead, type CreatorReadView } from "@/lib/of-sessions";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
 
-export function useOfReads() {
+export function useOfReads(scope: "dashboard" | "chat" = "dashboard") {
   const [creators, setCreators] = useState<CreatorReadView[]>([]);
   const [role, setRole] = useState<"owner" | "member" | null>(null);
   const [pendingId, setPendingId] = useState<string | null>(null);
@@ -13,7 +13,7 @@ export function useOfReads() {
 
   const refresh = useCallback(async () => {
     try {
-      const result = await listCreatorReads();
+      const result = await listCreatorReads({ data: { scope } });
       setCreators(result.creators);
       setRole(result.role);
       setIntervalMin(result.intervalMin);
@@ -23,7 +23,7 @@ export function useOfReads() {
     } catch (err) {
       setError(sessionErrorText(err));
     }
-  }, []);
+  }, [scope]);
 
   useEffect(() => {
     void refresh();

@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { authMiddleware } from "@/lib/auth/middleware";
+import { assertChatFanCardThreadLimit, type ChatFanCard } from "@/lib/chat-fan-cards";
 import type { SessionStatus } from "../../server/of-sessions/types.ts";
 
 export type { SessionStatus };
@@ -203,9 +204,23 @@ export type CreatorChatList = {
 
 export const listCreatorReads = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
-  .handler(async ({ context }): Promise<CreatorReadList> => {
+  .validator((input: { scope?: "dashboard" | "chat" } | undefined) => input ?? {})
+  .handler(async ({ context, data }): Promise<CreatorReadList> => {
     const { listCreatorReadViews } = await import("./of-sessions-runtime.server");
-    return listCreatorReadViews(context.userId);
+    // El rol decide el alcance. Un chatter que pida "chat" no sale de sus cuentas.
+    return listCreatorReadViews(context.userId, data.scope);
+  });
+
+export const listChatFanCards = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { threads?: Array<{ creatorId: string; fanKey: string }> } | undefined) => {
+    const threads = input?.threads ?? [];
+    assertChatFanCardThreadLimit(threads.length);
+    return { threads };
+  })
+  .handler(async ({ context, data }): Promise<{ fans: ChatFanCard[] }> => {
+    const { listChatFanCardViews } = await import("./of-sessions-runtime.server");
+    return listChatFanCardViews(context.userId, data.threads);
   });
 
 export const setSyncInterval = createServerFn({ method: "POST" })

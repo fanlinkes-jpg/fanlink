@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { isLast24h } from "@/lib/format";
+import { defaultDashboardConfig, normalizeDashboardConfig, type DashboardConfig } from "@/lib/dashboard-config";
 
 export type Platform = "OnlyFans" | "Fansly" | "Fanvue" | "MYM";
 export type Tier = "ballena" | "gastador" | "nuevo" | "frio";
@@ -206,6 +207,7 @@ function freshData() {
     translate: true,
     adaptPrices: true,
     notifyShifts: true,
+    dashboardConfig: defaultDashboardConfig(),
     creatorId: "all" as string,
     fanId: null as string | null,
     inboxTab: "todos" as InboxTab,
@@ -252,6 +254,7 @@ type CrmState = DataSlice & {
   setAdaptPrices: (on: boolean) => void;
   setNotify: (on: boolean) => void;
   setAgency: (name: string) => void;
+  setDashboardConfig: (config: DashboardConfig) => void;
   resetDemo: () => void;
   workspaceReady: boolean;
   workspaceNotice: string | null;
@@ -622,6 +625,7 @@ export const useCrm = create<CrmState>()((set, get) => ({
       setAdaptPrices: (on) => set({ adaptPrices: on }),
       setNotify: (on) => set({ notifyShifts: on }),
       setAgency: (name) => set({ agency: name }),
+      setDashboardConfig: (config) => set({ dashboardConfig: normalizeDashboardConfig(config) }),
       resetDemo: () => set(freshData()),
 }));
 

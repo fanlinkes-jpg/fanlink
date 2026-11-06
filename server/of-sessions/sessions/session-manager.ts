@@ -45,6 +45,8 @@ import { hasLiveCookies } from "./site.ts";
 import { collectCreatorRead, type CollectedRead } from "../sync/collect.ts";
 import type { TxCursor } from "../sync/parse.ts";
 import { collectChats, type CollectedChats } from "../sync/collect-chats.ts";
+import { collectNotifications, type CollectedNotifications } from "../sync/collect-notifications.ts";
+import { NOTIFICATION_PACE_MS, notificationReadBusy } from "../../../src/lib/notifications.ts";
 import {
   judgeStorageState,
   parseStorageState,
@@ -411,6 +413,26 @@ export class SessionManager {
     return job;
   }
 
+  readNotifications(accountId: string): Promise<CollectedNotifications> {
+    const busy: CollectedNotifications = {
+      items: [],
+      reason: "sincronización en curso",
+      jsonPaths: [],
+      captured: false,
+      alreadyRunning: true,
+    };
+    if (notificationReadBusy([...this.reading], accountId)) return Promise.resolve(busy);
+    this.reading.add(accountId);
+    const job = this.readTail.then(() => this.readNotificationsNow(accountId)).finally(() => {
+      this.reading.delete(accountId);
+    });
+    this.readTail = job.then(
+      () => undefined,
+      () => undefined,
+    );
+    return job;
+  }
+
   /** Mantiene el perfil abierto para escuchar. Cede si otra lectura ya lo usa. */
   holdWatch(accountId: string, run: (context: BrowserContext) => Promise<void>): Promise<boolean> {
     const job = this.readTail.then(async () => {
@@ -428,6 +450,25 @@ export class SessionManager {
       () => undefined,
     );
     return job;
+  }
+
+  private async readNotificationsNow(accountId: string): Promise<CollectedNotifications> {
+    const empty: CollectedNotifications = { items: [], reason: null, jsonPaths: [], captured: false };
+    const account = await this.options.store.get(accountId);
+    if (account.identityState === "mismatch") {
+      return { ...empty, reason: "Lecturas bloqueadas: la sesión guardada es de otra cuenta." };
+    }
+    try {
+      return await this.withSession(accountId, (context) =>
+        collectNotifications(context, this.options.site, {
+          paceMs: NOTIFICATION_PACE_MS,
+          waitMs: this.options.config.identityWaitMs,
+          scrolls: 1,
+        }),
+      );
+    } catch (error) {
+      return { ...empty, reason: publicErrorMessage(error, "no se pudo abrir la sesión") };
+    }
   }
 
   private async readChatsNow(accountId: string): Promise<CollectedChats> {

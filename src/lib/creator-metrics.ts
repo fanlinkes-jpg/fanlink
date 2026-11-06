@@ -83,6 +83,32 @@ export function changeRatio(current: number | null, previous: number | null): nu
   return (current - previous) / previous;
 }
 
+/**
+ * Bruto de un tipo ya sincronizado. Con transacciones en el rango manda ese
+ * desglose. Si no hay transacciones, suma la fila diaria de ese tipo. Sin fila
+ * devuelve null: un cero no se inventa.
+ */
+export function syncedKindGross(input: {
+  now: Date;
+  period: MetricPeriod;
+  kind: string;
+  transactions: MetricTx[];
+  earnings: MetricEarning[];
+  earningsSynced: boolean;
+}): number | null {
+  const { start, end } = bounds(input.now, input.period);
+  const txs = input.transactions.filter((row) => inRange(row.occurredAt, start, end));
+  if (txs.length > 0) {
+    const rows = txs.filter((row) => row.kind === input.kind);
+    return rows.length > 0 ? sum(rows, (row) => row.grossCents) : null;
+  }
+  if (!input.earningsSynced) return null;
+  const first = madridDay(start.toISOString());
+  const last = madridDay(new Date(end.getTime() - 1).toISOString());
+  const rows = input.earnings.filter((row) => row.kind === input.kind && row.day >= first && row.day <= last);
+  return rows.length > 0 ? sum(rows, (row) => row.amountCents) : null;
+}
+
 const MADRID = "Europe/Madrid";
 
 function bounds(now: Date, period: MetricPeriod): { start: Date; end: Date; previousStart: Date } {

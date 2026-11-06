@@ -14,6 +14,8 @@ export interface SiteAdapter {
   subscribersUrl?: string;
   /** Página normal de conversaciones. La sincronización solo la abre. */
   chatsUrl?: string;
+  /** Página normal de notificaciones. La sincronización solo la abre. */
+  notificationsUrl?: string;
   requiredCookies: readonly string[];
   /**
    * Selector del formulario de acceso. Si sigue visible, la persona

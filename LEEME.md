@@ -11,6 +11,8 @@ Son dos cosas distintas.
 
 ## Cómo ejecutarlo
 
+Hace falta Node `>=22.3`. `.nvmrc` fija `22.3.0`. La huella de una clave larga usa `process.getBuiltinModule`.
+
 ```bash
 npm install
 npx playwright install chromium
@@ -89,6 +91,14 @@ Por defecto el barrido de hilos es cada 2 minutos (`FANLINK_CHAT_SYNC_MIN`, entr
 Los hilos y los mensajes se guardan por creadora y por fan, y los ve todo el equipo. Un mensaje nuevo de un fan crea el evento interno `new_fan_message`. La segunda lectura del mismo mensaje no lo repite. Solo la dueña ve **Forzar sincronización**; el servidor se lo niega a un miembro. Un miembro con permiso de mensajes puede operar el chat de cualquier cuenta: la asignación no lo recorta.
 
 Fragilidad: si OnlyFans cambia la ruta del chat, la caja, el botón Send o los campos `withUser`, `lastMessage`, `text` y `createdAt`, la lista puede quedar vacía o el envío queda en error con el motivo, sin reintento.
+
+## Notificaciones de cada cuenta
+
+Un bucle aparte abre `https://onlyfans.com/my/notifications` cada 30 minutos, una cuenta cada vez, y escucha el JSON que esa página pide. No llama a un endpoint por su cuenta. Hace un solo desplazamiento, con 8 segundos de pausa. Si otra lectura usa el perfil, espera el turno. La migración `0034_notifications.sql` guarda el aviso y quién lo marcó leído. `0035_notification_first_seen.sql` añade `first_seen_at` si la tabla ya existía sin esa columna y, en ese caso, la rellena con `coalesce(first_seen_at, occurred_at, synced_at, now())`: la fecha del aviso va antes que `synced_at`, que es la última vez que se vio. `0036_notification_key_text.sql` quita el hash del texto de las claves antiguas sin id, se queda con la fila de `first_seen_at` más antiguo y copia las marcas de leído. No recorta una clave nueva de más de 120 caracteres. Un retoque del texto no crea otro aviso. Un chatter ve compras, propinas y suscripciones de los fans de sus cuentas, con el importe del fan. Las ganancias, el payout y el saldo de la agencia, y los tipos desconocidos, solo los ve la dueña. Lo que tiene fecha y supera 90 días se borra en la siguiente pasada. Un aviso sin fecha cuenta esos 90 días desde `first_seen_at`. En una fila nueva esa marca es el primer guardado y no se mueve si el aviso vuelve. Abrir la campana no lanza la visita.
+
+La bandeja es de todas las cuentas. `listChatFanCards` usa `creatorIdsForChats` y devuelve la ficha de cada fan: gasto, compras, propinas, suscripción, renovación y estado, también de una cuenta que el chatter no tiene asignada. No devuelve ingresos totales, beneficios, pagos ni cifras agregadas del dashboard. Si un campo no viene, la ficha dice Sin datos.
+
+En el Resumen, un chatter ve el número de fans activos de sus cuentas. No ve euros ni otros agregados: ni el bruto del día o del mes, ni ballenas, ni caídas. Las notificaciones no siguen el alcance de la ficha: un chatter solo ve las de las cuentas que tiene asignadas. La dueña, que es quien administra, las ve todas.
 
 ## Avisos de WhatsApp
 
