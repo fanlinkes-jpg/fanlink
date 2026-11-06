@@ -312,9 +312,17 @@ export const loadMoreChats = createServerFn({ method: "POST" })
     return loadMoreChatsView(context.userId, data);
   });
 
+export const readChatVault = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string; threadKey: string }) => input)
+  .handler(async ({ context, data }) => {
+    const { readChatVaultView } = await import("./of-sessions-runtime.server");
+    return readChatVaultView(context.userId, data);
+  });
+
 export const sendChatMessage = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null }) => input)
+  .validator((input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; vaultTitle?: string | null }) => input)
   .handler(async ({ context, data }) => {
     const { sendChatMessageView } = await import("./of-sessions-runtime.server");
     return sendChatMessageView(context.userId, data);

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AtSign, Clock, DollarSign, FolderOpen, ImagePlus, Languages, ScrollText, Send, Type } from "lucide-react";
-import { chatSendAccess, listCreatorChats, loadMoreChats, loadOlderMessages, recordChatOutbound, saveFanNote, saveFanProfile, sendChatMessage, syncCreatorChats, type CreatorChatList, type CreatorReadView } from "@/lib/of-sessions";
+import { chatSendAccess, listCreatorChats, loadMoreChats, loadOlderMessages, readChatVault, recordChatOutbound, saveFanNote, saveFanProfile, sendChatMessage, syncCreatorChats, type CreatorChatList, type CreatorReadView } from "@/lib/of-sessions";
 import { useCrm, type VaultItem } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
 import { useOfReads } from "@/lib/use-of-reads";
@@ -10,6 +10,7 @@ import { ChatBubble } from "@/features/chat-bubble";
 import { MessagePriceDialog } from "@/features/message-price-dialog";
 import { FULL_EMOJIS, QUICK_EMOJIS, TEXT_COLORS, authorLabel, matchScripts, mentionToken, paymentLabel, slashQuery, wrapSelection } from "@/lib/composer-tools";
 import { pendingForThread } from "@/lib/pending-thread";
+import { spendTone } from "@/lib/spend-tiers";
 
 export function RealChatsPage() {
   const creators = useCrm((s) => s.creators);
@@ -46,6 +47,10 @@ export function RealChatsPage() {
   const sendLock = useRef(false);
   const olderLock = useRef(false);
   const listLock = useRef(false);
+  const sendLock = useRef(false);
+  const [libraryQuery, setLibraryQuery] = useState("");
+  const [tagQuery, setTagQuery] = useState("");
+  const [ofVault, setOfVault] = useState<Array<{ id: string; title: string; kind: "foto" | "video" | "audio" | null }>>([]);
 
   async function refresh() {
     try {
@@ -111,8 +116,9 @@ export function RealChatsPage() {
     ? "Todas las cuentas"
     : creators.find((creator) => creator.id === creatorId)?.name ?? "Cuenta";
   const unread = threads.reduce((sum, thread) => sum + thread.unread, 0);
-  const scriptHits = matchScripts(scripts, slashQuery(draft) ?? "");
-  const showScripts = panel === "guiones" || slashQuery(draft) != null;
+  const slash = slashQuery(draft);
+  const scriptHits = matchScripts(scripts, slash != null ? slash : libraryQuery);
+  const showScripts = panel === "guiones" || slash != null;
   const realSend = selected != null && sendCreators.includes(selected.creatorId);
   const vaultItems = vault.filter((item) => item.creatorId === selected?.creatorId);
   const tagCreators = creators.filter((creator) => creator.id !== selected?.creatorId && creator.handle.trim() !== "");
@@ -161,10 +167,12 @@ export function RealChatsPage() {
 
   async function sendNow() {
     if (sendLock.current || !selected || !draft.trim() || !realSend || sending) return;
-    if (attachments.length > 0) {
-      setError("Los adjuntos siguen pendientes. Este envío es de texto y precio.");
+    const localFiles = attachments.filter((file) => file.kind !== "vault");
+    if (localFiles.length > 0) {
+      setError("Los archivos locales siguen pendientes. El vault de OnlyFans sí se adjunta.");
       return;
     }
+    const vaultTitle = attachments.find((file) => file.kind === "vault")?.name ?? null;
     const body = draft.trim();
     const price = draftPrice;
     sendLock.current = true;
@@ -177,10 +185,12 @@ export function RealChatsPage() {
           threadKey: selected.threadKey,
           body,
           priceCents: price,
+          vaultTitle,
         },
       });
       if (result.sent) {
         replaceDraft("");
+        setAttachments([]);
         setDraftPrice(null);
         setPriceLabel(null);
         setError(null);
@@ -192,6 +202,18 @@ export function RealChatsPage() {
     } finally {
       sendLock.current = false;
       setSending(false);
+    }
+  }
+
+  async function loadOfVault() {
+    if (!selected) return;
+    setPanel("vault");
+    try {
+      const result = await readChatVault({ data: { creatorId: selected.creatorId, threadKey: selected.threadKey } });
+      setOfVault(result.items);
+    } catch (err) {
+      setOfVault([]);
+      setError(sessionErrorText(err));
     }
   }
 
@@ -269,7 +291,7 @@ export function RealChatsPage() {
     setPanel(null);
   }
 
-  function attachVault(item: VaultItem) {
+  function attachVault(item: { id: string; title: string }) {
     setAttachments((current) => current.some((file) => file.id === `vault-${item.id}`) ? current : [
       ...current,
       { id: `vault-${item.id}`, url: null, name: item.title, kind: "vault" as const },
@@ -338,8 +360,8 @@ export function RealChatsPage() {
                     ) : (
                       <span className="grid h-10 w-10 place-items-center rounded-full bg-[#eef2ff] text-sm">{(thread.fanName ?? "F").slice(0, 1)}</span>
                     )}
-                    <span className={`text-[10px] font-medium ${thread.spentCents == null ? "text-[#6d7585]" : "text-[#137333]"}`}>
-                      {thread.spentCents == null ? "Sin datos" : `$${(thread.spentCents / 100).toFixed(2)}`}
+                    <span className="text-[10px] font-medium" style={{ color: spendTone(thread.spentCents).color ?? "#6d7585" }}>
+                      {spendTone(thread.spentCents).label}
                     </span>
                   </span>
                   <span className="min-w-0 flex-1">
@@ -407,7 +429,7 @@ export function RealChatsPage() {
                 </li>
               ))}
               {messages.map((message) => (
-                <ChatBubble key={message.messageKey} message={message} />
+                <ChatBubble key={message.messageKey} message={message} avatarUrl={message.fromFan ? selected?.avatarUrl ?? null : null} />
               ))}
               {messages.some((message) => message.fromFan) && fanTranslation ? <li className="text-[10px] text-[#6d7585]">Traducción: Sin datos</li> : null}
             </ol>
@@ -418,8 +440,12 @@ export function RealChatsPage() {
                     panel={panel}
                     vaultItems={vaultItems}
                     tagCreators={tagCreators}
+                    tagQuery={tagQuery}
+                    onTagQuery={setTagQuery}
                     fanTranslation={fanTranslation}
                     textSize={textSize}
+                    ofVault={ofVault}
+                    onReadVault={() => void loadOfVault()}
                     onVault={attachVault}
                     onTag={(handle) => { insertAtCursor(mentionToken(handle)); setPanel(null); }}
                     onFormat={formatCommand}
@@ -430,7 +456,9 @@ export function RealChatsPage() {
                 </div>
               ) : null}
               {showScripts ? (
-                <div role="region" aria-label="Panel Guiones" className="absolute inset-x-2 bottom-full z-20 mb-1 max-h-36 overflow-y-auto rounded-xl border border-[#e6e8ee] bg-white p-2 text-sm shadow-lg">
+                <div role="region" aria-label="Panel Guiones" className="absolute inset-x-2 bottom-full z-20 mb-1 max-h-52 overflow-y-auto rounded-xl border border-[#e6e8ee] bg-white p-2 text-sm shadow-lg">
+                  <input aria-label="Buscar guiones" value={libraryQuery} placeholder="Buscar guiones" onChange={(event) => setLibraryQuery(event.target.value)} className="mb-2 h-8 w-full rounded border border-[#e6e8ee] px-2 text-sm" />
+                  <a href="/guiones" className="mb-2 block text-xs text-[#2456c7]">Biblioteca de guiones</a>
                   {scriptHits.length === 0 ? <p className="text-xs text-[#6d7585]">Sin datos</p> : scriptHits.map((hit) => (
                     <button key={hit.id} type="button" className="block w-full rounded px-2 py-1 text-left hover:bg-[#f4f7ff]" onClick={() => {
                       replaceDraft(hit.text);
@@ -685,7 +713,11 @@ function panelLabel(panel: Exclude<ComposerPanel, null>): string {
 function ComposerPanelBody({
   panel,
   vaultItems,
+  ofVault,
+  onReadVault,
   tagCreators,
+  tagQuery,
+  onTagQuery,
   fanTranslation,
   textSize,
   onVault,
@@ -697,10 +729,14 @@ function ComposerPanelBody({
 }: {
   panel: Exclude<ComposerPanel, "guiones" | null>;
   vaultItems: VaultItem[];
+  ofVault: Array<{ id: string; title: string; kind: "foto" | "video" | "audio" | null }>;
+  onReadVault: () => void;
   tagCreators: Array<{ id: string; name: string; handle: string }>;
+  tagQuery: string;
+  onTagQuery: (value: string) => void;
   fanTranslation: boolean;
   textSize: "sm" | "base" | "lg";
-  onVault: (item: VaultItem) => void;
+  onVault: (item: { id: string; title: string }) => void;
   onTag: (handle: string) => void;
   onFormat: (command: "bold" | "italic" | "foreColor", value?: string) => void;
   onSize: (size: "sm" | "base" | "lg") => void;
@@ -708,16 +744,27 @@ function ComposerPanelBody({
   onEmoji: (emoji: string) => void;
 }) {
   switch (panel) {
-    case "vault":
-      return vaultItems.length === 0 ? <p className="text-xs text-[#6d7585]">Sin datos</p> : (
-        <ul className="space-y-1">
-          {vaultItems.map((item) => (
-            <li key={item.id}>
-              <button type="button" className="w-full rounded px-2 py-1 text-left hover:bg-[#f4f7ff]" onClick={() => onVault(item)}>{item.title}</button>
-            </li>
-          ))}
-        </ul>
+    case "vault": {
+      const picks = [
+        ...ofVault.map((item) => ({ id: item.id, title: item.title })),
+        ...vaultItems.map((item) => ({ id: item.id, title: item.title })),
+      ];
+      return (
+        <div className="space-y-2">
+          <button type="button" className="rounded border border-[#e6e8ee] px-2 py-1 text-xs" onClick={onReadVault}>Leer vault de OnlyFans</button>
+          <a href="/vault" className="block text-xs text-[#2456c7]">Abrir la bóveda</a>
+          {picks.length === 0 ? <p className="text-xs text-[#6d7585]">Sin datos</p> : (
+            <ul className="space-y-1">
+              {picks.map((item) => (
+                <li key={item.id}>
+                  <button type="button" className="w-full rounded px-2 py-1 text-left hover:bg-[#f4f7ff]" onClick={() => onVault(item)}>{item.title}</button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       );
+    }
     case "gif":
       return (
         <div className="space-y-2">
@@ -725,18 +772,27 @@ function ComposerPanelBody({
           <p className="text-xs text-[#6d7585]">Sin datos. Hace falta una clave de API para buscar GIF.</p>
         </div>
       );
-    case "etiqueta":
-      return tagCreators.length === 0 ? <p className="text-xs text-[#6d7585]">Sin datos</p> : (
-        <ul className="space-y-1">
-          {tagCreators.map((creator) => (
-            <li key={creator.id}>
-              <button type="button" className="w-full rounded px-2 py-1 text-left hover:bg-[#f4f7ff]" onClick={() => onTag(creator.handle)}>
-                {creator.name} · @{creator.handle.replace(/^@/, "")}
-              </button>
-            </li>
-          ))}
-        </ul>
+    case "etiqueta": {
+      const needle = tagQuery.trim().toLowerCase();
+      const visible = tagCreators.filter((creator) => !needle || creator.name.toLowerCase().includes(needle) || creator.handle.toLowerCase().includes(needle));
+      return (
+        <div className="space-y-2">
+          <input aria-label="Buscar creadora" value={tagQuery} placeholder="Buscar creadora" onChange={(event) => onTagQuery(event.target.value)} className="h-8 w-full rounded border border-[#e6e8ee] px-2 text-sm" />
+          <p className="text-xs text-[#6d7585]">No hay formularios en el CRM. Esto etiqueta a otra creadora.</p>
+          {visible.length === 0 ? <p className="text-xs text-[#6d7585]">Sin datos</p> : (
+            <ul className="space-y-1">
+              {visible.map((creator) => (
+                <li key={creator.id}>
+                  <button type="button" className="w-full rounded px-2 py-1 text-left hover:bg-[#f4f7ff]" onClick={() => onTag(creator.handle)}>
+                    {creator.name} · @{creator.handle.replace(/^@/, "")}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       );
+    }
     case "formato":
       return (
         <div className="space-y-2">
