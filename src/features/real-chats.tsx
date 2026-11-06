@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { listCreatorChats, recordChatOutbound, saveFanProfile, syncCreatorChats, type CreatorChatList, type CreatorReadView } from "@/lib/of-sessions";
+import { listCreatorChats, recordChatOutbound, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList, type CreatorReadView } from "@/lib/of-sessions";
 import { campaignSendFlag } from "@/lib/of-campaigns";
 import { useCrm } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
@@ -254,7 +254,7 @@ export function RealChatsPage() {
             </div>
             <div className="min-h-0 flex-1 overflow-hidden">
               {selected ? (
-                <InsightPane thread={selected} reads={reads.byCreator} crmFans={crmFans} messages={messages} profiles={data?.profiles ?? []} onNotes={saveNote} onProfile={(profile) => { void saveFanProfile({ data: profile }).then(() => refresh()); }} onCopyDraft={(body, price) => { setDraft(body); setDraftPrice(price); setInsightsOpen(false); }} />
+                <InsightPane thread={selected} reads={reads.byCreator} crmFans={crmFans} messages={messages} profiles={data?.profiles ?? []} notes={data?.notes ?? []} onNotes={saveNote} onProfile={(profile) => { void saveFanProfile({ data: profile }).then(() => refresh()); }} onCopyDraft={(body, price) => { setDraft(body); setDraftPrice(price); setInsightsOpen(false); }} onCreatorNote={(body) => { if (!selected.fanKey) return; void saveFanNote({ data: { creatorId: selected.creatorId, fanKey: selected.fanKey, body } }).then(() => refresh()); }} />
               ) : (
                 <FanInsights
                   name={null}
@@ -286,9 +286,11 @@ function InsightPane({
   crmFans,
   messages,
   profiles,
+  notes,
   onNotes,
   onProfile,
   onCopyDraft,
+  onCreatorNote,
 }: {
   thread: {
     creatorId: string;
@@ -306,9 +308,11 @@ function InsightPane({
   crmFans: Array<{ id: string; creatorId: string; handle: string; name: string; notes: string }>;
   messages: Array<{ messageKey: string; body: string; sentAt: string; fromFan: boolean; priceCents: number | null; purchased: boolean | null; mediaCount?: number | null; mediaSeconds?: number | null; mediaPreview?: string | null }>;
   profiles: CreatorChatList["profiles"];
+  notes: CreatorChatList["notes"];
   onNotes: (fanId: string, notes: string) => void;
   onProfile: (profile: CreatorChatList["profiles"][number]) => void;
   onCopyDraft: (body: string, priceCents: number) => void;
+  onCreatorNote: (body: string) => void;
 }) {
   const read = reads.get(thread.creatorId);
   const ofFan = read?.fans.find((fan) => fan.fanKey === thread.fanKey) ?? null;
@@ -346,6 +350,8 @@ function InsightPane({
       onProfile={onProfile}
       threadMessages={messages}
       onCopyDraft={onCopyDraft}
+      creatorNote={thread.fanKey ? (notes.find((item) => item.creatorId === thread.creatorId && item.fanKey === thread.fanKey) ?? null) : null}
+      onCreatorNote={onCreatorNote}
     />
   );
 }

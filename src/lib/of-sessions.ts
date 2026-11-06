@@ -172,6 +172,14 @@ export type CreatorChatList = {
     threadKey: string | null;
     body: string;
   }>;
+  notes: Array<{
+    creatorId: string;
+    fanKey: string;
+    body: string;
+    authorId: string;
+    authorName: string | null;
+    updatedAt: string;
+  }>;
   profiles: Array<{
     creatorId: string;
     fanKey: string;
@@ -245,6 +253,14 @@ export const listDashboard = createServerFn({ method: "GET" })
   .handler(async ({ context }): Promise<DashboardView> => {
     const { listDashboardView } = await import("./of-sessions-runtime.server");
     return listDashboardView(context.userId);
+  });
+
+export const saveFanNote = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string; fanKey: string; body: string }) => input)
+  .handler(async ({ context, data }) => {
+    const { saveFanNoteView } = await import("./of-sessions-runtime.server");
+    return saveFanNoteView(context.userId, data);
   });
 
 export const saveFanProfile = createServerFn({ method: "POST" })

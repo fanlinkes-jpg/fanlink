@@ -33,6 +33,8 @@ export type FanInsightProps = {
   onProfile?: (profile: FanProfileFields) => void;
   threadMessages?: PpvSource[];
   onCopyDraft?: (body: string, priceCents: number) => void;
+  creatorNote?: { body: string; authorName: string | null; updatedAt: string } | null;
+  onCreatorNote?: (body: string) => void;
 };
 
 const TABS = ["Insights", "Ventas", "Notas"] as const;
@@ -59,16 +61,7 @@ export function FanInsights(props: FanInsightProps) {
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
         {tab === "Notas" ? (
-          <label className="flex flex-col gap-2 text-xs text-[#6d7585]">
-            Notas
-            <textarea
-              value={props.notes}
-              readOnly={!props.notesEditable}
-              onChange={(event) => props.onNotes(event.target.value)}
-              placeholder="Sin datos"
-              className="min-h-40 rounded-xl border border-[#e6e8ee] bg-white p-3 text-sm text-[#1c2333]"
-            />
-          </label>
+          <CreatorNote note={props.creatorNote ?? null} onSave={props.onCreatorNote} />
         ) : tab === "Ventas" ? (
           <SalesPane messages={props.threadMessages ?? []} onCopy={props.onCopyDraft} />
         ) : (
@@ -121,6 +114,39 @@ export function FanInsights(props: FanInsightProps) {
         ))}
       </div>
     </aside>
+  );
+}
+
+function CreatorNote({
+  note,
+  onSave,
+}: {
+  note: { body: string; authorName: string | null; updatedAt: string } | null;
+  onSave?: (body: string) => void;
+}) {
+  const [body, setBody] = useState(note?.body ?? "");
+  const [stamp, setStamp] = useState(note?.updatedAt ?? "");
+  useEffect(() => {
+    setBody(note?.body ?? "");
+    setStamp(note?.updatedAt ?? "");
+  }, [note?.body, note?.updatedAt]);
+  useEffect(() => {
+    if (!onSave || body === (note?.body ?? "")) return;
+    const timer = setTimeout(() => onSave(body), 700);
+    return () => clearTimeout(timer);
+  }, [body, note?.body, onSave]);
+  const when = stamp ? stamp.slice(0, 16).replace("T", " ") : "";
+  return (
+    <label className="flex flex-col gap-2 text-xs text-[#6d7585]">
+      Notas de la creadora
+      <textarea
+        value={body}
+        onChange={(event) => setBody(event.target.value)}
+        placeholder="Sin datos"
+        className="min-h-40 rounded-xl border border-[#e6e8ee] bg-white p-3 text-sm text-[#1c2333]"
+      />
+      <span>{note?.authorName || when ? `${note?.authorName ?? "Sin datos"} · ${when || "Sin datos"}` : "Sin datos"}</span>
+    </label>
   );
 }
 
