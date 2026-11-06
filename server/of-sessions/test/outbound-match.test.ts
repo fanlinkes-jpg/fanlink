@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
@@ -9,27 +9,24 @@ import { claimOutboundMatch, saveChatRead } from "../sync/chat-store.ts";
 import type { ReadSql } from "../sync/store.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
-const schema = [
-  "0007_of_reads.sql",
-  "0008_sync_schedule.sql",
-  "0009_of_chats.sql",
-  "0013_chat_price.sql",
-  "0018_chat_preview.sql",
-  "0019_chat_author.sql",
-  "0020_chat_card.sql",
-  "0021_fan_profile.sql",
-  "0022_message_media.sql",
-  "0024_outbound_schedule.sql",
-  "0025_outbound_send.sql",
-];
+const matchMigration = "0033_outbound_match_unique.sql";
+
+async function applyMigrations(db: PGlite, includeMatch: boolean): Promise<void> {
+  const dir = path.join(root, "migrations");
+  const files = (await readdir(dir)).filter((name) => name.endsWith(".sql")).sort();
+  for (const file of files) {
+    if (!includeMatch && file === matchMigration) continue;
+    await db.exec(await readFile(path.join(dir, file), "utf8"));
+  }
+}
 
 test("la 0033 deja un borrador por mensaje aunque ya hubiera duplicados", async () => {
   const db = new PGlite();
-  for (const file of schema) await db.exec(await readFile(path.join(root, "migrations", file), "utf8"));
+  await applyMigrations(db, false);
   await db.exec(`
-    insert into staff_profile (user_id, display_name, role) values
-      ('ana', 'Ana', 'chatter'),
-      ('luis', 'Luis', 'chatter');
+    insert into staff_profile (user_id, display_name, role, perms) values
+      ('ana', 'Ana', 'member', '[]'::jsonb),
+      ('luis', 'Luis', 'member', '[]'::jsonb);
     insert into of_chat_message (
       creator_id, message_key, thread_key, from_fan, body, sent_at, synced_at
     ) values (
@@ -66,9 +63,8 @@ test("la 0033 deja un borrador por mensaje aunque ya hubiera duplicados", async 
 
 test("el segundo borrador no se queda el mensaje y la lectura sigue guardada", async () => {
   const db = new PGlite();
-  for (const file of schema) await db.exec(await readFile(path.join(root, "migrations", file), "utf8"));
-  await db.exec(await readFile(path.join(root, "migrations", "0033_outbound_match_unique.sql"), "utf8"));
-  await db.exec("insert into staff_profile (user_id, display_name, role) values ('ana', 'Ana', 'chatter'), ('luis', 'Luis', 'chatter')");
+  await applyMigrations(db, true);
+  await db.exec("insert into staff_profile (user_id, display_name, role, perms) values ('ana', 'Ana', 'member', '[]'::jsonb), ('luis', 'Luis', 'member', '[]'::jsonb)");
   await db.exec(`
     insert into of_chat_outbound (id, creator_id, thread_key, fan_key, author_id, body, created_at) values
       ('ana-1', 'c1', '7', '7', 'ana', 'hola', '2026-11-06T12:00:00.000Z'),
