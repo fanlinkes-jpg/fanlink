@@ -1,15 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { openUnreadFirst, threadsToOpen, type ChatThread } from "../sync/chats.ts";
-import { LIVE_PUSH_MS, OPEN_INBOX_SYNC_MS, chatIntervalMinutes, inboxIsOpen, liveCursorChanged, noteInboxOpen } from "../sync/live.ts";
+import { LIVE_PUSH_MS, chatIntervalMinutes, inboxIsOpen, liveCursorChanged, noteInboxOpen } from "../sync/live.ts";
 
-test("la bandeja abierta se entera en menos de 5 s y la lectura baja a 45 s", () => {
+test("la bandeja abierta se entera en menos de 5 s y no acorta el barrido", () => {
   assert.ok(LIVE_PUSH_MS <= 5_000);
   assert.equal(liveCursorChanged(null, "2026-11-06T10:00:00.000Z"), true);
   assert.equal(liveCursorChanged("2026-11-06T10:00:00.000Z", "2026-11-06T10:00:00.000Z"), false);
   assert.equal(chatIntervalMinutes(2, false), 2);
   assert.equal(chatIntervalMinutes(2, true), 2);
-  assert.ok(OPEN_INBOX_SYNC_MS >= 15_000);
   assert.equal(inboxIsOpen(), false);
   const close = noteInboxOpen();
   assert.equal(inboxIsOpen(), true);

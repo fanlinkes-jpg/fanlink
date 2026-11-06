@@ -1,9 +1,6 @@
 /** El navegador se entera de un mensaje ya guardado como mucho en este plazo. */
 export const LIVE_PUSH_MS = 2_000;
 
-/** Con la bandeja abierta, la siguiente lectura de chats puede salir a los 45 s. */
-export const OPEN_INBOX_SYNC_MS = 45_000;
-
 let openInboxes = 0;
 
 export type InboxWatch = { creatorId: string; threadKey: string | null };
