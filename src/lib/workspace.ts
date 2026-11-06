@@ -49,37 +49,84 @@ export const loadWorkspace = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
     const { getSql } = await import("@/lib/db");
+    const { ensureStaff } = await import("@/lib/workspace-store");
+    const { DEV_USER_ID, authConfigured } = await import("@/lib/auth/verify.server");
     const sql = await getSql();
-    await sql`insert into workspace_member (user_id) values (${context.userId}) on conflict (user_id) do nothing`;
+    const devMode = !authConfigured && context.userId === DEV_USER_ID;
+    const access = await ensureStaff(sql, context.userId, devMode);
     const rows = await sql<{ state: SharedSlice | string; version: number }>`
       select state, version from workspace_state where id = 1
     `;
     const row = rows[0];
-    if (!row) return { state: null as SharedSlice | null, version: 0 };
+    if (!row) return { state: null as SharedSlice | null, version: 0, access };
     const state = typeof row.state === "string" ? (JSON.parse(row.state) as SharedSlice) : row.state;
-    return { state, version: Number(row.version) };
+    return { state, version: Number(row.version), access };
   });
 
 export const saveWorkspace = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { state: SharedSlice }) => input)
+  .validator((input: { state: SharedSlice; expectedVersion: number }) => input)
   .handler(async ({ context, data }) => {
     const { getSql } = await import("@/lib/db");
+    const { commitWorkspace, ensureStaff } = await import("@/lib/workspace-store");
+    const { DEV_USER_ID, authConfigured } = await import("@/lib/auth/verify.server");
     const sql = await getSql();
-    const member = await sql<{ user_id: string }>`
-      select user_id from workspace_member where user_id = ${context.userId}
-    `;
-    if (!member.length) return { version: 0 };
-    const rows = await sql.query<{ version: number }>(
-      `insert into workspace_state (id, state, version, updated_by)
-       values (1, $1::jsonb, 1, $2)
-       on conflict (id) do update
-       set state = excluded.state,
-           version = workspace_state.version + 1,
-           updated_at = now(),
-           updated_by = excluded.updated_by
-       returning version`,
-      [JSON.stringify(data.state), context.userId],
-    );
-    return { version: Number(rows[0]?.version ?? 1) };
+    const devMode = !authConfigured && context.userId === DEV_USER_ID;
+    const access = await ensureStaff(sql, context.userId, devMode);
+    const result = await commitWorkspace(sql, context.userId, data.expectedVersion, data.state, access);
+    if (result.ok || result.reason === "forbidden") return result;
+    return {
+      ok: false as const,
+      reason: "conflict" as const,
+      version: result.version,
+      state: result.state as SharedSlice | null,
+    };
+  });
+
+export const updateStaffAccess = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { userId: string; perms: string[]; creatorIds: string[] }) => input)
+  .handler(async ({ context, data }) => {
+    const { getSql } = await import("@/lib/db");
+    const { ensureStaff, setCreatorGrant, setStaffPerms, readAccess } = await import("@/lib/workspace-store");
+    const { DEV_USER_ID, authConfigured } = await import("@/lib/auth/verify.server");
+    const sql = await getSql();
+    const devMode = !authConfigured && context.userId === DEV_USER_ID;
+    const actor = await ensureStaff(sql, context.userId, devMode);
+    await setStaffPerms(sql, actor, data.userId, data.perms);
+    const current = await readAccess(sql, data.userId, false);
+    for (const creatorId of current.creatorIds) {
+      if (!data.creatorIds.includes(creatorId)) await setCreatorGrant(sql, actor, data.userId, creatorId, false);
+    }
+    for (const creatorId of data.creatorIds) {
+      if (!current.creatorIds.includes(creatorId)) await setCreatorGrant(sql, actor, data.userId, creatorId, true);
+    }
+    return ensureStaff(sql, context.userId, devMode);
+  });
+
+export const updateStaffAlert = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { userId: string; phone: string; enabled: boolean; quietMinutes: number }) => input)
+  .handler(async ({ context, data }) => {
+    const { getSql } = await import("@/lib/db");
+    const { ensureStaff, setStaffAlert } = await import("@/lib/workspace-store");
+    const { DEV_USER_ID, authConfigured } = await import("@/lib/auth/verify.server");
+    const sql = await getSql();
+    const devMode = !authConfigured && context.userId === DEV_USER_ID;
+    const actor = await ensureStaff(sql, context.userId, devMode);
+    await setStaffAlert(sql, actor, data.userId, data);
+    return { ok: true as const };
+  });
+
+export const listTeam = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const { getSql } = await import("@/lib/db");
+    const { ensureStaff, listStaff } = await import("@/lib/workspace-store");
+    const { DEV_USER_ID, authConfigured } = await import("@/lib/auth/verify.server");
+    const sql = await getSql();
+    const devMode = !authConfigured && context.userId === DEV_USER_ID;
+    const access = await ensureStaff(sql, context.userId, devMode);
+    if (access.role !== "owner") return { access, staff: [] as Awaited<ReturnType<typeof listStaff>> };
+    return { access, staff: await listStaff(sql) };
   });

@@ -1,9 +1,11 @@
+/** Importe ya en unidades, siempre $X.XX. */
 export function money(n: number) {
-  return new Intl.NumberFormat("es-ES", {
-    style: "currency",
-    currency: "EUR",
-    maximumFractionDigits: 0,
-  }).format(n);
+  return `$${n.toFixed(2)}`;
+}
+
+/** Céntimos de una cifra sincronizada, siempre $X.XX. */
+export function formatCents(cents: number) {
+  return `$${(cents / 100).toFixed(2)}`;
 }
 
 export function pct(ratio: number) {

@@ -24,6 +24,7 @@ import { Route as ListasRouteImport } from './routes/listas'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as MensajesRouteImport } from './routes/mensajes'
 import { Route as VaultRouteImport } from './routes/vault'
+import { Route as ApiChatLiveRouteImport } from './routes/api/chat-live'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 
 const IndexRoute = IndexRouteImport.update({
@@ -101,6 +102,11 @@ const VaultRoute = VaultRouteImport.update({
   path: '/vault',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiChatLiveRoute = ApiChatLiveRouteImport.update({
+  id: '/api/chat-live',
+  path: '/api/chat-live',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
   path: '/api/auth/$',
@@ -123,6 +129,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/mensajes': typeof MensajesRoute
   '/vault': typeof VaultRoute
+  '/api/chat-live': typeof ApiChatLiveRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRoutesByTo {
@@ -141,6 +148,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/mensajes': typeof MensajesRoute
   '/vault': typeof VaultRoute
+  '/api/chat-live': typeof ApiChatLiveRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRoutesById {
@@ -160,6 +168,7 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/mensajes': typeof MensajesRoute
   '/vault': typeof VaultRoute
+  '/api/chat-live': typeof ApiChatLiveRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRouteTypes {
@@ -180,6 +189,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/mensajes'
     | '/vault'
+    | '/api/chat-live'
     | '/api/auth/$'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -198,6 +208,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/mensajes'
     | '/vault'
+    | '/api/chat-live'
     | '/api/auth/$'
   id:
     | '__root__'
@@ -216,6 +227,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/mensajes'
     | '/vault'
+    | '/api/chat-live'
     | '/api/auth/$'
   fileRoutesById: FileRoutesById
 }
@@ -235,6 +247,7 @@ export interface RootRouteChildren {
   LoginRoute: typeof LoginRoute
   MensajesRoute: typeof MensajesRoute
   VaultRoute: typeof VaultRoute
+  ApiChatLiveRoute: typeof ApiChatLiveRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
 }
 
@@ -345,6 +358,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof VaultRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/chat-live': {
+      id: '/api/chat-live'
+      path: '/api/chat-live'
+      fullPath: '/api/chat-live'
+      preLoaderRoute: typeof ApiChatLiveRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/auth/$': {
       id: '/api/auth/$'
       path: '/api/auth/$'
@@ -371,6 +391,7 @@ const rootRouteChildren: RootRouteChildren = {
   LoginRoute: LoginRoute,
   MensajesRoute: MensajesRoute,
   VaultRoute: VaultRoute,
+  ApiChatLiveRoute: ApiChatLiveRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
 }
 export const routeTree = rootRouteImport

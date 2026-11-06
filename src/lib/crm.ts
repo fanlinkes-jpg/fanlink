@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { createJSONStorage, persist } from "zustand/middleware";
 import { isLast24h } from "@/lib/format";
 
 export type Platform = "OnlyFans" | "Fansly" | "Fanvue" | "MYM";
@@ -22,7 +21,7 @@ export type Creator = {
   platform: Platform;
   city: string;
   subscribers: number;
-  revenue30: number;
+  revenue30: number | null;
   growth: number;
   split: number;
   status: "activa" | "pausa";
@@ -31,7 +30,6 @@ export type Creator = {
   nick?: string;
   tag?: string;
   staff?: string[];
-  session?: "conectada" | "pendiente" | "caida";
 };
 
 export type Fan = {
@@ -119,7 +117,7 @@ export type Employee = {
   id: string;
   name: string;
   role: Role;
-  replyMin: number;
+  replyMin: number | null;
   online: boolean;
   perms: Perm[];
   shifts: Array<"mañana" | "noche" | "libre">;
@@ -183,11 +181,11 @@ function freshData() {
   ];
 
   const lists: SmartList[] = [
-    { id: "l-ballenas", name: "Ballenas", detail: "Gasto de vida ≥ 500 €", kind: "ballenas", minSpend: 500 },
+    { id: "l-ballenas", name: "Ballenas", detail: "Gasto de vida ≥ $500.00", kind: "ballenas", minSpend: 500 },
     { id: "l-nuevos", name: "Nuevos 7 días", detail: "Suscripción de 7 días o menos", kind: "nuevos", minSpend: 0 },
     { id: "l-riesgo", name: "En riesgo", detail: "Renovación o ya expirados", kind: "riesgo", minSpend: 0 },
     { id: "l-online", name: "En línea ahora", detail: "Conectados en este momento", kind: "online", minSpend: 0 },
-    { id: "l-frio", name: "Sin compra 30 días", detail: "Activos con 0 € este mes", kind: "sincompra", minSpend: 0 },
+    { id: "l-frio", name: "Sin compra 30 días", detail: "Activos con $0.00 este mes", kind: "sincompra", minSpend: 0 },
   ];
 
   return {
@@ -255,20 +253,19 @@ type CrmState = DataSlice & {
   setNotify: (on: boolean) => void;
   setAgency: (name: string) => void;
   resetDemo: () => void;
+  workspaceReady: boolean;
+  workspaceNotice: string | null;
+  teamAccess: {
+    userId: string;
+    role: "owner" | "member";
+    perms: string[];
+    creatorIds: string[];
+    displayName: string;
+    devMode: boolean;
+  } | null;
 };
 
 const uid = () => Math.random().toString(36).slice(2, 9);
-
-const fanlinkStorage = createJSONStorage(() => ({
-  getItem: (name) =>
-    Promise.resolve(typeof window === "undefined" ? null : window.localStorage.getItem(name)),
-  setItem: (name, value) => {
-    if (typeof window !== "undefined") window.localStorage.setItem(name, value);
-  },
-  removeItem: (name) => {
-    if (typeof window !== "undefined") window.localStorage.removeItem(name);
-  },
-}));
 
 const REPLIES = [
   "Me interesa, mándame los detalles.",
@@ -373,10 +370,11 @@ export function suggestReplies(fan: Fan | undefined, copilot: boolean) {
   ];
 }
 
-export const useCrm = create<CrmState>()(
-  persist(
-    (set, get) => ({
+export const useCrm = create<CrmState>()((set, get) => ({
       ...freshData(),
+      workspaceReady: false,
+      workspaceNotice: null,
+      teamAccess: null,
       setCreator: (id) => set({ creatorId: id }),
       setTab: (tab) => set({ inboxTab: tab }),
       setQuery: (q) => set({ query: q }),
@@ -496,7 +494,7 @@ export const useCrm = create<CrmState>()(
             {
               id: uid(),
               name: name.trim() || "Lista nueva",
-              detail: `Gasto 30 días ≥ ${minSpend} €`,
+              detail: `Gasto 30 días ≥ $${Number(minSpend).toFixed(2)}`,
               kind: "custom",
               minSpend,
               custom: true,
@@ -582,7 +580,7 @@ export const useCrm = create<CrmState>()(
               id: uid(),
               name: name.trim() || "Nuevo",
               role,
-              replyMin: 6,
+              replyMin: null,
               online: false,
               perms: role === "Chatter" ? ["mensajes", "vault"] : role === "VA" ? ["vault"] : ["mensajes", "analitica", "equipo"],
               shifts: ["libre", "libre", "libre", "libre", "libre", "libre", "libre"],
@@ -602,14 +600,13 @@ export const useCrm = create<CrmState>()(
               city: city.trim() || "España",
               tag: tag.trim() || "general",
               subscribers: 0,
-              revenue30: 0,
+              revenue30: null,
               growth: 0,
               split: 25,
               status: "activa",
               hue: Math.floor(Math.random() * 360),
               proxy: "IP dedicada · pendiente",
               staff: [],
-              session: "pendiente",
             },
           ],
         })),
@@ -626,10 +623,7 @@ export const useCrm = create<CrmState>()(
       setNotify: (on) => set({ notifyShifts: on }),
       setAgency: (name) => set({ agency: name }),
       resetDemo: () => set(freshData()),
-    }),
-    { name: "fanlink-management-v2", skipHydration: true, storage: fanlinkStorage },
-  ),
-);
+}));
 
 export function revenue24h(messages: Msg[]) {
   return messages.filter((m) => isLast24h(m.at)).reduce((sum, m) => sum + messageValue(m), 0);

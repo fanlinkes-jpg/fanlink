@@ -26,6 +26,7 @@ import {
   type Fan,
   type Msg,
 } from "@/lib/crm";
+import { recordChatOutbound } from "@/lib/of-sessions";
 
 const EMOJIS = ["😊", "⚙️", "🎁", "🔥", "💋", "❤️", "😏", "🍆", "💦", "😈", "😘", "🍑"];
 
@@ -51,7 +52,7 @@ const GLOSS: Record<string, string> = {
 };
 
 function eur(n: number) {
-  return new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR", minimumFractionDigits: 2 }).format(n);
+  return `$${n.toFixed(2)}`;
 }
 
 function when(ts: number) {
@@ -101,8 +102,9 @@ export function MessagesPage() {
   const [localQuery, setLocalQuery] = useState("");
 
   const employee = employees.find((e) => e.id === activeEmployeeId);
-  const canPrice = employee?.perms.includes("precios") ?? false;
-  const canSend = employee?.perms.includes("mensajes") ?? false;
+  const teamAccess = useCrm((s) => s.teamAccess);
+  const canPrice = teamAccess?.role === "owner" || teamAccess?.perms.includes("precios") === true;
+  const canSend = teamAccess?.role === "owner" || teamAccess?.perms.includes("mensajes") === true;
   const creator = creators.find((c) => c.id === creatorId) ?? creators[0];
 
   const visible = useMemo(() => {
@@ -153,8 +155,21 @@ export function MessagesPage() {
       vaultId: attachVaultId ?? undefined,
     });
     if (!result.ok) toast.error(result.reason);
-    else if (result.price) toast.success(`PPV enviado a ${eur(result.price)}`);
-    else toast.success("Mensaje entregado");
+    else {
+      const body = personalize(text.trim(), fan) || "Contenido";
+      void recordChatOutbound({
+        data: {
+          creatorId: fan.creatorId,
+          fanKey: fan.id,
+          threadKey: fan.id,
+          body,
+          priceCents: result.price != null ? Math.round(result.price * 100) : null,
+          ofMessageKey: null,
+        },
+      }).catch(() => undefined);
+      if (result.price) toast.success(`PPV enviado a ${eur(result.price)}`);
+      else toast.success("Mensaje entregado");
+    }
     setPrice("");
     setShowScripts(false);
   }
@@ -349,7 +364,7 @@ export function MessagesPage() {
                     value={price}
                     onChange={(e) => setPrice(e.target.value)}
                     inputMode="numeric"
-                    placeholder="PPV €"
+                    placeholder="PPV $"
                     aria-label="Precio base del PPV"
                     className="w-16 rounded-md border border-[#e6e8ee] px-2 py-1 text-xs text-[#1c2333]"
                   />

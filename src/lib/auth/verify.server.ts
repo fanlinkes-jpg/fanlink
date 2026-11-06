@@ -1,4 +1,5 @@
 import { getRequest } from "@tanstack/react-start/server";
+import { isLoopbackHost } from "@/lib/loopback";
 import { gateIdentityEnabled } from "./gate-identity.server";
 import { auth, authConfigured } from "./server";
 
@@ -81,6 +82,15 @@ export async function getSessionUser(
  *   read/write everyone's rows.
  * - Auth disabled + no database -> the shared dev user id.
  */
+function assertLocalDevRequest(): void {
+  const request = getRequest();
+  if (!request) return;
+  const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host") ?? "";
+  if (!isLoopbackHost(host)) {
+    throw new Error("El modo sin autenticación solo está permitido en localhost.");
+  }
+}
+
 export async function requireUserId(bearerToken?: string): Promise<string> {
   if (!authConfigured && !gateIdentityEnabled()) {
     if (databaseConfigured) {
@@ -89,6 +99,7 @@ export async function requireUserId(bearerToken?: string): Promise<string> {
           "refusing to fall back to the shared dev user against a real database.",
       );
     }
+    assertLocalDevRequest();
     return DEV_USER_ID;
   }
   const user = await getSessionUser(bearerToken);

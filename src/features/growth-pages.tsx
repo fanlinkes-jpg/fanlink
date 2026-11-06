@@ -3,8 +3,9 @@ import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { money, pct } from "@/lib/format";
 import { cn } from "@/lib/cn";
-import { fansForList, massPlan, useCrm, type Platform } from "@/lib/crm";
+import { fansForList, useCrm, type Platform } from "@/lib/crm";
 import { Badge, Button, Field, Panel, Select } from "@/components/ui";
+import { CampaignDrafts } from "@/features/campaign-draft";
 
 export function ListsPage() {
   const lists = useCrm((s) => s.lists);
@@ -25,7 +26,7 @@ export function ListsPage() {
     <div className="space-y-4 p-4 md:p-6">
       <div>
         <h1 className="font-display text-2xl font-semibold">Listas inteligentes</h1>
-        <p className="text-sm text-muted">Segmentos vivos según gasto, antigüedad y estado. Sirven para campañas y prioridad de chat.</p>
+        <p className="text-sm text-muted">Estas listas son de ejemplo local. Los destinatarios de un masivo salen de los fans sincronizados, en Campañas.</p>
       </div>
       <Panel title="Nueva lista por gasto">
         <form
@@ -61,7 +62,7 @@ export function ListsPage() {
                     <li key={f.id} className="flex items-center justify-between gap-2 border-b border-line px-4 py-2 last:border-0">
                       <span className="min-w-0">
                         <span className="block truncate text-sm">{f.name}</span>
-                        <span className="block text-xs text-muted">{creators.find((c) => c.id === f.creatorId)?.name} · {money(f.spend30)} / 30 d</span>
+                        <span className="block text-xs text-muted">{creators.find((c) => c.id === f.creatorId)?.name} · ejemplo local</span>
                       </span>
                       <Button variant="ghost" onClick={() => { openFan(f.id); void navigate({ to: "/mensajes" }); }}>Chat</Button>
                     </li>
@@ -85,12 +86,7 @@ export function CampaignsPage() {
   const campaigns = useCrm((s) => s.campaigns);
   const lists = useCrm((s) => s.lists);
   const addCampaign = useCrm((s) => s.addCampaign);
-  const sendCampaign = useCrm((s) => s.sendCampaign);
   const setCampaignStatus = useCrm((s) => s.setCampaignStatus);
-  const fans = useCrm((s) => s.fans);
-  const messages = useCrm((s) => s.messages);
-  const creatorId = useCrm((s) => s.creatorId);
-  const adaptPrices = useCrm((s) => s.adaptPrices);
   const [name, setName] = useState("");
   const [listId, setListId] = useState(lists[0]?.id ?? "");
   const [body, setBody] = useState("");
@@ -105,8 +101,9 @@ export function CampaignsPage() {
           <span className="border-b-2 border-primary pb-2 font-medium text-primary">Mensajes masivos</span>
           <span className="pb-2 text-muted">Mensajes automáticos</span>
         </div>
-        <p className="mt-3 text-sm text-muted">Un masivo por precio. {`{nombre}`} se cambia por el nombre de cada fan.</p>
+        <p className="mt-3 text-sm text-muted">La tabla antigua no son envíos de OnlyFans. El borrador de arriba usa los fans sincronizados.</p>
       </div>
+      <CampaignDrafts />
       <Panel title="Nueva campaña">
         <form
           className="grid gap-2 md:grid-cols-2"
@@ -133,7 +130,7 @@ export function CampaignsPage() {
           <Select value={trigger} onChange={(e) => setTrigger(e.target.value)} aria-label="Disparador">
             {["Manual", "Nuevo suscriptor", "Expiración", "Compra", "Fan en línea"].map((t) => <option key={t}>{t}</option>)}
           </Select>
-          <Field value={price} onChange={(e) => setPrice(e.target.value)} placeholder="Precio base €" inputMode="numeric" />
+          <Field value={price} onChange={(e) => setPrice(e.target.value)} placeholder="Precio base $" inputMode="numeric" />
           <textarea value={body} onChange={(e) => setBody(e.target.value)} required rows={3} placeholder="Hola {nombre}, tengo un set para ti" className="rounded-md border border-line bg-bg px-3 py-2 text-sm md:col-span-2" />
           <p className="text-xs text-muted md:col-span-2">{"{nombre}"} se cambia por el nombre de cada fan. Si el precio se parte en varios tramos, la app manda un masivo por tramo.</p>
           <Button type="submit">Guardar</Button>
@@ -151,11 +148,7 @@ export function CampaignsPage() {
           <tbody>
             {campaigns.map((c) => {
               const list = lists.find((l) => l.id === c.listId);
-              const targets = list ? fansForList(fans, list).filter((f) => creatorId === "all" || f.creatorId === creatorId) : [];
-              const plan = c.lastBatches?.length ? c.lastBatches : massPlan(targets, c.price, adaptPrices !== false);
-              const fromThread = messages.filter((m) => m.campaignId === c.id && m.ppv?.unlocked).length;
-              const opened = fromThread || c.opened || 0;
-              const whenSent = c.sentAt ? new Date(c.sentAt).toLocaleString("es-ES", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "Sin enviar";
+              const whenSent = "Sin enviar";
               return (
                 <tr key={c.id} className="border-t border-line align-top">
                   <td className="px-3 py-3">
@@ -165,16 +158,13 @@ export function CampaignsPage() {
                   <td className="px-3 py-3"><Badge tone={c.status === "enviada" ? "primary" : c.status === "pausada" ? "danger" : "gold"}>{c.status}</Badge></td>
                   <td className="px-3 py-3 text-xs">{whenSent}</td>
                   <td className="px-3 py-3">{list?.name ?? "—"}</td>
-                  <td className="px-3 py-3 tabular-nums">{c.sent}</td>
-                  <td className="px-3 py-3 tabular-nums">{opened}</td>
-                  <td className="px-3 py-3 tabular-nums">{plan.length || "—"}</td>
-                  <td className="px-3 py-3 tabular-nums">{money(c.earned)}</td>
+                  <td className="px-3 py-3 text-muted">—</td>
+                  <td className="px-3 py-3 text-muted">—</td>
+                  <td className="px-3 py-3 text-muted">—</td>
+                  <td className="px-3 py-3 text-muted">Sin envío</td>
                   <td className="px-3 py-3">
                     <div className="flex flex-col gap-1">
-                      <Button onClick={() => {
-                        const n = sendCampaign(c.id);
-                        toast.success(n === 1 ? "1 masivo enviado" : `${n} masivos enviados`);
-                      }}>Enviar</Button>
+                      <Button disabled title="Envío real desactivado">Envío real desactivado</Button>
                       <Button variant="ghost" onClick={() => setCampaignStatus(c.id, c.status === "pausada" ? "activa" : "pausada")}>
                         {c.status === "pausada" ? "Reanudar" : "Pausar"}
                       </Button>
@@ -209,7 +199,7 @@ export function VaultPage() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="font-display text-2xl font-semibold">Vault Pro</h1>
-          <p className="text-sm text-muted">Biblioteca de la agencia. El chatter adjunta; no descarga. El precio sugerido sale del historial.</p>
+          <p className="text-sm text-muted">Biblioteca local de ejemplo. No son ingresos de OnlyFans. Sirve para elegir medios en un borrador.</p>
         </div>
         <div className="flex gap-2">
           <Select value={folder} onChange={(e) => setFolder(e.target.value)} aria-label="Carpeta">
@@ -224,7 +214,6 @@ export function VaultPage() {
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {items.map((item) => {
           const creator = creators.find((c) => c.id === item.creatorId);
-          const rate = item.unlocks / Math.max(1, item.sent);
           return (
             <article key={item.id} className="overflow-hidden rounded-lg border border-line bg-surface">
               <div className="flex h-28 items-end p-3" style={{ background: `linear-gradient(160deg, hsl(${item.hue} 35% 28%), hsl(${item.hue} 20% 12%))` }}>
@@ -238,7 +227,7 @@ export function VaultPage() {
                   </span>
                 </p>
                 <p className="text-xs text-muted">{creator?.name} · sugerido {money(item.price)}</p>
-                <p className="text-xs tabular-nums text-muted">Enviado {item.sent} · abre {pct(rate)} · {money(item.revenue)}</p>
+                <p className="text-xs text-muted">Ejemplo local. No es ingreso de OnlyFans.</p>
                 <Button
                   variant="soft"
                   onClick={() => {
@@ -332,7 +321,7 @@ export function LinksPage() {
     <div className="space-y-4 p-4 md:p-6">
       <div>
         <h1 className="font-display text-2xl font-semibold">Enlaces de seguimiento</h1>
-        <p className="text-sm text-muted">De dónde entra cada suscriptor y cuánto convierte el tráfico.</p>
+        <p className="text-sm text-muted">Ejemplo local. No son suscriptores ni ingresos de OnlyFans.</p>
       </div>
       <div className="overflow-x-auto rounded-lg border border-line">
         <table className="w-full min-w-[640px] text-left text-sm">
@@ -351,7 +340,7 @@ export function LinksPage() {
                 <td className="px-3 py-3 tabular-nums">{l.clicks}</td>
                 <td className="px-3 py-3 tabular-nums">{l.subs}</td>
                 <td className="px-3 py-3 tabular-nums">{pct(l.subs / Math.max(1, l.clicks))}</td>
-                <td className="px-3 py-3 tabular-nums">{money(l.revenue)}</td>
+                <td className="px-3 py-3 text-muted">Ejemplo</td>
                 <td className="px-3 py-3">
                   <button
                     className="rounded-md bg-raised px-2 py-1 text-xs"
