@@ -110,6 +110,27 @@ export function canProxyMedia(url: string): boolean {
   return mediaHostAllowed(url);
 }
 
+export async function followMedia(
+  start: string,
+  load: (url: string) => Promise<{ status: number; location: string | null; body: Uint8Array | null }>,
+): Promise<Uint8Array | null> {
+  let current = start;
+  for (let hop = 0; hop < 3; hop += 1) {
+    if (!mediaHostAllowed(current)) return null;
+    const response = await load(current);
+    if (response.status >= 300 && response.status < 400) {
+      const next = nextMediaUrl(current, response.location);
+      if (!next) return null;
+      current = next;
+      continue;
+    }
+    if (response.status < 200 || response.status >= 300 || !response.body) return null;
+    if (response.body.byteLength === 0 || response.body.byteLength > 5_000_000) return null;
+    return response.body;
+  }
+  return null;
+}
+
 export function olderThan(messages: ChatMessage[], cursorSentAt: string | null, limit: number): ChatMessage[] {
   const pool = cursorSentAt ? messages.filter((message) => message.sentAt < cursorSentAt) : messages;
   return [...pool].sort((left, right) => right.sentAt.localeCompare(left.sentAt)).slice(0, limit).reverse();
