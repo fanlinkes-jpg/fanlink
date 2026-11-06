@@ -119,6 +119,7 @@ export function kickInboxWatch(): void {
       if (!watch) return null;
       const accountId = accountForCreator(watch.creatorId);
       if (!accountId) return null;
+      threadRef.key = watch.threadKey ?? "";
       return {
         accountId,
         creatorId: watch.creatorId,
@@ -233,9 +234,11 @@ async function chatScheduleAccounts(sessions: SessionManager): Promise<ScheduleA
 async function scheduleAccounts(sessions: SessionManager): Promise<ScheduleAccount[]> {
   const [accounts, meta] = await Promise.all([sessions.listAccounts(), listSyncMeta(await getSql())]);
   const byCreator = new Map(meta.map((row) => [row.creatorId, row]));
+  const intervalMs = (await readSyncIntervalMin(await getSql(), intervalMinFromEnv(process.env.FANLINK_SYNC_INTERVAL_MIN))) * 60_000;
   return accounts.flatMap((account) => {
     if (!account.creatorId) return [];
     const state = byCreator.get(account.creatorId);
+    const pause = accountPause(account.id);
     return [
       {
         accountId: account.id,
@@ -244,7 +247,7 @@ async function scheduleAccounts(sessions: SessionManager): Promise<ScheduleAccou
         identityState: account.identityState,
         hasStorageState: account.hasStorageState,
         consecutiveFailures: state?.consecutiveFailures ?? 0,
-        lastAttemptAt: state?.lastAttemptAt ?? null,
+        lastAttemptAt: pause ? new Date(pause.until - intervalMs).toISOString() : state?.lastAttemptAt ?? null,
       },
     ];
   });

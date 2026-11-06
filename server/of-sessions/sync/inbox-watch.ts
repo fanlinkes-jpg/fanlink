@@ -79,7 +79,12 @@ export async function runInboxWatch(input: {
     if ((action === "open" || action === "navigate" || action === "reload") && target) {
       if (!session || accountId !== target.accountId) {
         await shut();
-        session = await input.open(target.accountId);
+        try {
+          session = await input.open(target.accountId);
+        } catch {
+          await input.sleep(2_000);
+          continue;
+        }
         accountId = target.accountId;
         creatorId = target.creatorId;
         pageOpen = true;
