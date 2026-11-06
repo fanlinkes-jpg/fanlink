@@ -292,11 +292,12 @@ export class SessionManager {
     });
   }
 
-  readCreatorData(accountId: string, includeEarnings: boolean): Promise<CollectedRead> {
+  readCreatorData(accountId: string, includeEarnings: boolean, sinceTx?: string | null): Promise<CollectedRead> {
     if (this.reading.size > 0) {
       return Promise.resolve({
         earnings: [],
         fans: [],
+        transactions: [],
         reason: "sincronización en curso",
         jsonPaths: [],
         earningsCaptured: false,
@@ -306,7 +307,7 @@ export class SessionManager {
     }
     this.reading.add(accountId);
     const job = this.readTail
-      .then(() => this.readCreatorDataNow(accountId, includeEarnings))
+      .then(() => this.readCreatorDataNow(accountId, includeEarnings, sinceTx))
       .finally(() => {
         this.reading.delete(accountId);
       });
@@ -355,10 +356,11 @@ export class SessionManager {
     }
   }
 
-  private async readCreatorDataNow(accountId: string, includeEarnings: boolean): Promise<CollectedRead> {
+  private async readCreatorDataNow(accountId: string, includeEarnings: boolean, sinceTx?: string | null): Promise<CollectedRead> {
     const empty: CollectedRead = {
       earnings: [],
       fans: [],
+      transactions: [],
       reason: null,
       jsonPaths: [],
       earningsCaptured: false,
@@ -375,6 +377,7 @@ export class SessionManager {
           waitMs: this.options.config.identityWaitMs,
           includeEarnings,
           now: this.now(),
+          sinceTx,
         }),
       );
     } catch (error) {

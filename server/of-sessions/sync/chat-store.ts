@@ -65,12 +65,14 @@ export async function saveChatRead(
     for (const message of read.messages) {
       await sql.query(
         `insert into of_chat_message (
-           creator_id, message_key, thread_key, fan_key, from_fan, body, sent_at, synced_at, origin
-         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           creator_id, message_key, thread_key, fan_key, from_fan, body, sent_at, price_cents, purchased, synced_at, origin
+         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          on conflict (creator_id, message_key) do update set
            body = excluded.body,
            from_fan = excluded.from_fan,
            sent_at = excluded.sent_at,
+           price_cents = excluded.price_cents,
+           purchased = excluded.purchased,
            synced_at = excluded.synced_at`,
         [
           creatorId,
@@ -80,6 +82,8 @@ export async function saveChatRead(
           message.fromFan,
           message.body,
           message.sentAt,
+          message.priceCents,
+          message.purchased,
           syncedAt,
           ORIGIN,
         ],
@@ -131,7 +135,7 @@ export async function listChats(
     creatorIds,
   );
   const messages = await sql.query<MessageRow>(
-    `select creator_id, message_key, thread_key, fan_key, from_fan, body, sent_at, synced_at
+    `select creator_id, message_key, thread_key, fan_key, from_fan, body, sent_at, price_cents, purchased, synced_at
      from of_chat_message where creator_id in (${filter})
      order by sent_at`,
     creatorIds,
@@ -161,6 +165,8 @@ export async function listChats(
       fromFan: row.from_fan === true || row.from_fan === "t" || row.from_fan === "true",
       body: row.body,
       sentAt: iso(row.sent_at) ?? "",
+      priceCents: row.price_cents == null ? null : Number(row.price_cents),
+      purchased: row.purchased == null ? null : row.purchased === true || row.purchased === "t" || row.purchased === "true",
       syncedAt: iso(row.synced_at) ?? "",
     })),
     meta: meta.map((row) => ({
@@ -208,6 +214,8 @@ type MessageRow = {
   from_fan: boolean | string;
   body: string;
   sent_at: Date | string;
+  price_cents: number | string | null;
+  purchased: boolean | string | null;
   synced_at: Date | string;
 };
 

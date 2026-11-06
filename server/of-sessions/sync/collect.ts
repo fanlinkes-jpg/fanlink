@@ -8,14 +8,17 @@ import {
   parseEarningsJson,
   parseFansDom,
   parseFansJson,
+  parseTransactions,
   readFailureReason,
   type EarningRow,
   type FanRow,
+  type TransactionRow,
 } from "./parse.ts";
 
 export type CollectedRead = {
   earnings: EarningRow[];
   fans: FanRow[];
+  transactions: TransactionRow[];
   reason: string | null;
   jsonPaths: string[];
   earningsCaptured: boolean;
@@ -32,13 +35,14 @@ export type CollectedRead = {
 export async function collectCreatorRead(
   context: BrowserContext,
   site: SiteAdapter,
-  options: { paceMs: number; waitMs: number; includeEarnings: boolean; now?: Date },
+  options: { paceMs: number; waitMs: number; includeEarnings: boolean; now?: Date; sinceTx?: string | null },
 ): Promise<CollectedRead> {
   const now = options.now ?? new Date();
   const notes = {
     paths: [] as string[],
     earnings: [] as EarningRow[],
     fans: [] as FanRow[],
+    transactions: [] as TransactionRow[],
     redirected: false,
     loginRequired: false,
     sawLoggedIn: false,
@@ -92,6 +96,7 @@ export async function collectCreatorRead(
     return {
       earnings: notes.earnings,
       fans: notes.fans.slice(0, 200),
+      transactions: notes.transactions.filter((row) => !options.sinceTx || row.occurredAt > options.sinceTx).slice(0, 400),
       reason,
       jsonPaths: notes.paths,
       earningsCaptured: notes.earnings.length > 0,
@@ -183,6 +188,7 @@ async function observe(
     paths: string[];
     earnings: EarningRow[];
     fans: FanRow[];
+    transactions: TransactionRow[];
     earningsUrl: boolean;
     fansUrl: boolean;
     loginRequired: boolean;
@@ -222,7 +228,10 @@ async function observe(
     const raw = await response.text();
     if (raw.length > 1_500_000) return;
     const parsed = JSON.parse(raw) as unknown;
-    if (kind === "earnings") notes.earnings.push(...parseEarningsJson(parsed, now));
+    if (kind === "earnings") {
+      notes.earnings.push(...parseEarningsJson(parsed, now));
+      notes.transactions.push(...parseTransactions(parsed, now));
+    }
     if (kind === "fans") notes.fans.push(...parseFansJson(parsed, now));
   } catch {
     if (url && classifyJsonPath(url) === "earnings") notes.earningsUrl = true;

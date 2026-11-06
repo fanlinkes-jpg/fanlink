@@ -105,6 +105,8 @@ export function RealChatsPage() {
                 <li key={message.messageKey} className={message.fromFan ? "text-left" : "text-right"}>
                   <p className={`inline-block max-w-[70%] rounded-2xl px-3 py-2 text-sm ${message.fromFan ? "bg-[#f4f6fb]" : "bg-[#e7f0ff]"}`}>
                     {message.body}
+                    {message.priceCents != null ? ` · ${(message.priceCents / 100).toFixed(2)}` : ""}
+                    {message.purchased === true ? " · comprado" : message.purchased === false ? " · no comprado" : ""}
                   </p>
                   <p className="mt-1 text-[10px] text-[#6d7585]">{message.sentAt.slice(0, 16).replace("T", " ")}</p>
                 </li>

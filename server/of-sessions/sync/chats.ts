@@ -21,6 +21,10 @@ export type ChatMessage = {
   fromFan: boolean;
   body: string;
   sentAt: string;
+  /** Null si el mensaje no trae precio. */
+  priceCents: number | null;
+  /** Null si la página no dice si el PPV se compró. */
+  purchased: boolean | null;
 };
 
 export type FanMessageEvent = {
@@ -174,7 +178,21 @@ function messageFrom(record: Record<string, unknown>, threadKey: string, fanKey:
     fromFan: isFromFan(record, fanKey),
     body,
     sentAt,
+    priceCents: priceCents(record.price ?? record.ppvPrice),
+    purchased: purchasedFlag(record),
   };
+}
+
+function priceCents(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) return Math.round(value * 100);
+  if (typeof value === "string" && /^\d+(\.\d{1,2})?$/.test(value.trim())) return Math.round(Number(value) * 100);
+  return null;
+}
+
+function purchasedFlag(record: Record<string, unknown>): boolean | null {
+  if (typeof record.isOpened === "boolean") return record.isOpened;
+  if (typeof record.purchased === "boolean") return record.purchased;
+  return null;
 }
 
 function isFromFan(record: Record<string, unknown>, fanKey: string | null): boolean {

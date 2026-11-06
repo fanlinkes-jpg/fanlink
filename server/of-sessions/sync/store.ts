@@ -1,5 +1,5 @@
 import { publicSyncReason } from "../messages.ts";
-import type { EarningRow, FanRow } from "./parse.ts";
+import type { EarningRow, FanRow, TransactionRow } from "./parse.ts";
 
 export type ReadSql = {
   query<T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<T[]>;
@@ -7,6 +7,7 @@ export type ReadSql = {
 
 export type StoredEarning = EarningRow & { syncedAt: string };
 export type StoredFan = FanRow & { syncedAt: string };
+export type StoredTransaction = TransactionRow & { syncedAt: string };
 
 export type StoredCreatorRead = {
   creatorId: string;
@@ -19,6 +20,8 @@ export type StoredCreatorRead = {
   jsonPaths: string[];
   earnings: StoredEarning[];
   fans: StoredFan[];
+  transactions: StoredTransaction[];
+  txCursor: string | null;
 };
 
 export type SyncMeta = {
@@ -35,6 +38,7 @@ export async function saveCreatorRead(
   read: {
     earnings: EarningRow[];
     fans: FanRow[];
+    transactions?: TransactionRow[];
     earningsCaptured: boolean;
     fansCaptured: boolean;
     reason: string | null;
@@ -56,12 +60,21 @@ export async function saveCreatorRead(
       }
     }
     if (read.fansCaptured) {
-      await sql.query("delete from of_fan_read where creator_id = $1", [creatorId]);
       for (const row of read.fans) {
         await sql.query(
           `insert into of_fan_read (
-             creator_id, fan_key, of_user_id, handle, display_name, subscribed_at, status, spent_cents, synced_at, origin
-           ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+             creator_id, fan_key, of_user_id, handle, display_name, subscribed_at, status, spent_cents, renew_auto, expires_at, synced_at, origin
+           ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+           on conflict (creator_id, fan_key) do update set
+             of_user_id = excluded.of_user_id,
+             handle = excluded.handle,
+             display_name = excluded.display_name,
+             subscribed_at = excluded.subscribed_at,
+             status = excluded.status,
+             spent_cents = excluded.spent_cents,
+             renew_auto = excluded.renew_auto,
+             expires_at = excluded.expires_at,
+             synced_at = excluded.synced_at`,
           [
             creatorId,
             row.fanKey,
@@ -71,11 +84,29 @@ export async function saveCreatorRead(
             row.subscribedAt,
             row.status,
             row.spentCents,
+            row.renewAuto,
+            row.expiresAt,
             syncedAt,
             ORIGIN,
           ],
         );
       }
+    }
+    for (const row of read.transactions ?? []) {
+      await sql.query(
+        `insert into of_transaction (
+           creator_id, tx_key, occurred_at, gross_cents, net_cents, kind, fan_key, currency, synced_at, origin
+         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         on conflict (creator_id, tx_key) do update set
+           occurred_at = excluded.occurred_at,
+           gross_cents = excluded.gross_cents,
+           net_cents = excluded.net_cents,
+           kind = excluded.kind,
+           fan_key = excluded.fan_key,
+           currency = excluded.currency,
+           synced_at = excluded.synced_at`,
+        [creatorId, row.txKey, row.occurredAt, row.grossCents, row.netCents, row.kind, row.fanKey, row.currency, syncedAt, ORIGIN],
+      );
     }
     const previous = await sql.query<{ consecutive_failures: number | string }>(
       "select consecutive_failures from of_sync_state where creator_id = $1",
@@ -109,6 +140,21 @@ export async function saveCreatorRead(
         failed ? "error" : "ok",
       ],
     );
+    const newest = (read.transactions ?? []).reduce<string | null>((max, row) => {
+      if (!max || row.occurredAt > max) return row.occurredAt;
+      return max;
+    }, null);
+    if (newest) {
+      await sql.query(
+        `update of_sync_state
+         set tx_cursor = case
+           when tx_cursor is null or tx_cursor < $2::timestamptz then $2::timestamptz
+           else tx_cursor
+         end
+         where creator_id = $1`,
+        [creatorId, newest],
+      );
+    }
     await sql.query("commit");
   } catch (error) {
     await sql.query("rollback").catch(() => undefined);
@@ -130,8 +176,17 @@ export async function listCreatorReads(sql: ReadSql, creatorIds: string[]): Prom
      from of_earning where creator_id in (${filter}) order by day`,
     creatorIds,
   );
+  const transactions = await sql.query<TxDb>(
+    `select creator_id, tx_key, occurred_at, gross_cents, net_cents, kind, fan_key, currency, synced_at
+     from of_transaction where creator_id in (${filter}) order by occurred_at`,
+    creatorIds,
+  );
+  const cursors = await sql.query<{ creator_id: string; tx_cursor: Date | string | null }>(
+    `select creator_id, tx_cursor from of_sync_state where creator_id in (${filter})`,
+    creatorIds,
+  );
   const fans = await sql.query<FanDb>(
-    `select creator_id, fan_key, of_user_id, handle, display_name, subscribed_at, status, spent_cents, synced_at
+    `select creator_id, fan_key, of_user_id, handle, display_name, subscribed_at, status, spent_cents, renew_auto, expires_at, synced_at
      from of_fan_read where creator_id in (${filter})`,
     creatorIds,
   );
@@ -163,8 +218,23 @@ export async function listCreatorReads(sql: ReadSql, creatorIds: string[]): Prom
         subscribedAt: iso(row.subscribed_at),
         status: row.status === "expired" ? "expired" : "active",
         spentCents: row.spent_cents == null ? null : Number(row.spent_cents),
+        renewAuto: row.renew_auto == null ? null : row.renew_auto === true || row.renew_auto === "t" || row.renew_auto === "true",
+        expiresAt: iso(row.expires_at),
         syncedAt: iso(row.synced_at) ?? "",
       })),
+    transactions: transactions
+      .filter((row) => row.creator_id === state.creator_id)
+      .map((row) => ({
+        txKey: row.tx_key,
+        occurredAt: iso(row.occurred_at) ?? "",
+        grossCents: Number(row.gross_cents),
+        netCents: row.net_cents == null ? null : Number(row.net_cents),
+        kind: row.kind as TransactionRow["kind"],
+        fanKey: row.fan_key,
+        currency: row.currency,
+        syncedAt: iso(row.synced_at) ?? "",
+      })),
+    txCursor: iso(cursors.find((row) => row.creator_id === state.creator_id)?.tx_cursor ?? null),
   }));
 }
 
@@ -259,6 +329,20 @@ type FanDb = {
   subscribed_at: Date | string | null;
   status: string;
   spent_cents: number | string | null;
+  renew_auto: boolean | string | null;
+  expires_at: Date | string | null;
+  synced_at: Date | string;
+};
+
+type TxDb = {
+  creator_id: string;
+  tx_key: string;
+  occurred_at: Date | string;
+  gross_cents: number | string;
+  net_cents: number | string | null;
+  kind: string;
+  fan_key: string | null;
+  currency: string;
   synced_at: Date | string;
 };
 

@@ -213,6 +213,18 @@ async function handle(
         currency: "USD",
         password: "no-guardar",
         list: [{ date: "2026-11-01", subscriptions: 4, tips: 3, messages: 2, posts: 1 }],
+        transactions: [
+          {
+            id: "tx-tip",
+            createdAt: "2026-11-03T15:00:00.000Z",
+            amount: 10,
+            net: 8,
+            type: "tip",
+            currency: "USD",
+            user: { id: 7, username: "fanuno" },
+            password: "no-guardar",
+          },
+        ],
       }),
     );
     return;
@@ -232,7 +244,7 @@ async function handle(
             username: "fanuno",
             name: "Fan Uno",
             password: "no-guardar",
-            subscribedOnData: { subscribedAt: "2026-10-01T00:00:00.000Z", totalSumm: 15.5 },
+            subscribedOnData: { subscribedAt: "2026-10-01T00:00:00.000Z", totalSumm: 15.5, autoRenew: true, expiredAt: "2026-12-01T00:00:00.000Z" },
           },
           {
             id: 8,
@@ -312,7 +324,7 @@ async function handle(
       JSON.stringify({
         list: [
           { id: 100, text: "Hola, ¿sigues ahí?", createdAt: "2026-11-05T10:00:00.000Z", fromUser: { id: 7 } },
-          { id: 101, text: "Sí, dime.", createdAt: "2026-11-05T10:05:00.000Z", fromUser: { id: 42 } },
+          { id: 101, text: "Sí, dime.", createdAt: "2026-11-05T10:05:00.000Z", fromUser: { id: 42 }, price: 5, isOpened: true },
           ...extraMessages.map((item) => ({
             id: item.id,
             text: item.text,

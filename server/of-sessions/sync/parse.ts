@@ -18,6 +18,18 @@ export type EarningRow = {
 
 export type FanStatus = "active" | "expired";
 
+export type TxKind = "subscription" | "renewal" | "tip" | "message" | "post" | "stream" | "referral";
+
+export type TransactionRow = {
+  txKey: string;
+  occurredAt: string;
+  grossCents: number;
+  netCents: number | null;
+  kind: TxKind;
+  fanKey: string | null;
+  currency: string;
+};
+
 export type FanRow = {
   fanKey: string;
   ofUserId: string | null;
@@ -26,6 +38,9 @@ export type FanRow = {
   subscribedAt: string | null;
   status: FanStatus;
   spentCents: number | null;
+  /** Null si la página no dice si la renovación sigue activa. */
+  renewAuto: boolean | null;
+  expiresAt: string | null;
 };
 
 export type DomEarning = { day: string; kind: string; amount: string; currency: string };
@@ -73,6 +88,34 @@ export function classifyJsonPath(url: string): "earnings" | "fans" | "other" {
   if (/earnings|statements|payouts|\/stats/.test(path)) return "earnings";
   if (/subscribers|subscriptions|\/fans/.test(path)) return "fans";
   return "other";
+}
+
+const TX_KINDS: Record<string, TxKind> = {
+  subscription: "subscription",
+  subscribe: "subscription",
+  subscriptions: "subscription",
+  new_subscription: "subscription",
+  renewal: "renewal",
+  renew: "renewal",
+  recurring: "renewal",
+  tip: "tip",
+  tips: "tip",
+  message: "message",
+  messages: "message",
+  ppv: "message",
+  chat: "message",
+  post: "post",
+  posts: "post",
+  stream: "stream",
+  streaming: "stream",
+  referral: "referral",
+  ref: "referral",
+};
+
+export function parseTransactions(value: unknown, now = new Date()): TransactionRow[] {
+  const rows: TransactionRow[] = [];
+  walkTransactions(value, rows, 0, now);
+  return dedupeTransactions(rows).slice(0, 400);
 }
 
 export function parseEarningsJson(value: unknown, now = new Date()): EarningRow[] {
@@ -233,7 +276,78 @@ function fanFrom(record: Record<string, unknown>, now: Date): FanRow | null {
     subscribedAt,
     status,
     spentCents: spent,
+    renewAuto: boolOrNull(nested?.autoRenew ?? nested?.renewedAuto ?? nested?.isAutoRenew ?? record.autoRenew),
+    expiresAt:
+      iso(record.expiredAt) ??
+      iso(record.expireDate) ??
+      iso(nested?.expiredAt) ??
+      iso(nested?.expireDate) ??
+      iso(nested?.expiredDate),
   };
+}
+
+function walkTransactions(value: unknown, rows: TransactionRow[], depth: number, now: Date): void {
+  if (!value || typeof value !== "object" || depth > 4 || rows.length > 400) return;
+  if (Array.isArray(value)) {
+    for (const item of value.slice(0, 200)) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const row = transactionFrom(item as Record<string, unknown>, now);
+      if (row) rows.push(row);
+    }
+    return;
+  }
+  const record = value as Record<string, unknown>;
+  for (const [key, child] of Object.entries(record)) {
+    if (SECRET.test(key)) continue;
+    if (key === "transactions" || key === "history" || key === "operations" || key === "list") {
+      walkTransactions(child, rows, depth + 1, now);
+    }
+  }
+}
+
+function transactionFrom(record: Record<string, unknown>, now: Date): TransactionRow | null {
+  const txKey = numericId(record.id) ?? clean(record.id, 80);
+  const kind = TX_KINDS[String(record.type ?? record.kind ?? record.source ?? "").toLowerCase()];
+  const gross = cents(record.amount ?? record.gross ?? record.total ?? record.value);
+  const occurredAt = isoStamp(record.createdAt ?? record.created_at ?? record.date ?? record.time);
+  if (!txKey || !kind || gross == null || !occurredAt || !dayOk(occurredAt.slice(0, 10), now)) return null;
+  const user = nestedRecord(record.user) ?? nestedRecord(record.fan) ?? nestedRecord(record.fromUser);
+  const fanKey = numericId(user?.id) ?? (clean(user?.username, 80)?.replace(/^@+/, "") ?? null);
+  return {
+    txKey: txKey.slice(0, 80),
+    occurredAt,
+    grossCents: gross,
+    netCents: cents(record.net ?? record.netAmount ?? record.payout),
+    kind,
+    fanKey,
+    currency: clean(record.currency, 8)?.toUpperCase() ?? "USD",
+  };
+}
+
+function dedupeTransactions(rows: TransactionRow[]): TransactionRow[] {
+  const map = new Map<string, TransactionRow>();
+  for (const row of rows) map.set(row.txKey, row);
+  return [...map.values()];
+}
+
+function boolOrNull(value: unknown): boolean | null {
+  if (value === true || value === false) return value;
+  return null;
+}
+
+function isoStamp(value: unknown): string | null {
+  if (typeof value === "number" && Number.isFinite(value) && value > 1_000_000_000) {
+    const millis = value > 10_000_000_000 ? value : value * 1000;
+    const date = new Date(millis);
+    if (Number.isNaN(date.getTime())) return null;
+    return date.toISOString();
+  }
+  if (typeof value !== "string") return null;
+  const match = value.match(/\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)?/);
+  if (!match) return null;
+  const date = new Date(match[0].length === 10 ? `${match[0]}T00:00:00.000Z` : match[0]);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString();
 }
 
 function fanStatus(

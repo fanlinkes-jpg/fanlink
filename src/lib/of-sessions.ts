@@ -80,6 +80,18 @@ export type CreatorFanView = {
   subscribedAt: string | null;
   status: "active" | "expired";
   spentCents: number | null;
+  renewAuto: boolean | null;
+  expiresAt: string | null;
+};
+
+export type CreatorTransactionView = {
+  txKey: string;
+  occurredAt: string;
+  grossCents: number;
+  netCents: number | null;
+  kind: "subscription" | "renewal" | "tip" | "message" | "post" | "stream" | "referral";
+  fanKey: string | null;
+  currency: string;
 };
 
 /** Lectura guardada de OnlyFans. `earnings` es null si quien mira no es la dueña. */
@@ -93,6 +105,8 @@ export type CreatorReadView = {
   lastStatus: "idle" | "ok" | "error";
   earnings: CreatorEarningView[] | null;
   fans: CreatorFanView[];
+  /** Null si quien mira no es la dueña. */
+  transactions: CreatorTransactionView[] | null;
 };
 
 export type CreatorReadList = {
@@ -122,6 +136,8 @@ export type CreatorChatList = {
     fromFan: boolean;
     body: string;
     sentAt: string;
+    priceCents: number | null;
+    purchased: boolean | null;
   }>;
   meta: Array<{
     creatorId: string;

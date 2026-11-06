@@ -53,7 +53,7 @@ test("el simulador entrega el chat y solo avisa de mensajes nuevos", { timeout: 
   const pg = new PGlite();
   const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../migrations");
   try {
-    for (const name of ["0007_of_reads.sql", "0008_sync_schedule.sql", "0009_of_chats.sql"]) {
+    for (const name of ["0007_of_reads.sql", "0008_sync_schedule.sql", "0009_of_chats.sql", "0013_chat_price.sql"]) {
       await pg.exec(await readFile(path.join(dir, name), "utf8"));
     }
     const sql: ReadSql = {
@@ -69,7 +69,7 @@ test("el simulador entrega el chat y solo avisa de mensajes nuevos", { timeout: 
     assert.equal(read.reason, null);
     assert.equal(read.threads[0]?.fanHandle, "fanuno");
     assert.equal(read.messages.some((message) => message.fromFan && message.body.includes("sigues")), true);
-    assert.equal(read.messages.some((message) => !message.fromFan && message.body === "Sí, dime."), true);
+    assert.equal(read.messages.some((message) => !message.fromFan && message.body === "Sí, dime." && message.priceCents === 500 && message.purchased === true), true);
     assert.equal(raw.includes("sekret"), false);
     assert.equal(raw.includes("no-guardar"), false);
     const first = await saveChatRead(sql, "c-alba", read);

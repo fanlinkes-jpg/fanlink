@@ -82,9 +82,10 @@ function bootSyncLoop(sessions: SessionManager): void {
     inProgressIds: () => new Set(sessions.readingIds()),
     accounts: () => scheduleAccounts(sessions),
     sync: async (accountId) => {
-      const read = await sessions.readCreatorData(accountId, true);
       const account = (await sessions.listAccounts()).find((item) => item.id === accountId);
       const creatorId = account?.creatorId ?? accountId;
+      const prior = account?.creatorId ? await listCreatorReads(await getSql(), [account.creatorId]) : [];
+      const read = await sessions.readCreatorData(accountId, true, prior[0]?.txCursor ?? null);
       logCreatorRead(creatorId, read);
       if (read.alreadyRunning) return;
       if (read.loginRequired) await sessions.markLoginRequired(accountId);
@@ -286,6 +287,8 @@ export async function listCreatorChatViews(userId: string): Promise<CreatorChatL
       fromFan: message.fromFan,
       body: message.body,
       sentAt: message.sentAt,
+      priceCents: message.priceCents,
+      purchased: message.purchased,
     })),
     meta: stored.meta.map((item) => ({
       creatorId: item.creatorId,
@@ -319,10 +322,11 @@ export async function syncCreatorReadView(userId: string, creatorId: string): Pr
   const sessions = await getOfSessionManager();
   const account = (await sessions.listAccounts()).find((item) => item.creatorId === id);
   if (!account) throw new Error("No hay sesión guardada para sincronizar.");
-  const read = await sessions.readCreatorData(account.id, true);
+  const sql = await getSql();
+  const prior = await listCreatorReads(sql, [id]);
+  const read = await sessions.readCreatorData(account.id, true, prior[0]?.txCursor ?? null);
   logCreatorRead(id, read);
   if (read.loginRequired) await sessions.markLoginRequired(account.id);
-  const sql = await getSql();
   if (!read.alreadyRunning) await saveCreatorRead(sql, id, read);
   const [stored] = await listCreatorReads(sql, [id]);
   if (!stored) {
@@ -336,6 +340,7 @@ export async function syncCreatorReadView(userId: string, creatorId: string): Pr
       lastStatus: read.alreadyRunning ? "idle" : "error",
       earnings: access.role === "owner" ? [] : null,
       fans: [],
+      transactions: access.role === "owner" ? [] : null,
     };
   }
   return presentRead(access.role, stored);
@@ -367,7 +372,20 @@ function presentRead(role: "owner" | "member", row: Awaited<ReturnType<typeof li
       subscribedAt: item.subscribedAt,
       status: item.status,
       spentCents: owner ? item.spentCents : null,
+      renewAuto: item.renewAuto,
+      expiresAt: item.expiresAt,
     })),
+    transactions: owner
+      ? row.transactions.map((item) => ({
+          txKey: item.txKey,
+          occurredAt: item.occurredAt,
+          grossCents: item.grossCents,
+          netCents: item.netCents,
+          kind: item.kind,
+          fanKey: item.fanKey,
+          currency: item.currency,
+        }))
+      : null,
   };
 }
 

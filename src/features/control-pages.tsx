@@ -9,7 +9,7 @@ import { hasPerm } from "@/lib/access-policy";
 import { listTeam, updateStaffAccess, updateStaffAlert } from "@/lib/workspace";
 import { useCreatorSessions } from "@/lib/use-creator-sessions";
 import { useOfReads } from "@/lib/use-of-reads";
-import type { CreatorEarningView } from "@/lib/of-sessions";
+import type { CreatorEarningView, CreatorReadView } from "@/lib/of-sessions";
 import { PLATFORMS } from "@/features/growth-pages";
 import { Badge, Button, Field, Panel, Select } from "@/components/ui";
 
@@ -104,6 +104,9 @@ export function AnalyticsPage() {
               </tbody>
             </table>
           </div>
+          <Panel title="Movimientos">
+            <TransactionList creators={scopedCreators.map((c) => ({ id: c.id, name: c.name }))} reads={reads.byCreator} />
+          </Panel>
         </>
       )}
 
@@ -415,6 +418,35 @@ function earningsChart(creatorIds: string[], byCreator: Map<string, { earnings: 
 function lastSyncAt(read: { earningsSyncedAt: string | null; fansSyncedAt: string | null } | undefined): string | null {
   const times = [read?.earningsSyncedAt, read?.fansSyncedAt].filter((value): value is string => Boolean(value));
   return times.sort().at(-1) ?? null;
+}
+
+function TransactionList({
+  creators,
+  reads,
+}: {
+  creators: Array<{ id: string; name: string }>;
+  reads: Map<string, CreatorReadView>;
+}) {
+  const rows = creators.flatMap((creator) =>
+    (reads.get(creator.id)?.transactions ?? []).map((tx) => ({ ...tx, creatorName: creator.name })),
+  );
+  if (rows.length === 0) return <p className="text-sm text-muted">Sin datos</p>;
+  return (
+    <ul className="space-y-2 text-sm">
+      {rows.slice(0, 40).map((tx) => (
+        <li key={`${tx.creatorName}:${tx.txKey}`} className="flex justify-between gap-3">
+          <span>
+            {tx.occurredAt.slice(0, 10)} · {tx.kind}
+            {tx.fanKey ? ` · ${tx.fanKey}` : ""}
+          </span>
+          <span className="tabular-nums">
+            {(tx.grossCents / 100).toFixed(2)} {tx.currency}
+            {tx.netCents == null ? " · neto Sin datos" : ` · neto ${(tx.netCents / 100).toFixed(2)}`}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 function syncAge(iso: string | null): string {
