@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listChatFanCards } from "@/lib/of-sessions";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
-import { fanThreadsForCards, type ChatFanCard } from "@/lib/chat-fan-cards";
+import { fanThreadsForCards, isLatestFanCardRequest, type ChatFanCard } from "@/lib/chat-fan-cards";
 
 /** Pide solo los hilos visibles. Si la lista no cambia, la petición sigue siendo esa lista. */
 export function useChatFanCards(threads: ReadonlyArray<{ creatorId: string; fanKey: string | null }>) {
@@ -9,11 +9,15 @@ export function useChatFanCards(threads: ReadonlyArray<{ creatorId: string; fanK
   const [error, setError] = useState<string | null>(null);
   const requested = fanThreadsForCards(threads);
   const signature = requested.map((thread) => `${thread.creatorId}\u001f${thread.fanKey}`).join("\u001e");
+  const request = useRef(0);
 
   const refresh = useCallback(async () => {
+    const ticket = ++request.current;
     if (!signature) {
-      setFans([]);
-      setError(null);
+      if (isLatestFanCardRequest(ticket, request.current)) {
+        setFans([]);
+        setError(null);
+      }
       return;
     }
     const current = signature.split("\u001e").flatMap((item) => {
@@ -23,9 +27,11 @@ export function useChatFanCards(threads: ReadonlyArray<{ creatorId: string; fanK
     });
     try {
       const result = await listChatFanCards({ data: { threads: current } });
+      if (!isLatestFanCardRequest(ticket, request.current)) return;
       setFans(result.fans);
       setError(null);
     } catch (err) {
+      if (!isLatestFanCardRequest(ticket, request.current)) return;
       setError(sessionErrorText(err));
     }
   }, [signature]);

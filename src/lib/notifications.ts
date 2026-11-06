@@ -221,6 +221,7 @@ export function notificationKey(input: {
       : null;
   if (!full) return null;
   if (full.length <= 120) return full;
+  // 113 caracteres y el separador en el 81. La 0036 no debe tratar esto como una clave antigua.
   return `${full.slice(0, 80)}\u001f${notificationSha256(full).slice(0, 32)}`;
 }
 

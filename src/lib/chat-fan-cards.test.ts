@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { creatorIdsForChats, type TeamAccess } from "./access-policy.ts";
 import { creatorIdsForReads } from "./dashboard-config.ts";
-import { chatFanCardFor, chatFanCardsFrom, fanCardTransactions, fanThreadsForCards, type ChatFanRead } from "./chat-fan-cards.ts";
+import { chatFanCardFor, chatFanCardsFrom, fanCardTransactions, fanThreadsForCards, isLatestFanCardRequest, type ChatFanRead } from "./chat-fan-cards.ts";
 
 const chatter: TeamAccess = { userId: "chatter", role: "member", perms: ["mensajes"], creatorIds: ["c-alba"] };
 
@@ -26,6 +26,11 @@ test("un chatter ve la ficha completa en una cuenta que no tiene asignada", () =
   assert.deepEqual(fanCardTransactions(card).filter((row) => row.kind === "post"), [
     { occurredAt: "2026-11-02T11:00:00.000Z", grossCents: 300, kind: "post" },
   ]);
+});
+
+test("una respuesta vieja de fichas no pisa a la más reciente", () => {
+  assert.equal(isLatestFanCardRequest(1, 2), false);
+  assert.equal(isLatestFanCardRequest(2, 2), true);
 });
 
 test("la ficha solo pide los hilos visibles", () => {

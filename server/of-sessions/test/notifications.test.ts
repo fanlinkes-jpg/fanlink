@@ -301,6 +301,106 @@ test("0036 quita el hash del texto y deja una sola clave", async () => {
   }
 });
 
+test("0036 conserva la marca de leído de la fila que se borra", async () => {
+  const pg = await migrated();
+  try {
+    const bare = `like\u001flike\u001f2026-11-05T10:00:00.000Z\u001f7\u001f`;
+    const kept = `${bare}\u001f${"b".repeat(32)}`;
+    const dropped = `${bare}\u001f${"a".repeat(32)}`;
+    await pg.query(
+      `insert into of_notification (creator_id, notification_key, kind, first_seen_at, synced_at) values
+       ('c-alba', $1, 'like', '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z'),
+       ('c-alba', $2, 'like', '2026-11-05T00:00:00Z', '2026-11-05T00:00:00Z')`,
+      [kept, dropped],
+    );
+    await pg.query(
+      "insert into of_notification_seen (creator_id, notification_key, user_id, seen_at) values ('c-alba', $1, 'chatter', '2026-11-06T00:00:00Z')",
+      [dropped],
+    );
+    await applyTwice(pg);
+    const seen = await pg.query<{ notification_key: string; user_id: string }>(
+      "select notification_key, user_id from of_notification_seen",
+    );
+    assert.deepEqual(seen.rows, [{ notification_key: bare, user_id: "chatter" }]);
+  } finally {
+    await pg.close();
+  }
+});
+
+test("0036 choca con una clave nueva que ya existe", async () => {
+  const pg = await migrated();
+  try {
+    const bare = `like\u001flike\u001f2026-11-05T10:00:00.000Z\u001f7\u001f`;
+    const hashed = `${bare}\u001f${"c".repeat(32)}`;
+    await pg.query(
+      `insert into of_notification (creator_id, notification_key, kind, body, first_seen_at, synced_at) values
+       ('c-alba', $1, 'like', 'nueva', '2026-11-05T00:00:00Z', '2026-11-05T00:00:00Z'),
+       ('c-alba', $2, 'like', 'vieja', '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z')`,
+      [bare, hashed],
+    );
+    await pg.query(
+      "insert into of_notification_seen (creator_id, notification_key, user_id, seen_at) values ('c-alba', $1, 'chatter', '2026-10-02T00:00:00Z')",
+      [hashed],
+    );
+    await applyTwice(pg);
+    const rows = await pg.query<{ notification_key: string; body: string; first_seen_at: Date | string }>(
+      "select notification_key, body, first_seen_at from of_notification",
+    );
+    assert.equal(rows.rows.length, 1);
+    assert.equal(rows.rows[0]?.notification_key, bare);
+    assert.equal(rows.rows[0]?.body, "vieja");
+    assert.equal(new Date(rows.rows[0]?.first_seen_at ?? "").toISOString(), "2026-10-01T00:00:00.000Z");
+    const seen = await pg.query<{ notification_key: string }>("select notification_key from of_notification_seen");
+    assert.deepEqual(seen.rows.map((row) => row.notification_key), [bare]);
+  } finally {
+    await pg.close();
+  }
+});
+
+test("0036 conserva el first_seen_at más antiguo", async () => {
+  const pg = await migrated();
+  try {
+    const bare = `like\u001flike\u001f2026-11-05T10:00:00.000Z\u001f7\u001f`;
+    const laterHash = `${bare}\u001f${"a".repeat(32)}`;
+    const earlierHash = `${bare}\u001f${"f".repeat(32)}`;
+    await pg.query(
+      `insert into of_notification (creator_id, notification_key, kind, first_seen_at, synced_at) values
+       ('c-alba', $1, 'like', '2026-11-05T00:00:00Z', '2026-11-05T00:00:00Z'),
+       ('c-alba', $2, 'like', '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z')`,
+      [laterHash, earlierHash],
+    );
+    await applyTwice(pg);
+    const rows = await pg.query<{ notification_key: string; first_seen_at: Date | string }>(
+      "select notification_key, first_seen_at from of_notification",
+    );
+    assert.equal(rows.rows.length, 1);
+    assert.equal(rows.rows[0]?.notification_key, bare);
+    assert.equal(new Date(rows.rows[0]?.first_seen_at ?? "").toISOString(), "2026-10-01T00:00:00.000Z");
+  } finally {
+    await pg.close();
+  }
+});
+
+test("reaplicar 0036 no recorta una clave nueva de más de 120 caracteres", async () => {
+  const pg = await migrated();
+  try {
+    const full = ["like", "lk", "2026-11-05T10:00:00.000Z", "fan", "t".repeat(100)].join("\u001f");
+    assert.ok(full.length > 120);
+    const stored = `${full.slice(0, 80)}\u001f${"d".repeat(32)}`;
+    assert.equal(stored.length, 113);
+    assert.equal(stored[80], "\u001f");
+    await pg.query(
+      "insert into of_notification (creator_id, notification_key, kind, synced_at) values ('c-alba', $1, 'like', now())",
+      [stored],
+    );
+    await applyTwice(pg);
+    const rows = await pg.query<{ notification_key: string }>("select notification_key from of_notification");
+    assert.deepEqual(rows.rows.map((row) => row.notification_key), [stored]);
+  } finally {
+    await pg.close();
+  }
+});
+
 test("un aviso sin fecha caduca desde la primera vez que se vio", async () => {
   const { pg, sql } = await database();
   try {
@@ -322,6 +422,18 @@ test("un aviso sin fecha caduca desde la primera vez que se vio", async () => {
     await pg.close();
   }
 });
+
+async function migrated() {
+  const pg = new PGlite();
+  await pg.exec(await readFile(path.join(root, "migrations/0034_notifications.sql"), "utf8"));
+  return pg;
+}
+
+async function applyTwice(pg: PGlite) {
+  const repair = await readFile(path.join(root, "migrations/0036_notification_key_text.sql"), "utf8");
+  await pg.exec(repair);
+  await pg.exec(repair);
+}
 
 function item(key: string, kind: "agency" | "other" | "tip" | "ppv" | "like", occurredAt: string | null) {
   return {

@@ -211,7 +211,7 @@ export const listCreatorReads = createServerFn({ method: "GET" })
     return listCreatorReadViews(context.userId, data.scope);
   });
 
-export const listChatFanCards = createServerFn({ method: "GET" })
+export const listChatFanCards = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((input: { threads?: Array<{ creatorId: string; fanKey: string }> } | undefined) => input ?? {})
   .handler(async ({ context, data }): Promise<{ fans: ChatFanCard[] }> => {
