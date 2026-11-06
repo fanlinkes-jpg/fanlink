@@ -13,6 +13,42 @@ import {
   writeSendFailure,
 } from "./targets.ts";
 
+/** Una petición de chat que no termina no cuenta para siempre. */
+export const PENDING_NET_TTL_MS = 60_000;
+
+export function createPendingNet(ttlMs = PENDING_NET_TTL_MS) {
+  const open = new Map<object, number>();
+  return {
+    start(key: object, now = Date.now()) {
+      this.sweep(now);
+      open.set(key, now);
+    },
+    finish(key: object, now = Date.now()) {
+      this.sweep(now);
+      open.delete(key);
+    },
+    sweep(now = Date.now()) {
+      for (const [key, at] of open) {
+        if (now - at >= ttlMs) open.delete(key);
+      }
+    },
+    count(now = Date.now()) {
+      this.sweep(now);
+      return open.size;
+    },
+    openedSince(mark: number, now = Date.now()) {
+      this.sweep(now);
+      for (const at of open.values()) {
+        if (at >= mark) return true;
+      }
+      return false;
+    },
+    reset() {
+      open.clear();
+    },
+  };
+}
+
 export type ComposeRequest = {
   chatsUrl: string;
   siteId: string;
@@ -47,15 +83,17 @@ export type ComposeResult = {
 export async function composeChat(context: BrowserContext, request: ComposeRequest): Promise<ComposeResult> {
   const page = await openWorkPage(context);
   const payloads: string[] = [];
-  let pendingNet = 0;
-  const trackNet = (delta: number, rawUrl: string) => {
-    const path = pathOf(rawUrl);
+  const pending = createPendingNet();
+  const trackNet = (delta: number, request: { url(): string }) => {
+    const path = pathOf(request.url());
     if (!path.includes("message") && !path.includes("chat")) return;
-    pendingNet += delta;
+    if (delta > 0) pending.start(request);
+    else pending.finish(request);
   };
-  page.on("request", (request) => trackNet(1, request.url()));
-  page.on("requestfinished", (request) => trackNet(-1, request.url()));
-  page.on("requestfailed", (request) => trackNet(-1, request.url()));
+  page.on("request", (request) => trackNet(1, request));
+  page.on("requestfinished", (request) => trackNet(-1, request));
+  page.on("requestfailed", (request) => trackNet(-1, request));
+  page.on("close", () => pending.reset());
   const onResponse = (response: { url(): string; status(): number; text(): Promise<string> }) => {
     if (response.status() < 200 || response.status() >= 300) return;
     const path = pathOf(response.url());
@@ -121,7 +159,7 @@ export async function composeChat(context: BrowserContext, request: ComposeReque
       await page.getByRole("button", { name: /^(Save|Guardar)$/ }).click();
     }
     const before = payloads.length;
-    const netAtClick = pendingNet;
+    const netAtClick = Date.now();
     const beforeDom = await messageCount(page);
     const send = await firstReady(page, SEND_SELECTORS, 8_000);
     if (!send) return await giveUp(page, "no está el botón Send");
@@ -141,7 +179,7 @@ export async function composeChat(context: BrowserContext, request: ComposeReque
       console.info("[fanlink:send] confirmado via=pendiente");
       return { messageId: null, reason: null, awaitingId: true };
     }
-    const missed = await clickMissed(roleBox, page, payloads, before, request, beforeDom, () => pendingNet > netAtClick);
+    const missed = await clickMissed(roleBox, page, payloads, before, request, beforeDom, () => pending.openedSince(netAtClick));
     if (!missed) {
       const lateId = idFromPayloads(payloads, before, request);
       if (lateId) {
