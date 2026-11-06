@@ -46,8 +46,8 @@ export function fanInsightModel(input: InsightSource): InsightModel {
   const ppvTotal = input.ppvPrices.length > 0 ? ppvSum : null;
   const ppvAvg = input.ppvPrices.length > 0 ? Math.round(ppvSum / input.ppvPrices.length) : null;
   const last = [...input.transactions].sort((left, right) => right.occurredAt.localeCompare(left.occurredAt))[0] ?? null;
-  const max = input.transactions.reduce<{ grossCents: number; occurredAt: string } | null>((best, row) => {
-    if (!best || row.grossCents > best.grossCents) return { grossCents: row.grossCents, occurredAt: row.occurredAt };
+  const max = input.transactions.reduce<{ grossCents: number; occurredAt: string; kind: string } | null>((best, row) => {
+    if (!best || row.grossCents > best.grossCents) return { grossCents: row.grossCents, occurredAt: row.occurredAt, kind: row.kind };
     return best;
   }, null);
   return {
@@ -57,17 +57,30 @@ export function fanInsightModel(input: InsightSource): InsightModel {
     ppvAvg: moneyOrEmpty(ppvAvg),
     tipTotal: moneyOrEmpty(tipTotal),
     tipAvg: moneyOrEmpty(tipAvg),
-    max: max ? `${moneyOrEmpty(max.grossCents)} · ${max.occurredAt.slice(0, 10)}` : "Sin datos",
+    max: max ? `${moneyOrEmpty(max.grossCents)} · ${max.kind} · ${max.occurredAt.slice(0, 10)}` : "Sin datos",
     status: input.status === "active" ? "Activa" : input.status === "expired" ? "Caducada" : "Sin datos",
-    expires: input.expiresAt?.slice(0, 10) ?? "Sin datos",
+    expires: expiresLabel(input.expiresAt),
     price: moneyOrEmpty(input.subPriceCents),
-    renew: input.renewAuto == null ? "Sin datos" : input.renewAuto ? "Sí" : "No",
+    renew: input.renewAuto == null ? "Sin datos" : input.renewAuto ? "On" : "Off",
     notes: input.notes.trim() ? input.notes.trim() : "Sin datos",
     lastAgo: last ? agoLabel(last.occurredAt, input.now ?? new Date()) : "Sin datos",
     duration: durationLabel(input.subscribedAt, input.expiresAt),
-    power: "Sin datos",
-    chargeback: "Sin datos",
+    power: "Datos insuficientes",
+    chargeback: "Desconocido",
   };
+}
+
+function expiresLabel(iso: string | null): string {
+  if (!iso) return "Sin datos";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "Sin datos";
+  const formatted = new Intl.DateTimeFormat("es-ES", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "Europe/Madrid",
+  }).format(date);
+  return `Caduca: ${formatted}`;
 }
 
 function agoLabel(iso: string, now: Date): string {

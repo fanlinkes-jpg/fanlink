@@ -140,6 +140,7 @@ export type CreatorChatList = {
     subPriceCents: number | null;
     subExpiresAt: string | null;
     renewAuto: boolean | null;
+    lists: string[] | null;
   }>;
   messages: Array<{
     creatorId: string;
@@ -167,6 +168,16 @@ export type CreatorChatList = {
     creatorId: string;
     threadKey: string | null;
     body: string;
+  }>;
+  profiles: Array<{
+    creatorId: string;
+    fanKey: string;
+    nickname: string | null;
+    birthday: string | null;
+    timezone: string | null;
+    source: string | null;
+    salaryCents: number | null;
+    lastPayDate: string | null;
   }>;
 };
 
@@ -231,6 +242,23 @@ export const listDashboard = createServerFn({ method: "GET" })
   .handler(async ({ context }): Promise<DashboardView> => {
     const { listDashboardView } = await import("./of-sessions-runtime.server");
     return listDashboardView(context.userId);
+  });
+
+export const saveFanProfile = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: {
+    creatorId: string;
+    fanKey: string;
+    nickname: string | null;
+    birthday: string | null;
+    timezone: string | null;
+    source: string | null;
+    salaryCents: number | null;
+    lastPayDate: string | null;
+  }) => input)
+  .handler(async ({ context, data }) => {
+    const { saveFanProfileView } = await import("./of-sessions-runtime.server");
+    return saveFanProfileView(context.userId, data);
   });
 
 export const recordChatOutbound = createServerFn({ method: "POST" })

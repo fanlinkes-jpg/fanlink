@@ -1,5 +1,16 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { fanInsightModel } from "@/lib/fan-insights";
+
+export type FanProfileFields = {
+  creatorId: string;
+  fanKey: string;
+  nickname: string | null;
+  birthday: string | null;
+  timezone: string | null;
+  source: string | null;
+  salaryCents: number | null;
+  lastPayDate: string | null;
+};
 
 export type FanInsightProps = {
   name: string | null;
@@ -16,12 +27,15 @@ export type FanInsightProps = {
   onNotes: (value: string) => void;
   transactions: Array<{ occurredAt: string; grossCents: number; kind: string }>;
   ppvPrices: number[];
+  lists?: string[] | null;
+  profile?: FanProfileFields | null;
+  onProfile?: (profile: FanProfileFields) => void;
 };
 
-const TABS = ["Datos", "Ventas", "Notas"] as const;
+const TABS = ["Insights", "Ventas", "Notas"] as const;
 
 export function FanInsights(props: FanInsightProps) {
-  const [tab, setTab] = useState<(typeof TABS)[number]>("Datos");
+  const [tab, setTab] = useState<(typeof TABS)[number]>("Insights");
   const model = fanInsightModel({
     spentCents: props.spentCents,
     tipsCents: props.tipsCents,
@@ -66,7 +80,7 @@ export function FanInsights(props: FanInsightProps) {
             <Card title="Comportamiento de gasto">
               <div className="grid grid-cols-2 gap-3">
                 <Pair label="Gasto total" value={model.total} />
-                <Pair label="Último gasto" value={model.lastAgo} />
+                <Pair label="Último gasto" value={model.lastAgo === "Sin datos" ? "Sin datos" : `${model.lastAgo} · ${model.last}`} />
               </div>
               <Pair label="Tipo del último" value={model.last} />
               <Pair label="PPV total" value={model.ppvTotal} />
@@ -80,11 +94,20 @@ export function FanInsights(props: FanInsightProps) {
               <Pair label="Riesgo de contracargo" value={model.chargeback} />
             </Card>
             <Card title="Suscripción">
-              <Pair label="Estado" value={model.status} />
-              <Pair label="Caducidad" value={model.expires} />
-              <Pair label="Precio al mes" value={model.price} />
+              <Pair label="Estado" value={model.status === "Activa" && model.expires.startsWith("Caduca:") ? model.expires : model.status} />
+              <Pair label="Coste" value={model.price === "Sin datos" ? "Sin datos" : `${model.price}/mes`} />
               <Pair label="Duración" value={model.duration} />
               <Pair label="Auto-renovación" value={model.renew} />
+            </Card>
+            <Card title="Perfil">
+              <ProfileFields profile={props.profile ?? null} onSave={props.onProfile} />
+            </Card>
+            <Card title="Listas">
+              {props.lists == null || props.lists.length === 0 ? <p className="text-sm text-[#6d7585]">Sin datos</p> : (
+                <div className="flex flex-wrap gap-1">
+                  {props.lists.map((name) => <span key={name} className="rounded-full bg-[#eef2ff] px-2 py-1 text-xs text-[#2456c7]">{name}</span>)}
+                </div>
+              )}
             </Card>
           </div>
         )}
@@ -102,6 +125,78 @@ export function FanInsights(props: FanInsightProps) {
         ))}
       </div>
     </aside>
+  );
+}
+
+function ProfileFields({
+  profile,
+  onSave,
+}: {
+  profile: FanProfileFields | null;
+  onSave?: (profile: FanProfileFields) => void;
+}) {
+  const [form, setForm] = useState({
+    nickname: profile?.nickname ?? "",
+    birthday: profile?.birthday ?? "",
+    timezone: profile?.timezone ?? "",
+    source: profile?.source ?? "",
+    salary: profile?.salaryCents == null ? "" : (profile.salaryCents / 100).toFixed(2),
+    lastPayDate: profile?.lastPayDate ?? "",
+  });
+  useEffect(() => {
+    setForm({
+      nickname: profile?.nickname ?? "",
+      birthday: profile?.birthday ?? "",
+      timezone: profile?.timezone ?? "",
+      source: profile?.source ?? "",
+      salary: profile?.salaryCents == null ? "" : (profile.salaryCents / 100).toFixed(2),
+      lastPayDate: profile?.lastPayDate ?? "",
+    });
+  }, [profile]);
+  if (!profile?.fanKey || !onSave) return <p className="text-sm text-[#6d7585]">Sin datos</p>;
+  const commit = () => {
+    const salary = form.salary.trim();
+    const cents = salary === "" ? null : Number(salary);
+    onSave({
+      creatorId: profile.creatorId,
+      fanKey: profile.fanKey,
+      nickname: form.nickname.trim() || null,
+      birthday: form.birthday || null,
+      timezone: form.timezone.trim() || null,
+      source: form.source.trim() || null,
+      salaryCents: cents == null || !Number.isFinite(cents) ? null : Math.round(cents * 100),
+      lastPayDate: form.lastPayDate || null,
+    });
+  };
+  return (
+    <div className="space-y-2" onBlur={commit}>
+      <Field label="Apodo" value={form.nickname} onChange={(value) => setForm({ ...form, nickname: value })} />
+      <Field label="Cumpleaños" type="date" value={form.birthday} onChange={(value) => setForm({ ...form, birthday: value })} />
+      <Field label="Zona" value={form.timezone} onChange={(value) => setForm({ ...form, timezone: value })} placeholder="Europe/Madrid" />
+      <Field label="Origen" value={form.source} onChange={(value) => setForm({ ...form, source: value })} />
+      <Field label="Salario mensual $" value={form.salary} onChange={(value) => setForm({ ...form, salary: value })} />
+      <Field label="Último pago" type="date" value={form.lastPayDate} onChange={(value) => setForm({ ...form, lastPayDate: value })} />
+      <LocalClock zone={form.timezone} />
+    </div>
+  );
+}
+
+function LocalClock({ zone }: { zone: string }) {
+  if (!zone.trim()) return <Pair label="Hora local" value="Sin datos" />;
+  try {
+    const time = new Intl.DateTimeFormat("es-ES", { hour: "2-digit", minute: "2-digit", timeZone: zone.trim() }).format(new Date());
+    return <Pair label="Hora local" value={`${time} · ${zone.trim()}`} />;
+  } catch {
+    return <Pair label="Hora local" value="Sin datos" />;
+  }
+}
+
+function Field({ label, value, onChange, type = "text", placeholder }: { label: string; value: string; onChange: (value: string) => void; type?: string; placeholder?: string }) {
+  return (
+    <label className="block text-xs text-[#6d7585]">
+      {label}
+      <input type={type} value={value} placeholder={placeholder ?? "Sin datos"} onChange={(event) => onChange(event.target.value)} className="mt-1 w-full rounded-lg border border-[#e6e8ee] px-2 py-1 text-sm text-[#1c2333]" />
+    </label>
   );
 }
 

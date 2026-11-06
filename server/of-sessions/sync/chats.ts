@@ -27,6 +27,8 @@ export type ChatThread = {
   subPriceCents: number | null;
   subExpiresAt: string | null;
   renewAuto: boolean | null;
+  /** Nombres de listas de OnlyFans. Null si el JSON no las trae. */
+  lists?: string[] | null;
 };
 
 export type ChatMessage = {
@@ -219,6 +221,7 @@ function combineThread(left: ChatThread, right: ChatThread): ChatThread {
     subPriceCents: newer.subPriceCents ?? older.subPriceCents,
     subExpiresAt: newer.subExpiresAt ?? older.subExpiresAt,
     renewAuto: newer.renewAuto ?? older.renewAuto,
+    lists: newer.lists ?? older.lists ?? null,
   };
 }
 
@@ -381,7 +384,24 @@ function threadFrom(record: Record<string, unknown>, accountId: string | null): 
     lastFromUserId,
     lastFromFan: fromFanFlag(lastFromUserId, fanKey, accountId),
     ...spend,
+    lists: readFanLists(user),
   };
+}
+
+export function readFanLists(user: Record<string, unknown> | null): string[] | null {
+  if (!user) return null;
+  const raw = user.lists ?? user.listsStates ?? user.listStates;
+  if (!Array.isArray(raw)) return null;
+  const names = raw.flatMap((item) => {
+    if (typeof item === "string") {
+      const name = item.replace(/\s+/g, " ").trim();
+      return name ? [name.slice(0, 80)] : [];
+    }
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const name = clean((item as Record<string, unknown>).name, 80);
+    return name ? [name] : [];
+  });
+  return [...new Set(names)];
 }
 
 function previewMessage(record: Record<string, unknown>, accountId: string | null): ChatMessage | null {

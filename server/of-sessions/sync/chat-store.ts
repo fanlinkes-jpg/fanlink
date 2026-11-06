@@ -46,8 +46,8 @@ export async function saveChatRead(
         `insert into of_chat_thread (
            creator_id, thread_key, fan_key, fan_handle, fan_name, last_message_at, excerpt, unread, synced_at, origin,
            last_from_fan, spent_cents, subscribes_cents, tips_cents, posts_cents, messages_cents,
-           avatar_url, is_online, sub_price_cents, sub_expires_at, renew_auto
-         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+           avatar_url, is_online, sub_price_cents, sub_expires_at, renew_auto, fan_lists
+         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
          on conflict (creator_id, thread_key) do update set
            fan_key = excluded.fan_key,
            fan_handle = excluded.fan_handle,
@@ -66,7 +66,8 @@ export async function saveChatRead(
            is_online = excluded.is_online,
            sub_price_cents = excluded.sub_price_cents,
            sub_expires_at = excluded.sub_expires_at,
-           renew_auto = excluded.renew_auto`,
+           renew_auto = excluded.renew_auto,
+           fan_lists = excluded.fan_lists`,
         [
           creatorId,
           thread.threadKey,
@@ -89,6 +90,7 @@ export async function saveChatRead(
           thread.subPriceCents,
           thread.subExpiresAt,
           thread.renewAuto,
+          thread.lists?.length ? thread.lists.join("\n") : null,
         ],
       );
     }
@@ -167,7 +169,7 @@ export async function listChats(
   const threads = await sql.query<ThreadRow>(
     `select creator_id, thread_key, fan_key, fan_handle, fan_name, last_message_at, excerpt, unread, synced_at,
             last_from_fan, spent_cents, subscribes_cents, tips_cents, posts_cents, messages_cents,
-            avatar_url, is_online, sub_price_cents, sub_expires_at, renew_auto
+            avatar_url, is_online, sub_price_cents, sub_expires_at, renew_auto, fan_lists
      from of_chat_thread where creator_id in (${filter})
      order by last_message_at desc nulls last`,
     creatorIds,
@@ -208,6 +210,7 @@ export async function listChats(
       subPriceCents: centsOrNull(row.sub_price_cents),
       subExpiresAt: iso(row.sub_expires_at),
       renewAuto: flagOrNull(row.renew_auto),
+      lists: row.fan_lists ? row.fan_lists.split("\n").filter(Boolean) : null,
       syncedAt: iso(row.synced_at) ?? "",
     })),
     messages: messages.map((row) => ({
@@ -273,6 +276,7 @@ type ThreadRow = {
   sub_price_cents: number | string | null;
   sub_expires_at: Date | string | null;
   renew_auto: boolean | string | null;
+  fan_lists: string | null;
 };
 
 type MessageRow = {
