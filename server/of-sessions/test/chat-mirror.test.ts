@@ -18,6 +18,12 @@ test("el hilo pinta el medio, el candado y el pagado", async () => {
   const browser = await chromium.launch();
   try {
     await waitForServer(`http://127.0.0.1:${port}/mensajes`);
+    const foreign = await fetch(`http://127.0.0.1:${port}/api/chat-media?creatorId=cpreview&threadKey=otro&messageKey=mmedia&index=0`);
+    assert.equal(foreign.status, 404);
+    const missing = await fetch(`http://127.0.0.1:${port}/api/chat-media`);
+    assert.equal(missing.status, 404);
+    const own = await fetch(`http://127.0.0.1:${port}/api/chat-media?creatorId=cpreview&threadKey=7&messageKey=mmedia&index=0`);
+    assert.equal(own.status, 200);
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     await page.goto(`http://127.0.0.1:${port}/mensajes`, { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: /Fan Uno/ }).click();
