@@ -90,24 +90,28 @@ function dashboardHtml(mode: FixtureMode): string {
   }
 }
 
-function ofChatHtml(mode: "live" | "slow" | "enter" | "stuck" = "live", chatId = "9"): string {
+function ofChatHtml(mode: "live" | "slow" | "late" | "enter" | "stuck" = "live", chatId = "9"): string {
   const sendScript = mode === "stuck"
     ? `document.querySelector("[at-attr='send_btn']").disabled = true;`
     : `const box = document.querySelector("[at-attr='chat_input']");
        const send = document.querySelector("[at-attr='send_btn']");
-       const post = async (late) => {
+       const lateMs = "${mode}" === "late" ? 4000 : "${mode}" === "slow" ? 800 : 0;
+       const post = async (waitMs) => {
          if (send.disabled) return;
-         const body = box.value;
-         const price = document.querySelector("[at-attr='price_input']").dataset.saved || "";
-         await fetch("/fixture/compose", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ body, price, file: "" }) });
-         await fetch("/api2/v2/chats/${chatId}/messages?order=desc");
-         const clear = () => { box.value = ""; send.disabled = true; };
-         if (late) setTimeout(clear, 800);
-         else clear();
+         const go = async () => {
+           const body = box.value;
+           const price = document.querySelector("[at-attr='price_input']").dataset.saved || "";
+           await fetch("/fixture/compose", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ body, price, file: "" }) });
+           await fetch("/api2/v2/chats/${chatId}/messages?order=desc");
+           box.value = "";
+           send.disabled = true;
+         };
+         if (waitMs > 0) setTimeout(() => { void go(); }, waitMs);
+         else await go();
        };
        send.disabled = true;
        box.addEventListener("input", () => { send.disabled = box.value.trim() === ""; });
-       send.onclick = () => { if ("${mode}" === "enter") return; void post("${mode}" === "slow"); };
+       send.onclick = () => { if ("${mode}" === "enter") return; void post(lateMs); };
        box.addEventListener("keydown", (event) => {
          if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void post(false); }
        });
@@ -468,7 +472,7 @@ async function handle(
     );
     return;
   }
-  if (req.method === "GET" && /^\/api2\/v2\/chats\/(?:4|6|9)\/messages$/.test(url.pathname)) {
+  if (req.method === "GET" && /^\/api2\/v2\/chats\/(?:3|4|6|9)\/messages$/.test(url.pathname)) {
     if (!accepted(req, epoch())) {
       res.writeHead(401, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "no" }));
@@ -498,6 +502,14 @@ async function handle(
       return;
     }
     html(res, ofChatHtml("stuck"));
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/my/chats/chat/3") {
+    if (!accepted(req, epoch())) {
+      redirect(res, "/login");
+      return;
+    }
+    html(res, ofChatHtml("late", "3"));
     return;
   }
   if (req.method === "GET" && url.pathname === "/my/chats/chat/6") {
@@ -612,6 +624,10 @@ async function handle(
   }
   if (req.method === "GET" && url.pathname === "/simulate-sent") {
     html(res, pageHtml("Enviado", "", "<p>ok</p>"));
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/tall") {
+    html(res, pageHtml("Alto", "", `<div style="height:5000px">sin chat</div>`));
     return;
   }
   if (req.method === "GET" && url.pathname === "/blank") {
