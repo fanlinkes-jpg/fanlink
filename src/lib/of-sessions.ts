@@ -146,6 +146,8 @@ export type CreatorChatList = {
     sentAt: string;
     priceCents: number | null;
     purchased: boolean | null;
+    authorId: string | null;
+    authorName: string | null;
   }>;
   meta: Array<{
     creatorId: string;
@@ -216,6 +218,14 @@ export const listDashboard = createServerFn({ method: "GET" })
   .handler(async ({ context }): Promise<DashboardView> => {
     const { listDashboardView } = await import("./of-sessions-runtime.server");
     return listDashboardView(context.userId);
+  });
+
+export const recordChatOutbound = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; ofMessageKey: string | null }) => input)
+  .handler(async ({ context, data }) => {
+    const { recordChatOutboundView } = await import("./of-sessions-runtime.server");
+    return recordChatOutboundView(context.userId, data);
   });
 
 export const listTeamMetrics = createServerFn({ method: "GET" })

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { assertOwnerForce, canOperateCreator, canSeeAgencyEarnings, canSeeChatterFigures, creatorIdsForChats, WorkspaceAccessError } from "@/lib/access-policy";
+import { assertOwnerForce, canOperateCreator, canSeeAgencyEarnings, creatorIdsForChats, WorkspaceAccessError } from "@/lib/access-policy";
 import { DEV_USER_ID, authConfigured } from "@/lib/auth/verify.server";
 import { getSql } from "@/lib/db";
 import { ensureStaff } from "@/lib/workspace-store";
@@ -20,11 +20,11 @@ import type { CreatorChatList, CreatorReadList, CreatorReadView, CreatorSessionV
 import { parseAccountProxy, proxyLabel, readAccountProxy, removeAccountProxy, writeAccountProxy } from "../../server/of-sessions/proxy.ts";
 import { syncAssignments } from "../../server/of-sessions/metrics/assignments.ts";
 import { dashboardAlerts } from "../../server/of-sessions/metrics/dashboard.ts";
-import { chatterReports } from "../../server/of-sessions/metrics/team.ts";
+import { presentTeamMetrics } from "../../server/of-sessions/metrics/present-team.ts";
 import { changeRatio, creatorReport } from "@/lib/creator-metrics";
 import { deliverFanAlerts } from "../../server/of-sessions/notify/deliver.ts";
 import { chatIntervalMinFromEnv } from "../../server/of-sessions/sync/chats.ts";
-import { listChatMeta, listChats, saveChatRead } from "../../server/of-sessions/sync/chat-store.ts";
+import { listChatMeta, listChats, recordOutbound, saveChatRead } from "../../server/of-sessions/sync/chat-store.ts";
 import { intervalMinFromEnv, startSyncLoop, type ScheduleAccount } from "../../server/of-sessions/sync/schedule.ts";
 import {
   listCreatorReads,
@@ -325,6 +325,8 @@ export async function listCreatorChatViews(userId: string): Promise<CreatorChatL
       sentAt: message.sentAt,
       priceCents: message.priceCents,
       purchased: message.purchased,
+      authorId: message.authorId,
+      authorName: message.authorName,
     })),
     meta: stored.meta.map((item) => ({
       creatorId: item.creatorId,
@@ -528,7 +530,8 @@ export async function listTeamMetricViews(userId: string): Promise<Array<{
     from_fan: boolean | string;
     price_cents: number | string | null;
     purchased: boolean | string | null;
-  }>("select creator_id, thread_key, fan_key, sent_at, from_fan, price_cents, purchased from of_chat_message");
+    author_id: string | null;
+  }>("select creator_id, thread_key, fan_key, sent_at, from_fan, price_cents, purchased, author_id from of_chat_message");
   const names = await sql.query<{ user_id: string; display_name: string }>("select user_id, display_name from staff_profile");
   const nameOf = new Map(names.map((row) => [row.user_id, row.display_name]));
   const asIso = (value: Date | string) => (value instanceof Date ? value.toISOString() : String(value));
@@ -540,13 +543,15 @@ export async function listTeamMetricViews(userId: string): Promise<Array<{
     fromFan: row.from_fan === true || row.from_fan === "t" || row.from_fan === "true",
     priceCents: row.price_cents == null ? null : Number(row.price_cents),
     purchased: row.purchased == null ? null : row.purchased === true || row.purchased === "t" || row.purchased === "true",
-    authorId: null,
+    authorId: row.author_id,
   }));
   const ppvSales = chatRows
     .filter((row) => !row.fromFan && row.purchased === true && row.priceCents != null && row.priceCents > 0)
     .map((row) => ({ creatorId: row.creatorId, fanKey: row.fanKey, at: row.at, grossCents: row.priceCents ?? 0, kind: "ppv" as const }));
-  return chatterReports({
-    sales: [
+  return presentTeamMetrics(
+    access,
+    chatRows,
+    [
       ...sales.map((row) => ({
         creatorId: row.creator_id,
         fanKey: row.fan_key,
@@ -556,18 +561,32 @@ export async function listTeamMetricViews(userId: string): Promise<Array<{
       })),
       ...ppvSales,
     ],
-    messages: chatRows,
-  })
-    .filter((row) => canSeeChatterFigures(access, row.userId))
-    .map((row) => ({
-      userId: row.userId,
-      name: nameOf.get(row.userId) ?? row.userId,
-      grossCents: canSeeAgencyEarnings(access) || row.userId === access.userId ? row.grossCents : null,
-      ppvSent: row.ppvSent,
-      ppvBought: row.ppvBought,
-      firstReplyMinutes: row.firstReplyMinutes,
-      threads: row.threads,
-    }));
+    nameOf,
+  );
+}
+
+export async function recordChatOutboundView(
+  userId: string,
+  input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; ofMessageKey: string | null },
+): Promise<{ ok: true; sent: false }> {
+  const access = await accessFor(userId);
+  if (access.role !== "owner" && !access.perms.includes("mensajes")) {
+    throw new WorkspaceAccessError("No tienes permiso para escribir.");
+  }
+  const body = input.body.replace(/\s+/g, " ").trim();
+  if (!body) throw new WorkspaceAccessError("Escribe un mensaje.");
+  await recordOutbound(await getSql(), {
+    id: crypto.randomUUID(),
+    creatorId: input.creatorId,
+    threadKey: input.threadKey,
+    fanKey: input.fanKey,
+    authorId: access.userId,
+    body,
+    priceCents: input.priceCents,
+    createdAt: new Date().toISOString(),
+    ofMessageKey: input.ofMessageKey,
+  });
+  return { ok: true, sent: false };
 }
 
 function txCursorOf(row: { txCursor: string | null; txCursorKey: string | null } | undefined) {

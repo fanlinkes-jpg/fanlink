@@ -26,6 +26,7 @@ import {
   type Fan,
   type Msg,
 } from "@/lib/crm";
+import { recordChatOutbound } from "@/lib/of-sessions";
 
 const EMOJIS = ["😊", "⚙️", "🎁", "🔥", "💋", "❤️", "😏", "🍆", "💦", "😈", "😘", "🍑"];
 
@@ -154,8 +155,21 @@ export function MessagesPage() {
       vaultId: attachVaultId ?? undefined,
     });
     if (!result.ok) toast.error(result.reason);
-    else if (result.price) toast.success(`PPV enviado a ${eur(result.price)}`);
-    else toast.success("Mensaje entregado");
+    else {
+      const body = personalize(text.trim(), fan) || "Contenido";
+      void recordChatOutbound({
+        data: {
+          creatorId: fan.creatorId,
+          fanKey: fan.id,
+          threadKey: fan.id,
+          body,
+          priceCents: result.price != null ? Math.round(result.price * 100) : null,
+          ofMessageKey: null,
+        },
+      }).catch(() => undefined);
+      if (result.price) toast.success(`PPV enviado a ${eur(result.price)}`);
+      else toast.success("Mensaje entregado");
+    }
     setPrice("");
     setShowScripts(false);
   }

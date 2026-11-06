@@ -1,10 +1,16 @@
+import { matchOutboundAuthor, type OutboundDraft } from "./author-match.ts";
 import { newFanEvents, type ChatMessage, type ChatThread, type FanMessageEvent } from "./chats.ts";
 import type { ReadSql } from "./store.ts";
 
 const ORIGIN = "onlyfans";
 
 export type StoredThread = ChatThread & { creatorId: string; syncedAt: string };
-export type StoredChatMessage = ChatMessage & { creatorId: string; syncedAt: string };
+export type StoredChatMessage = ChatMessage & {
+  creatorId: string;
+  syncedAt: string;
+  authorId: string | null;
+  authorName: string | null;
+};
 export type ChatMeta = {
   creatorId: string;
   consecutiveFailures: number;
@@ -78,15 +84,16 @@ export async function saveChatRead(
     for (const message of read.messages) {
       await sql.query(
         `insert into of_chat_message (
-           creator_id, message_key, thread_key, fan_key, from_fan, body, sent_at, price_cents, purchased, synced_at, origin
-         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+           creator_id, message_key, thread_key, fan_key, from_fan, body, sent_at, price_cents, purchased, synced_at, origin, author_id
+         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, null)
          on conflict (creator_id, message_key) do update set
            body = excluded.body,
            from_fan = excluded.from_fan,
            sent_at = excluded.sent_at,
            price_cents = excluded.price_cents,
            purchased = excluded.purchased,
-           synced_at = excluded.synced_at`,
+           synced_at = excluded.synced_at,
+           author_id = coalesce(of_chat_message.author_id, excluded.author_id)`,
         [
           creatorId,
           message.messageKey,
@@ -102,6 +109,7 @@ export async function saveChatRead(
         ],
       );
     }
+    await attachOutboundAuthors(sql, creatorId, read.messages);
     for (const event of events) {
       await sql.query(
         `insert into of_fan_message_event (id, creator_id, fan_key, fan_name, excerpt, sent_at)
@@ -149,8 +157,11 @@ export async function listChats(
     creatorIds,
   );
   const messages = await sql.query<MessageRow>(
-    `select creator_id, message_key, thread_key, fan_key, from_fan, body, sent_at, price_cents, purchased, synced_at
-     from of_chat_message where creator_id in (${filter})
+    `select m.creator_id, m.message_key, m.thread_key, m.fan_key, m.from_fan, m.body, m.sent_at, m.price_cents, m.purchased, m.synced_at,
+            m.author_id, p.display_name as author_name
+     from of_chat_message m
+     left join staff_profile p on p.user_id = m.author_id
+     where m.creator_id in (${filter})
      order by sent_at`,
     creatorIds,
   );
@@ -189,6 +200,8 @@ export async function listChats(
       priceCents: row.price_cents == null ? null : Number(row.price_cents),
       purchased: row.purchased == null ? null : row.purchased === true || row.purchased === "t" || row.purchased === "true",
       fromUserId: null,
+      authorId: row.author_id,
+      authorName: row.author_name,
       syncedAt: iso(row.synced_at) ?? "",
     })),
     meta: meta.map((row) => ({
@@ -245,6 +258,8 @@ type MessageRow = {
   price_cents: number | string | null;
   purchased: boolean | string | null;
   synced_at: Date | string;
+  author_id: string | null;
+  author_name: string | null;
 };
 
 type MetaRow = {
@@ -262,6 +277,53 @@ function iso(value: Date | string | null | undefined): string | null {
   const parsed = new Date(String(value));
   if (Number.isNaN(parsed.getTime())) return String(value);
   return parsed.toISOString();
+}
+
+async function attachOutboundAuthors(sql: ReadSql, creatorId: string, messages: ChatMessage[]): Promise<void> {
+  const drafts = await sql.query<{
+    id: string;
+    author_id: string;
+    body: string;
+    price_cents: number | string | null;
+    created_at: Date | string;
+    thread_key: string | null;
+    fan_key: string | null;
+    of_message_key: string | null;
+  }>(
+    `select id, author_id, body, price_cents, created_at, thread_key, fan_key, of_message_key
+     from of_chat_outbound where creator_id = $1 and matched_message_key is null`,
+    [creatorId],
+  );
+  const pending: OutboundDraft[] = drafts.map((row) => ({
+    id: row.id,
+    authorId: row.author_id,
+    body: row.body,
+    priceCents: row.price_cents == null ? null : Number(row.price_cents),
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
+    threadKey: row.thread_key,
+    fanKey: row.fan_key,
+    ofMessageKey: row.of_message_key,
+  }));
+  const used = new Set<string>();
+  for (const message of messages) {
+    const match = matchOutboundAuthor(message, pending.filter((draft) => !used.has(draft.id)));
+    if (!match) continue;
+    used.add(match.draftId);
+    await sql.query(
+      `update of_chat_message set author_id = $1
+       where creator_id = $2 and message_key = $3 and author_id is null`,
+      [match.authorId, creatorId, message.messageKey],
+    );
+    await sql.query("update of_chat_outbound set matched_message_key = $2 where id = $1", [match.draftId, message.messageKey]);
+  }
+}
+
+export async function recordOutbound(sql: ReadSql, draft: OutboundDraft & { creatorId: string }): Promise<void> {
+  await sql.query(
+    `insert into of_chat_outbound (id, creator_id, thread_key, fan_key, author_id, body, price_cents, created_at, of_message_key)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [draft.id, draft.creatorId, draft.threadKey, draft.fanKey, draft.authorId, draft.body, draft.priceCents, draft.createdAt, draft.ofMessageKey],
+  );
 }
 
 function flagOrNull(value: boolean | string | null): boolean | null {

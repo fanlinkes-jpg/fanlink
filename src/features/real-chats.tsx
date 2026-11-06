@@ -118,7 +118,10 @@ export function RealChatsPage() {
                     {message.priceCents != null ? ` · ${(message.priceCents / 100).toFixed(2)}` : ""}
                     {message.purchased === true ? " · comprado" : message.purchased === false ? " · no comprado" : ""}
                   </p>
-                  <p className="mt-1 text-[10px] text-[#6d7585]">{message.sentAt.slice(0, 16).replace("T", " ")}</p>
+                  <p className="mt-1 text-[10px] text-[#6d7585]">
+                    {message.sentAt.slice(0, 16).replace("T", " ")}
+                    {message.fromFan ? "" : ` · ${message.authorName ?? "Cuenta"}`}
+                  </p>
                 </li>
               ))}
             </ol>
