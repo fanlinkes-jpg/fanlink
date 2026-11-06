@@ -1,5 +1,6 @@
 import { matchOutboundAuthor, type OutboundDraft } from "./author-match.ts";
 import { newFanEvents, type ChatMessage, type ChatThread, type FanMessageEvent } from "./chats.ts";
+import { decodeMedia, encodeMedia, oldestCursor } from "./history.ts";
 import type { ReadSql } from "./store.ts";
 
 const ORIGIN = "onlyfans";
@@ -98,8 +99,8 @@ export async function saveChatRead(
       await sql.query(
         `insert into of_chat_message (
            creator_id, message_key, thread_key, fan_key, from_fan, body, sent_at, price_cents, purchased, synced_at, origin, author_id, seen, automatic,
-           media_count, media_seconds, media_preview
-         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, null, $12, $13, $14, $15, $16)
+           media_count, media_seconds, media_preview, media_json, liked, reply_body, event_kind, event_cents
+         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, null, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
          on conflict (creator_id, message_key) do update set
            body = excluded.body,
            from_fan = excluded.from_fan,
@@ -112,14 +113,19 @@ export async function saveChatRead(
            automatic = excluded.automatic,
            media_count = excluded.media_count,
            media_seconds = excluded.media_seconds,
-           media_preview = excluded.media_preview`,
+           media_preview = excluded.media_preview,
+           media_json = excluded.media_json,
+           liked = excluded.liked,
+           reply_body = excluded.reply_body,
+           event_kind = excluded.event_kind,
+           event_cents = excluded.event_cents`,
         [
           creatorId,
           message.messageKey,
           message.threadKey,
           message.fanKey,
           message.fromFan,
-          message.body,
+          message.body || (message.eventKind ? " " : " "),
           message.sentAt,
           message.priceCents,
           message.purchased,
@@ -130,10 +136,16 @@ export async function saveChatRead(
           message.mediaCount ?? null,
           message.mediaSeconds ?? null,
           message.mediaPreview ?? null,
+          encodeMedia(message.media),
+          message.liked ?? null,
+          message.replyBody ?? null,
+          message.eventKind ?? null,
+          message.eventCents ?? null,
         ],
       );
     }
     await attachOutboundAuthors(sql, creatorId, read.messages);
+    await noteHistoryCursor(sql, creatorId);
     for (const event of events) {
       await sql.query(
         `insert into of_fan_message_event (id, creator_id, fan_key, fan_name, excerpt, sent_at)
@@ -183,7 +195,8 @@ export async function listChats(
   );
   const messages = await sql.query<MessageRow>(
     `select m.creator_id, m.message_key, m.thread_key, m.fan_key, m.from_fan, m.body, m.sent_at, m.price_cents, m.purchased, m.synced_at,
-            m.author_id, p.display_name as author_name, m.seen, m.automatic, m.media_count, m.media_seconds, m.media_preview
+            m.author_id, p.display_name as author_name, m.seen, m.automatic, m.media_count, m.media_seconds, m.media_preview,
+            m.media_json, m.liked, m.reply_body, m.event_kind, m.event_cents
      from of_chat_message m
      left join staff_profile p on p.user_id = m.author_id
      where m.creator_id in (${filter})
@@ -238,6 +251,11 @@ export async function listChats(
       mediaCount: row.media_count == null ? null : Number(row.media_count),
       mediaSeconds: row.media_seconds == null ? null : Number(row.media_seconds),
       mediaPreview: row.media_preview,
+      media: decodeMedia(row.media_json),
+      liked: flagOrNull(row.liked),
+      replyBody: row.reply_body,
+      eventKind: row.event_kind === "compra" || row.event_kind === "propina" ? row.event_kind : null,
+      eventCents: row.event_cents == null ? null : Number(row.event_cents),
       syncedAt: iso(row.synced_at) ?? "",
     })),
     meta: meta.map((row) => ({
@@ -307,6 +325,11 @@ type MessageRow = {
   media_count: number | string | null;
   media_seconds: number | string | null;
   media_preview: string | null;
+  media_json: string | null;
+  liked: boolean | string | null;
+  reply_body: string | null;
+  event_kind: string | null;
+  event_cents: number | string | null;
 };
 
 type MetaRow = {
@@ -406,6 +429,51 @@ export async function markOutboundError(sql: ReadSql, id: string, reason: string
      set status = 'error', error_reason = $2
      where id = $1 and coalesce(status, 'pending') = 'pending'`,
     [id, reason.slice(0, 180)],
+  );
+}
+
+export async function noteHistoryCursor(sql: ReadSql, creatorId: string): Promise<void> {
+  await sql.query(
+    `update of_chat_thread t set history_cursor = sub.message_key
+     from (
+       select distinct on (thread_key) thread_key, message_key
+       from of_chat_message
+       where creator_id = $1
+       order by thread_key, sent_at asc
+     ) sub
+     where t.creator_id = $1 and t.thread_key = sub.thread_key and t.history_cursor is null`,
+    [creatorId],
+  );
+}
+
+export async function listOpenHistory(sql: ReadSql, creatorId: string): Promise<Array<{ threadKey: string; cursor: string | null; done: boolean }>> {
+  const rows = await sql.query<{ thread_key: string; history_cursor: string | null; history_done: boolean | string }>(
+    `select thread_key, history_cursor, history_done from of_chat_thread
+     where creator_id = $1 and history_done = false
+     order by last_message_at desc nulls last`,
+    [creatorId],
+  );
+  return rows.map((row) => ({
+    threadKey: row.thread_key,
+    cursor: row.history_cursor,
+    done: row.history_done === true || row.history_done === "t" || row.history_done === "true",
+  }));
+}
+
+export async function markHistory(sql: ReadSql, creatorId: string, threadKey: string, cursor: string | null, done: boolean): Promise<void> {
+  await sql.query(
+    `update of_chat_thread set history_cursor = coalesce($3, history_cursor), history_done = $4
+     where creator_id = $1 and thread_key = $2`,
+    [creatorId, threadKey, cursor, done],
+  );
+}
+
+export async function markChatList(sql: ReadSql, creatorId: string, cursor: string | null, done: boolean): Promise<void> {
+  await sql.query(
+    `insert into of_sync_state (creator_id, origin, chat_list_cursor, chat_list_done)
+     values ($1, $2, $3, $4)
+     on conflict (creator_id) do update set chat_list_cursor = excluded.chat_list_cursor, chat_list_done = excluded.chat_list_done`,
+    [creatorId, ORIGIN, cursor, done],
   );
 }
 

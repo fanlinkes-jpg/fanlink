@@ -103,7 +103,16 @@ function chatComposerHtml(): string {
        <button type="button" data-fanlink-price-save>Save</button>
      </div>
      <input type="hidden" data-fanlink-price-value value="" />
+     <div data-fanlink-history style="height:80px;overflow:auto"><div style="height:400px">hilo</div></div>
      <script>
+       const history = document.querySelector("[data-fanlink-history]");
+       history.scrollTop = 200;
+       let older = false;
+       history.onscroll = async () => {
+         if (older || history.scrollTop > 0) return;
+         older = true;
+         await fetch("/api2/v2/chats/7/messages?before=2");
+       };
        document.querySelector("[data-fanlink-price]").onclick = () => { document.getElementById("price-box").hidden = false; };
        document.querySelector("[data-fanlink-price-save]").onclick = () => {
          document.querySelector("[data-fanlink-price-value]").value = document.querySelector("[data-fanlink-amount]").value;
@@ -333,6 +342,15 @@ async function handle(
       return;
     }
     const latest = extraMessages.at(-1);
+    if (url.searchParams.get("page") === "2") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        list: [
+          { id: 8, withUser: { id: 8, username: "fanexp", name: "Fan Exp" }, unreadMessagesCount: 0, lastMessage: { id: 80, text: "antiguo", createdAt: "2026-10-01T10:00:00.000Z", fromUser: { id: 8 } } },
+        ],
+      }));
+      return;
+    }
     res.writeHead(200, { "content-type": "application/json" });
     res.end(
       JSON.stringify({
@@ -355,6 +373,22 @@ async function handle(
     if (!accepted(req, epoch())) {
       res.writeHead(401, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "no" }));
+      return;
+    }
+    if (url.searchParams.get("before") === "2") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        list: [{
+          id: 1,
+          text: "el primero",
+          createdAt: "2026-11-01T10:00:00.000Z",
+          fromUser: { id: 42 },
+          isFavorite: true,
+          isFromQueue: true,
+          replyToMessage: { id: 9, text: "cita" },
+          media: [{ type: "video", duration: 12, canView: true, isOpened: true, files: { thumb: { url: "https://cdn.example/thumb.jpg" } } }],
+        }],
+      }));
       return;
     }
     res.writeHead(200, { "content-type": "application/json" });
@@ -380,6 +414,28 @@ async function handle(
         ],
       }),
     );
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/my/chats/full") {
+    if (!accepted(req, epoch())) {
+      redirect(res, "/login");
+      return;
+    }
+    html(res, pageHtml(
+      "Chats",
+      "",
+      `<div data-fanlink-chats style="height:80px;overflow:auto"><div style="height:400px">lista</div></div>
+       <script>
+         const box = document.querySelector("[data-fanlink-chats]");
+         box.scrollTop = 0;
+         let more = false;
+         box.onscroll = async () => {
+           if (more || box.scrollTop < 40) return;
+           more = true;
+           await fetch("/api2/v2/chats?page=2");
+         };
+       </script>`,
+    ));
     return;
   }
   if (req.method === "GET" && url.pathname === "/my/chats/chat/7") {

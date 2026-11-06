@@ -87,7 +87,7 @@ test("el texto y el precio se confirman con el id y un fallo no se reintenta", a
 
 test("un enviado deja de estar pendiente y un error guarda el motivo", async () => {
   const db = new PGlite();
-  const files = ["0007_of_reads.sql", "0008_sync_schedule.sql", "0009_of_chats.sql", "0013_chat_price.sql", "0018_chat_preview.sql", "0019_chat_author.sql", "0020_chat_card.sql", "0021_fan_profile.sql", "0022_message_media.sql", "0024_outbound_schedule.sql", "0025_outbound_send.sql"];
+  const files = ["0007_of_reads.sql", "0008_sync_schedule.sql", "0009_of_chats.sql", "0013_chat_price.sql", "0018_chat_preview.sql", "0019_chat_author.sql", "0020_chat_card.sql", "0021_fan_profile.sql", "0022_message_media.sql", "0024_outbound_schedule.sql", "0025_outbound_send.sql", "0026_chat_history.sql"];
   for (const file of files) await db.exec(await readFile(path.join(root, "migrations", file), "utf8"));
   const sql: ReadSql = {
     async query<T>(text: string, params?: unknown[]): Promise<T[]> {

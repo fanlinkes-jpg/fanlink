@@ -51,6 +51,21 @@ export type ChatMessage = {
   mediaCount?: number | null;
   mediaSeconds?: number | null;
   mediaPreview?: string | null;
+  media?: ChatMedia[] | null;
+  liked?: boolean | null;
+  replyBody?: string | null;
+  eventKind?: "compra" | "propina" | null;
+  eventCents?: number | null;
+};
+
+export type ChatMedia = {
+  kind: "foto" | "video" | "audio" | null;
+  seconds: number | null;
+  preview: string | null;
+  locked: boolean | null;
+  priceCents: number | null;
+  paid: boolean | null;
+  opened: boolean | null;
 };
 
 export type FanMessageEvent = {
@@ -423,10 +438,12 @@ function messageFrom(
   accountId: string | null,
   source: "page" | "socket" = "page",
 ): ChatMessage | null {
-  const body = visibleText(record.text ?? record.body, 2000);
+  const body = visibleText(record.text ?? record.body, 2000) ?? "";
   const sentAt = iso(record.createdAt ?? record.created_at ?? record.at);
   const messageKey = clean(record.id, 40);
-  if (!body || !sentAt || !messageKey) return null;
+  const media = mediaItems(record);
+  const event = eventFrom(record, body);
+  if ((!body && media.length === 0 && !event) || !sentAt || !messageKey) return null;
   const chat = nested(record.chat);
   const ownThread = clean(record.chatId, 40) ?? clean(record.chat_id, 40) ?? clean(chat?.id, 40);
   const fromId = clean(nested(record.fromUser)?.id, 40);
@@ -450,6 +467,11 @@ function messageFrom(
     priceCents: priceCents(record.price ?? record.ppvPrice),
     purchased: purchasedFlag(record, priceCents(record.price ?? record.ppvPrice)),
     ...mediaFacts(record),
+    media,
+    liked: likedFlag(record),
+    replyBody: replyText(record),
+    eventKind: event?.kind ?? null,
+    eventCents: event?.cents ?? null,
   };
 }
 
@@ -469,26 +491,80 @@ function purchasedFlag(record: Record<string, unknown>, price: number | null): b
 }
 
 function mediaFacts(record: Record<string, unknown>): { mediaCount: number | null; mediaSeconds: number | null; mediaPreview: string | null } {
+  const items = mediaItems(record);
+  if (items.length === 0) return { mediaCount: null, mediaSeconds: null, mediaPreview: null };
+  const seconds = items.reduce((sum, item) => sum + (item.seconds ?? 0), 0);
+  const haveSeconds = items.some((item) => item.seconds != null);
+  return {
+    mediaCount: items.length,
+    mediaSeconds: haveSeconds ? Math.round(seconds) : null,
+    mediaPreview: items.find((item) => item.preview)?.preview ?? null,
+  };
+}
+
+export function mediaItems(record: Record<string, unknown>): ChatMedia[] {
   const raw = record.media ?? record.previews ?? record.attachments;
-  if (!Array.isArray(raw)) return { mediaCount: null, mediaSeconds: null, mediaPreview: null };
-  const items = raw.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item));
-  let seconds = 0;
-  let haveSeconds = false;
-  let preview: string | null = null;
-  for (const item of items) {
-    const duration = item.duration ?? item.durationSeconds;
-    if (typeof duration === "number" && Number.isFinite(duration) && duration >= 0) {
-      seconds += duration;
-      haveSeconds = true;
-    }
-    if (!preview) preview = mediaUrl(item.thumb ?? item.preview ?? item.src ?? nested(item.files)?.thumb);
+  if (!Array.isArray(raw)) return [];
+  const messagePrice = priceCents(record.price ?? record.ppvPrice);
+  const messagePaid = purchasedFlag(record, messagePrice);
+  return raw.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const row = item as Record<string, unknown>;
+    const files = nested(row.files);
+    const preview = mediaUrl(row.thumb ?? row.preview ?? row.src ?? files?.thumb ?? nested(files?.thumb)?.url ?? files?.squarePreview);
+    const secondsValue = row.duration ?? row.durationSeconds;
+    const seconds = typeof secondsValue === "number" && Number.isFinite(secondsValue) && secondsValue >= 0 ? Math.round(secondsValue) : null;
+    const ownPrice = priceCents(row.price);
+    const locked = row.canView === false || row.isLocked === true ? true : row.canView === true || row.isLocked === false ? false : null;
+    const opened = typeof row.isOpened === "boolean" ? row.isOpened : null;
+    return [{
+      kind: mediaKind(row.type ?? row.mediaType),
+      seconds,
+      preview,
+      locked,
+      priceCents: ownPrice ?? messagePrice,
+      paid: opened ?? messagePaid,
+      opened,
+    }];
+  });
+}
+
+function mediaKind(value: unknown): ChatMedia["kind"] {
+  const text = clean(value, 20)?.toLowerCase() ?? "";
+  if (text === "photo" || text === "image" || text === "foto") return "foto";
+  if (text === "video") return "video";
+  if (text === "audio") return "audio";
+  return null;
+}
+
+function likedFlag(record: Record<string, unknown>): boolean | null {
+  if (typeof record.isLiked === "boolean") return record.isLiked;
+  if (typeof record.isFavorite === "boolean") return record.isFavorite;
+  return null;
+}
+
+function replyText(record: Record<string, unknown>): string | null {
+  const reply = nested(record.replyToMessage) ?? nested(record.replyTo);
+  return visibleText(reply?.text ?? record.replyText, 240);
+}
+
+function eventFrom(record: Record<string, unknown>, body: string): { kind: "compra" | "propina"; cents: number | null } | null {
+  const tip = priceCents(record.tipAmount ?? record.tipSum);
+  if (record.isTip === true || record.type === "tip") return { kind: "propina", cents: tip };
+  if (/purchased your message/i.test(body) || record.type === "paided_message" || record.type === "purchase") {
+    return { kind: "compra", cents: priceCents(record.amount ?? record.price) ?? centsInText(body) };
   }
-  return { mediaCount: items.length, mediaSeconds: haveSeconds ? Math.round(seconds) : null, mediaPreview: preview };
+  return null;
+}
+
+function centsInText(body: string): number | null {
+  const match = body.match(/\$(\d+(?:\.\d{1,2})?)/);
+  return match?.[1] ? priceCents(match[1]) : null;
 }
 
 function mediaUrl(value: unknown): string | null {
   const nestedUrl = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>).url : value;
-  if (typeof nestedUrl !== "string" || !/^https?:\/\//.test(nestedUrl) || nestedUrl.length > 400) return null;
+  if (typeof nestedUrl !== "string" || !/^https?:\/\//.test(nestedUrl) || nestedUrl.length > 2000) return null;
   return nestedUrl;
 }
 

@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AtSign, Clock, DollarSign, FolderOpen, ImagePlus, Languages, ScrollText, Send, Type } from "lucide-react";
-import { chatSendAccess, listCreatorChats, recordChatOutbound, saveFanNote, saveFanProfile, sendChatMessage, syncCreatorChats, type CreatorChatList, type CreatorReadView } from "@/lib/of-sessions";
+import { chatSendAccess, listCreatorChats, loadMoreChats, loadOlderMessages, recordChatOutbound, saveFanNote, saveFanProfile, sendChatMessage, syncCreatorChats, type CreatorChatList, type CreatorReadView } from "@/lib/of-sessions";
 import { useCrm, type VaultItem } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
 import { useOfReads } from "@/lib/use-of-reads";
 import { FanInsights } from "@/features/fan-insights";
+import { ChatBubble } from "@/features/chat-bubble";
 import { MessagePriceDialog } from "@/features/message-price-dialog";
-import { FULL_EMOJIS, QUICK_EMOJIS, TEXT_COLORS, authorLabel, matchScripts, mentionToken, paymentLabel, slashQuery, wrapSelection } from "@/lib/composer-tools";
+import { FULL_EMOJIS, QUICK_EMOJIS, TEXT_COLORS, matchScripts, mentionToken, slashQuery, wrapSelection } from "@/lib/composer-tools";
 
 export function RealChatsPage() {
   const creators = useCrm((s) => s.creators);
@@ -41,6 +42,8 @@ export function RealChatsPage() {
   const draftBox = useRef<HTMLDivElement>(null);
   const fileBox = useRef<HTMLInputElement>(null);
   const savedRange = useRef<Range | null>(null);
+  const olderLock = useRef(false);
+  const listLock = useRef(false);
 
   async function refresh() {
     try {
@@ -304,7 +307,16 @@ export function RealChatsPage() {
           </div>
         </div>
         {error ? <p className="shrink-0 px-4 text-sm text-[#8a5a12]">{error}</p> : null}
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="min-h-0 flex-1 overflow-y-auto" onScroll={(event) => {
+          const node = event.currentTarget;
+          if (node.scrollHeight - node.scrollTop - node.clientHeight > 48 || listLock.current) return;
+          const creator = creatorId === "all" ? selected?.creatorId : creatorId;
+          if (!creator) return;
+          listLock.current = true;
+          void loadMoreChats({ data: { creatorId: creator } }).then(() => refresh()).catch(() => undefined).finally(() => {
+            listLock.current = false;
+          });
+        }}>
         {visible.length === 0 ? (
           <p className="px-4 py-8 text-sm text-[#6d7585]">{threads.length === 0 ? emptyChatsLabel(data) : "Sin datos"}</p>
         ) : (
@@ -376,7 +388,13 @@ export function RealChatsPage() {
                 ) : null}
               </div>
             ) : null}
-            <ol className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
+            <ol className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4" onScroll={(event) => {
+              if (event.currentTarget.scrollTop > 24 || !selected || olderLock.current) return;
+              olderLock.current = true;
+              void loadOlderMessages({ data: { creatorId: selected.creatorId, threadKey: selected.threadKey } }).then(() => refresh()).catch(() => undefined).finally(() => {
+                olderLock.current = false;
+              });
+            }}>
               {!selected || messages.length === 0 ? <li className="text-sm text-[#6d7585]">{selected ? "Sin datos" : "Sin sincronizar"}</li> : null}
               {pendingOut.filter((item) => item.creatorId === selected?.creatorId && item.threadKey === selected?.threadKey).map((item) => (
                 <li key={item.id} className="text-right">
@@ -385,14 +403,9 @@ export function RealChatsPage() {
                 </li>
               ))}
               {messages.map((message) => (
-                <li key={message.messageKey} className={message.fromFan ? "text-left" : "text-right"}>
-                  <p className={`inline-block max-w-[70%] rounded-2xl px-3 py-2 text-sm ${message.fromFan ? "bg-[#f4f6fb]" : "bg-[#e7f0ff]"}`}>
-                    {message.body}
-                  </p>
-                  <p className="mt-1 text-[10px] text-[#6d7585]">{messageCaption(message)}</p>
-                  {fanTranslation && message.fromFan ? <p className="mt-1 text-[10px] text-[#6d7585]">Traducción: Sin datos</p> : null}
-                </li>
+                <ChatBubble key={message.messageKey} message={message} />
               ))}
+              {messages.some((message) => message.fromFan) && fanTranslation ? <li className="text-[10px] text-[#6d7585]">Traducción: Sin datos</li> : null}
             </ol>
             <form className="relative shrink-0 border-t border-[#e6e8ee] p-2" onSubmit={(event) => event.preventDefault()}>
               {panel && panel !== "guiones" ? (
@@ -798,15 +811,6 @@ function pendingCaption(item: { scheduledAt: string | null; authorName: string |
   if (item.status === "error") return `Error · ${item.errorReason ?? "No se envió"} · sin reintento`;
   if (item.scheduledAt) return `Pendiente · programado ${item.scheduledAt.slice(0, 16).replace("T", " ")} · ${item.authorName ?? "Sin datos"} · no enviado`;
   return "Pendiente · no enviado";
-}
-
-function messageCaption(message: { sentAt: string; fromFan: boolean; authorName: string | null; automatic: boolean | null; seen: boolean | null; priceCents: number | null; purchased: boolean | null }): string {
-  const time = message.sentAt.slice(0, 16).replace("T", " ");
-  const seen = message.seen == null ? "" : message.seen ? " · ✓" : "";
-  if (message.fromFan) return `${time}${seen}`;
-  const pay = paymentLabel(message);
-  const who = authorLabel(message.authorName, message.automatic);
-  return `${time}${seen}${pay ? ` · ${pay}` : ""} · ${who}`;
 }
 
 function emptyChatsLabel(data: CreatorChatList | null): string {

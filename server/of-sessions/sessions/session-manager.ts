@@ -320,6 +320,23 @@ export class SessionManager {
     return job;
   }
 
+  /** Una lectura a la vez, el mismo perfil que la sincronización. */
+  runQueued<T>(accountId: string, run: (context: BrowserContext) => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; busy: true }> {
+    if (this.reading.size > 0) return Promise.resolve({ ok: false, busy: true });
+    this.reading.add(accountId);
+    const job = this.readTail.then(async () => {
+      const value = await this.withSession(accountId, run);
+      return { ok: true as const, value };
+    }).finally(() => {
+      this.reading.delete(accountId);
+    });
+    this.readTail = job.then(
+      () => undefined,
+      () => undefined,
+    );
+    return job;
+  }
+
   readCreatorChats(accountId: string): Promise<CollectedChats> {
     const busy: CollectedChats = {
       threads: [],
