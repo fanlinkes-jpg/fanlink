@@ -78,7 +78,9 @@ Solo esa cuenta (el id `9ikis52` o el handle `@bigpoppa1111`, el que tenga guard
 
 `GET /api/chat-live` es un stream SSE. El proxy no puede acumular la respuesta: nginx necesita `proxy_buffering off;` y la app ya manda `X-Accel-Buffering: no`. El timeout de lectura tiene que aguantar la conexión abierta (minutos, no el timeout corto de una API). Sin eso el navegador se entera del mensaje tarde o la conexión se corta.
 
-`npm run db:migrate` aplica también `0019_chat_author.sql` (autor del mensaje y borradores salientes), `0020_chat_card.sql` (ficha del fan), `0025_outbound_send.sql` (enviado o error del borrador) y `0033_outbound_match_unique.sql` (un borrador por mensaje y el índice único). Sin ese comando la 0033 no entra y un despliegue con duplicados antiguos no arranca.
+`npm run db:migrate` aplica también `0019_chat_author.sql` (autor del mensaje y borradores salientes), `0020_chat_card.sql` (ficha del fan), `0025_outbound_send.sql` (enviado o error del borrador), `0026_chat_history.sql` (cursor del histórico, me gusta, cita y aviso) y `0033_outbound_match_unique.sql` (un borrador por mensaje y el índice único). Sin ese comando la 0033 no entra y un despliegue con duplicados antiguos no arranca.
+
+El espejo del hilo no incluye el reproductor ni la caché de medios. `0022_message_media.sql` y `0026_chat_history.sql` solo guardan metadatos (si hay archivo, duración, vista previa, me gusta, cita). No se descarga el archivo y en el hilo se pinta el marcador Medio.
 
 ## 6. Masivos
 

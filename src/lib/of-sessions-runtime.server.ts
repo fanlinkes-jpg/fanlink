@@ -28,7 +28,13 @@ import { chatIntervalMinFromEnv } from "../../server/of-sessions/sync/chats.ts";
 import { chatIntervalMinutes, inboxIsOpen, activeThreadWatches } from "../../server/of-sessions/sync/live.ts";
 import { openWatchContext, runInboxWatch } from "../../server/of-sessions/sync/inbox-watch.ts";
 import { pickAccountWatch } from "../../server/of-sessions/sync/watch-plan.ts";
-import { listChatMeta, listChats, listPendingOutbounds, markOutboundAwaiting, markOutboundError, markOutboundSent, recordOutbound, saveChatRead } from "../../server/of-sessions/sync/chat-store.ts";
+import { listChatMeta, listChats, listOpenHistory, listPendingOutbounds, markChatList, markHistory, markOutboundAwaiting, markOutboundError, markOutboundSent, recordOutbound, saveChatRead } from "../../server/of-sessions/sync/chat-store.ts";
+import { historyPerMinute, listPageDone, nextHistoryThread, oldestCursor, pageFinished } from "../../server/of-sessions/sync/history.ts";
+import { captureChatListPage, captureOlderMessages } from "../../server/of-sessions/sync/history-scroll.ts";
+import { openWorkPage } from "../../server/of-sessions/sessions/work-page.ts";
+import { captureVaultList, type VaultFile } from "../../server/of-sessions/sync/vault-listen.ts";
+import { chatPageUrl } from "../../server/of-sessions/sync/chats.ts";
+import { sendPace } from "../../server/of-sessions/send/gate.ts";
 import { chatSendGate, publicSendReason, type SendAccount } from "../../server/of-sessions/send/gate.ts";
 import { deliverChatSend, sendLimitFromEnv } from "../../server/of-sessions/send/deliver.ts";
 import { composeChat } from "../../server/of-sessions/send/compose.ts";
@@ -84,6 +90,7 @@ async function createManager(): Promise<SessionManager> {
   await runtime.sessions.recoverInterruptedLogins();
   bootSyncLoop(runtime.sessions);
   bootChatLoop(runtime.sessions);
+  bootHistoryLoop(runtime.sessions);
   return runtime.sessions;
 }
 
@@ -188,6 +195,60 @@ export async function rememberCreatorAccounts(): Promise<void> {
   for (const account of accounts) {
     if (account.creatorId) creatorAccounts.set(account.creatorId, account.id);
   }
+}
+
+function bootHistoryLoop(sessions: SessionManager): void {
+  if (process.env.FANLINK_HISTORY_ENABLED === "false") return;
+  if (process.execArgv.includes("--test")) return;
+  const recent: number[] = [];
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  void (async () => {
+    await sleep(20_000);
+    while (true) {
+      try {
+        const accounts = await sessions.listAccounts();
+        let stepped = false;
+        for (const account of accounts) {
+          if (!account.creatorId || account.identityState === "mismatch") continue;
+          const open = await listOpenHistory(await getSql(), account.creatorId);
+          const next = nextHistoryThread(open);
+          if (!next) continue;
+          const pace = sendPace(recent, Date.now(), historyPerMinute(process.env.FANLINK_HISTORY_PER_MINUTE));
+          if (pace.waitMs > 0) await sleep(Math.min(pace.waitMs, 60_000));
+          await pullOlder(sessions, account.id, account.creatorId, next.threadKey, account.identityUserId);
+          recent.push(Date.now());
+          stepped = true;
+          await sleep(2_000 + Math.floor(Math.random() * 3_000));
+        }
+        if (!stepped) await sleep(30_000);
+      } catch (error) {
+        console.info(`[fanlink:chat] historico ${error instanceof Error ? error.message.slice(0, 120) : "error"}`);
+        await sleep(15_000);
+      }
+    }
+  })();
+}
+
+async function pullOlder(sessions: SessionManager, accountId: string, creatorId: string, threadKey: string, accountUserId: string | null): Promise<void> {
+  const sql = await getSql();
+  const open = await listOpenHistory(sql, creatorId);
+  const row = open.find((item) => item.threadKey === threadKey);
+  if (row?.done) return;
+  const ran = await sessions.runQueued(accountId, async (context) => {
+    const page = await context.newPage();
+    try {
+      await page.goto(chatPageUrl(onlyFansSite.chatsUrl ?? "https://onlyfans.com/my/chats", threadKey, onlyFansSite.id), { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
+      return await captureOlderMessages(page, { threadKey, fanKey: null, accountUserId, waitMs: 6_000 });
+    } finally {
+      await page.close().catch(() => undefined);
+    }
+  });
+  if (!ran.ok) return;
+  const done = pageFinished(row?.cursor ?? null, ran.value);
+  if (ran.value.length > 0) {
+    await saveChatRead(sql, creatorId, { threads: [], messages: ran.value, reason: null, jsonPaths: [] });
+  }
+  await markHistory(sql, creatorId, threadKey, oldestCursor(ran.value) ?? row?.cursor ?? null, done);
 }
 
 function bootChatLoop(sessions: SessionManager): void {
@@ -435,6 +496,11 @@ export async function listCreatorChatViews(userId: string): Promise<CreatorChatL
       mediaCount: message.mediaCount ?? null,
       mediaSeconds: message.mediaSeconds ?? null,
       mediaPreview: message.mediaPreview ?? null,
+      media: message.media ?? null,
+      liked: message.liked ?? null,
+      replyBody: message.replyBody ?? null,
+      eventKind: message.eventKind ?? null,
+      eventCents: message.eventCents ?? null,
     })),
     meta: stored.meta.map((item) => ({
       creatorId: item.creatorId,
@@ -755,7 +821,7 @@ export async function chatSendAccessView(userId: string): Promise<{ creatorIds: 
 
 export async function sendChatMessageView(
   userId: string,
-  input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null },
+  input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; vaultTitle?: string | null },
 ): Promise<{ sent: boolean; reason: string | null; messageId: string | null }> {
   const access = await accessFor(userId);
   if (access.role !== "owner" && !access.perms.includes("mensajes")) {
@@ -806,6 +872,7 @@ export async function sendChatMessageView(
         accountUserId: account.identityUserId,
         body,
         priceCents: input.priceCents,
+        vaultTitle: input.vaultTitle ?? null,
         typeDelayMs: null,
       })),
     });
@@ -826,6 +893,70 @@ export async function sendChatMessageView(
     await markOutboundError(sql, id, reason);
     return { sent: false, reason, messageId: null };
   }
+}
+
+export async function readChatVaultView(userId: string, input: { creatorId: string; threadKey: string }): Promise<{ items: VaultFile[]; reason: string | null }> {
+  const access = await accessFor(userId);
+  if (access.role !== "owner" && !access.perms.includes("mensajes")) {
+    throw new WorkspaceAccessError("No tienes permiso para escribir.");
+  }
+  const sessions = await getOfSessionManager();
+  const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
+  if (!account) return { items: [], reason: "Sin datos" };
+  const ran = await sessions.runQueued(account.id, async (context) => {
+    const page = await openWorkPage(context);
+    try {
+      await page.goto(chatPageUrl(onlyFansSite.chatsUrl ?? "https://onlyfans.com/my/chats", input.threadKey, onlyFansSite.id), {
+        waitUntil: "domcontentloaded",
+        timeout: 30_000,
+      }).catch(() => undefined);
+      return await captureVaultList(page);
+    } finally {
+      await page.close().catch(() => undefined);
+    }
+  });
+  if (!ran.ok || ran.value.length === 0) return { items: [], reason: "Sin datos" };
+  return { items: ran.value, reason: null };
+}
+
+export async function loadOlderMessagesView(userId: string, input: { creatorId: string; threadKey: string }): Promise<{ ok: boolean }> {
+  const access = await accessFor(userId);
+  if (access.role !== "owner" && !access.perms.includes("mensajes")) {
+    throw new WorkspaceAccessError("No tienes permiso para escribir.");
+  }
+  const sessions = await getOfSessionManager();
+  const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
+  if (!account) return { ok: false };
+  await pullOlder(sessions, account.id, input.creatorId, input.threadKey, account.identityUserId);
+  return { ok: true };
+}
+
+export async function loadMoreChatsView(userId: string, input: { creatorId: string }): Promise<{ ok: boolean }> {
+  const access = await accessFor(userId);
+  if (access.role !== "owner" && !access.perms.includes("mensajes")) {
+    throw new WorkspaceAccessError("No tienes permiso para escribir.");
+  }
+  const sessions = await getOfSessionManager();
+  const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
+  if (!account) return { ok: false };
+  const sql = await getSql();
+  const previous = (await listChats(sql, [input.creatorId])).threads.map((thread) => thread.threadKey);
+  const ran = await sessions.runQueued(account.id, async (context) => {
+    const page = await context.newPage();
+    try {
+      await page.goto(onlyFansSite.chatsUrl ?? "https://onlyfans.com/my/chats", { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
+      return await captureChatListPage(page, account.identityUserId);
+    } finally {
+      await page.close().catch(() => undefined);
+    }
+  });
+  if (!ran.ok) return { ok: false };
+  const done = listPageDone(previous, ran.value);
+  if (ran.value.length > 0) {
+    await saveChatRead(sql, input.creatorId, { threads: ran.value, messages: [], reason: null, jsonPaths: [] });
+  }
+  await markChatList(sql, input.creatorId, ran.value.at(-1)?.threadKey ?? null, done);
+  return { ok: true };
 }
 
 function sendAccount(account: Account): SendAccount {

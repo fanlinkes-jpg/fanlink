@@ -99,7 +99,7 @@ test("el botón Enviar se ve entero sin scroll de página", async () => {
         await region.waitFor();
         if (name === "Add from media vault" || name === "Tag other creator") await region.getByText("Sin datos").waitFor();
         if (name === "GIF") await region.getByText("Sin datos. Hace falta una clave de API para buscar GIF.").waitFor();
-        if (name === "Format text") await region.getByRole("button", { name: "Color Rojo" }).waitFor();
+        if (name === "Format text") await region.getByRole("button", { name: "Color Gris" }).waitFor();
         if (name === "Translation") await region.getByText("Sin datos: no hay servicio de traducción.").waitFor();
         await composer.getByRole("button", { name, exact: true }).click();
         await region.waitFor({ state: "hidden" });
