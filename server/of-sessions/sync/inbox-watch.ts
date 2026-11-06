@@ -1,12 +1,12 @@
 import type { BrowserContext, Page } from "playwright";
 import { chatPageUrl, classifyChatPath, parseChatMessages, parsePreviewMessages, type ChatMessage } from "./chats.ts";
 import { parseLivePayload } from "./live-frames.ts";
-import { planWatch } from "./watch-plan.ts";
+import { FALLBACK_RELOAD_MS, nextFallbackThread, WATCH_IDLE_MS, type WatchedThread } from "./watch-plan.ts";
 
 export type WatchTarget = {
   accountId: string;
   creatorId: string;
-  threadKey: string | null;
+  threads: WatchedThread[];
   watchers: number;
   chatsUrl: string;
   siteId: string;
@@ -22,8 +22,9 @@ export type WatchSession = {
 };
 
 /**
- * Una pestaña abierta. No envía frames ni llama a la API: solo navega
- * cuando cambia el hilo y escucha lo que la página recibe.
+ * Una pestaña por cuenta. No envía frames ni llama a la API.
+ * El WebSocket de esa página trae todos los chats. Sin socket, recarga
+ * los hilos vigilados de uno en uno.
  */
 export async function runInboxWatch(input: {
   stopped: () => boolean;
@@ -31,83 +32,98 @@ export async function runInboxWatch(input: {
   open: (accountId: string) => Promise<WatchSession>;
   save: (creatorId: string, messages: ChatMessage[]) => Promise<void>;
   onBlock: (accountId: string, reason: string) => void;
+  onNavigate?: (threadKey: string | null) => void;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
-  paceMs?: number;
   blockMs?: number;
+  fallbackMs?: number;
+  idleMs?: number;
 }): Promise<void> {
+  const fallbackMs = input.fallbackMs ?? FALLBACK_RELOAD_MS;
+  const idleMs = input.idleMs ?? WATCH_IDLE_MS;
   let session: WatchSession | null = null;
-  let pageOpen = false;
   let pageThread: string | null = null;
   let accountId: string | null = null;
   let creatorId: string | null = null;
-  let lastNavAt: number | null = null;
+  let openedAt: number | null = null;
   let lastUsefulAt: number | null = null;
-  let lastReloadAt: number | null = null;
+  let lastGlobalReloadAt: number | null = null;
   let lastWatcherAt = input.now();
   let blockedUntil: number | null = null;
+  const reloadedAt = new Map<string, number>();
 
   const shut = async () => {
     if (!session) return;
     await session.close();
     session = null;
-    pageOpen = false;
     pageThread = null;
+    openedAt = null;
+    reloadedAt.clear();
+    input.onNavigate?.(null);
   };
 
   while (!input.stopped()) {
     const target = input.target();
     const now = input.now();
     if (target && target.watchers > 0) lastWatcherAt = now;
-    const action = planWatch({
-      watchers: target?.watchers ?? 0,
-      wantedThread: target?.threadKey ?? null,
-      pageThread,
-      pageOpen,
-      lastNavAt,
-      lastUsefulAt,
-      lastReloadAt,
-      lastWatcherAt,
-      now,
-      blockedUntil,
-      paceMs: input.paceMs,
-    });
-    if (action === "close") {
-      await shut();
-      if (!target || target.watchers <= 0) break;
+    if (blockedUntil != null && now < blockedUntil) {
+      if (session) await shut();
+      await input.sleep(200);
+      continue;
     }
-    if ((action === "open" || action === "navigate" || action === "reload") && target) {
-      if (!session || accountId !== target.accountId) {
+    if (!target || target.watchers <= 0) {
+      if (now - lastWatcherAt >= idleMs) {
         await shut();
-        try {
-          session = await input.open(target.accountId);
-        } catch {
-          await input.sleep(2_000);
-          continue;
-        }
-        accountId = target.accountId;
-        creatorId = target.creatorId;
-        pageOpen = true;
-        const current = () => creatorId;
-        session.listen({
-          onMessages: (messages) => {
-            lastUsefulAt = input.now();
-            const id = current();
-            if (id && messages.length) void input.save(id, messages);
-          },
-          onBlock: (reason) => {
-            blockedUntil = input.now() + (input.blockMs ?? 15_000);
-            if (accountId) input.onBlock(accountId, reason);
-          },
-        });
+        break;
       }
-      const url = target.threadKey
-        ? chatPageUrl(target.chatsUrl, target.threadKey, target.siteId)
-        : target.chatsUrl;
-      const status = await session.goto(url);
-      lastNavAt = input.now();
-      if (action === "reload") lastReloadAt = input.now();
-      pageThread = target.threadKey;
+      await input.sleep(200);
+      continue;
+    }
+    if (!session || accountId !== target.accountId) {
+      await shut();
+      try {
+        session = await input.open(target.accountId);
+      } catch {
+        await input.sleep(2_000);
+        continue;
+      }
+      accountId = target.accountId;
+      creatorId = target.creatorId;
+      openedAt = input.now();
+      const current = () => creatorId;
+      session.listen({
+        onMessages: (messages) => {
+          lastUsefulAt = input.now();
+          const id = current();
+          const kept = messages.filter((message) => message.threadKey);
+          if (id && kept.length) void input.save(id, kept);
+        },
+        onBlock: (reason) => {
+          blockedUntil = input.now() + (input.blockMs ?? 15_000);
+          if (accountId) input.onBlock(accountId, reason);
+        },
+      });
+      input.onNavigate?.(null);
+      const status = await session.goto(target.chatsUrl);
+      if (status === 403 || status === 429) {
+        blockedUntil = input.now() + (input.blockMs ?? 15_000);
+        input.onBlock(target.accountId, String(status));
+        await shut();
+        await input.sleep(200);
+        continue;
+      }
+    }
+    const quiet = lastUsefulAt == null || now - lastUsefulAt >= fallbackMs;
+    const next = quiet
+      ? nextFallbackThread(target.threads, reloadedAt, openedAt, lastGlobalReloadAt, now, fallbackMs)
+      : null;
+    if (next && session) {
+      input.onNavigate?.(next);
+      const status = await session.goto(chatPageUrl(target.chatsUrl, next, target.siteId));
+      const at = input.now();
+      lastGlobalReloadAt = at;
+      reloadedAt.set(next, at);
+      pageThread = next;
       if (status === 403 || status === 429) {
         blockedUntil = input.now() + (input.blockMs ?? 15_000);
         input.onBlock(target.accountId, String(status));

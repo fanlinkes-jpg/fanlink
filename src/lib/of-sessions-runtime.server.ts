@@ -27,6 +27,7 @@ import { deliverFanAlerts } from "../../server/of-sessions/notify/deliver.ts";
 import { chatIntervalMinFromEnv } from "../../server/of-sessions/sync/chats.ts";
 import { chatIntervalMinutes, inboxIsOpen, activeThreadWatches } from "../../server/of-sessions/sync/live.ts";
 import { openWatchContext, runInboxWatch } from "../../server/of-sessions/sync/inbox-watch.ts";
+import { pickAccountWatch } from "../../server/of-sessions/sync/watch-plan.ts";
 import { listChatMeta, listChats, recordOutbound, saveChatRead } from "../../server/of-sessions/sync/chat-store.ts";
 import { intervalMinFromEnv, startSyncLoop, type ScheduleAccount } from "../../server/of-sessions/sync/schedule.ts";
 import {
@@ -115,16 +116,15 @@ export function kickInboxWatch(): void {
   watchLoop = runInboxWatch({
     stopped: () => false,
     target: () => {
-      const watch = activeThreadWatches()[0];
-      if (!watch) return null;
-      const accountId = accountForCreator(watch.creatorId);
+      const picked = pickAccountWatch(activeThreadWatches());
+      if (!picked) return null;
+      const accountId = accountForCreator(picked.creatorId);
       if (!accountId) return null;
-      threadRef.key = watch.threadKey ?? "";
       return {
         accountId,
-        creatorId: watch.creatorId,
-        threadKey: watch.threadKey,
-        watchers: activeThreadWatches().length,
+        creatorId: picked.creatorId,
+        threads: picked.threads,
+        watchers: picked.watchers,
         chatsUrl: onlyFansSite.chatsUrl ?? "https://onlyfans.com/my/chats",
         siteId: onlyFansSite.id,
       };
@@ -154,6 +154,9 @@ export function kickInboxWatch(): void {
     },
     save: async (creatorId, messages) => {
       await saveChatRead(await getSql(), creatorId, { threads: [], messages, reason: null, jsonPaths: [] });
+    },
+    onNavigate: (threadKey) => {
+      threadRef.key = threadKey ?? "";
     },
     onBlock: (accountId, reason) => {
       const delay = noteAccountBlock(accountId, reason);

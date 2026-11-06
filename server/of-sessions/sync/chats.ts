@@ -402,12 +402,16 @@ function messageFrom(
   const sentAt = iso(record.createdAt ?? record.created_at ?? record.at);
   const messageKey = clean(record.id, 40);
   if (!body || !sentAt || !messageKey) return null;
+  const chat = nested(record.chat);
+  const ownThread = clean(record.chatId, 40) ?? clean(record.chat_id, 40) ?? clean(chat?.id, 40);
+  const thread = ownThread ?? threadKey;
+  const fan = ownThread ?? fanKey;
   const fromUserId = clean(nested(record.fromUser)?.id, 40);
-  const flag = fromFanFlag(fromUserId, fanKey, accountId);
+  const flag = fromFanFlag(fromUserId, fan, accountId);
   return {
     messageKey,
-    threadKey,
-    fanKey,
+    threadKey: thread,
+    fanKey: fan,
     fromFan: flag ?? isFromFan(record, fanKey),
     fromUserId,
     seen: seenFlag(record),
