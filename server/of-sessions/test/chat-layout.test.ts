@@ -10,7 +10,7 @@ const port = 18731;
 const shots = path.join(root, "tmp/chat-layout");
 
 const viewports = [
-  { width: 1024, height: 630, capture: false },
+  { width: 1024, height: 630, capture: true },
   { width: 1280, height: 720, capture: false },
   { width: 1440, height: 900, capture: true },
 ] as const;
@@ -46,6 +46,12 @@ test("el botón Enviar se ve entero sin scroll de página", async () => {
       for (const part of seen.parts) {
         assert.ok(part.top >= 0 && part.bottom <= viewport.height + 1, `${label}: ${part.label} queda fuera`);
       }
+      const composer = page.locator("form");
+      for (const name of ["Almacén", "GIF", "Galería", "Precio", "Mención", "Formato", "Traducción", "Guiones", "Programar"]) {
+        await composer.getByRole("button", { name, exact: true }).click();
+        await page.getByRole("region", { name: `Panel ${name}` }).waitFor();
+      }
+      await composer.getByRole("button", { name: "Programar", exact: true }).click();
       const dialog = page.getByRole("dialog", { name: "Ficha del fan" });
       await page.getByRole("button", { name: "Ficha del fan" }).click();
       await dialog.waitFor();
@@ -116,8 +122,8 @@ async function sendButtonBox(page: Page): Promise<{
     const button = [...document.querySelectorAll("button")].find((node) => node.getAttribute("aria-label") === "Enviar");
     const form = document.querySelector("form");
     const formRect = form?.getBoundingClientRect();
-    const parts = ["Traducción", "Guiones", "Galería", "Dejar pendiente"].map((label) => {
-      const node = [...document.querySelectorAll("button")].find((item) => item.textContent?.includes(label));
+    const parts = ["Traducción", "Guiones", "Galería", "Dejar pendiente", "Almacén", "Programar"].map((label) => {
+      const node = [...document.querySelectorAll("button")].find((item) => item.getAttribute("aria-label") === label || item.textContent?.includes(label));
       const box = node?.getBoundingClientRect();
       return { label, top: box?.top ?? -1, bottom: box?.bottom ?? -1 };
     });

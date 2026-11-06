@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { AtSign, Clock, DollarSign, ImagePlus, Languages, ScrollText, Send, Type, Vault } from "lucide-react";
 import { listCreatorChats, recordChatOutbound, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList, type CreatorReadView } from "@/lib/of-sessions";
 import { campaignSendFlag } from "@/lib/of-campaigns";
 import { useCrm } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
 import { useOfReads } from "@/lib/use-of-reads";
 import { FanInsights } from "@/features/fan-insights";
-import { FULL_EMOJIS, QUICK_EMOJIS, authorLabel, emojiRows, matchScripts, mentionToken, paymentLabel, slashQuery, wrapSelection } from "@/lib/composer-tools";
+import { FULL_EMOJIS, QUICK_EMOJIS, authorLabel, matchScripts, mentionToken, paymentLabel, slashQuery, wrapSelection } from "@/lib/composer-tools";
 
 export function RealChatsPage() {
   const creators = useCrm((s) => s.creators);
@@ -13,6 +14,7 @@ export function RealChatsPage() {
   const setCreator = useCrm((s) => s.setCreator);
   const crmFans = useCrm((s) => s.fans);
   const scripts = useCrm((s) => s.scripts);
+  const vault = useCrm((s) => s.vault);
   const saveNote = useCrm((s) => s.saveNote);
   const teamAccess = useCrm((s) => s.teamAccess);
   const reads = useOfReads();
@@ -25,13 +27,16 @@ export function RealChatsPage() {
   const [menu, setMenu] = useState(false);
   const [draft, setDraft] = useState("");
   const [draftPrice, setDraftPrice] = useState<number | null>(null);
-  const [emojiOpen, setEmojiOpen] = useState(false);
-  const [scriptOpen, setScriptOpen] = useState(false);
   const [sendEnabled, setSendEnabled] = useState(false);
   const [pendingOut, setPendingOut] = useState<Array<{ id: string; creatorId: string; threadKey: string; body: string; scheduledAt: string | null; authorName: string | null }>>([]);
-  const [scheduleOpen, setScheduleOpen] = useState(false);
   const [scheduleAt, setScheduleAt] = useState("");
+  const [panel, setPanel] = useState<ComposerPanel>(null);
+  const [textSize, setTextSize] = useState<"sm" | "base" | "lg">("base");
+  const [attachments, setAttachments] = useState<Array<{ url: string; name: string; kind: "image" | "video" }>>([]);
+  const [fanTranslation, setFanTranslation] = useState(false);
+  const [priceDraft, setPriceDraft] = useState("");
   const draftBox = useRef<HTMLTextAreaElement>(null);
+  const fileBox = useRef<HTMLInputElement>(null);
 
   async function refresh() {
     try {
@@ -89,6 +94,54 @@ export function RealChatsPage() {
     ? "Todas las cuentas"
     : creators.find((creator) => creator.id === creatorId)?.name ?? "Cuenta";
   const unread = threads.reduce((sum, thread) => sum + thread.unread, 0);
+  const scriptHits = matchScripts(scripts, slashQuery(draft) ?? "");
+  const showScripts = panel === "guiones" || slashQuery(draft) != null;
+
+  function toggle(next: ComposerPanel) {
+    setPanel((current) => current === next ? null : next);
+  }
+
+  function applyMark(marker: string) {
+    const node = draftBox.current;
+    const next = wrapSelection(draft, node?.selectionStart ?? draft.length, node?.selectionEnd ?? draft.length, marker);
+    setDraft(next.value);
+  }
+
+  function savePending(scheduledAt: string | null) {
+    if (!selected || !draft.trim()) return;
+    const body = draft.trim();
+    const price = draftPrice;
+    setDraft("");
+    setDraftPrice(null);
+    setScheduleAt("");
+    setPanel(null);
+    void recordChatOutbound({
+      data: {
+        creatorId: selected.creatorId,
+        fanKey: selected.fanKey,
+        threadKey: selected.threadKey,
+        body,
+        priceCents: price,
+        ofMessageKey: null,
+        scheduledAt,
+      },
+    }).then(() => refresh()).catch((err: unknown) => {
+      setDraft(body);
+      setError(sessionErrorText(err));
+    });
+  }
+
+  function insertAtCursor(token: string) {
+    const node = draftBox.current;
+    const start = node?.selectionStart ?? draft.length;
+    const end = node?.selectionEnd ?? draft.length;
+    setDraft(`${draft.slice(0, start)}${token}${draft.slice(end)}`);
+    const cursor = start + token.length;
+    requestAnimationFrame(() => {
+      node?.focus();
+      node?.setSelectionRange(cursor, cursor);
+    });
+  }
 
   return (
     <div className="absolute inset-0 flex min-h-0 overflow-hidden bg-white text-[#1c2333]">
@@ -202,120 +255,132 @@ export function RealChatsPage() {
                     {message.body}
                   </p>
                   <p className="mt-1 text-[10px] text-[#6d7585]">{messageCaption(message)}</p>
+                  {fanTranslation && message.fromFan ? <p className="mt-1 text-[10px] text-[#6d7585]">Traducción: Sin datos</p> : null}
                 </li>
               ))}
             </ol>
             <form className="relative shrink-0 border-t border-[#e6e8ee] p-2" onSubmit={(event) => event.preventDefault()}>
-              {(scriptOpen || slashQuery(draft) != null) ? (
-                <div className="absolute inset-x-2 bottom-full z-20 mb-1 max-h-36 overflow-y-auto rounded-xl border border-[#e6e8ee] bg-white p-2 text-sm shadow-lg">
-                  {matchScripts(scripts, slashQuery(draft) ?? "").length === 0 ? <p className="text-xs text-[#6d7585]">Sin datos</p> : matchScripts(scripts, slashQuery(draft) ?? "").map((hit) => (
-                    <button key={hit.id} type="button" className="block w-full rounded px-2 py-1 text-left hover:bg-[#f4f7ff]" onClick={() => { setDraft(hit.text); if (hit.priceCents != null) setDraftPrice(hit.priceCents); setScriptOpen(false); }}>
+              {panel && panel !== "guiones" ? (
+                <div role="region" aria-label={panelLabel(panel)} className="absolute inset-x-2 bottom-full z-20 mb-1 max-h-40 overflow-y-auto rounded-xl border border-[#e6e8ee] bg-white p-3 text-sm shadow-lg">
+                  {panel === "almacen" ? (
+                    vault.length === 0 ? <p className="text-xs text-[#6d7585]">Sin datos</p> : (
+                      <ul className="space-y-1">
+                        {vault.map((item) => (
+                          <li key={item.id}>
+                            <button type="button" className="w-full rounded px-2 py-1 text-left hover:bg-[#f4f7ff]" onClick={() => insertAtCursor(`[${item.title}] `)}>{item.title}</button>
+                          </li>
+                        ))}
+                      </ul>
+                    )
+                  ) : null}
+                  {panel === "gif" ? <p className="text-xs text-[#6d7585]">Sin datos. Hace falta una clave de API para buscar GIF.</p> : null}
+                  {panel === "galeria" ? (
+                    <div>
+                      <input ref={fileBox} type="file" accept="image/*,video/*" multiple className="text-xs" onChange={(event) => {
+                        const files = [...(event.target.files ?? [])];
+                        setAttachments((current) => [
+                          ...current,
+                          ...files.map((file) => ({ url: URL.createObjectURL(file), name: file.name, kind: file.type.startsWith("video/") ? "video" as const : "image" as const })),
+                        ]);
+                      }} />
+                      <p className="mt-1 text-xs text-[#8a5a12]">Adjunto pendiente · no enviado</p>
+                    </div>
+                  ) : null}
+                  {panel === "precio" ? (
+                    <div className="flex items-center gap-2">
+                      <input aria-label="Precio" value={priceDraft} onChange={(event) => setPriceDraft(event.target.value)} placeholder="0.00" className="h-8 w-24 rounded border border-[#e6e8ee] px-2 text-sm" />
+                      <button type="button" className="rounded bg-[#eef2ff] px-2 py-1 text-xs text-[#2456c7]" onClick={() => {
+                        const amount = priceDraft.trim();
+                        setDraftPrice(amount === "" || Number.isNaN(Number(amount)) ? null : Math.round(Number(amount) * 100));
+                        setPanel(null);
+                      }}>Fijar precio</button>
+                    </div>
+                  ) : null}
+                  {panel === "mencion" ? (
+                    <button type="button" className="rounded px-2 py-1 text-sm hover:bg-[#f4f7ff]" onClick={() => insertAtCursor(mentionToken(selected?.fanHandle ?? null))}>
+                      Insertar {mentionToken(selected?.fanHandle ?? null).trim() || "@"}
+                    </button>
+                  ) : null}
+                  {panel === "formato" ? (
+                    <div className="flex flex-wrap gap-2">
+                      <button type="button" className="rounded border border-[#e6e8ee] px-2 py-1 text-xs font-semibold" onClick={() => applyMark("*")}>Negrita</button>
+                      <button type="button" className="rounded border border-[#e6e8ee] px-2 py-1 text-xs italic" onClick={() => applyMark("_")}>Cursiva</button>
+                      {(["sm", "base", "lg"] as const).map((size) => (
+                        <button key={size} type="button" className="rounded border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => setTextSize(size)}>{size === "sm" ? "Pequeño" : size === "lg" ? "Grande" : "Normal"}</button>
+                      ))}
+                    </div>
+                  ) : null}
+                  {panel === "traduccion" ? (
+                    <div className="space-y-2 text-xs text-[#6d7585]">
+                      <label className="block">Idioma
+                        <select aria-label="Idioma" className="mt-1 block h-8 rounded border border-[#e6e8ee] px-2 text-sm text-[#1c2333]">
+                          <option>Español</option>
+                          <option>Inglés</option>
+                        </select>
+                      </label>
+                      <p>Sin datos: no hay servicio de traducción.</p>
+                      <button type="button" className="rounded border border-[#e6e8ee] px-2 py-1" onClick={() => setFanTranslation((value) => !value)}>{fanTranslation ? "Ocultar traducción del fan" : "Mostrar traducción del fan"}</button>
+                    </div>
+                  ) : null}
+                  {panel === "programar" ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <input type="datetime-local" aria-label="Fecha programada" value={scheduleAt} onChange={(event) => setScheduleAt(event.target.value)} className="h-8 rounded border border-[#e6e8ee] px-2 text-xs" />
+                      <button type="button" disabled={!draft.trim() || !scheduleAt || !selected} className="rounded border border-[#e6e8ee] px-2 py-1 text-xs disabled:opacity-50" onClick={() => savePending(new Date(scheduleAt).toISOString())}>Guardar programado</button>
+                    </div>
+                  ) : null}
+                  {panel === "emojis" ? (
+                    <div className="grid gap-0" style={{ gridTemplateColumns: "repeat(14, 32px)" }}>
+                      {FULL_EMOJIS.map((emoji) => (
+                        <button key={`full-${emoji}`} type="button" className="grid h-8 w-8 place-items-center text-[20px] leading-none" onClick={() => insertAtCursor(emoji)}>{emoji}</button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+              {showScripts ? (
+                <div role="region" aria-label="Panel Guiones" className="absolute inset-x-2 bottom-full z-20 mb-1 max-h-36 overflow-y-auto rounded-xl border border-[#e6e8ee] bg-white p-2 text-sm shadow-lg">
+                  {scriptHits.length === 0 ? <p className="text-xs text-[#6d7585]">Sin datos</p> : scriptHits.map((hit) => (
+                    <button key={hit.id} type="button" className="block w-full rounded px-2 py-1 text-left hover:bg-[#f4f7ff]" onClick={() => { setDraft(hit.text); if (hit.priceCents != null) setDraftPrice(hit.priceCents); setPanel(null); }}>
                       {hit.title} · /{hit.keyword}
                     </button>
                   ))}
                 </div>
               ) : null}
-              {emojiOpen ? (
-                <div className="absolute inset-x-2 bottom-full z-20 mb-1 max-h-40 overflow-y-auto rounded-xl border border-[#e6e8ee] bg-white p-2 shadow-lg">
-                  <div className="grid grid-cols-12 gap-0.5 text-base">
-                    {FULL_EMOJIS.map((emoji) => (
-                      <button key={`full-${emoji}`} type="button" className="rounded hover:bg-[#f3f4f6]" onClick={() => setDraft((value) => `${value}${emoji}`)}>{emoji}</button>
-                    ))}
-                  </div>
+              <div className="flex items-start gap-2">
+                <div className="grid shrink-0 gap-0" style={{ gridTemplateColumns: "repeat(14, 32px)" }}>
+                  {QUICK_EMOJIS.map((emoji) => (
+                    <button key={emoji} type="button" className="grid h-8 w-8 place-items-center text-[20px] leading-none" onClick={() => insertAtCursor(emoji)}>{emoji}</button>
+                  ))}
+                  <button type="button" aria-label="Más emojis" title="Más emojis" className="grid h-8 w-8 place-items-center text-xs text-[#2456c7]" onClick={() => toggle("emojis")}>+</button>
                 </div>
-              ) : null}
-              <div className="mb-1 max-h-16 overflow-y-auto">
-                <div className="grid grid-cols-12 gap-0.5 text-base leading-none">
-                  {emojiRows(QUICK_EMOJIS).flat().map((emoji) => (
-                    <button key={emoji} type="button" className="rounded hover:bg-[#f3f4f6]" onClick={() => setDraft((value) => `${value}${emoji}`)}>{emoji}</button>
+                <div className="ml-auto flex shrink-0 gap-1">
+                  <button type="button" aria-label="Guiones" title="Guiones" className="flex h-9 items-center gap-1 rounded-lg border border-[#e6e8ee] px-2 text-xs" onClick={() => toggle("guiones")}><ScrollText className="h-4 w-4" />Guiones</button>
+                  <button type="button" aria-label="Programar" title="Programar" className="grid h-9 w-9 place-items-center rounded-lg border border-[#e6e8ee]" onClick={() => toggle("programar")}><Clock className="h-6 w-6" /></button>
+                </div>
+              </div>
+              <div className="my-2 border-t border-[#e6e8ee]" />
+              {draftPrice != null ? <p className="mb-1 text-xs font-medium text-[#8a5a12]">PPV ${(draftPrice / 100).toFixed(2)}</p> : null}
+              {attachments.length > 0 ? (
+                <div className="mb-1 flex gap-2 overflow-x-auto">
+                  {attachments.map((file) => (
+                    <figure key={file.url} className="shrink-0">
+                      {file.kind === "video" ? <video src={file.url} className="h-14 w-14 rounded object-cover" /> : <img src={file.url} alt="" className="h-14 w-14 rounded object-cover" />}
+                      <figcaption className="max-w-14 truncate text-[10px] text-[#8a5a12]">Pendiente</figcaption>
+                    </figure>
                   ))}
                 </div>
-              </div>
-              {scheduleOpen ? (
-                <div className="mb-1 flex flex-wrap items-center gap-2">
-                  <input type="datetime-local" aria-label="Fecha programada" value={scheduleAt} onChange={(event) => setScheduleAt(event.target.value)} className="h-8 rounded border border-[#e6e8ee] px-2 text-xs" />
-                  <button
-                    type="button"
-                    disabled={!draft.trim() || !scheduleAt || !selected}
-                    onClick={() => {
-                      if (!selected || !draft.trim() || !scheduleAt) return;
-                      const body = draft.trim();
-                      const price = draftPrice;
-                      const when = new Date(scheduleAt).toISOString();
-                      setDraft("");
-                      setDraftPrice(null);
-                      setScheduleAt("");
-                      setScheduleOpen(false);
-                      void recordChatOutbound({
-                        data: {
-                          creatorId: selected.creatorId,
-                          fanKey: selected.fanKey,
-                          threadKey: selected.threadKey,
-                          body,
-                          priceCents: price,
-                          ofMessageKey: null,
-                          scheduledAt: when,
-                        },
-                      }).then(() => refresh()).catch((err: unknown) => setError(sessionErrorText(err)));
-                    }}
-                    className="rounded border border-[#e6e8ee] px-2 py-1 text-xs disabled:opacity-50"
-                  >
-                    Guardar programado
-                  </button>
-                </div>
               ) : null}
-              <div className="mb-1 flex justify-end">
-                <button type="button" className="rounded px-2 py-0.5 text-xs text-[#2456c7]" aria-label="Programar" onClick={() => setScheduleOpen((open) => !open)}>Calendario</button>
-                <button type="button" className="rounded px-2 py-0.5 text-xs text-[#2456c7]" onClick={() => setScriptOpen((open) => !open)}>Guiones</button>
-                <button type="button" className="rounded px-2 py-0.5 text-xs text-[#2456c7]" onClick={() => setEmojiOpen((open) => !open)}>{emojiOpen ? "Cerrar emojis" : "Más emojis"}</button>
-              </div>
-              <div className="flex flex-wrap items-end gap-2">
-                <textarea ref={draftBox} value={draft} onChange={(event) => setDraft(event.target.value)} rows={2} placeholder="Escribe un mensaje" className="min-h-12 min-w-48 flex-1 resize-none rounded-xl border border-[#e6e8ee] px-3 py-2 text-sm" />
-                <input value={draftPrice == null ? "" : (draftPrice / 100).toFixed(2)} onChange={(event) => setDraftPrice(event.target.value.trim() === "" ? null : Math.round(Number(event.target.value) * 100))} placeholder="Precio $" aria-label="Precio" className="h-10 w-24 rounded-xl border border-[#e6e8ee] px-2 text-sm" />
-              </div>
-              <div className="mt-1 flex flex-wrap items-center gap-1 text-xs">
-                <button type="button" disabled title="Envío real desactivado" className="shrink-0 rounded border border-[#e6e8ee] px-2 py-1 text-[#b0b6c2]">Almacén</button>
-                <button type="button" disabled title="Envío real desactivado" className="shrink-0 rounded border border-[#e6e8ee] px-2 py-1 text-[#b0b6c2]">GIF</button>
-                <button type="button" disabled title="Envío real desactivado" className="shrink-0 rounded border border-[#e6e8ee] px-2 py-1 text-[#b0b6c2]">Galería</button>
-                <span className="shrink-0 rounded bg-[#fff6e8] px-2 py-1 text-[#8a5a12]">{draftPrice == null ? "PPV" : `PPV $${(draftPrice / 100).toFixed(2)}`}</span>
-                <button type="button" className="shrink-0 rounded border border-[#e6e8ee] px-2 py-1" onClick={() => setDraft((value) => `${value}${mentionToken(selected?.fanHandle ?? null)}`)}>@</button>
-                <button type="button" aria-label="Formato" className="shrink-0 rounded border border-[#e6e8ee] px-2 py-1" onClick={() => {
-                  const node = draftBox.current;
-                  const next = wrapSelection(draft, node?.selectionStart ?? draft.length, node?.selectionEnd ?? draft.length, "*");
-                  setDraft(next.value);
-                }}>Aa</button>
-                <button type="button" disabled title="Sin datos" className="shrink-0 rounded border border-[#e6e8ee] px-2 py-1 text-[#b0b6c2]">Traducción</button>
-                <button
-                  type="button"
-                  disabled={!draft.trim()}
-                  onClick={() => {
-                    if (!selected || !draft.trim()) return;
-                    const body = draft.trim();
-                    const price = draftPrice;
-                    setDraft("");
-                    setDraftPrice(null);
-                    void recordChatOutbound({
-                      data: {
-                        creatorId: selected.creatorId,
-                        fanKey: selected.fanKey,
-                        threadKey: selected.threadKey,
-                        body,
-                        priceCents: price,
-                        ofMessageKey: null,
-                        scheduledAt: null,
-                      },
-                    }).then(() => refresh()).catch((err: unknown) => {
-                      setDraft(body);
-                      setError(sessionErrorText(err));
-                    });
-                  }}
-                  className="shrink-0 rounded-full border border-[#e6e8ee] px-3 py-1 disabled:opacity-50"
-                >
-                  Dejar pendiente
-                </button>
-                <button type="button" disabled title="Envío real desactivado" aria-label="Enviar" className="shrink-0 rounded-full bg-[#d7dbe3] px-3 py-1 text-white">
-                  {sendEnabled ? "Enviar" : "Envío real desactivado"}
-                </button>
+              <textarea ref={draftBox} value={draft} onChange={(event) => setDraft(event.target.value)} rows={2} placeholder="Pulsa / + palabra para buscar guiones" className={`min-h-12 w-full resize-none rounded-xl border border-[#e6e8ee] px-3 py-2 ${textSize === "sm" ? "text-xs" : textSize === "lg" ? "text-base" : "text-sm"}`} />
+              <div className="mt-2 flex items-center gap-1">
+                <ToolButton label="Almacén" title="Almacén" onClick={() => toggle("almacen")}><Vault className="h-6 w-6" /></ToolButton>
+                <ToolButton label="GIF" title="GIF" onClick={() => toggle("gif")}><span className="text-[11px] font-semibold">GIF</span></ToolButton>
+                <ToolButton label="Galería" title="Galería" onClick={() => toggle("galeria")}><ImagePlus className="h-6 w-6" /></ToolButton>
+                <ToolButton label="Precio" title="Precio" onClick={() => { setPriceDraft(draftPrice == null ? "" : (draftPrice / 100).toFixed(2)); toggle("precio"); }}><DollarSign className="h-6 w-6" /></ToolButton>
+                <ToolButton label="Mención" title="Mención" onClick={() => toggle("mencion")}><AtSign className="h-6 w-6" /></ToolButton>
+                <ToolButton label="Formato" title="Formato" onClick={() => toggle("formato")}><Type className="h-6 w-6" /></ToolButton>
+                <ToolButton label="Traducción" title="Traducción" onClick={() => toggle("traduccion")}><Languages className="h-6 w-6" /></ToolButton>
+                <button type="button" disabled={!draft.trim()} onClick={() => savePending(null)} className="ml-auto shrink-0 rounded-full border border-[#e6e8ee] px-3 py-2 text-sm disabled:opacity-50">Dejar pendiente</button>
+                <button type="button" disabled title="Envío real desactivado" aria-label="Enviar" className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#3b6cff] text-white disabled:opacity-60"><Send className="h-5 w-5" /></button>
               </div>
             </form>
       </section>
@@ -427,6 +492,32 @@ function InsightPane({
       creatorNote={thread.fanKey ? (notes.find((item) => item.creatorId === thread.creatorId && item.fanKey === thread.fanKey) ?? null) : null}
       onCreatorNote={onCreatorNote}
     />
+  );
+}
+
+type ComposerPanel = "guiones" | "programar" | "almacen" | "gif" | "galeria" | "precio" | "mencion" | "formato" | "traduccion" | "emojis" | null;
+
+function panelLabel(panel: Exclude<ComposerPanel, null>): string {
+  const names: Record<Exclude<ComposerPanel, null>, string> = {
+    guiones: "Panel Guiones",
+    programar: "Panel Programar",
+    almacen: "Panel Almacén",
+    gif: "Panel GIF",
+    galeria: "Panel Galería",
+    precio: "Panel Precio",
+    mencion: "Panel Mención",
+    formato: "Panel Formato",
+    traduccion: "Panel Traducción",
+    emojis: "Panel Emojis",
+  };
+  return names[panel];
+}
+
+function ToolButton({ label, title, onClick, children }: { label: string; title: string; onClick: () => void; children: ReactNode }) {
+  return (
+    <button type="button" aria-label={label} title={title} onClick={onClick} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-[#1c2333] hover:bg-[#f3f4f6]">
+      {children}
+    </button>
   );
 }
 
