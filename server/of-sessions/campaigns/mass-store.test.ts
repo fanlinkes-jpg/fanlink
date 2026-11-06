@@ -10,7 +10,17 @@ import {
   type MassSnapshot,
 } from "../../../src/lib/mass/index.ts";
 import type { ReadSql } from "../sync/store.ts";
-import { readMassDraft, saveMassDraft } from "./mass-store.ts";
+import {
+  MassAccessError,
+  MassConflictError,
+  MassTransitionError,
+  openMassLaunch,
+  readMassDraft,
+  saveMassDraft,
+  updateMassStatus,
+} from "./mass-store.ts";
+
+const OWNER = { role: "owner" as const, perms: [] as const };
 
 test("el borrador se guarda y se vuelve a leer, y el dry-run sigue sin enviar", async () => {
   const pg = new PGlite();
@@ -50,8 +60,30 @@ test("el borrador se guarda y se vuelve a leer, y el dry-run sigue sin enviar", 
     });
     assert.equal(composed.ok, true);
     if (!composed.ok) return;
-    await saveMassDraft(sql, composed.draft);
-    await saveMassDraft(sql, { ...composed.draft, id: "mass-2", name: "Otro" });
+    await saveMassDraft(sql, composed.draft, OWNER);
+    const again = await saveMassDraft(
+      sql,
+      { ...composed.draft, id: "mass-2" },
+      OWNER,
+    );
+    assert.equal(again.id, "mass-1");
+    await assert.rejects(
+      () =>
+        saveMassDraft(
+          sql,
+          { ...composed.draft, id: "mass-3", name: "Otro" },
+          OWNER,
+        ),
+      MassConflictError,
+    );
+    await assert.rejects(
+      () =>
+        saveMassDraft(sql, composed.draft, {
+          role: "member",
+          perms: ["campanas"],
+        }),
+      MassAccessError,
+    );
     const stored = await readMassDraft(sql, "mass-1");
     const duplicate = await readMassDraft(sql, "mass-2");
     assert.equal(duplicate, null);
@@ -97,12 +129,57 @@ test("el borrador se guarda y se vuelve a leer, y el dry-run sigue sin enviar", 
       draft: stored ?? composed.draft,
       snapshot,
       now: new Date("2026-11-06T10:00:00.000Z"),
+      actor: OWNER,
       env: {},
     });
     assert.equal(run.delivered, false);
     assert.equal(run.network, "sin-llamada");
     assert.equal(run.queue[0]?.text, "Hola *Ana*");
     assert.equal(run.queue[0]?.priceCents, 300);
+
+    const raced = {
+      ...composed.draft,
+      id: "race-1",
+      idempotencyKey: "carrera",
+    };
+    const [left, right] = await Promise.all([
+      saveMassDraft(sql, raced, OWNER),
+      saveMassDraft(sql, { ...raced, id: "race-2" }, OWNER),
+    ]);
+    assert.equal(left.id, right.id);
+    const races = await sql.query<{ total: number }>(
+      "select count(*)::int as total from of_mass_message where idempotency_key = $1",
+      ["carrera"],
+    );
+    assert.equal(Number(races[0]?.total), 1);
+
+    await assert.rejects(
+      () => updateMassStatus(sql, "mass-1", "sent", OWNER),
+      MassTransitionError,
+    );
+    const opened = await openMassLaunch(sql, {
+      draftId: "mass-1",
+      actor: OWNER,
+      now: new Date("2026-11-06T10:00:00.000Z"),
+      createToken: () => "tok",
+    });
+    await assert.rejects(
+      () =>
+        saveMassDraft(sql, composed.draft, OWNER, {
+          token: "tok",
+          now: new Date(opened.expiresAt + 5),
+        }),
+      MassTransitionError,
+    );
+    const sent = await saveMassDraft(sql, composed.draft, OWNER, {
+      token: opened.token,
+      now: new Date("2026-11-06T10:00:00.000Z"),
+    });
+    assert.equal(sent.status, "sent");
+    await assert.rejects(
+      () => updateMassStatus(sql, "mass-1", "retry", OWNER),
+      MassTransitionError,
+    );
   } finally {
     await pg.close();
   }

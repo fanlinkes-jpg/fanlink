@@ -26,13 +26,14 @@ export type {
 } from "./types.ts";
 export { formattedText, parseMarkup, personalize, plainText } from "./text.ts";
 export {
-  LAUNCH_PHRASE,
+  LAUNCH_TOKEN_TTL_MS,
   MASS_PERMISSION,
+  beginMassLaunch,
   canCreateMass,
   canLaunchMass,
   confirmMassLaunch,
 } from "./access.ts";
-export type { MassActor } from "./access.ts";
+export type { LaunchChallenge, MassActor } from "./access.ts";
 export {
   MASS_ALLOW_ACCOUNTS,
   MASS_SEND_FLAG,

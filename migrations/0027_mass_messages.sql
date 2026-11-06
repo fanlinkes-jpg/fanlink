@@ -19,6 +19,8 @@ create table if not exists of_mass_message (
   exclude_bought boolean not null default false,
   status text not null default 'draft',
   flag text,
+  launch_token text,
+  launch_token_expires_at timestamptz,
   created_at timestamptz not null default now(),
   constraint of_mass_message_idem_uniq unique (creator_id, idempotency_key),
   constraint of_mass_message_status_chk check (status in ('draft', 'scheduled', 'held', 'cancelled', 'sent', 'retry')),

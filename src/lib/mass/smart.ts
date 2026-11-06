@@ -31,8 +31,10 @@ export function suggestPrice(
 export function bestSendHour(
   messages: readonly MassHistoryMessage[] | null,
   fanKeys: readonly string[],
-): { hourUtc: number; samples: number } | SinDatos {
-  if (messages == null) return SIN_DATOS;
+  timeZone: string | null,
+): { hour: number; timeZone: string; samples: number } | SinDatos {
+  if (messages == null || timeZone == null) return SIN_DATOS;
+  if (hourInZone(0, timeZone) == null) return SIN_DATOS;
   const wanted = new Set(fanKeys);
   const counts = new Map<number, number>();
   let samples = 0;
@@ -45,7 +47,8 @@ export function bestSendHour(
       continue;
     const time = Date.parse(message.sentAt);
     if (!Number.isFinite(time)) continue;
-    const hour = new Date(time).getUTCHours();
+    const hour = hourInZone(time, timeZone);
+    if (hour == null) continue;
     counts.set(hour, (counts.get(hour) ?? 0) + 1);
     samples += 1;
   }
@@ -58,7 +61,22 @@ export function bestSendHour(
       bestCount = count;
     }
   }
-  return { hourUtc: bestHour, samples };
+  return { hour: bestHour, timeZone, samples };
+}
+
+function hourInZone(time: number, timeZone: string): number | null {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hourCycle: "h23",
+      hour: "2-digit",
+    }).formatToParts(new Date(time));
+    const raw = Number(parts.find((part) => part.type === "hour")?.value);
+    if (!Number.isFinite(raw)) return null;
+    return raw === 24 ? 0 : raw;
+  } catch {
+    return null;
+  }
 }
 
 function validPpv(cents: number | null): cents is number {

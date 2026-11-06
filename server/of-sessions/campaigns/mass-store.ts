@@ -1,11 +1,23 @@
+import {
+  beginMassLaunch as issueLaunchChallenge,
+  canCreateMass,
+  confirmMassLaunch,
+  type MassActor,
+} from "../../../src/lib/mass/access.ts";
+import { canTransitionMass } from "../../../src/lib/mass/status.ts";
 import { knownMark } from "../../../src/lib/mass/text.ts";
 import type {
   MassDraft,
   MassMedia,
+  MassStatus,
   TextMark,
   TextRun,
 } from "../../../src/lib/mass/types.ts";
 import type { ReadSql } from "../sync/store.ts";
+
+export class MassAccessError extends Error {}
+export class MassConflictError extends Error {}
+export class MassTransitionError extends Error {}
 
 type MassRow = {
   id: string;
@@ -27,13 +39,31 @@ type MassRow = {
   exclude_bought: boolean | string;
   status: string;
   flag: string | null;
+  launch_token: string | null;
+  launch_token_expires_at: Date | string | null;
 };
 
-/** Guarda el borrador. La misma clave de la cuenta no crea otra fila. No envía. */
+/** Guarda el borrador. La misma clave y el mismo contenido devuelven la fila. Otro contenido es conflicto. No envía. */
 export async function saveMassDraft(
   sql: ReadSql,
   draft: MassDraft,
+  actor: MassActor | null,
+  launch?: { token: string; now: Date },
 ): Promise<MassDraft> {
+  if (!canCreateMass(actor)) {
+    throw new MassAccessError("No tienes permiso para los masivos.");
+  }
+  if (launch)
+    return commitLaunch(sql, draft.id, actor, launch.token, launch.now);
+  if (
+    draft.status !== "draft" &&
+    draft.status !== "scheduled" &&
+    draft.status !== "held"
+  ) {
+    throw new MassTransitionError(
+      "Ese estado solo se alcanza con una transición.",
+    );
+  }
   const preview = draft.media
     .filter((item) => item.preview)
     .map((item) => item.vaultId);
@@ -77,6 +107,78 @@ export async function saveMassDraft(
     draft.idempotencyKey,
   );
   if (!stored) throw new Error("No se ha podido guardar el masivo.");
+  if (!sameContent(stored, draft)) {
+    throw new MassConflictError(
+      "La clave de idempotencia ya guarda otro masivo.",
+    );
+  }
+  return stored;
+}
+
+export async function openMassLaunch(
+  sql: ReadSql,
+  input: {
+    draftId: string;
+    actor: MassActor | null;
+    now: Date;
+    ttlMs?: number;
+    createToken?: () => string;
+  },
+): Promise<{ token: string; expiresAt: number }> {
+  const current = await readMassDraft(sql, input.draftId);
+  if (!current) throw new MassTransitionError("No está el masivo.");
+  if (!canTransitionMass(current.status, "sent")) {
+    throw new MassTransitionError("Transición no permitida.");
+  }
+  const issued = issueLaunchChallenge(input);
+  if (!issued.ok) throw new MassAccessError(issued.reason);
+  const rows = await sql.query<{ id: string }>(
+    `update of_mass_message
+     set launch_token = $2, launch_token_expires_at = $3
+     where id = $1 and status = $4
+     returning id`,
+    [
+      input.draftId,
+      issued.challenge.token,
+      new Date(issued.challenge.expiresAt).toISOString(),
+      current.status,
+    ],
+  );
+  if (!rows.length)
+    throw new MassTransitionError("No se ha podido abrir la confirmación.");
+  return {
+    token: issued.challenge.token,
+    expiresAt: issued.challenge.expiresAt,
+  };
+}
+
+export async function updateMassStatus(
+  sql: ReadSql,
+  id: string,
+  to: MassStatus,
+  actor: MassActor | null,
+  options?: { confirmed?: boolean },
+): Promise<MassDraft> {
+  if (!canCreateMass(actor))
+    throw new MassAccessError("No tienes permiso para los masivos.");
+  if (to === "sent" && !options?.confirmed) {
+    throw new MassTransitionError("Enviar exige la segunda confirmación.");
+  }
+  const current = await readMassDraft(sql, id);
+  if (!current) throw new MassTransitionError("No está el masivo.");
+  if (!canTransitionMass(current.status, to)) {
+    throw new MassTransitionError("Transición no permitida.");
+  }
+  const rows = await sql.query<{ id: string }>(
+    `update of_mass_message
+     set status = $2, launch_token = null, launch_token_expires_at = null
+     where id = $1 and status = $3
+     returning id`,
+    [id, to, current.status],
+  );
+  if (!rows.length) throw new MassTransitionError("Transición no permitida.");
+  const stored = await readMassDraft(sql, id);
+  if (!stored) throw new MassTransitionError("No está el masivo.");
   return stored;
 }
 
@@ -134,6 +236,58 @@ function rowToDraft(row: MassRow): MassDraft {
     idempotencyKey: row.idempotency_key,
     flag: row.flag ?? undefined,
   };
+}
+
+async function commitLaunch(
+  sql: ReadSql,
+  id: string,
+  actor: MassActor | null,
+  token: string,
+  now: Date,
+): Promise<MassDraft> {
+  const rows = await sql.query<MassRow>(
+    "select * from of_mass_message where id = $1",
+    [id],
+  );
+  const row = rows[0];
+  const expires =
+    row?.launch_token_expires_at == null
+      ? null
+      : new Date(row.launch_token_expires_at).getTime();
+  const check = confirmMassLaunch({
+    actor,
+    draftId: id,
+    token,
+    challenge:
+      row?.launch_token && expires != null && Number.isFinite(expires)
+        ? { draftId: id, token: row.launch_token, expiresAt: expires }
+        : null,
+    now,
+  });
+  if (!check.ok) throw new MassTransitionError(check.reason);
+  return updateMassStatus(sql, id, "sent", actor, { confirmed: true });
+}
+
+function sameContent(stored: MassDraft, draft: MassDraft): boolean {
+  return contentKey(stored) === contentKey(draft);
+}
+
+function contentKey(draft: MassDraft): string {
+  return JSON.stringify({
+    accountId: draft.accountId,
+    name: draft.name,
+    body: draft.body,
+    priceCents: draft.priceCents,
+    media: draft.media,
+    scheduledAt: draft.scheduledAt,
+    segment: draft.segment,
+    unsendAfterHours: draft.unsendAfterHours,
+    followUp: draft.followUp,
+    rotate: draft.rotate,
+    excludeBought: draft.excludeBought,
+    status: draft.status,
+    idempotencyKey: draft.idempotencyKey,
+  });
 }
 
 function mediaFrom(vaultIds: unknown, previewIds: unknown): MassMedia[] {

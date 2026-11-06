@@ -1,3 +1,9 @@
+import {
+  canCreateMass,
+  confirmMassLaunch,
+  type LaunchChallenge,
+  type MassActor,
+} from "./access.ts";
 import { massSendGate, type MassEnv } from "./gates.ts";
 import { formattedText, personalize, plainText } from "./text.ts";
 import {
@@ -11,8 +17,9 @@ import { bestSendHour, suggestPrice } from "./smart.ts";
 import {
   followUpRecipients,
   massStats,
+  massStatsForRole,
   type MassDelivery,
-  type MassStats,
+  type VisibleMassStats,
 } from "./stats.ts";
 import type { MassDraft, MassSnapshot, SinDatos } from "./types.ts";
 import { SIN_DATOS } from "./types.ts";
@@ -39,14 +46,14 @@ export type DryRunResult = {
   }>;
   held: string[];
   suggestedPrice: { cents: number; sample: number } | SinDatos;
-  bestHourUtc: { hourUtc: number; samples: number } | SinDatos;
+  bestHour: { hour: number; timeZone: string; samples: number } | SinDatos;
   unsendAfterHours: number | null;
   followUp: {
     afterHours: number;
     text: string;
     recipients: string[] | SinDatos;
   } | null;
-  stats: MassStats;
+  stats: VisibleMassStats;
   quota: {
     maxPerHour: number;
     maxPerDay: number;
@@ -61,19 +68,37 @@ export function dryRunMass(input: {
   draft: MassDraft;
   snapshot: MassSnapshot;
   now: Date;
+  actor: MassActor | null;
   env?: MassEnv;
   pace?: PaceLimits;
   stopWords?: readonly string[];
   deliveries?: readonly MassDelivery[] | null;
+  launch?: { token: string; challenge: LaunchChallenge | null };
 }): DryRunResult {
   const env = input.env ?? {};
   const gate = massSendGate(input.draft.accountId, env);
   const pace = input.pace ?? DEFAULT_PACE;
   const errors: string[] = [];
-  const stats = massStats({
-    createdBy: input.draft.createdBy,
-    deliveries: input.deliveries ?? null,
-  });
+  const stats = massStatsForRole(
+    massStats({
+      createdBy: input.draft.createdBy,
+      deliveries: input.deliveries ?? null,
+    }),
+    input.actor?.role === "owner" ? "owner" : "member",
+  );
+  if (!canCreateMass(input.actor)) {
+    return blocked(gate, ["No tienes permiso para los masivos."], stats, pace);
+  }
+  if (input.launch) {
+    const launch = confirmMassLaunch({
+      actor: input.actor,
+      draftId: input.draft.id,
+      token: input.launch.token,
+      challenge: input.launch.challenge,
+      now: input.now,
+    });
+    if (!launch.ok) return blocked(gate, [launch.reason], stats, pace);
+  }
   if (input.draft.accountId !== input.snapshot.accountId)
     errors.push("La cuenta del masivo y la del snapshot no coinciden.");
   if (!validPace(pace)) errors.push("El ritmo de la cuenta no es válido.");
@@ -114,7 +139,11 @@ export function dryRunMass(input: {
 
   const fanKeys = candidates.map((fan) => fan.fanKey);
   const suggestedPrice = suggestPrice(input.snapshot.messages, fanKeys);
-  const bestHourUtc = bestSendHour(input.snapshot.messages, fanKeys);
+  const bestHour = bestSendHour(
+    input.snapshot.messages,
+    fanKeys,
+    input.snapshot.timeZone,
+  );
 
   if (segment.blockers.length > 0) {
     return {
@@ -127,7 +156,7 @@ export function dryRunMass(input: {
       excluded,
       skippedMissing: segment.skippedMissing,
       suggestedPrice,
-      bestHourUtc,
+      bestHour,
       unsendAfterHours: input.draft.unsendAfterHours,
       followUp: followUpOf(input.draft, input.deliveries ?? null),
       quota: quotaOf(pace, {
@@ -135,6 +164,34 @@ export function dryRunMass(input: {
         sentLastDay: SIN_DATOS,
         slots: [],
         held: [],
+      }),
+    };
+  }
+
+  if (input.snapshot.sendUsage == null || input.snapshot.timeZone == null) {
+    const missing = [
+      input.snapshot.sendUsage == null ? "Sin datos: uso de envío" : null,
+      input.snapshot.timeZone == null ? "Sin datos: zona horaria" : null,
+    ].filter((item): item is string => item != null);
+    return {
+      ...base(gate, stats),
+      ok: false,
+      status: "sin_datos",
+      errors: missing,
+      warnings: segment.warnings,
+      audience: segment.audience,
+      excluded,
+      skippedMissing: segment.skippedMissing,
+      held: fanKeys,
+      suggestedPrice,
+      bestHour,
+      unsendAfterHours: input.draft.unsendAfterHours,
+      followUp: followUpOf(input.draft, input.deliveries ?? null),
+      quota: quotaOf(pace, {
+        sentLastHour: input.snapshot.sendUsage?.sentLastHour ?? SIN_DATOS,
+        sentLastDay: input.snapshot.sendUsage?.sentLastDay ?? SIN_DATOS,
+        slots: [],
+        held: fanKeys,
       }),
     };
   }
@@ -184,7 +241,7 @@ export function dryRunMass(input: {
     queue,
     held: plan.held,
     suggestedPrice,
-    bestHourUtc,
+    bestHour,
     unsendAfterHours: input.draft.unsendAfterHours,
     followUp: followUpOf(input.draft, input.deliveries ?? null),
     quota: quotaOf(pace, plan),
@@ -232,7 +289,7 @@ function quotaOf(
   };
 }
 
-function base(gate: ReturnType<typeof massSendGate>, stats: MassStats) {
+function base(gate: ReturnType<typeof massSendGate>, stats: VisibleMassStats) {
   return {
     delivered: false as const,
     mode: "dry-run" as const,
@@ -254,7 +311,7 @@ function base(gate: ReturnType<typeof massSendGate>, stats: MassStats) {
 function blocked(
   gate: ReturnType<typeof massSendGate>,
   errors: string[],
-  stats: MassStats,
+  stats: VisibleMassStats,
   pace: PaceLimits,
 ): DryRunResult {
   const missing = errors.some((error) => error.startsWith("Sin datos"));
@@ -271,7 +328,7 @@ function blocked(
     excluded: [],
     skippedMissing: [],
     suggestedPrice: SIN_DATOS,
-    bestHourUtc: SIN_DATOS,
+    bestHour: SIN_DATOS,
     unsendAfterHours: null,
     followUp: null,
     quota: quotaOf(pace, {

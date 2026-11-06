@@ -9,7 +9,7 @@ El borrador antiguo de Campañas (`of_campaign_draft`) sigue igual. Esta fase no
 - No firma peticiones ni llama a la API de OnlyFans.
 - No lee ni escribe la clave de cifrado de la sesión.
 - El envío real está apagado. Hace falta `FANLINK_ENABLE_SEND=true`, `FANLINK_ENABLE_MASS_SEND=true` y que la cuenta esté en `FANLINK_SEND_ALLOW_ACCOUNTS` (ids separados por comas). Cualquier otro valor deja la compuerta cerrada.
-- Lanzarlo, además, lo confirma un admin dos veces: el id del masivo y la frase `ENVIAR MASIVO`. Crear el borrador lo puede hacer la dueña o quien tenga el permiso `masivos`.
+- Lanzarlo son dos peticiones de un admin. La primera guarda un token que caduca a los dos minutos. La segunda lo presenta. Sin ese token, o si caducó, el estado no pasa a `sent`. Crear el borrador lo puede hacer la dueña o quien tenga el permiso `masivos`.
 - Aunque la compuerta se abra, `dryRunMass` devuelve `delivered: false` y `network: "sin-llamada"`. No hay transporte.
 
 ## Modelo
@@ -47,15 +47,16 @@ Los colores de gasto son los de `src/lib/spend-tiers.ts`: 0 gris, hasta 50 USD v
 
 1. `composeMass` valida texto, media, precio, horario, unsend, follow-up y que haya una audiencia. Sin audiencia explícita (`includeAll` u otro filtro) no hay borrador.
 2. `resolveSegment` cruza la audiencia. Todas las condiciones de entrada se suman. Luego se restan exclusiones manuales, listas, quien ya compró ese medio y quien ya lo recibió.
-3. `suggestPrice` mira los PPV comprados del segmento (mediana, redondeada al dólar, dentro de 3–200). `bestSendHour` mira la hora UTC en la que escriben esos fans. Si no hay casos, «Sin datos». No se propone una hora ni un precio por defecto.
-4. `buildQueue` ordena a ritmo humano: pausa de 45–90 s según el fan, tope de 30 por hora y 200 por día, en la zona horaria de la cuenta. Es una política de Fanlink, no un cupo medido. Si no hay uso sincronizado o no hay zona, no se coloca a nadie: no se supone que el uso es 0. Los fans repetidos se quedan una sola vez. Lo que pasa del tope del día queda en espera; no se programa al día siguiente.
-5. `dryRunMass` devuelve la vista. `massStats` solo cuenta un registro de entregas. La longitud de la cola no es «enviados».
+3. `suggestPrice` mira los PPV comprados del segmento (mediana, redondeada al dólar, dentro de 3–200). `bestSendHour` usa la zona horaria de la cuenta. Sin zona o sin mensajes del fan, «Sin datos». No se propone una hora ni un precio por defecto.
+4. `buildQueue` ordena a ritmo humano: pausa de 45–90 s según el fan, tope de 30 por hora y 200 por día, en la zona horaria de la cuenta. Es una política de Fanlink, no un cupo medido. Si no hay uso sincronizado o no hay zona, el dry-run queda en `sin_datos` y no coloca a nadie: no se supone que el uso es 0. Los fans repetidos se quedan una sola vez. Lo que pasa del tope del día queda en espera; no se programa al día siguiente.
+5. `dryRunMass` devuelve la vista. Quien no tiene permiso `masivos` (ni es la dueña) queda rechazado. `massStatsForRole` oculta ingresos y buy rate a un chatter. La longitud de la cola no es «enviados».
 
-Si falta un dato necesario para no pasarse de audiencia, la cola queda vacía y el estado es `sin_datos`:
+Si falta un dato necesario, el estado es `sin_datos` y la cola no se da por lista:
 
 - Pedir una lista de OnlyFans sin catálogo.
 - Adjuntar media sin la bóveda cargada, o sin saber quién recibió o compró ese medio (rotación y exclusión activas).
 - Un filtro de gasto, actividad o compra donde nadie se puede clasificar.
+- No hay uso de envío sincronizado, o no hay zona horaria de la cuenta. `snapshotFromSynced` los deja en null porque el CRM no guarda ni la zona ni el cupo de masivos. No se rellenan con `Europe/Madrid` ni con cero.
 
 Un fan concreto sin ese campo se omite y se lista. No se le trata como si gastara 0 o llevara días sin entrar.
 
@@ -63,8 +64,23 @@ Un fan concreto sin ese campo se omite y se lista. No se le trata como si gastar
 
 1. **Esta.** Modelo, compositor, segmentos, planes (precio, hora, unsend, follow-up, rotación) y dry-run. Tabla `of_mass_message`. Tests de dominio.
 2. **Pantalla.** Sustituir el borrador de Campañas por este modelo, sin activar el envío.
-3. **Transporte.** Reutilizar el conector que apruebe el envío 1 a 1. Este módulo no llama a la API. Unsend y follow-up solo se ejecutan con la compuerta abierta y la cuenta en la allowlist.
+3. **Transporte.** Reutilizar el conector que apruebe el envío 1 a 1. Este módulo no llama a la API. Unsend y follow-up solo se ejecutan con la compuerta abierta y la cuenta en la allowlist. El reintento no reenvía a quien ya recibió el masivo: hace falta una fila por destinatario, descrita abajo. No se crea en esta fase (las migraciones `0028` y `0029` están reservadas a otro PR).
 4. **Cifras vivas.** Vistos, compras e ingresos cuando el sync los ate a ese masivo. Hasta entonces la ficha muestra «Sin datos».
+
+## Reintento por destinatario (fase 3)
+
+Hoy el estado `retry` es del masivo entero. Reenviar el masivo volvería a tocar a quien ya lo compró o ya lo recibió. En la fase 3 cada destinatario tendrá su propia fila, todavía sin tabla:
+
+| Campo                 | Uso                                                                  |
+| --------------------- | -------------------------------------------------------------------- |
+| `mass_id` + `fan_key` | Una fila por fan. Clave primaria.                                    |
+| `state`               | `pendiente`, `enviado`, `fallido` u `omitido`.                       |
+| `attempt`             | Cuántas veces se intentó con ese fan.                                |
+| `sent_at`             | Cuándo quedó `enviado`. Vacío si no salió.                           |
+| `content_hash`        | El mensaje que se le mandó, para no repetirlo si el borrador cambia. |
+| `last_error`          | El fallo del último intento. Vacío si no hubo.                       |
+
+Pasar el masivo a `retry` solo vuelve a encolar `state = fallido` por debajo del tope de intentos. Quien está `enviado` u `omitido` no sale otra vez. El transporte lee esa tabla; no recorre de nuevo la audiencia entera. Esta fase no crea la tabla ni escribe esas filas.
 
 ## Estadísticas
 

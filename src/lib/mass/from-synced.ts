@@ -27,7 +27,9 @@ export type SyncedPurchaseRow = {
 
 /**
  * Arma el snapshot con lo que el CRM ya guardó.
- * Las listas de OnlyFans, el uso de envío y qué medio iba en cada mensaje no están en ese sync: quedan en null.
+ * Las listas de OnlyFans, el medio de cada mensaje, la zona de la cuenta y
+ * cuántos masivos lleva hoy no están en ese sync: quedan en null. El dry-run
+ * con esa foto sale `sin_datos` y no finge que el uso es 0 ni que la zona es UTC.
  */
 export function snapshotFromSynced(input: {
   accountId: string;

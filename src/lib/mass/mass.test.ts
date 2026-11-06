@@ -7,8 +7,8 @@ import { fanProfiles } from "../fan-metrics.ts";
 import { spendTone } from "../spend-tiers.ts";
 import {
   FAN_WHALE_CENTS,
-  LAUNCH_PHRASE,
   SIN_DATOS,
+  beginMassLaunch,
   bestSendHour,
   buildQueue,
   canCreateMass,
@@ -24,10 +24,13 @@ import {
   spendBand,
   suggestPrice,
   textoIngresos,
+  type MassActor,
   type MassDraft,
   type MassFan,
   type MassSnapshot,
 } from "./index.ts";
+
+const OWNER: MassActor = { role: "owner", perms: [] };
 
 const NOW = new Date("2026-11-06T10:00:00.000Z");
 const ROOT = path.resolve(
@@ -109,7 +112,7 @@ test("una palabra prohibida retiene el borrador y el dry-run no lo cola", () => 
   assert.equal(composed.ok, true);
   if (!composed.ok) return;
   assert.equal(composed.draft.status, "held");
-  const run = dryRunMass({
+  const run = runDry({
     draft: composed.draft,
     snapshot: snapshotOf([fan("7")]),
     now: NOW,
@@ -139,7 +142,7 @@ test("el segmento usa tramo, suscripción, actividad y última compra", () => {
     }),
     fan("sin-gasto", { spentCents: null }),
   ]);
-  const run = dryRunMass({
+  const run = runDry({
     draft: mustCompose({
       segment: {
         spendTiers: ["ballena"],
@@ -177,7 +180,7 @@ test("sin listas de OnlyFans el segmento no inventa miembros", () => {
   assert.equal(snapshot.ofLists, null);
   assert.equal(snapshot.contentEvents, null);
   assert.equal(snapshot.sendUsage, null);
-  const run = dryRunMass({
+  const run = runDry({
     draft: mustCompose({
       segment: { ofListIds: ["lista-vip"] },
       rotate: false,
@@ -201,7 +204,7 @@ test("la lista sincronizada, la exclusión de compra y la rotación recortan la 
     ],
     vaultIds: ["set-1"],
   });
-  const run = dryRunMass({
+  const run = runDry({
     draft: mustCompose({
       media: [{ vaultId: "set-1", preview: false }],
       priceCents: 300,
@@ -226,7 +229,7 @@ test("sin historial de contenido no se cola un masivo con media", () => {
     vaultIds: ["set-1"],
     contentEvents: null,
   });
-  const run = dryRunMass({
+  const run = runDry({
     draft: mustCompose({
       media: [{ vaultId: "set-1", preview: false }],
       priceCents: 300,
@@ -288,8 +291,14 @@ test("el precio sugerido y la mejor hora salen del historial o dicen Sin datos",
   assert.deepEqual(suggestPrice(messages, ["7"]), { cents: 700, sample: 2 });
   assert.equal(suggestPrice(messages, ["8"]), SIN_DATOS);
   assert.equal(suggestPrice(null, ["7"]), SIN_DATOS);
-  assert.deepEqual(bestSendHour(messages, ["7", "8"]), {
-    hourUtc: 18,
+  assert.deepEqual(bestSendHour(messages, ["7", "8"], "UTC"), {
+    hour: 18,
+    timeZone: "UTC",
+    samples: 3,
+  });
+  assert.deepEqual(bestSendHour(messages, ["7", "8"], "Europe/Madrid"), {
+    hour: 19,
+    timeZone: "Europe/Madrid",
     samples: 3,
   });
   assert.deepEqual(
@@ -305,10 +314,12 @@ test("el precio sugerido y la mejor hora salen del historial o dicen Sin datos",
         },
       ],
       ["7", "8"],
+      "UTC",
     ),
-    { hourUtc: 9, samples: 4 },
+    { hour: 9, timeZone: "UTC", samples: 4 },
   );
-  assert.equal(bestSendHour([], ["7"]), SIN_DATOS);
+  assert.equal(bestSendHour([], ["7"], "UTC"), SIN_DATOS);
+  assert.equal(bestSendHour(messages, ["7"], null), SIN_DATOS);
 });
 
 test("las estadísticas no rellenan vistos, compras ni ingresos que no vienen", () => {
@@ -342,7 +353,7 @@ test("las estadísticas no rellenan vistos, compras ni ingresos que no vienen", 
 });
 
 test("el dry-run personaliza, no copia la cola en enviados y deja el follow-up sin destinatarios", () => {
-  const run = dryRunMass({
+  const run = runDry({
     draft: mustCompose({
       body: "Hola {nombre}",
       followUp: { body: "¿Lo viste?", afterHours: 24 },
@@ -368,7 +379,7 @@ test("el dry-run personaliza, no copia la cola en enviados y deja el follow-up s
 test("el flag y la allowlist siguen cerrados salvo true y la cuenta concreta, y aun así no se envía", () => {
   const draft = mustCompose({});
   const snapshot = snapshotOf([fan("7")], { messages: [] });
-  const closed = dryRunMass({
+  const closed = runDry({
     draft,
     snapshot,
     now: NOW,
@@ -379,7 +390,7 @@ test("el flag y la allowlist siguen cerrados salvo true y la cuenta concreta, y 
   });
   assert.equal(closed.gate.open, false);
   assert.equal(closed.delivered, false);
-  const missing = dryRunMass({
+  const missing = runDry({
     draft,
     snapshot,
     now: NOW,
@@ -389,7 +400,7 @@ test("el flag y la allowlist siguen cerrados salvo true y la cuenta concreta, y 
     },
   });
   assert.equal(missing.gate.open, false);
-  const sendOff = dryRunMass({
+  const sendOff = runDry({
     draft,
     snapshot,
     now: NOW,
@@ -399,7 +410,7 @@ test("el flag y la allowlist siguen cerrados salvo true y la cuenta concreta, y 
     },
   });
   assert.equal(sendOff.gate.open, false);
-  const open = dryRunMass({
+  const open = runDry({
     draft,
     snapshot: ready([fan("7")]),
     now: NOW,
@@ -517,32 +528,133 @@ test("el gasto a 30 días sigue la cobertura del perfil y no se copia del total"
   assert.equal(snapshot.sendUsage, null);
 });
 
-test("crear admite admin o el permiso masivos, y lanzar pide dos confirmaciones del admin", () => {
+test("crear admite admin o el permiso masivos, y lanzar son dos peticiones con token", () => {
   assert.equal(canCreateMass(null), false);
   assert.equal(canCreateMass({ role: "member", perms: ["campanas"] }), false);
   assert.equal(canCreateMass({ role: "member", perms: ["masivos"] }), true);
-  assert.equal(canCreateMass({ role: "owner", perms: [] }), true);
-  const half = confirmMassLaunch({
-    actor: { role: "owner", perms: [] },
+  assert.equal(canCreateMass(OWNER), true);
+  const missing = confirmMassLaunch({
+    actor: OWNER,
     draftId: "mass-1",
-    confirmDraftId: "mass-1",
-    confirmPhrase: "si",
+    token: "abc",
+    challenge: null,
+    now: NOW,
   });
-  assert.equal(half.ok, false);
+  assert.equal(missing.ok, false);
+  const started = beginMassLaunch({
+    actor: OWNER,
+    draftId: "mass-1",
+    now: NOW,
+    createToken: () => "token-1",
+  });
+  assert.equal(started.ok, true);
+  if (!started.ok) return;
   const member = confirmMassLaunch({
     actor: { role: "member", perms: ["masivos"] },
     draftId: "mass-1",
-    confirmDraftId: "mass-1",
-    confirmPhrase: LAUNCH_PHRASE,
+    token: started.challenge.token,
+    challenge: started.challenge,
+    now: NOW,
   });
   assert.equal(member.ok, false);
-  const both = confirmMassLaunch({
-    actor: { role: "owner", perms: [] },
+  const expired = confirmMassLaunch({
+    actor: OWNER,
     draftId: "mass-1",
-    confirmDraftId: "mass-1",
-    confirmPhrase: LAUNCH_PHRASE,
+    token: started.challenge.token,
+    challenge: started.challenge,
+    now: new Date(started.challenge.expiresAt + 1),
+  });
+  assert.equal(expired.ok, false);
+  const both = confirmMassLaunch({
+    actor: OWNER,
+    draftId: "mass-1",
+    token: started.challenge.token,
+    challenge: started.challenge,
+    now: NOW,
   });
   assert.equal(both.ok, true);
+});
+
+test("un chatter sin permiso no simula, y uno con permiso no ve ingresos ni buy rate", () => {
+  const draft = mustCompose({});
+  const snapshot = ready([fan("7")], {
+    messages: [],
+  });
+  const deliveries = [
+    {
+      fanKey: "7",
+      status: "enviado" as const,
+      purchased: true,
+      viewed: true,
+      priceCents: 500,
+    },
+  ];
+  const denied = dryRunMass({
+    draft,
+    snapshot,
+    now: NOW,
+    actor: { role: "member", perms: ["campanas"] },
+    env: {},
+    deliveries,
+  });
+  assert.equal(denied.ok, false);
+  assert.equal(denied.status, "bloqueado");
+  assert.equal(denied.stats.revenueCents, null);
+  assert.equal(denied.stats.buyRate, null);
+  const chatter = dryRunMass({
+    draft,
+    snapshot,
+    now: NOW,
+    actor: { role: "member", perms: ["masivos"] },
+    env: {},
+    deliveries,
+  });
+  assert.equal(chatter.ok, true);
+  assert.equal(chatter.stats.sent, 1);
+  assert.equal(chatter.stats.revenueCents, null);
+  assert.equal(chatter.stats.buyRate, null);
+  const owner = dryRunMass({
+    draft,
+    snapshot,
+    now: NOW,
+    actor: OWNER,
+    env: {},
+    deliveries,
+  });
+  assert.equal(owner.stats.revenueCents, 500);
+  assert.equal(owner.stats.buyRate, 1);
+  const unconfirmed = dryRunMass({
+    draft,
+    snapshot,
+    now: NOW,
+    actor: OWNER,
+    env: {},
+    launch: { token: "todavia-no", challenge: null },
+  });
+  assert.equal(unconfirmed.ok, false);
+  assert.equal(unconfirmed.status, "bloqueado");
+});
+
+test("sin uso o sin zona el dry-run no queda listo", () => {
+  const draft = mustCompose({});
+  const synced = snapshotFromSynced({
+    accountId: "cuenta-1",
+    now: NOW,
+    fans: [syncedFan("7", "Fan Uno", 0)],
+    messages: [],
+    purchases: [],
+  });
+  const run = dryRunMass({
+    draft,
+    snapshot: synced,
+    now: NOW,
+    actor: OWNER,
+    env: {},
+  });
+  assert.equal(run.status, "sin_datos");
+  assert.equal(run.ok, false);
+  assert.equal(run.queue.length, 0);
+  assert.equal(run.bestHour, SIN_DATOS);
 });
 
 test("un chatter no ve ingresos ni buy rate, aunque existan", () => {
@@ -691,6 +803,14 @@ function ready(
     timeZone: "UTC",
     ...patch,
   });
+}
+
+function runDry(
+  input: Omit<Parameters<typeof dryRunMass>[0], "actor"> & {
+    actor?: MassActor;
+  },
+) {
+  return dryRunMass({ actor: OWNER, ...input });
 }
 
 function mustCompose(patch: Parameters<typeof baseInput>[0]): MassDraft {
