@@ -1,4 +1,4 @@
-import { isSpendTierId } from "../spend-tiers.ts";
+import { isMassSpendTier } from "./spend.ts";
 import { knownMark, parseMarkup, plainText } from "./text.ts";
 import type {
   MassDraft,
@@ -32,6 +32,7 @@ export type ComposeMassInput = {
   stopWords?: readonly string[];
   now?: Date;
   createId?: () => string;
+  idempotencyKey?: string;
 };
 
 export type ComposeMassResult =
@@ -75,6 +76,8 @@ export function composeMass(input: ComposeMassInput): ComposeMassResult {
   );
   const followUp = normalizeFollowUp(input.followUp ?? null, errors);
   const createdBy = normalizeAuthor(input.createdBy ?? null, errors);
+  const idempotencyKey = (input.idempotencyKey ?? "").trim();
+  if (!idempotencyKey) errors.push("Falta la clave de idempotencia.");
   validateSegment(input.segment, errors);
 
   const flag = stopFlag(plain, input.stopWords ?? []);
@@ -96,6 +99,7 @@ export function composeMass(input: ComposeMassInput): ComposeMassResult {
     rotate: input.rotate ?? withMedia,
     excludeBought: input.excludeBought ?? withMedia,
     status: flag ? "held" : scheduledAt ? "scheduled" : "draft",
+    idempotencyKey,
     flag,
   };
   return { ok: true, draft };
@@ -216,7 +220,7 @@ function normalizeAuthor(
 
 function validateSegment(segment: MassSegment, errors: string[]): void {
   for (const tier of segment.spendTiers ?? []) {
-    if (!isSpendTierId(tier))
+    if (!isMassSpendTier(tier))
       errors.push("Hay un tramo de gasto que no existe.");
   }
   if (

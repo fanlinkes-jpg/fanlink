@@ -47,6 +47,7 @@ export function snapshotFromSynced(input: {
     contentEvents: null,
     vaultIds: null,
     sendUsage: null,
+    timeZone: null,
   };
 }
 

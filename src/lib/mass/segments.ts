@@ -1,4 +1,9 @@
-import { spendAmount, spendTierFor, type SpendWindow } from "../spend-tiers.ts";
+import {
+  matchesSpendTier,
+  spendAmount,
+  type SpendCut,
+  type SpendWindow,
+} from "./spend.ts";
 import type {
   ContentEvent,
   MassFan,
@@ -28,6 +33,8 @@ export function resolveSegment(
     vaultIds: string[];
     rotate: boolean;
     excludeBought: boolean;
+    spendCuts?: readonly SpendCut[];
+    whaleCents?: number;
   },
 ): SegmentResolution {
   const blockers: string[] = [];
@@ -42,7 +49,7 @@ export function resolveSegment(
     return empty(SIN_DATOS, ["Sin datos: listas de OnlyFans"]);
   }
 
-  let pool = [...snapshot.fans];
+  let pool = uniqueFans(snapshot.fans);
   const skipped: Array<{ fanKey: string; field: string }> = [];
   let droppedByValue = 0;
 
@@ -68,13 +75,18 @@ export function resolveSegment(
     const keep: MassFan[] = [];
     for (const fan of pool) {
       const amount = spendAmount(fan, window);
-      const tier = spendTierFor(amount);
-      if (tier == null)
+      const hits = [...wanted].map((tier) =>
+        matchesSpendTier(amount, tier, {
+          cuts: options.spendCuts,
+          whaleCents: options.whaleCents,
+        }),
+      );
+      if (hits.some((hit) => hit == null))
         skipped.push({
           fanKey: fan.fanKey,
           field: window === "spend30" ? "gasto30" : "gasto",
         });
-      else if (wanted.has(tier)) keep.push(fan);
+      else if (hits.some((hit) => hit === true)) keep.push(fan);
       else droppedByValue += 1;
     }
     pool = keep;
@@ -324,4 +336,15 @@ function exclusion(
 
 function unique(values: string[]): string[] {
   return [...new Set(values)];
+}
+
+function uniqueFans(fans: readonly MassFan[]): MassFan[] {
+  const seen = new Set<string>();
+  const next: MassFan[] = [];
+  for (const fan of fans) {
+    if (seen.has(fan.fanKey)) continue;
+    seen.add(fan.fanKey);
+    next.push(fan);
+  }
+  return next;
 }

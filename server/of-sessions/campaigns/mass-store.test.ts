@@ -26,7 +26,7 @@ test("el borrador se guarda y se vuelve a leer, y el dry-run sigue sin enviar", 
   };
   try {
     await pg.exec(
-      await readFile(path.join(dir, "0021_mass_messages.sql"), "utf8"),
+      await readFile(path.join(dir, "0027_mass_messages.sql"), "utf8"),
     );
     const composed = composeMass({
       accountId: "cuenta-1",
@@ -46,11 +46,25 @@ test("el borrador se guarda y se vuelve a leer, y el dry-run sigue sin enviar", 
       excludeBought: false,
       now: new Date("2026-11-06T10:00:00.000Z"),
       createId: () => "mass-1",
+      idempotencyKey: "clave-1",
     });
     assert.equal(composed.ok, true);
     if (!composed.ok) return;
     await saveMassDraft(sql, composed.draft);
+    await saveMassDraft(sql, { ...composed.draft, id: "mass-2", name: "Otro" });
     const stored = await readMassDraft(sql, "mass-1");
+    const duplicate = await readMassDraft(sql, "mass-2");
+    assert.equal(duplicate, null);
+    assert.equal(stored?.name, "Viernes");
+    const count = await sql.query<{ total: number }>(
+      "select count(*)::int as total from of_mass_message",
+    );
+    assert.equal(Number(count[0]?.total), 1);
+    const kind = await sql.query<{ kind: string }>(
+      "select jsonb_typeof(vault_ids) as kind from of_mass_message where id = $1",
+      ["mass-1"],
+    );
+    assert.equal(kind[0]?.kind, "array");
     assert.equal(stored?.name, "Viernes");
     assert.equal(stored?.priceCents, 300);
     assert.equal(stored?.media[0]?.preview, true);
@@ -76,7 +90,8 @@ test("el borrador se guarda y se vuelve a leer, y el dry-run sigue sin enviar", 
       ofLists: null,
       contentEvents: null,
       vaultIds: ["set-1", "set-2"],
-      sendUsage: null,
+      sendUsage: { sentLastHour: 0, sentLastDay: 0 },
+      timeZone: "UTC",
     };
     const run = dryRunMass({
       draft: stored ?? composed.draft,

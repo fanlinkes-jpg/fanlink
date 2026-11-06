@@ -1,11 +1,14 @@
+export { SPEND_TIERS, spendTone } from "../spend-tiers.ts";
 export {
-  WHALE_CENTS,
-  SPEND_TIERS,
-  spendTierFor,
+  FAN_WHALE_CENTS,
+  defaultSpendCuts,
+  isMassSpendTier,
+  isWhale,
+  matchesSpendTier,
   spendAmount,
-  isSpendTierId,
-} from "../spend-tiers.ts";
-export type { SpendTierId, SpendWindow } from "../spend-tiers.ts";
+  spendBand,
+} from "./spend.ts";
+export type { MassSpendTier, SpendCut, SpendWindow } from "./spend.ts";
 export { SIN_DATOS, textoMetrica } from "./types.ts";
 export type {
   ContentEvent,
@@ -23,8 +26,17 @@ export type {
 } from "./types.ts";
 export { formattedText, parseMarkup, personalize, plainText } from "./text.ts";
 export {
+  LAUNCH_PHRASE,
+  MASS_PERMISSION,
+  canCreateMass,
+  canLaunchMass,
+  confirmMassLaunch,
+} from "./access.ts";
+export type { MassActor } from "./access.ts";
+export {
   MASS_ALLOW_ACCOUNTS,
   MASS_SEND_FLAG,
+  SEND_FLAG,
   massAllowAccounts,
   massSendEnabled,
   massSendGate,
@@ -40,8 +52,16 @@ export type { ComposeMassInput, ComposeMassResult } from "./composer.ts";
 export { resolveSegment } from "./segments.ts";
 export type { SegmentResolution } from "./segments.ts";
 export { bestSendHour, suggestPrice } from "./smart.ts";
-export { followUpRecipients, massStats, textoIngresos } from "./stats.ts";
-export type { MassDelivery, MassStats } from "./stats.ts";
+export {
+  followUpRecipients,
+  massStats,
+  massStatsForRole,
+  textoIngresos,
+} from "./stats.ts";
+export type { MassDelivery, MassStats, VisibleMassStats } from "./stats.ts";
+export { canTransitionMass } from "./status.ts";
+export { MASS_STATUSES } from "./types.ts";
+export type { MassStatus } from "./types.ts";
 export { DEFAULT_PACE, buildQueue, gapMs, validPace } from "./queue.ts";
 export type { PaceLimits, QueuePlan } from "./queue.ts";
 export { dryRunMass } from "./dry-run.ts";

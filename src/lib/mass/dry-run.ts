@@ -148,6 +148,7 @@ export function dryRunMass(input: {
     now: input.now.getTime(),
     pace,
     usage: input.snapshot.sendUsage,
+    timeZone: input.snapshot.timeZone,
   });
   const byKey = new Map(candidates.map((fan) => [fan.fanKey, fan]));
   const queue = plan.slots.flatMap((slot) => {

@@ -62,6 +62,20 @@ export function textoIngresos(cents: Metric): string {
   return cents === SIN_DATOS ? SIN_DATOS : formatCents(cents);
 }
 
+export type VisibleMassStats = Omit<MassStats, "revenueCents" | "buyRate"> & {
+  revenueCents: Metric | null;
+  buyRate: Metric | null;
+};
+
+/** Un chatter no ve ingresos ni buy rate. Null es oculto, no una cifra que falte. */
+export function massStatsForRole(
+  stats: MassStats,
+  role: "owner" | "member",
+): VisibleMassStats {
+  if (role === "owner") return stats;
+  return { ...stats, revenueCents: null, buyRate: null };
+}
+
 function countFlag(
   rows: readonly MassDelivery[],
   key: "viewed" | "purchased",

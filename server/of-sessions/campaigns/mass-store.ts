@@ -13,8 +13,9 @@ type MassRow = {
   name: string;
   body_json: string;
   price_cents: number | null;
-  vault_ids: string;
-  preview_vault_ids: string;
+  idempotency_key: string;
+  vault_ids: unknown;
+  preview_vault_ids: unknown;
   scheduled_at: Date | string | null;
   segment_json: string;
   unsend_after_hours: number | null;
@@ -28,33 +29,35 @@ type MassRow = {
   flag: string | null;
 };
 
-/** Guarda el borrador. No envía. */
+/** Guarda el borrador. La misma clave de la cuenta no crea otra fila. No envía. */
 export async function saveMassDraft(
   sql: ReadSql,
   draft: MassDraft,
-): Promise<void> {
+): Promise<MassDraft> {
   const preview = draft.media
     .filter((item) => item.preview)
     .map((item) => item.vaultId);
   await sql.query(
     `insert into of_mass_message (
-       id, creator_id, name, body, body_json, price_cents, vault_ids, preview_vault_ids, scheduled_at,
+       id, creator_id, idempotency_key, name, body, body_json, price_cents, vault_ids, preview_vault_ids, scheduled_at,
        segment_json, unsend_after_hours, follow_up_json, follow_up_after_hours, created_by_id, created_by_name,
        rotate, exclude_bought, status, flag
      ) values (
-       $1, $2, $3, $4, $5, $6, $7, $8, $9,
-       $10, $11, $12, $13, $14, $15,
-       $16, $17, $18, $19
-     )`,
+       $1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10,
+       $11, $12, $13, $14, $15, $16,
+       $17, $18, $19, $20
+     )
+     on conflict (creator_id, idempotency_key) do nothing`,
     [
       draft.id,
       draft.accountId,
+      draft.idempotencyKey,
       draft.name,
       runsText(draft.body),
       JSON.stringify(draft.body),
       draft.priceCents,
-      draft.media.map((item) => item.vaultId).join(","),
-      preview.join(","),
+      JSON.stringify(draft.media.map((item) => item.vaultId)),
+      JSON.stringify(preview),
       draft.scheduledAt,
       JSON.stringify(draft.segment),
       draft.unsendAfterHours,
@@ -68,6 +71,13 @@ export async function saveMassDraft(
       draft.flag ?? null,
     ],
   );
+  const stored = await readMassDraftByKey(
+    sql,
+    draft.accountId,
+    draft.idempotencyKey,
+  );
+  if (!stored) throw new Error("No se ha podido guardar el masivo.");
+  return stored;
 }
 
 export async function readMassDraft(
@@ -79,7 +89,23 @@ export async function readMassDraft(
     [id],
   );
   const row = rows[0];
-  if (!row) return null;
+  return row ? rowToDraft(row) : null;
+}
+
+async function readMassDraftByKey(
+  sql: ReadSql,
+  accountId: string,
+  idempotencyKey: string,
+): Promise<MassDraft | null> {
+  const rows = await sql.query<MassRow>(
+    "select * from of_mass_message where creator_id = $1 and idempotency_key = $2",
+    [accountId, idempotencyKey],
+  );
+  const row = rows[0];
+  return row ? rowToDraft(row) : null;
+}
+
+function rowToDraft(row: MassRow): MassDraft {
   return {
     id: row.id,
     accountId: row.creator_id,
@@ -105,23 +131,33 @@ export async function readMassDraft(
     rotate: flag(row.rotate),
     excludeBought: flag(row.exclude_bought),
     status: statusOf(row.status),
+    idempotencyKey: row.idempotency_key,
     flag: row.flag ?? undefined,
   };
 }
 
-function mediaFrom(vaultIds: string, previewIds: string): MassMedia[] {
-  const preview = new Set(splitIds(previewIds));
-  return splitIds(vaultIds).map((vaultId) => ({
+function mediaFrom(vaultIds: unknown, previewIds: unknown): MassMedia[] {
+  const preview = new Set(asIds(previewIds));
+  return asIds(vaultIds).map((vaultId) => ({
     vaultId,
     preview: preview.has(vaultId),
   }));
 }
 
-function splitIds(value: string): string[] {
-  return value
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
+function asIds(value: unknown): string[] {
+  const parsed = typeof value === "string" ? safeJson(value) : value;
+  if (!Array.isArray(parsed)) return [];
+  return parsed.filter(
+    (item): item is string => typeof item === "string" && item.length > 0,
+  );
+}
+
+function safeJson(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
 }
 
 function parseRuns(value: string): TextRun[] {
@@ -168,6 +204,9 @@ function statusOf(value: string): MassDraft["status"] {
     case "draft":
     case "scheduled":
     case "held":
+    case "cancelled":
+    case "sent":
+    case "retry":
       return value;
     default:
       throw new Error("El borrador guardado no se puede leer.");

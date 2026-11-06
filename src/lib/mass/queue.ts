@@ -17,7 +17,6 @@ export const DEFAULT_PACE: PaceLimits = {
 };
 
 const HOUR_MS = 3_600_000;
-const DAY_MS = 86_400_000;
 
 export type QueuePlan = {
   slots: Array<{ fanKey: string; at: number }>;
@@ -45,33 +44,59 @@ export function buildQueue(input: {
   now: number;
   pace: PaceLimits;
   usage: { sentLastHour: number; sentLastDay: number } | null;
+  timeZone: string | null;
 }): QueuePlan {
+  const fanKeys = uniqueKeys(input.fanKeys);
+  const knownHour = input.usage == null ? SIN_DATOS : input.usage.sentLastHour;
+  const knownDay = input.usage == null ? SIN_DATOS : input.usage.sentLastDay;
+  if (
+    input.usage == null ||
+    input.timeZone == null ||
+    zoneParts(input.startAt, input.timeZone) == null
+  ) {
+    return {
+      slots: [],
+      held: fanKeys,
+      sentLastHour: knownHour,
+      sentLastDay: knownDay,
+    };
+  }
+  const timeZone = input.timeZone;
+  const start = zoneParts(input.startAt, timeZone);
+  const now = zoneParts(input.now, timeZone);
+  if (start == null || now == null) {
+    return {
+      slots: [],
+      held: fanKeys,
+      sentLastHour: knownHour,
+      sentLastDay: knownDay,
+    };
+  }
+
   const slots: Array<{ fanKey: string; at: number }> = [];
   const held: string[] = [];
-  const startDay = dayStart(input.startAt);
   let cursor = input.startAt;
-  let hourBucket = hourStart(cursor);
-  let hourCount = seed(
-    input.usage?.sentLastHour,
-    input.now,
-    hourBucket,
-    hourStart,
-  );
-  let dayCount = seed(input.usage?.sentLastDay, input.now, startDay, dayStart);
+  let hourBucket = start.hourKey;
+  let hourCount = start.hourKey === now.hourKey ? input.usage.sentLastHour : 0;
+  let dayCount = start.day === now.day ? input.usage.sentLastDay : 0;
 
-  for (let index = 0; index < input.fanKeys.length; index += 1) {
-    const fanKey = input.fanKeys[index] ?? "";
+  for (let index = 0; index < fanKeys.length; index += 1) {
+    const fanKey = fanKeys[index] ?? "";
     let placed = false;
     for (let step = 0; step < 48; step += 1) {
-      if (dayStart(cursor) !== startDay || dayCount >= input.pace.maxPerDay)
+      const here = zoneParts(cursor, timeZone);
+      if (
+        here == null ||
+        here.day !== start.day ||
+        dayCount >= input.pace.maxPerDay
+      )
         break;
-      const hour = hourStart(cursor);
-      if (hour !== hourBucket) {
-        hourBucket = hour;
+      if (here.hourKey !== hourBucket) {
+        hourBucket = here.hourKey;
         hourCount = 0;
       }
       if (hourCount >= input.pace.maxPerHour) {
-        cursor = hour + HOUR_MS;
+        cursor += HOUR_MS;
         continue;
       }
       slots.push({ fanKey, at: cursor });
@@ -82,17 +107,12 @@ export function buildQueue(input: {
       break;
     }
     if (!placed) {
-      held.push(...input.fanKeys.slice(index));
+      held.push(...fanKeys.slice(index));
       break;
     }
   }
 
-  return {
-    slots,
-    held,
-    sentLastHour: input.usage == null ? SIN_DATOS : input.usage.sentLastHour,
-    sentLastDay: input.usage == null ? SIN_DATOS : input.usage.sentLastDay,
-  };
+  return { slots, held, sentLastHour: knownHour, sentLastDay: knownDay };
 }
 
 export function gapMs(fanKey: string, pace: PaceLimits): number {
@@ -105,20 +125,38 @@ export function gapMs(fanKey: string, pace: PaceLimits): number {
   return pace.minGapMs + (hash % (span + 1));
 }
 
-function seed(
-  used: number | undefined,
-  now: number,
-  bucket: number,
-  toBucket: (time: number) => number,
-): number {
-  if (used == null) return 0;
-  return toBucket(now) === bucket ? used : 0;
+function uniqueKeys(fanKeys: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const next: string[] = [];
+  for (const fanKey of fanKeys) {
+    if (!fanKey || seen.has(fanKey)) continue;
+    seen.add(fanKey);
+    next.push(fanKey);
+  }
+  return next;
 }
 
-function hourStart(time: number): number {
-  return Math.floor(time / HOUR_MS) * HOUR_MS;
-}
-
-function dayStart(time: number): number {
-  return Math.floor(time / DAY_MS) * DAY_MS;
+function zoneParts(
+  time: number,
+  timeZone: string,
+): { day: string; hourKey: string } | null {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hourCycle: "h23",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+    }).formatToParts(new Date(time));
+    const pick = (type: Intl.DateTimeFormatPartTypes) =>
+      parts.find((part) => part.type === type)?.value ?? "";
+    let hour = Number(pick("hour"));
+    if (!Number.isFinite(hour)) return null;
+    if (hour === 24) hour = 0;
+    const day = `${pick("year")}-${pick("month")}-${pick("day")}`;
+    return { day, hourKey: `${day}T${hour}` };
+  } catch {
+    return null;
+  }
 }

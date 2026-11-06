@@ -1,4 +1,4 @@
-import type { SpendTierId, SpendWindow } from "../spend-tiers.ts";
+import type { MassSpendTier, SpendWindow } from "./spend.ts";
 
 export const SIN_DATOS = "Sin datos" as const;
 export type SinDatos = typeof SIN_DATOS;
@@ -20,11 +20,21 @@ export type MassMedia = {
 
 export type MassSubscription = "activa" | "caducada";
 
+export const MASS_STATUSES = [
+  "draft",
+  "scheduled",
+  "held",
+  "cancelled",
+  "sent",
+  "retry",
+] as const;
+export type MassStatus = (typeof MASS_STATUSES)[number];
+
 export type MassSegment = {
   includeAll?: boolean;
   ofListIds?: string[];
   includeFanKeys?: string[];
-  spendTiers?: SpendTierId[];
+  spendTiers?: MassSpendTier[];
   spendWindow?: SpendWindow;
   activeWithinDays?: number;
   purchasedWithinDays?: number;
@@ -74,6 +84,8 @@ export type MassSnapshot = {
   /** Ids de la bóveda que el CRM conoce. Null si esa lista no se ha cargado. */
   vaultIds: string[] | null;
   sendUsage: { sentLastHour: number; sentLastDay: number } | null;
+  /** Zona IANA de la cuenta. Null si el sync no la trae. */
+  timeZone: string | null;
 };
 
 export type MassFollowUp = {
@@ -96,7 +108,9 @@ export type MassDraft = {
   createdBy: { id: string; name: string } | null;
   rotate: boolean;
   excludeBought: boolean;
-  status: "draft" | "scheduled" | "held";
+  status: MassStatus;
+  /** Estable entre reintentos del mismo clic. Evita dos filas. */
+  idempotencyKey: string;
   flag?: string;
 };
 

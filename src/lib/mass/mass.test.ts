@@ -4,17 +4,24 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { fanProfiles } from "../fan-metrics.ts";
-import { WHALE_CENTS } from "../spend-tiers.ts";
+import { spendTone } from "../spend-tiers.ts";
 import {
+  FAN_WHALE_CENTS,
+  LAUNCH_PHRASE,
   SIN_DATOS,
   bestSendHour,
   buildQueue,
+  canCreateMass,
+  canTransitionMass,
+  confirmMassLaunch,
   composeMass,
   dryRunMass,
   formattedText,
+  isWhale,
   massStats,
+  massStatsForRole,
   snapshotFromSynced,
-  spendTierFor,
+  spendBand,
   suggestPrice,
   textoIngresos,
   type MassDraft,
@@ -28,28 +35,35 @@ const ROOT = path.resolve(
   "../../..",
 );
 
-test("los tramos respetan la ballena de 100 USD y no clasifican un importe ausente", () => {
-  assert.equal(WHALE_CENTS, 10_000);
-  assert.equal(spendTierFor(null), null);
-  assert.equal(spendTierFor(0), "sin_compra");
-  assert.equal(spendTierFor(1), "bajo");
-  assert.equal(spendTierFor(1_999), "bajo");
-  assert.equal(spendTierFor(2_000), "medio");
-  assert.equal(spendTierFor(4_999), "medio");
-  assert.equal(spendTierFor(5_000), "alto");
-  assert.equal(spendTierFor(9_999), "alto");
-  assert.equal(spendTierFor(10_000), "ballena");
+test("la ballena del masivo coincide con el perfil y los colores salen de spend-tiers", () => {
+  assert.equal(FAN_WHALE_CENTS, 10_000);
+  assert.equal(isWhale(10_000), true);
+  assert.equal(isWhale(9_999), false);
+  assert.equal(spendBand(null), null);
+  assert.equal(spendBand(0), "cero");
+  assert.equal(spendBand(5_000), "verde");
+  assert.equal(spendTone(5_000).color, "#137333");
+  assert.equal(spendBand(5_001), "azul");
+  assert.equal(spendBand(20_001), "morado");
+  assert.equal(spendBand(100_001), "dorado");
+  assert.equal(
+    spendBand(100, [
+      { name: "mini", untilCents: 50 },
+      { name: "resto", untilCents: Number.POSITIVE_INFINITY },
+    ]),
+    "resto",
+  );
   const whale = fanProfiles({
     now: NOW,
     ppvSynced: false,
-    fans: [moneyFan(WHALE_CENTS)],
+    fans: [moneyFan(FAN_WHALE_CENTS)],
     purchases: [],
     ppv: [],
   });
   const below = fanProfiles({
     now: NOW,
     ppvSynced: false,
-    fans: [moneyFan(WHALE_CENTS - 1)],
+    fans: [moneyFan(FAN_WHALE_CENTS - 1)],
     purchases: [],
     ppv: [],
   });
@@ -107,27 +121,24 @@ test("una palabra prohibida retiene el borrador y el dry-run no lo cola", () => 
 });
 
 test("el segmento usa tramo, suscripción, actividad y última compra", () => {
-  const snapshot = snapshotOf(
-    [
-      fan("activo", {
-        spentCents: 10_000,
-        spend30Cents: 6_000,
-        lastActiveAt: "2026-11-06T09:00:00.000Z",
-        lastPurchaseAt: "2026-11-01T00:00:00.000Z",
-      }),
-      fan("caducado", {
-        status: "expired",
-        spentCents: 10_000,
-        lastActiveAt: "2026-11-06T09:00:00.000Z",
-      }),
-      fan("frio", {
-        spentCents: 100,
-        lastActiveAt: "2026-08-01T00:00:00.000Z",
-      }),
-      fan("sin-gasto", { spentCents: null }),
-    ],
-    { messages: [] },
-  );
+  const snapshot = ready([
+    fan("activo", {
+      spentCents: 10_000,
+      spend30Cents: 6_000,
+      lastActiveAt: "2026-11-06T09:00:00.000Z",
+      lastPurchaseAt: "2026-11-01T00:00:00.000Z",
+    }),
+    fan("caducado", {
+      status: "expired",
+      spentCents: 10_000,
+      lastActiveAt: "2026-11-06T09:00:00.000Z",
+    }),
+    fan("frio", {
+      spentCents: 100,
+      lastActiveAt: "2026-08-01T00:00:00.000Z",
+    }),
+    fan("sin-gasto", { spentCents: null }),
+  ]);
   const run = dryRunMass({
     draft: mustCompose({
       segment: {
@@ -182,7 +193,7 @@ test("sin listas de OnlyFans el segmento no inventa miembros", () => {
 });
 
 test("la lista sincronizada, la exclusión de compra y la rotación recortan la audiencia", () => {
-  const snapshot = snapshotOf([fan("7"), fan("8"), fan("9")], {
+  const snapshot = ready([fan("7"), fan("8"), fan("9")], {
     ofLists: [{ id: "vip", name: "VIP", fanKeys: ["7", "8", "9"] }],
     contentEvents: [
       { fanKey: "7", vaultId: "set-1", kind: "comprado" },
@@ -338,9 +349,7 @@ test("el dry-run personaliza, no copia la cola en enviados y deja el follow-up s
       unsendAfterHours: 12,
       createdBy: { id: "ch-1", name: "Nuria" },
     }),
-    snapshot: snapshotOf([fan("7", { name: "Ana López", handle: "@ana" })], {
-      messages: [],
-    }),
+    snapshot: ready([fan("7", { name: "Ana López", handle: "@ana" })]),
     now: NOW,
     env: {},
   });
@@ -353,7 +362,7 @@ test("el dry-run personaliza, no copia la cola en enviados y deja el follow-up s
   assert.equal(run.stats.sent, SIN_DATOS);
   assert.notEqual(run.stats.sent, run.queue.length);
   assert.equal(run.followUp?.recipients, SIN_DATOS);
-  assert.equal(run.quota.sentLastHour, SIN_DATOS);
+  assert.equal(run.quota.sentLastHour, 0);
 });
 
 test("el flag y la allowlist siguen cerrados salvo true y la cuenta concreta, y aun así no se envía", () => {
@@ -380,11 +389,22 @@ test("el flag y la allowlist siguen cerrados salvo true y la cuenta concreta, y 
     },
   });
   assert.equal(missing.gate.open, false);
-  const open = dryRunMass({
+  const sendOff = dryRunMass({
     draft,
     snapshot,
     now: NOW,
     env: {
+      FANLINK_ENABLE_MASS_SEND: "true",
+      FANLINK_SEND_ALLOW_ACCOUNTS: "cuenta-1",
+    },
+  });
+  assert.equal(sendOff.gate.open, false);
+  const open = dryRunMass({
+    draft,
+    snapshot: ready([fan("7")]),
+    now: NOW,
+    env: {
+      FANLINK_ENABLE_SEND: "true",
       FANLINK_ENABLE_MASS_SEND: "true",
       FANLINK_SEND_ALLOW_ACCOUNTS: "cuenta-1, otra",
     },
@@ -395,29 +415,69 @@ test("el flag y la allowlist siguen cerrados salvo true y la cuenta concreta, y 
   assert.equal(open.queue.length, 1);
 });
 
-test("la cola respeta el tope por hora y por día y no inventa el uso ya enviado", () => {
+test("la cola no supone uso cero, respeta el día de la cuenta y quita fans repetidos", () => {
   const pace = { minGapMs: 0, maxGapMs: 0, maxPerHour: 2, maxPerDay: 3 };
   const start = NOW.getTime();
-  const open = buildQueue({
-    fanKeys: ["a", "b", "c"],
+  const unknown = buildQueue({
+    fanKeys: ["a", "a", "b"],
     startAt: start,
     now: start,
     pace,
     usage: null,
+    timeZone: "UTC",
   });
-  assert.equal(open.slots.length, 3);
+  assert.deepEqual(unknown.slots, []);
+  assert.deepEqual(unknown.held, ["a", "b"]);
+  assert.equal(unknown.sentLastHour, SIN_DATOS);
+  const open = buildQueue({
+    fanKeys: ["a", "a", "b", "c"],
+    startAt: start,
+    now: start,
+    pace,
+    usage: { sentLastHour: 0, sentLastDay: 0 },
+    timeZone: "UTC",
+  });
+  assert.deepEqual(
+    open.slots.map((slot) => slot.fanKey),
+    ["a", "b", "c"],
+  );
   assert.equal(open.slots[2]?.at, start + 3_600_000);
-  assert.equal(open.sentLastHour, SIN_DATOS);
   const fullDay = buildQueue({
     fanKeys: ["a", "b"],
     startAt: start,
     now: start,
     pace: { ...pace, maxPerDay: 1 },
     usage: { sentLastHour: 0, sentLastDay: 1 },
+    timeZone: "UTC",
   });
   assert.equal(fullDay.slots.length, 0);
   assert.deepEqual(fullDay.held, ["a", "b"]);
-  assert.equal(fullDay.sentLastDay, 1);
+  const madrid = Date.parse("2026-11-06T22:30:00.000Z");
+  const inMadrid = buildQueue({
+    fanKeys: ["a", "b"],
+    startAt: madrid,
+    now: madrid,
+    pace: { ...pace, maxPerHour: 1, maxPerDay: 5 },
+    usage: { sentLastHour: 0, sentLastDay: 0 },
+    timeZone: "Europe/Madrid",
+  });
+  assert.deepEqual(
+    inMadrid.slots.map((slot) => slot.fanKey),
+    ["a"],
+  );
+  assert.deepEqual(inMadrid.held, ["b"]);
+  const inUtc = buildQueue({
+    fanKeys: ["a", "b"],
+    startAt: madrid,
+    now: madrid,
+    pace: { ...pace, maxPerHour: 1, maxPerDay: 5 },
+    usage: { sentLastHour: 0, sentLastDay: 0 },
+    timeZone: "UTC",
+  });
+  assert.deepEqual(
+    inUtc.slots.map((slot) => slot.fanKey),
+    ["a", "b"],
+  );
 });
 
 test("el gasto a 30 días sigue la cobertura del perfil y no se copia del total", () => {
@@ -452,7 +512,77 @@ test("el gasto a 30 días sigue la cobertura del perfil y no se copia del total"
     ],
   });
   assert.equal(covered.fans?.[0]?.spend30Cents, 500);
-  assert.equal(spendTierFor(covered.fans?.[0]?.spend30Cents ?? null), "bajo");
+  assert.equal(spendBand(covered.fans?.[0]?.spend30Cents ?? null), "verde");
+  assert.equal(snapshot.timeZone, null);
+  assert.equal(snapshot.sendUsage, null);
+});
+
+test("crear admite admin o el permiso masivos, y lanzar pide dos confirmaciones del admin", () => {
+  assert.equal(canCreateMass(null), false);
+  assert.equal(canCreateMass({ role: "member", perms: ["campanas"] }), false);
+  assert.equal(canCreateMass({ role: "member", perms: ["masivos"] }), true);
+  assert.equal(canCreateMass({ role: "owner", perms: [] }), true);
+  const half = confirmMassLaunch({
+    actor: { role: "owner", perms: [] },
+    draftId: "mass-1",
+    confirmDraftId: "mass-1",
+    confirmPhrase: "si",
+  });
+  assert.equal(half.ok, false);
+  const member = confirmMassLaunch({
+    actor: { role: "member", perms: ["masivos"] },
+    draftId: "mass-1",
+    confirmDraftId: "mass-1",
+    confirmPhrase: LAUNCH_PHRASE,
+  });
+  assert.equal(member.ok, false);
+  const both = confirmMassLaunch({
+    actor: { role: "owner", perms: [] },
+    draftId: "mass-1",
+    confirmDraftId: "mass-1",
+    confirmPhrase: LAUNCH_PHRASE,
+  });
+  assert.equal(both.ok, true);
+});
+
+test("un chatter no ve ingresos ni buy rate, aunque existan", () => {
+  const stats = massStats({
+    createdBy: { name: "Nuria" },
+    deliveries: [
+      {
+        fanKey: "7",
+        status: "enviado",
+        purchased: true,
+        viewed: true,
+        priceCents: 500,
+      },
+      {
+        fanKey: "8",
+        status: "enviado",
+        purchased: false,
+        viewed: false,
+        priceCents: 500,
+      },
+    ],
+  });
+  assert.equal(stats.revenueCents, 500);
+  assert.equal(stats.buyRate, 0.5);
+  const hidden = massStatsForRole(stats, "member");
+  assert.equal(hidden.revenueCents, null);
+  assert.equal(hidden.buyRate, null);
+  assert.equal(hidden.sent, 2);
+  const owner = massStatsForRole(stats, "owner");
+  assert.equal(owner.revenueCents, 500);
+  assert.equal(owner.buyRate, 0.5);
+});
+
+test("el masivo puede cancelarse, enviarse y reintentarse", () => {
+  assert.equal(canTransitionMass("scheduled", "sent"), true);
+  assert.equal(canTransitionMass("scheduled", "cancelled"), true);
+  assert.equal(canTransitionMass("scheduled", "retry"), true);
+  assert.equal(canTransitionMass("retry", "sent"), true);
+  assert.equal(canTransitionMass("sent", "retry"), false);
+  assert.equal(canTransitionMass("cancelled", "draft"), false);
 });
 
 test("el módulo de masivos no llama a la API ni lee la clave de sesión", async () => {
@@ -460,6 +590,9 @@ test("el módulo de masivos no llama a la API ni lee la clave de sesión", async
     "src/lib/spend-tiers.ts",
     "src/lib/mass/types.ts",
     "src/lib/mass/text.ts",
+    "src/lib/mass/access.ts",
+    "src/lib/mass/spend.ts",
+    "src/lib/mass/status.ts",
     "src/lib/mass/gates.ts",
     "src/lib/mass/composer.ts",
     "src/lib/mass/segments.ts",
@@ -529,6 +662,7 @@ function snapshotOf(
     contentEvents: patch.contentEvents ?? null,
     vaultIds: patch.vaultIds ?? null,
     sendUsage: patch.sendUsage ?? null,
+    timeZone: patch.timeZone ?? null,
   };
 }
 
@@ -542,8 +676,21 @@ function baseInput(
     segment: { includeAll: true },
     now: NOW,
     createId: () => "mass-1",
+    idempotencyKey: "clave-1",
     ...patch,
   };
+}
+
+function ready(
+  fans: MassFan[],
+  patch: Partial<MassSnapshot> = {},
+): MassSnapshot {
+  return snapshotOf(fans, {
+    messages: [],
+    sendUsage: { sentLastHour: 0, sentLastDay: 0 },
+    timeZone: "UTC",
+    ...patch,
+  });
 }
 
 function mustCompose(patch: Parameters<typeof baseInput>[0]): MassDraft {
