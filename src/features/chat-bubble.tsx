@@ -41,6 +41,7 @@ export function ChatBubble({ message, avatarUrl = null }: { message: BubbleMessa
   const [open, setOpen] = useState(false);
   const slide = media[index] ?? null;
   const decision = slide ? mediaPlay({ ...slide, full: slide.full ?? null }, message.fromFan) : null;
+  const blocked = Boolean(decision && !decision.play && decision.notice.includes("bloquead"));
   const text = message.body.trim();
   const initial = (message.fromFan ? "F" : message.authorName ?? "A").slice(0, 1).toLocaleUpperCase("es-ES");
   return (
@@ -54,7 +55,7 @@ export function ChatBubble({ message, avatarUrl = null }: { message: BubbleMessa
           {slide ? (
             <figure className="relative mb-1 h-52 overflow-hidden rounded-lg bg-[#d7dbe3]">
               {slide.preview ? (
-                <img src={`/api/chat-media?creatorId=${encodeURIComponent(message.creatorId)}&threadKey=${encodeURIComponent(message.threadKey ?? "")}&messageKey=${encodeURIComponent(message.messageKey)}&index=${index}`} alt="" className={`h-full w-full object-cover ${decision && !decision.play ? "scale-110 blur-md" : ""}`} />
+                <img src={`/api/chat-media?creatorId=${encodeURIComponent(message.creatorId)}&threadKey=${encodeURIComponent(message.threadKey ?? "")}&messageKey=${encodeURIComponent(message.messageKey)}&index=${index}`} alt="" className={`h-full w-full object-cover ${blocked ? "scale-110 blur-md" : ""}`} />
               ) : (
                 <span className="grid h-full place-items-center text-[10px] text-[#6d7585]">Sin datos</span>
               )}
@@ -65,7 +66,7 @@ export function ChatBubble({ message, avatarUrl = null }: { message: BubbleMessa
                 </>
               ) : null}
               {slide.kind === "video" || slide.kind === "audio" ? <Film className="absolute right-2 top-2 h-4 w-4 text-white" aria-label="Vídeo" /> : null}
-              {decision?.play ? (
+              {!blocked ? (
                 <button
                   type="button"
                   aria-label={slide.kind === "foto" ? "Ver foto" : "Reproducir"}
