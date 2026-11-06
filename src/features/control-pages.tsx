@@ -279,7 +279,7 @@ export function TeamPage() {
           </thead>
           <tbody>
             {employees.map((e) => {
-              const synced = teamRows.find((row) => row.name === e.name) ?? null;
+              const synced = teamRows.find((row) => row.userId === e.id) ?? null;
               const [gross, ppv, reply, threads] = employeeMetricCells(synced);
               return (
                 <tr key={e.id} className="border-t border-line">
@@ -297,6 +297,22 @@ export function TeamPage() {
                   <td className="px-3 py-3">
                     <span className={`rounded-lg px-2 py-1 text-xs capitalize ${SHIFT_STYLE[e.shifts[today]]}`}>{e.shifts[today]}</span>
                   </td>
+                </tr>
+              );
+            })}
+            {teamRows.filter((row) => !employees.some((employee) => employee.id === row.userId)).map((row) => {
+              const [gross, ppv, reply, threads] = employeeMetricCells(row);
+              return (
+                <tr key={row.userId} className="border-t border-line">
+                  <td className="px-3 py-3 font-medium">{row.name}</td>
+                  <td className="px-3 py-3">Servidor</td>
+                  <td className="px-3 py-3">Sin datos</td>
+                  <td className="px-3 py-3 tabular-nums">{threads}</td>
+                  <td className="px-3 py-3 tabular-nums">{gross}</td>
+                  <td className="px-3 py-3 tabular-nums">{ppv}</td>
+                  <td className="px-3 py-3 tabular-nums">Sin datos</td>
+                  <td className="px-3 py-3">{reply}</td>
+                  <td className="px-3 py-3">Sin datos</td>
                 </tr>
               );
             })}
