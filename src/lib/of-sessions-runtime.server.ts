@@ -30,6 +30,7 @@ import { openWatchContext, runInboxWatch } from "../../server/of-sessions/sync/i
 import { pickAccountWatch } from "../../server/of-sessions/sync/watch-plan.ts";
 import { listChatMeta, listChats, listPendingOutbounds, recordOutbound, saveChatRead } from "../../server/of-sessions/sync/chat-store.ts";
 import { listFanProfiles, saveFanProfile } from "../../server/of-sessions/sync/fan-profile.ts";
+import { listFanNotes, saveFanNote } from "../../server/of-sessions/sync/fan-note.ts";
 import { intervalMinFromEnv, startSyncLoop, type ScheduleAccount } from "../../server/of-sessions/sync/schedule.ts";
 import {
   listCreatorReads,
@@ -440,6 +441,7 @@ export async function listCreatorChatViews(userId: string): Promise<CreatorChatL
     })),
     pending: await listPendingOutbounds(sql, creatorIds),
     profiles: await listFanProfiles(sql, creatorIds),
+    notes: await listFanNotes(sql, creatorIds),
   };
 }
 
@@ -673,6 +675,19 @@ export async function listTeamMetricViews(userId: string): Promise<Array<{
     ],
     nameOf,
   );
+}
+
+export async function saveFanNoteView(
+  userId: string,
+  input: { creatorId: string; fanKey: string; body: string },
+): Promise<{ ok: true }> {
+  const access = await accessFor(userId);
+  if (access.role !== "owner" && !access.perms.includes("mensajes")) {
+    throw new WorkspaceAccessError("No tienes permiso para escribir.");
+  }
+  if (!input.fanKey.trim()) throw new WorkspaceAccessError("Sin datos del fan.");
+  await saveFanNote(await getSql(), { ...input, updatedBy: access.userId });
+  return { ok: true };
 }
 
 export async function saveFanProfileView(
