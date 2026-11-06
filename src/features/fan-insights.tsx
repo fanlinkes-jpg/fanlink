@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { fanInsightModel } from "@/lib/fan-insights";
 
 export type FanInsightProps = {
@@ -10,6 +10,7 @@ export type FanInsightProps = {
   expiresAt: string | null;
   renewAuto: boolean | null;
   subPriceCents: number | null;
+  subscribedAt?: string | null;
   notes: string;
   notesEditable: boolean;
   onNotes: (value: string) => void;
@@ -28,65 +29,96 @@ export function FanInsights(props: FanInsightProps) {
     expiresAt: props.expiresAt,
     renewAuto: props.renewAuto,
     subPriceCents: props.subPriceCents,
+    subscribedAt: props.subscribedAt,
     notes: props.notes,
     transactions: props.transactions,
     ppvPrices: props.ppvPrices,
   });
-  const facts = tab === "Ventas"
-    ? [
-        ["Último gasto", model.last],
-        ["PPV total", model.ppvTotal],
-        ["PPV medio", model.ppvAvg],
-        ["Propinas", model.tipTotal],
-        ["Propina media", model.tipAvg],
-        ["Gasto máximo", model.max],
-      ]
-    : [
-        ["Gasto total", model.total],
-        ["Suscripción", model.status],
-        ["Caduca", model.expires],
-        ["Precio al mes", model.price],
-        ["Auto-renovación", model.renew],
-      ];
   return (
-    <aside className="flex h-full min-h-0 flex-col bg-white">
-      <div className="border-b border-[#e6e8ee] px-4 py-3">
-        <p className="font-medium">{props.name ?? "Fan"}</p>
-        <p className="text-xs text-[#6d7585]">{props.handle ? `@${props.handle.replace(/^@/, "")}` : "Sin datos"}</p>
+    <aside className="flex h-full min-h-0 flex-col bg-[#f7f8fb]">
+      <div className="border-b border-[#e6e8ee] bg-white px-4 py-3">
+        <p className="text-sm font-semibold">Ficha del fan</p>
+        <p className="truncate text-xs text-[#6d7585]">{props.name ?? "Fan"}{props.handle ? ` · @${props.handle.replace(/^@/, "")}` : ""}</p>
       </div>
-      <div className="flex gap-1 border-b border-[#e6e8ee] p-2">
+      <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        {tab === "Notas" ? (
+          <label className="flex flex-col gap-2 text-xs text-[#6d7585]">
+            Notas
+            <textarea
+              value={props.notes}
+              readOnly={!props.notesEditable}
+              onChange={(event) => props.onNotes(event.target.value)}
+              placeholder="Sin datos"
+              className="min-h-40 rounded-xl border border-[#e6e8ee] bg-white p-3 text-sm text-[#1c2333]"
+            />
+          </label>
+        ) : tab === "Ventas" ? (
+          <Card title="Ventas">
+            <Pair label="Último gasto" value={`${model.lastAgo} · ${model.last}`} />
+            <Pair label="PPV total" value={model.ppvTotal} />
+            <Pair label="PPV medio" value={model.ppvAvg} />
+            <Pair label="Propinas" value={model.tipTotal} />
+            <Pair label="Propina media" value={model.tipAvg} />
+            <Pair label="Gasto máximo" value={model.max} />
+          </Card>
+        ) : (
+          <div className="space-y-3">
+            <Card title="Comportamiento de gasto">
+              <div className="grid grid-cols-2 gap-3">
+                <Pair label="Gasto total" value={model.total} />
+                <Pair label="Último gasto" value={model.lastAgo} />
+              </div>
+              <Pair label="Tipo del último" value={model.last} />
+              <Pair label="PPV total" value={model.ppvTotal} />
+              <Pair label="PPV medio" value={model.ppvAvg} />
+              <Pair label="Propinas" value={model.tipTotal} />
+              <Pair label="Propina media" value={model.tipAvg} />
+              <Pair label="Gasto máximo" value={model.max} />
+            </Card>
+            <Card title="Métricas">
+              <Pair label="Poder de gasto" value={model.power} />
+              <Pair label="Riesgo de contracargo" value={model.chargeback} />
+            </Card>
+            <Card title="Suscripción">
+              <Pair label="Estado" value={model.status} />
+              <Pair label="Caducidad" value={model.expires} />
+              <Pair label="Precio al mes" value={model.price} />
+              <Pair label="Duración" value={model.duration} />
+              <Pair label="Auto-renovación" value={model.renew} />
+            </Card>
+          </div>
+        )}
+      </div>
+      <div className="grid grid-cols-3 border-t border-[#e6e8ee] bg-white">
         {TABS.map((item) => (
           <button
             key={item}
             type="button"
             onClick={() => setTab(item)}
-            className={`rounded-md px-2 py-1 text-xs ${tab === item ? "bg-[#e7f0ff] text-[#2456c7]" : "text-[#6d7585]"}`}
+            className={`py-3 text-xs ${tab === item ? "font-semibold text-[#2456c7]" : "text-[#6d7585]"}`}
           >
             {item}
           </button>
         ))}
       </div>
-      {tab === "Notas" ? (
-        <label className="flex min-h-0 flex-1 flex-col gap-2 p-4 text-xs text-[#6d7585]">
-          Notas
-          <textarea
-            value={props.notes}
-            readOnly={!props.notesEditable}
-            onChange={(event) => props.onNotes(event.target.value)}
-            placeholder="Sin datos"
-            className="min-h-32 flex-1 rounded-lg border border-[#e6e8ee] p-2 text-sm text-[#1c2333]"
-          />
-        </label>
-      ) : (
-        <dl className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 text-sm">
-          {facts.map(([label, value]) => (
-            <div key={label}>
-              <dt className="text-xs text-[#6d7585]">{label}</dt>
-              <dd>{value}</dd>
-            </div>
-          ))}
-        </dl>
-      )}
     </aside>
+  );
+}
+
+function Card({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <details open className="rounded-xl border border-[#e6e8ee] bg-white">
+      <summary className="cursor-pointer px-3 py-2 text-sm font-medium">{title}</summary>
+      <div className="space-y-2 px-3 pb-3">{children}</div>
+    </details>
+  );
+}
+
+function Pair({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-start justify-between gap-3 text-sm">
+      <span className="text-[#6d7585]">{label}</span>
+      <span className="text-right">{value}</span>
+    </div>
   );
 }

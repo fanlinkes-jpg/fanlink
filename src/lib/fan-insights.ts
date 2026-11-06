@@ -6,6 +6,8 @@ export type InsightSource = {
   renewAuto: boolean | null;
   subPriceCents: number | null;
   notes: string;
+  subscribedAt?: string | null;
+  now?: Date;
   transactions: Array<{ occurredAt: string; grossCents: number; kind: string }>;
   ppvPrices: number[];
 };
@@ -23,6 +25,10 @@ export type InsightModel = {
   price: string;
   renew: string;
   notes: string;
+  lastAgo: string;
+  duration: string;
+  power: string;
+  chargeback: string;
 };
 
 export function moneyOrEmpty(cents: number | null): string {
@@ -57,5 +63,24 @@ export function fanInsightModel(input: InsightSource): InsightModel {
     price: moneyOrEmpty(input.subPriceCents),
     renew: input.renewAuto == null ? "Sin datos" : input.renewAuto ? "Sí" : "No",
     notes: input.notes.trim() ? input.notes.trim() : "Sin datos",
+    lastAgo: last ? agoLabel(last.occurredAt, input.now ?? new Date()) : "Sin datos",
+    duration: durationLabel(input.subscribedAt, input.expiresAt),
+    power: "Sin datos",
+    chargeback: "Sin datos",
   };
+}
+
+function agoLabel(iso: string, now: Date): string {
+  const ms = now.getTime() - Date.parse(iso);
+  if (!Number.isFinite(ms) || ms < 0) return "Sin datos";
+  const hours = Math.floor(ms / 3_600_000);
+  if (hours < 48) return `hace ${hours} h`;
+  return `hace ${Math.floor(hours / 24)} d`;
+}
+
+function durationLabel(start: string | null | undefined, end: string | null): string {
+  if (!start || !end) return "Sin datos";
+  const ms = Date.parse(end) - Date.parse(start);
+  if (!Number.isFinite(ms) || ms <= 0) return "Sin datos";
+  return `${Math.round(ms / 86_400_000)} días`;
 }
