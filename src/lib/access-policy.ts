@@ -1,3 +1,5 @@
+import { sameDashboardConfig } from "./dashboard-config.ts";
+
 export const TEAM_PERMS = [
   "mensajes",
   "precios",
@@ -38,6 +40,8 @@ export type WorkspaceSlice = {
   translate: boolean;
   adaptPrices: boolean;
   notifyShifts: boolean;
+  /** Configuración de widgets. Ausente en filas anteriores: equivale al defecto. */
+  dashboardConfig?: unknown;
 };
 
 export class WorkspaceAccessError extends Error {
@@ -107,6 +111,10 @@ export function canSeeChatterFigures(access: TeamAccess | null, subjectUserId: s
 
 export function assertWorkspaceChange(access: TeamAccess, prev: WorkspaceSlice, next: WorkspaceSlice): void {
   if (access.role === "owner") return;
+
+  if (!sameDashboardConfig(prev.dashboardConfig, next.dashboardConfig)) {
+    throw new WorkspaceAccessError("Solo la dueña puede configurar el dashboard.");
+  }
 
   const added = ids(next.creators).filter((id) => !ids(prev.creators).includes(id));
   const removed = ids(prev.creators).filter((id) => !ids(next.creators).includes(id));

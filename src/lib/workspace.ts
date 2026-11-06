@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { authMiddleware } from "@/lib/auth/middleware";
+import { normalizeDashboardConfig } from "@/lib/dashboard-config";
 import type { DataSlice } from "@/lib/crm";
 
 export type SharedSlice = Pick<
@@ -21,6 +22,7 @@ export type SharedSlice = Pick<
   | "translate"
   | "adaptPrices"
   | "notifyShifts"
+  | "dashboardConfig"
 >;
 
 export function snapshot(state: DataSlice): SharedSlice {
@@ -42,6 +44,7 @@ export function snapshot(state: DataSlice): SharedSlice {
     translate: state.translate,
     adaptPrices: state.adaptPrices,
     notifyShifts: state.notifyShifts,
+    dashboardConfig: normalizeDashboardConfig(state.dashboardConfig),
   };
 }
 
