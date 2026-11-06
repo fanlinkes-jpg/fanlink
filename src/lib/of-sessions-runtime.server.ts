@@ -29,6 +29,7 @@ import { chatIntervalMinutes, inboxIsOpen, activeThreadWatches } from "../../ser
 import { openWatchContext, runInboxWatch } from "../../server/of-sessions/sync/inbox-watch.ts";
 import { pickAccountWatch } from "../../server/of-sessions/sync/watch-plan.ts";
 import { listChatMeta, listChats, listPendingOutbounds, recordOutbound, saveChatRead } from "../../server/of-sessions/sync/chat-store.ts";
+import { mediaForBrowser } from "../../server/of-sessions/sync/media-play.ts";
 import { intervalMinFromEnv, startSyncLoop, type ScheduleAccount } from "../../server/of-sessions/sync/schedule.ts";
 import {
   listCreatorReads,
@@ -425,6 +426,7 @@ export async function listCreatorChatViews(userId: string): Promise<CreatorChatL
       authorName: message.authorName,
       seen: message.seen,
       automatic: message.automatic,
+      media: mediaForBrowser(message.media, message.fromFan),
     })),
     meta: stored.meta.map((item) => ({
       creatorId: item.creatorId,

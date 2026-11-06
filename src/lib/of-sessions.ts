@@ -155,6 +155,16 @@ export type CreatorChatList = {
     authorName: string | null;
     seen: boolean | null;
     automatic: boolean | null;
+    media: Array<{
+      kind: "foto" | "video" | "audio" | null;
+      seconds: number | null;
+      preview: string | null;
+      full: string | null;
+      locked: boolean | null;
+      priceCents: number | null;
+      paid: boolean | null;
+      opened: boolean | null;
+    }> | null;
   }>;
   meta: Array<{
     creatorId: string;

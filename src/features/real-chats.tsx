@@ -4,6 +4,7 @@ import { campaignSendFlag } from "@/lib/of-campaigns";
 import { useCrm } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
 import { useOfReads } from "@/lib/use-of-reads";
+import { ChatBubble } from "@/features/chat-bubble";
 import { FanInsights } from "@/features/fan-insights";
 
 const EMOJIS = ["😊", "🔥", "❤️", "😘", "🎁"];
@@ -183,12 +184,7 @@ export function RealChatsPage() {
                 </li>
               ))}
               {messages.map((message) => (
-                <li key={message.messageKey} className={message.fromFan ? "text-left" : "text-right"}>
-                  <p className={`inline-block max-w-[70%] rounded-2xl px-3 py-2 text-sm ${message.fromFan ? "bg-[#f4f6fb]" : "bg-[#e7f0ff]"}`}>
-                    {message.body}
-                  </p>
-                  <p className="mt-1 text-[10px] text-[#6d7585]">{messageCaption(message)}</p>
-                </li>
+                <ChatBubble key={message.messageKey} message={message} avatarUrl={selected.avatarUrl} />
               ))}
             </ol>
             <form className="border-t border-[#e6e8ee] p-3" onSubmit={(event) => event.preventDefault()}>
@@ -307,14 +303,6 @@ function InsightPane({
       ))}
     />
   );
-}
-
-function messageCaption(message: { sentAt: string; fromFan: boolean; authorName: string | null; automatic: boolean | null; seen: boolean | null }): string {
-  const time = message.sentAt.slice(0, 16).replace("T", " ");
-  const seen = message.seen == null ? "" : message.seen ? " · ✓" : "";
-  if (message.fromFan) return `${time}${seen}`;
-  const who = message.automatic ? "Mensaje automático" : message.authorName ?? "Cuenta";
-  return `${time}${seen} · ${who}`;
 }
 
 function emptyChatsLabel(data: CreatorChatList | null): string {

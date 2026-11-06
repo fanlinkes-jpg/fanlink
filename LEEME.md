@@ -72,6 +72,18 @@ Los hilos y los mensajes se guardan por creadora y por fan, y los ve todo el equ
 
 Fragilidad: si OnlyFans cambia la ruta del chat o los campos `withUser`, `lastMessage`, `text` y `createdAt`, la lista puede quedar vacía y la razón será `sin respuesta de chats` o `página cambiada (chats)`. El envío no existe en esta versión.
 
+## Vídeo del hilo
+
+El mensaje guarda foto, vídeo o audio: duración, miniatura, candado, precio y si se pagó. Hace falta `npm run db:migrate` para `0021_message_media.sql`. El reproductor no envía nada y no toca `FANLINK_ENABLE_SEND`. El compositor sigue dejando el texto como pendiente; el botón de envío real sigue apagado. Adjuntar desde la bóveda llega en otra fase y, cuando exista, solo adjuntará: el envío real sigue en la rama del chat, detrás de ese flag.
+
+Lo que envía la cuenta se reproduce si hay URL completa, aunque OnlyFans marque `locked`. Lo del fan sigue `canView`: si está bloqueado, la miniatura sale borrosa, con candado y precio (o «Sin datos» si el precio no vino). Esa URL completa no se manda al navegador. El play pide `/api/chat-media?variant=full` y el servidor lee la URL guardada.
+
+La miniatura de una cuenta con sesión activa se pide con `context.request` del navegador de esa sesión: mismo proxy, mismas cookies del perfil y la misma huella (`user-agent` de Chrome 131). No se copian cookies a un `fetch` del servidor. Si no hay sesión, el GET va sin Cookie y solo a `*.onlyfans.com`, sin `/api2/` ni `/api/`. Un redirect fuera de OnlyFans no se sigue.
+
+Con `VITE_AUTH_ENABLED=false` (solo localhost y sin `DATABASE_URL`), un miembro también ve las miniaturas del hilo que existe. Con el login real hace falta ser owner o tener el permiso `mensajes`. Sin permiso, o con un `threadKey` que no es el del mensaje, `/api/chat-media` responde 404.
+
+La miniatura se corta a 5 MB, con 8 s de silencio y 20 s de reloj total. El vídeo se reenvía de trozo en trozo: solo un `bytes=N-M` de como máximo 8 MB, con tiempo de cabeceras y de inactividad separados (12 s). La playlist HLS se reutiliza 10 s, con tope de 32 entradas y 256 KB. La caché de miniaturas no pasa de 200 ficheros ni de 50 MB, se borra a la semana y no se poda en cada escritura (como mucho cada 60 s).
+
 ## Avisos de WhatsApp
 
 Cuando entra un `new_fan_message`, Fanlink avisa a los miembros asignados a esa creadora que tengan el interruptor de avisos encendido y un teléfono en formato internacional. El texto lleva el nombre de la cuenta, el fan y el extracto. Varios fans del mismo momento salen en un solo mensaje. El mismo fan no se repite hasta que pasan los minutos guardados en su ficha (por defecto 15, `FANLINK_ALERT_QUIET_MIN`).

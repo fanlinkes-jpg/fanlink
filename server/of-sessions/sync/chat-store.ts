@@ -1,5 +1,6 @@
 import { matchOutboundAuthor, type OutboundDraft } from "./author-match.ts";
 import { newFanEvents, type ChatMessage, type ChatThread, type FanMessageEvent } from "./chats.ts";
+import { decodeMedia, encodeMedia } from "./media-url.ts";
 import type { ReadSql } from "./store.ts";
 
 const ORIGIN = "onlyfans";
@@ -95,8 +96,9 @@ export async function saveChatRead(
     for (const message of read.messages) {
       await sql.query(
         `insert into of_chat_message (
-           creator_id, message_key, thread_key, fan_key, from_fan, body, sent_at, price_cents, purchased, synced_at, origin, author_id, seen, automatic
-         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, null, $12, $13)
+           creator_id, message_key, thread_key, fan_key, from_fan, body, sent_at, price_cents, purchased, synced_at, origin, author_id, seen, automatic,
+           media_count, media_seconds, media_preview, media_json
+         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, null, $12, $13, $14, $15, $16, $17)
          on conflict (creator_id, message_key) do update set
            body = excluded.body,
            from_fan = excluded.from_fan,
@@ -106,7 +108,11 @@ export async function saveChatRead(
            synced_at = excluded.synced_at,
            author_id = coalesce(of_chat_message.author_id, excluded.author_id),
            seen = excluded.seen,
-           automatic = excluded.automatic`,
+           automatic = excluded.automatic,
+           media_count = excluded.media_count,
+           media_seconds = excluded.media_seconds,
+           media_preview = excluded.media_preview,
+           media_json = excluded.media_json`,
         [
           creatorId,
           message.messageKey,
@@ -121,6 +127,10 @@ export async function saveChatRead(
           ORIGIN,
           message.seen,
           message.automatic,
+          message.mediaCount ?? null,
+          message.mediaSeconds ?? null,
+          message.mediaPreview ?? null,
+          encodeMedia(message.media),
         ],
       );
     }
@@ -174,7 +184,7 @@ export async function listChats(
   );
   const messages = await sql.query<MessageRow>(
     `select m.creator_id, m.message_key, m.thread_key, m.fan_key, m.from_fan, m.body, m.sent_at, m.price_cents, m.purchased, m.synced_at,
-            m.author_id, p.display_name as author_name, m.seen, m.automatic
+            m.author_id, p.display_name as author_name, m.seen, m.automatic, m.media_count, m.media_seconds, m.media_preview, m.media_json
      from of_chat_message m
      left join staff_profile p on p.user_id = m.author_id
      where m.creator_id in (${filter})
@@ -225,6 +235,10 @@ export async function listChats(
       authorName: row.author_name,
       seen: flagOrNull(row.seen),
       automatic: flagOrNull(row.automatic),
+      mediaCount: row.media_count == null ? null : Number(row.media_count),
+      mediaSeconds: row.media_seconds == null ? null : Number(row.media_seconds),
+      mediaPreview: row.media_preview,
+      media: decodeMedia(row.media_json),
       syncedAt: iso(row.synced_at) ?? "",
     })),
     meta: meta.map((row) => ({
@@ -290,6 +304,10 @@ type MessageRow = {
   author_name: string | null;
   seen: boolean | string | null;
   automatic: boolean | string | null;
+  media_count: number | string | null;
+  media_seconds: number | string | null;
+  media_preview: string | null;
+  media_json: string | null;
 };
 
 type MetaRow = {
