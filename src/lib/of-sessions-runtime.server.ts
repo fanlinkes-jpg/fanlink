@@ -32,7 +32,6 @@ import { listChatMeta, listChats, listPendingOutbounds, markOutboundError, markO
 import { chatSendGate, publicSendReason, type SendAccount } from "../../server/of-sessions/send/gate.ts";
 import { deliverChatSend, sendLimitFromEnv } from "../../server/of-sessions/send/deliver.ts";
 import { composeChat } from "../../server/of-sessions/send/compose.ts";
-import { threadIdKind } from "../../server/of-sessions/send/targets.ts";
 import { listFanProfiles, saveFanProfile } from "../../server/of-sessions/sync/fan-profile.ts";
 import { listFanNotes, saveFanNote } from "../../server/of-sessions/sync/fan-note.ts";
 import { intervalMinFromEnv, startSyncLoop, type ScheduleAccount } from "../../server/of-sessions/sync/schedule.ts";
@@ -799,9 +798,7 @@ export async function sendChatMessageView(
       account: fields,
       now: () => Date.now(),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-      open: () => {
-        console.info(`[fanlink:send] inicio hilo=${input.threadKey ?? ""} origen=${threadIdKind(input.threadKey ?? "", input.fanKey)}`);
-        return sessions.withSession(account.id, (context) => composeChat(context, {
+      open: () => sessions.withSession(account.id, (context) => composeChat(context, {
         chatsUrl: onlyFansSite.chatsUrl ?? "https://onlyfans.com/my/chats",
         siteId: onlyFansSite.id,
         threadKey: input.threadKey ?? "",
@@ -810,8 +807,7 @@ export async function sendChatMessageView(
         body,
         priceCents: input.priceCents,
         typeDelayMs: null,
-      }));
-      },
+      })),
     });
     if (result.sent && result.messageId) {
       await markOutboundSent(sql, id, result.messageId);

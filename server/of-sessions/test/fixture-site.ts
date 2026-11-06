@@ -90,7 +90,27 @@ function dashboardHtml(mode: FixtureMode): string {
   }
 }
 
-function ofChatHtml(): string {
+function ofChatHtml(live = true): string {
+  const sendScript = live
+    ? `const box = document.querySelector("[at-attr='chat_input']");
+       const send = document.querySelector("[at-attr='send_btn']");
+       const post = async () => {
+         if (send.disabled) return;
+         const body = box.value;
+         const price = document.querySelector("[at-attr='price_input']").dataset.saved || "";
+         await fetch("/fixture/compose", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ body, price, file: "" }) });
+         await fetch("/api2/v2/chats/9/messages?order=desc");
+         box.value = "";
+         send.disabled = true;
+       };
+       send.disabled = true;
+       box.addEventListener("input", () => { send.disabled = box.value.trim() === ""; });
+       send.onclick = () => { void post(); };
+       box.addEventListener("keydown", (event) => {
+         if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void post(); }
+       });
+       document.querySelector("[at-attr='vault_btn']").onclick = () => { void fetch("/fixture/vault"); };`
+    : `document.querySelector("[at-attr='send_btn']").disabled = true;`;
   return pageHtml(
     "Hilo",
     "",
@@ -102,6 +122,7 @@ function ofChatHtml(): string {
            <textarea placeholder="Type a message..." at-attr="chat_input"></textarea>
          </div>
          <button type="button" at-attr="price_btn" aria-label="Price">Price</button>
+         <button type="button" at-attr="vault_btn" aria-label="Add from media vault">Vault</button>
          <button type="button" at-attr="send_btn">Send</button>
        </form>
        <div id="price-box" role="dialog" aria-label="Message price" hidden>
@@ -115,12 +136,7 @@ function ofChatHtml(): string {
          document.querySelector("[at-attr='price_input']").dataset.saved = document.querySelector("[at-attr='price_input']").value;
          document.getElementById("price-box").hidden = true;
        };
-       document.querySelector("[at-attr='send_btn']").onclick = async () => {
-         const body = document.querySelector("[at-attr='chat_input']").value;
-         const price = document.querySelector("[at-attr='price_input']").dataset.saved || "";
-         await fetch("/fixture/compose", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ body, price, file: "" }) });
-         await fetch("/api2/v2/chats/9/messages?order=desc");
-       };
+       ${sendScript}
      </script>`,
   );
 }
@@ -138,7 +154,16 @@ function chatComposerHtml(): string {
        <button type="button" data-fanlink-price-save>Save</button>
      </div>
      <input type="hidden" data-fanlink-price-value value="" />
+     <div data-fanlink-history style="height:80px;overflow:auto"><div style="height:400px">hilo</div></div>
      <script>
+       const history = document.querySelector("[data-fanlink-history]");
+       history.scrollTop = 200;
+       let older = false;
+       history.onscroll = async () => {
+         if (older || history.scrollTop > 0) return;
+         older = true;
+         await fetch("/api2/v2/chats/7/messages?before=2");
+       };
        document.querySelector("[data-fanlink-price]").onclick = () => { document.getElementById("price-box").hidden = false; };
        document.querySelector("[data-fanlink-price-save]").onclick = () => {
          document.querySelector("[data-fanlink-price-value]").value = document.querySelector("[data-fanlink-amount]").value;
@@ -368,6 +393,15 @@ async function handle(
       return;
     }
     const latest = extraMessages.at(-1);
+    if (url.searchParams.get("page") === "2") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        list: [
+          { id: 8, withUser: { id: 8, username: "fanexp", name: "Fan Exp" }, unreadMessagesCount: 0, lastMessage: { id: 80, text: "antiguo", createdAt: "2026-10-01T10:00:00.000Z", fromUser: { id: 8 } } },
+        ],
+      }));
+      return;
+    }
     res.writeHead(200, { "content-type": "application/json" });
     res.end(
       JSON.stringify({
@@ -390,6 +424,22 @@ async function handle(
     if (!accepted(req, epoch())) {
       res.writeHead(401, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "no" }));
+      return;
+    }
+    if (url.searchParams.get("before") === "2") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        list: [{
+          id: 1,
+          text: "el primero",
+          createdAt: "2026-11-01T10:00:00.000Z",
+          fromUser: { id: 42 },
+          isFavorite: true,
+          isFromQueue: true,
+          replyToMessage: { id: 9, text: "cita" },
+          media: [{ type: "video", duration: 12, canView: true, isOpened: true, files: { thumb: { url: "https://cdn.example/thumb.jpg" } } }],
+        }],
+      }));
       return;
     }
     res.writeHead(200, { "content-type": "application/json" });
@@ -436,12 +486,47 @@ async function handle(
     }));
     return;
   }
+  if (req.method === "GET" && url.pathname === "/fixture/vault") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ list: [{ id: "v1", type: "photo", title: "playa" }] }));
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/my/chats/chat/8") {
+    if (!accepted(req, epoch())) {
+      redirect(res, "/login");
+      return;
+    }
+    html(res, ofChatHtml(false));
+    return;
+  }
   if (req.method === "GET" && url.pathname === "/my/chats/chat/9") {
     if (!accepted(req, epoch())) {
       redirect(res, "/login");
       return;
     }
     html(res, ofChatHtml());
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/my/chats/full") {
+    if (!accepted(req, epoch())) {
+      redirect(res, "/login");
+      return;
+    }
+    html(res, pageHtml(
+      "Chats",
+      "",
+      `<div data-fanlink-chats style="height:80px;overflow:auto"><div style="height:400px">lista</div></div>
+       <script>
+         const box = document.querySelector("[data-fanlink-chats]");
+         box.scrollTop = 0;
+         let more = false;
+         box.onscroll = async () => {
+           if (more || box.scrollTop < 40) return;
+           more = true;
+           await fetch("/api2/v2/chats?page=2");
+         };
+       </script>`,
+    ));
     return;
   }
   if (req.method === "GET" && url.pathname === "/my/chats/chat/7") {
