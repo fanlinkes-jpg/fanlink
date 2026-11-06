@@ -8,7 +8,8 @@ on:
       - cursor/of-session-crm-617f
 
 concurrency:
-  group: ci-${{ github.head_ref || github.ref_name }}
+  # El push y el pull request no comparten grupo: uno no cancela al otro.
+  group: ci-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
