@@ -464,6 +464,12 @@ export function RealChatsPage() {
                   contentEditable
                   suppressContentEditableWarning
                   onInput={(event) => setDraft(draftPlain(event.currentTarget))}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" || event.shiftKey) return;
+                    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+                    event.preventDefault();
+                    void sendNow();
+                  }}
                   onBlur={rememberSelection}
                   onKeyUp={rememberSelection}
                   onMouseUp={rememberSelection}

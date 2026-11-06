@@ -37,6 +37,7 @@ import {
   type ManagedBrowser,
 } from "./browser-factory.ts";
 import { assertLoginDisplay } from "./display.ts";
+import { openWorkPage } from "./work-page.ts";
 import { readAccountProxy } from "../proxy.ts";
 import { preparePrivateDir } from "./private-dir.ts";
 import type { SiteAdapter } from "./site.ts";
@@ -76,6 +77,8 @@ const silentLogger = { info() {}, warn() {} };
 export class SessionManager {
   private readonly loginTasks = new Map<string, Promise<void>>();
   private readonly openContexts = new Set<BrowserContext>();
+  private readonly profileUsers = new Map<string, { context: BrowserContext; users: number }>();
+  private readonly profileWait = new Map<string, Promise<void>>();
   private background: ManagedBrowser | null = null;
   private readTail: Promise<void> = Promise.resolve();
   private readonly reading = new Set<string>();
@@ -253,17 +256,54 @@ export class SessionManager {
    * Restaura el JSON de la cuenta en un contexto nuevo. No abre el
    * formulario ni rellena credenciales.
    */
+  private async acquireProfile(accountId: string): Promise<BrowserContext> {
+    for (;;) {
+      const held = this.profileUsers.get(accountId);
+      if (held) {
+        held.users += 1;
+        return held.context;
+      }
+      const pending = this.profileWait.get(accountId);
+      if (pending) {
+        await pending;
+        continue;
+      }
+      let release: () => void = () => undefined;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      this.profileWait.set(accountId, gate);
+      try {
+        const context = await this.newRestoredContext(accountId);
+        this.profileUsers.set(accountId, { context, users: 1 });
+        return context;
+      } finally {
+        this.profileWait.delete(accountId);
+        release();
+      }
+    }
+  }
+
+  private async releaseProfile(accountId: string): Promise<void> {
+    const held = this.profileUsers.get(accountId);
+    if (!held) return;
+    held.users -= 1;
+    if (held.users > 0) return;
+    this.profileUsers.delete(accountId);
+    this.openContexts.delete(held.context);
+    await held.context.close().catch(() => undefined);
+  }
+
   async withSession<T>(
     accountId: string,
     run: (context: BrowserContext) => Promise<T>,
   ): Promise<T> {
     await this.assertUsable(accountId);
-    const context = await this.newRestoredContext(accountId);
+    const context = await this.acquireProfile(accountId);
     try {
       return await run(context);
     } finally {
-      this.openContexts.delete(context);
-      await context.close().catch(() => undefined);
+      await this.releaseProfile(accountId);
     }
   }
 
@@ -413,7 +453,8 @@ export class SessionManager {
     this.options.site.assertRequestUrl(url);
     try {
       const result = await this.withSession(accountId, async (context) => {
-        const page = await context.newPage();
+        const page = await openWorkPage(context);
+        try {
         const response = await page.goto(url, {
           waitUntil: "domcontentloaded",
           timeout: this.options.config.probeTimeoutMs,
@@ -438,6 +479,9 @@ export class SessionManager {
         }
         const body = (await page.content()).slice(0, 200_000);
         return { status, finalUrl, body };
+        } finally {
+          await page.close().catch(() => undefined);
+        }
       });
       await this.options.store.update(accountId, {
         status: "active",
@@ -457,6 +501,7 @@ export class SessionManager {
 
   async close(): Promise<void> {
     this.closed = true;
+    this.profileUsers.clear();
     const contexts = [...this.openContexts];
     this.openContexts.clear();
     await Promise.all(
@@ -735,7 +780,7 @@ export class SessionManager {
     identityReason: string | null;
     error: string | null;
   }> {
-    const context = await this.newRestoredContext(accountId);
+    const context = await this.acquireProfile(accountId);
     const notes: IdentityNotes & { identities: ReadIdentity[] } = {
       identities: [],
       jsonPaths: [],
@@ -759,8 +804,9 @@ export class SessionManager {
       identityUserId: null,
       identityReason: null as string | null,
     };
+    let page: Page | undefined;
     try {
-      const page = await context.newPage();
+      page = await openWorkPage(context);
       const first = await this.watchNavigation(page, this.options.site.probeUrl, notes, pending);
       if (this.options.site.isInconclusiveUrl?.(first.finalUrl)) {
         return { connection: "inconclusive", ...blank, identityReason: "no concluyente", error: messages.inconclusive };
@@ -816,8 +862,8 @@ export class SessionManager {
       };
     } finally {
       context.off("response", onResponse);
-      this.openContexts.delete(context);
-      await context.close().catch(() => undefined);
+      await page?.close().catch(() => undefined);
+      await this.releaseProfile(accountId);
     }
   }
 
@@ -935,7 +981,7 @@ export class SessionManager {
     try {
       const info = await stat(profile);
       if (info.isDirectory()) {
-        const headless = this.options.config.headlessLogin;
+        const headless = this.options.config.headlessWork;
         const proxy = await this.accountProxy(accountId);
         console.info(`[fanlink:navegador] perfil=${accountId} headless=${String(headless)} proxy=${proxy ? "si" : "no"}`);
         const context = await this.options.browsers.launchPersistentContext(profile, {

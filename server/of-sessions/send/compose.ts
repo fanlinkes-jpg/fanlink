@@ -1,4 +1,5 @@
 import type { BrowserContext, Page } from "playwright";
+import { openWorkPage } from "../sessions/work-page.ts";
 import { chatPageUrl, parseChatMessages } from "../sync/chats.ts";
 import { confirmedOwnMessage, humanTypeDelay, publicSendReason } from "./gate.ts";
 
@@ -27,7 +28,7 @@ export type ComposeResult = { messageId: string | null; reason: string | null };
  * solo escucha el JSON o el WebSocket que la propia página recibe.
  */
 export async function composeChat(context: BrowserContext, request: ComposeRequest): Promise<ComposeResult> {
-  const page = await context.newPage();
+  const page = await openWorkPage(context);
   const payloads: string[] = [];
   const onResponse = (response: { url(): string; status(): number; text(): Promise<string> }) => {
     if (response.status() < 200 || response.status() >= 300) return;
@@ -48,14 +49,19 @@ export async function composeChat(context: BrowserContext, request: ComposeReque
   });
   try {
     const url = chatPageUrl(request.chatsUrl, request.threadKey, request.siteId);
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    if (page.url() === "about:blank") {
+      return fail("no se abrió el hilo");
+    }
+    console.info("[fanlink:send] navegado");
     if (/\/login(?:\/|$)/i.test(new URL(page.url()).pathname)) {
-      return { messageId: null, reason: "OnlyFans pide iniciar sesión: pulsa Reconectar" };
+      return fail("OnlyFans pide iniciar sesión: pulsa Reconectar");
     }
     const box = page.locator("[data-fanlink-composer], textarea[aria-label='Message'], .b-chat__message-input [contenteditable='true'], .b-chat__message-input textarea").last();
     await box.waitFor({ timeout: 8_000 });
     await box.click();
     await typeBody(page, request.body, request.typeDelayMs);
+    console.info("[fanlink:send] escrito");
     if (request.bold) {
       const format = page.locator("[data-fanlink-format], button[aria-label='Format text'], button[aria-label='Formato de texto']").first();
       await format.click();
@@ -68,7 +74,7 @@ export async function composeChat(context: BrowserContext, request: ComposeReque
     }
     if (request.priceCents != null && request.priceCents > 0) {
       const opened = await setNativePrice(page, request.priceCents, request.typeDelayMs);
-      if (!opened) return { messageId: null, reason: "No está el precio nativo" };
+      if (!opened) return fail("No está el precio nativo");
     }
     if (request.files && request.files.length > 0) {
       const input = page.locator("input[type='file']").first();
@@ -89,13 +95,15 @@ export async function composeChat(context: BrowserContext, request: ComposeReque
     const send = page.locator("[data-fanlink-send], button[aria-label='Send'], button[aria-label='Enviar'], .b-chat__btn-submit").first();
     await send.waitFor({ timeout: 4_000 });
     if ((request.typeDelayMs ?? 1) > 0) await delay(280 + Math.floor(Math.random() * 220));
+    console.info("[fanlink:send] click");
     await send.click();
     const messageId = await waitForOwnMessage(payloads, before, request);
-    if (!messageId) return { messageId: null, reason: "No apareció el mensaje propio" };
+    if (!messageId) return fail("No apareció el mensaje propio");
+    console.info("[fanlink:send] confirmado");
     return { messageId, reason: null };
   } catch (error) {
     const reason = error instanceof Error ? error.message : "No se envió";
-    return { messageId: null, reason: publicSendReason(reason) };
+    return fail(publicSendReason(reason));
   } finally {
     page.off("response", onResponse);
     await page.close().catch(() => undefined);
@@ -158,6 +166,12 @@ function pathOf(raw: string): string {
   } catch {
     return "";
   }
+}
+
+function fail(reason: string): ComposeResult {
+  const motivo = publicSendReason(reason);
+  console.info(`[fanlink:send] error motivo=${motivo}`);
+  return { messageId: null, reason: motivo };
 }
 
 function delay(ms: number): Promise<void> {

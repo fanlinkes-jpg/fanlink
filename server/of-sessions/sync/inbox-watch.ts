@@ -1,4 +1,5 @@
 import type { BrowserContext, Page } from "playwright";
+import { openWorkPage } from "../sessions/work-page.ts";
 import { chatPageUrl, classifyChatPath, parseChatMessages, parsePreviewMessages, type ChatMessage } from "./chats.ts";
 import { parseLivePayload } from "./live-frames.ts";
 import { FALLBACK_RELOAD_MS, nextFallbackThread, WATCH_IDLE_MS, type WatchedThread } from "./watch-plan.ts";
@@ -167,6 +168,6 @@ export function watchPage(page: Page, threadKey: () => string): WatchSession {
 }
 
 export async function openWatchContext(context: BrowserContext, threadKey: () => string): Promise<WatchSession> {
-  const page = await context.newPage();
+  const page = await openWorkPage(context);
   return watchPage(page, threadKey);
 }
