@@ -56,8 +56,17 @@ test("un pendiente de la bandeja queda atribuido en el hilo y en Equipo al sincr
   assert.equal(stored?.authorId, "e-1");
   assert.equal(stored?.authorName, "Ana");
   const team = presentTeamMetrics(
-    { role: "owner", userId: "owner", permissions: [] },
-    [{ authorId: stored?.authorId ?? null, sentAt: stored?.sentAt ?? "", priceCents: null, purchased: null, fromFan: false }],
+    { role: "owner", userId: "owner", perms: [], creatorIds: [] },
+    [{
+      creatorId: "creator-1",
+      threadKey: "fan-7",
+      fanKey: "fan-7",
+      at: stored?.sentAt ?? "",
+      fromFan: false,
+      priceCents: null,
+      purchased: null,
+      authorId: stored?.authorId ?? null,
+    }],
     [],
     new Map([["e-1", "Ana"]]),
   );
