@@ -798,7 +798,9 @@ export async function sendChatMessageView(
       account: fields,
       now: () => Date.now(),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-      open: () => sessions.withSession(account.id, (context) => composeChat(context, {
+      open: () => {
+        console.info(`[fanlink:send] inicio hilo=${input.threadKey ?? ""}`);
+        return sessions.withSession(account.id, (context) => composeChat(context, {
         chatsUrl: onlyFansSite.chatsUrl ?? "https://onlyfans.com/my/chats",
         siteId: onlyFansSite.id,
         threadKey: input.threadKey ?? "",
@@ -807,7 +809,8 @@ export async function sendChatMessageView(
         body,
         priceCents: input.priceCents,
         typeDelayMs: null,
-      })),
+      }));
+      },
     });
     if (result.sent && result.messageId) {
       await markOutboundSent(sql, id, result.messageId);
@@ -818,6 +821,7 @@ export async function sendChatMessageView(
     return { sent: false, reason, messageId: null };
   } catch (error) {
     const reason = publicSendReason(error instanceof Error ? error.message : "No se envió");
+    console.info(`[fanlink:send] error motivo=${reason}`);
     await markOutboundError(sql, id, reason);
     return { sent: false, reason, messageId: null };
   }

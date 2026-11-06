@@ -28,6 +28,7 @@ export function testConfig(
     host: "127.0.0.1",
     port: 0,
     headlessLogin: true,
+    headlessWork: true,
     openLoginOnInvalidate: true,
     loginTimeoutMs: 20_000,
     probeTimeoutMs: 15_000,
