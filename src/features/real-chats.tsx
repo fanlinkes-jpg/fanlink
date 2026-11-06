@@ -77,7 +77,7 @@ export function RealChatsPage() {
   const unread = threads.reduce((sum, thread) => sum + thread.unread, 0);
 
   return (
-    <div className="flex h-full min-h-0 overflow-hidden bg-white text-[#1c2333]">
+    <div className="absolute inset-0 flex min-h-0 overflow-hidden bg-white text-[#1c2333]">
       <section className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden border-r border-[#e6e8ee] md:w-[340px] md:shrink-0">
         <div className="shrink-0 space-y-3 border-b border-[#e6e8ee] px-3 py-3">
           <h1 className="truncate text-sm font-semibold uppercase tracking-wide">{creatorName}</h1>
@@ -101,11 +101,12 @@ export function RealChatsPage() {
             <button type="button" onClick={() => setFilter("propinas")} className={`rounded-full px-3 py-1 text-xs ${filter === "propinas" ? "bg-[#3b6cff] text-white" : "bg-[#f3f4f6] text-[#6d7585]"}`}>Con propinas</button>
           </div>
         </div>
-        {error ? <p className="px-4 text-sm text-[#8a5a12]">{error}</p> : null}
+        {error ? <p className="shrink-0 px-4 text-sm text-[#8a5a12]">{error}</p> : null}
+        <div className="min-h-0 flex-1 overflow-y-auto">
         {visible.length === 0 ? (
           <p className="px-4 py-8 text-sm text-[#6d7585]">{threads.length === 0 ? emptyChatsLabel(data) : "Sin datos"}</p>
         ) : (
-          <ul className="min-h-0 flex-1 overflow-y-auto">
+          <ul>
             {visible.map((thread) => (
               <li key={`${thread.creatorId}:${thread.threadKey}`}>
                 <button
@@ -140,6 +141,7 @@ export function RealChatsPage() {
             ))}
           </ul>
         )}
+        </div>
       </section>
       <section className="hidden h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden md:flex">
         <header className="flex shrink-0 items-center justify-between gap-3 border-b border-[#e6e8ee] px-4 py-3">
