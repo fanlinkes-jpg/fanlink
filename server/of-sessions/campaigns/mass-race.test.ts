@@ -60,7 +60,6 @@ test("dos conexiones de Postgres no duplican el guardado ni el lanzamiento", asy
     const opened = await openMassLaunch(sqlOf(left), {
       draftId: savedLeft.id,
       actor: OWNER,
-      createToken: () => `token-${key}`,
     });
     const launched = await Promise.allSettled([
       saveMassDraft(sqlOf(left), composed.draft, OWNER, {

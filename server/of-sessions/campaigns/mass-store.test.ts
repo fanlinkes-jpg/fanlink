@@ -171,20 +171,31 @@ test("el borrador se guarda y se vuelve a leer, y el dry-run sigue sin enviar", 
     const opened = await openMassLaunch(sql, {
       draftId: "mass-1",
       actor: OWNER,
-      createToken: () => "tok",
     });
+    await assert.rejects(
+      () => openMassLaunch(sql, { draftId: "mass-1", actor: OWNER }),
+      MassConflictError,
+    );
     await assert.rejects(
       () =>
         openMassLaunch(sql, {
           draftId: "mass-1",
-          actor: OWNER,
-          createToken: () => "otro",
+          actor: { id: " ", role: "owner", perms: [] },
         }),
-      MassConflictError,
+      MassAccessError,
+    );
+    await assert.rejects(
+      () =>
+        saveMassDraft(sql, composed.draft, CHATTER, { token: opened.token }),
+      (error: unknown) => error instanceof MassAccessError,
     );
     await assert.rejects(
       () => saveMassDraft(sql, composed.draft, OTHER, { token: opened.token }),
-      MassTransitionError,
+      (error: unknown) => {
+        assert.ok(error instanceof MassTransitionError);
+        assert.match(error.message, /admin que lo pidió/);
+        return true;
+      },
     );
     const preview = await dryRunMass({
       draft: stored ?? composed.draft,
@@ -212,17 +223,28 @@ test("el borrador se guarda y se vuelve a leer, y el dry-run sigue sin enviar", 
     );
     await assert.rejects(
       () => saveMassDraft(sql, composed.draft, OWNER, { token: opened.token }),
-      MassTransitionError,
+      (error: unknown) => {
+        assert.ok(error instanceof MassTransitionError);
+        assert.match(error.message, /caducado/);
+        return true;
+      },
     );
     const renewed = await openMassLaunch(sql, {
       draftId: "mass-1",
       actor: OWNER,
-      createToken: () => "tok-2",
     });
     const sent = await saveMassDraft(sql, composed.draft, OWNER, {
       token: renewed.token,
     });
     assert.equal(sent.status, "sent");
+    await assert.rejects(
+      () => saveMassDraft(sql, composed.draft, OWNER, { token: renewed.token }),
+      (error: unknown) => {
+        assert.ok(error instanceof MassTransitionError);
+        assert.match(error.message, /ya se consumió/);
+        return true;
+      },
+    );
     await assert.rejects(
       () => updateMassStatus(sql, "mass-1", "retry", OWNER),
       MassTransitionError,

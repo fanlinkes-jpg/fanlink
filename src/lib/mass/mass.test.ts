@@ -539,14 +539,11 @@ test("crear admite admin o el permiso masivos, y el token se compara por hash", 
     true,
   );
   assert.equal(canCreateMass(OWNER), true);
-  const started = beginMassLaunch({
-    actor: OWNER,
-    draftId: "mass-1",
-    createToken: () => "token-1",
-  });
+  const started = beginMassLaunch({ actor: OWNER, draftId: "mass-1" });
   assert.equal(started.ok, true);
   if (!started.ok) return;
-  assert.equal(started.tokenHash.includes("token-1"), false);
+  assert.notEqual(started.tokenHash, started.token);
+  assert.equal(started.tokenHash.length, 64);
   const missing = confirmMassLaunch({
     actor: OWNER,
     presentedToken: started.token,

@@ -1,6 +1,7 @@
 import {
   beginMassLaunch as issueLaunchChallenge,
   canCreateMass,
+  canLaunchMass,
   confirmMassLaunch,
   hashLaunchToken,
   type MassActor,
@@ -118,18 +119,18 @@ export async function saveMassDraft(
 
 export async function openMassLaunch(
   sql: ReadSql,
-  input: {
-    draftId: string;
-    actor: MassActor | null;
-    createToken?: () => string;
-  },
+  input: { draftId: string; actor: MassActor | null },
 ): Promise<{ token: string }> {
+  const adminId = adminWhoLaunches(input.actor);
   const current = await readMassDraft(sql, input.draftId);
   if (!current) throw new MassTransitionError("No está el masivo.");
   if (!canTransitionMass(current.status, "sent")) {
     throw new MassTransitionError("Transición no permitida.");
   }
-  const issued = issueLaunchChallenge({ ...input, draftId: input.draftId });
+  const issued = issueLaunchChallenge({
+    actor: input.actor,
+    draftId: input.draftId,
+  });
   if (!issued.ok) throw new MassAccessError(issued.reason);
   const rows = await sql.query<{ id: string }>(
     `update of_mass_message
@@ -140,7 +141,7 @@ export async function openMassLaunch(
        and status = $4
        and (launch_token_expires_at is null or launch_token_expires_at <= now())
      returning id`,
-    [input.draftId, issued.tokenHash, input.actor?.id ?? "", current.status],
+    [input.draftId, issued.tokenHash, adminId, current.status],
   );
   if (!rows.length) {
     const live = await sql.query<{ token_live: boolean | string | null }>(
@@ -262,7 +263,14 @@ async function commitLaunch(
     [id],
   );
   const row = rows[0];
-  if (!row || !canTransitionMass(statusOf(row.status), "sent")) {
+  if (!row) throw new MassTransitionError("No está el masivo.");
+  const adminId = adminWhoLaunches(actor);
+  if (row.status === "sent") {
+    throw new MassTransitionError("El token ya se consumió.");
+  }
+  const early = launchMiss(row, adminId);
+  if (early) throw new MassTransitionError(early);
+  if (!canTransitionMass(statusOf(row.status), "sent")) {
     throw new MassTransitionError("Transición no permitida.");
   }
   const check = confirmMassLaunch({
@@ -285,13 +293,54 @@ async function commitLaunch(
        and launch_token_expires_at > now()
        and status = $4
      returning id`,
-    [id, hashLaunchToken(token), actor?.id ?? "", row.status],
+    [id, hashLaunchToken(token), adminId, row.status],
   );
-  if (!consumed.length)
-    throw new MassTransitionError("El token de confirmación ha caducado.");
+  if (!consumed.length) {
+    const again = await sql.query<typeof row>(
+      `select status, launch_token_hash, launch_issued_by,
+              (launch_token_expires_at > now()) as token_live
+       from of_mass_message where id = $1`,
+      [id],
+    );
+    const miss = launchMiss(again[0], adminId);
+    if (miss) throw new MassTransitionError(miss);
+    if (again[0] && again[0].status !== row.status) {
+      throw new MassTransitionError("Transición no permitida.");
+    }
+    throw new MassTransitionError("El token ya se consumió.");
+  }
   const stored = await readMassDraft(sql, id);
   if (!stored) throw new MassTransitionError("No está el masivo.");
   return stored;
+}
+
+function adminWhoLaunches(actor: MassActor | null): string {
+  const id = actor?.id.trim() ?? "";
+  if (!id || !canLaunchMass(actor)) {
+    throw new MassAccessError("Falta el admin que pide la confirmación.");
+  }
+  return id;
+}
+
+function launchMiss(
+  row:
+    | {
+        status: string;
+        launch_token_hash: string | null;
+        launch_issued_by: string | null;
+        token_live: boolean | string | null;
+      }
+    | undefined,
+  adminId: string,
+): string | null {
+  if (!row) return "No está el masivo.";
+  if (row.status === "sent") return "El token ya se consumió.";
+  if (row.launch_token_hash == null) return null;
+  if (row.launch_issued_by !== adminId) {
+    return "El token lo tiene que usar el admin que lo pidió.";
+  }
+  if (!isLive(row.token_live)) return "El token de confirmación ha caducado.";
+  return null;
 }
 
 function isLive(value: boolean | string | null | undefined): boolean {

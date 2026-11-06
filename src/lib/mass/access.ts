@@ -21,11 +21,10 @@ export function canLaunchMass(actor: MassActor | null): boolean {
   return actor?.role === "owner" && actor.id.trim().length > 0;
 }
 
-/** Primera petición. Devuelve el token en claro una sola vez. La base guarda el hash. */
+/** Primera petición. El token lo genera el servidor. La base guarda el hash. */
 export function beginMassLaunch(input: {
   actor: MassActor | null;
   draftId: string;
-  createToken?: () => string;
 }):
   | { ok: true; token: string; tokenHash: string }
   | { ok: false; reason: string } {
@@ -36,7 +35,7 @@ export function beginMassLaunch(input: {
     };
   }
   if (!input.draftId.trim()) return { ok: false, reason: "Falta el masivo." };
-  const token = (input.createToken ?? defaultToken)();
+  const token = defaultToken();
   if (!token.trim())
     return { ok: false, reason: "No se ha podido crear el token." };
   return { ok: true, token, tokenHash: hashLaunchToken(token) };
