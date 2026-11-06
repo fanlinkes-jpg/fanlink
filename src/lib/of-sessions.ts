@@ -188,6 +188,21 @@ export type TeamMetricView = {
   threads: number | null;
 };
 
+export type DashboardView = {
+  role: "owner" | "member";
+  dayGrossCents: number | null;
+  monthGrossCents: number | null;
+  activeFans: number | null;
+  alerts: Array<{ kind: "session" | "sync" | "whale" | "drop"; text: string }>;
+};
+
+export const listDashboard = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }): Promise<DashboardView> => {
+    const { listDashboardView } = await import("./of-sessions-runtime.server");
+    return listDashboardView(context.userId);
+  });
+
 export const listTeamMetrics = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async ({ context }): Promise<TeamMetricView[]> => {
