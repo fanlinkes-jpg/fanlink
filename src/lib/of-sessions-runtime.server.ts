@@ -457,14 +457,12 @@ export async function inspectCreatorSession(userId: string, creatorId: string): 
   return view;
 }
 
-export async function listCreatorReadViews(userId: string): Promise<CreatorReadList> {
+export async function listCreatorReadViews(userId: string, scope: "dashboard" | "chat" = "dashboard"): Promise<CreatorReadList> {
   const access = await accessFor(userId);
   const sessions = await getOfSessionManager();
   const accounts = await sessions.listAccounts();
-  const creatorIds = creatorIdsForChats(
-    access,
-    accounts.flatMap((account) => (account.creatorId ? [account.creatorId] : [])),
-  );
+  const allIds = accounts.flatMap((account) => (account.creatorId ? [account.creatorId] : []));
+  const creatorIds = scope === "chat" ? creatorIdsForChats(access, allIds) : dashboardCreatorIds(access, accounts);
   const sql = await getSql();
   const rows = await listCreatorReads(sql, creatorIds);
   const running = new Set((await getOfSessionManager()).readingIds());
@@ -472,7 +470,7 @@ export async function listCreatorReadViews(userId: string): Promise<CreatorReadL
     role: access.role,
     intervalMin: await readSyncIntervalMin(sql, intervalMinFromEnv(process.env.FANLINK_SYNC_INTERVAL_MIN)),
     chatIntervalMin: await readChatIntervalMin(sql, chatIntervalMinFromEnv(process.env.FANLINK_CHAT_SYNC_MIN)),
-    runningCreatorIds: visibleRunning(accounts, null, running),
+    runningCreatorIds: visibleRunning(accounts, new Set(creatorIds), running),
     creators: rows.map((row) => presentRead(access.role, row)),
   };
 }

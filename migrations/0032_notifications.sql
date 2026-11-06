@@ -9,6 +9,7 @@ create table if not exists of_notification (
   amount_cents integer,
   occurred_at timestamptz,
   pending boolean not null default false,
+  first_seen_at timestamptz not null default now(),
   synced_at timestamptz not null,
   origin text not null default 'onlyfans',
   primary key (creator_id, notification_key),

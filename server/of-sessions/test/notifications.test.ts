@@ -9,7 +9,8 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { collectNotifications } from "../sync/collect-notifications.ts";
-import { listNotificationRows, markNotificationsSeen, saveNotificationRead } from "../sync/notification-store.ts";
+import { listNotificationRows, markNotificationPage, markNotificationsSeen, notificationPageFor, saveNotificationRead } from "../sync/notification-store.ts";
+import { dashboardCreatorIds } from "../../../src/lib/dashboard-config.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
@@ -129,6 +130,104 @@ test("la lista pagina y olvida lo que pasa de 90 días", async () => {
     await pg.close();
   }
 });
+
+test("agencia y desconocido no pasan a un tipo que vea el chatter", async () => {
+  const { pg, sql } = await database();
+  try {
+    await saveNotificationRead(sql, "c-alba", {
+      captured: true,
+      reason: null,
+      items: [
+        item("ag", "agency", "2026-11-05T10:00:00.000Z"),
+        item("un", "other", "2026-11-05T09:00:00.000Z"),
+      ],
+    });
+    await saveNotificationRead(sql, "c-alba", {
+      captured: true,
+      reason: null,
+      items: [item("ag", "tip", "2026-11-05T10:00:00.000Z"), item("un", "like", "2026-11-05T09:00:00.000Z")],
+    });
+    const rows = (await listNotificationRows(sql, "c-alba", "dueña", { role: "owner" })).rows;
+    assert.equal(rows.find((row) => row.key === "ag")?.kind, "agency");
+    assert.equal(rows.find((row) => row.key === "un")?.kind, "other");
+  } finally {
+    await pg.close();
+  }
+});
+
+test("el chatter no recibe páginas vacías ni la cuenta de otra persona", async () => {
+  const { pg, sql } = await database();
+  try {
+    await saveNotificationRead(sql, "c-alba", {
+      captured: true,
+      reason: null,
+      items: [
+        item("ag1", "agency", "2026-11-05T12:00:00.000Z"),
+        item("ag2", "agency", "2026-11-05T11:00:00.000Z"),
+        item("tip", "tip", "2026-11-05T10:00:00.000Z"),
+        item("ppv", "ppv", "2026-11-04T10:00:00.000Z"),
+      ],
+    });
+    await saveNotificationRead(sql, "c-nora", {
+      captured: true,
+      reason: null,
+      items: [item("ajena", "tip", "2026-11-05T10:00:00.000Z")],
+    });
+    const page = await listNotificationRows(sql, "c-alba", "chatter", { role: "member", limit: 2 });
+    assert.deepEqual(page.rows.map((row) => row.kind), ["tip", "ppv"]);
+    const chatter = { userId: "chatter", role: "member" as const, creatorIds: ["c-alba"] };
+    const foreign = await notificationPageFor(sql, chatter, "c-nora");
+    assert.deepEqual(foreign.items, []);
+    await assert.rejects(() => markNotificationPage(sql, chatter, "c-nora", ["tip"]), /cuenta/);
+    const own = await notificationPageFor(sql, chatter, "c-alba", null);
+    assert.deepEqual(own.items.map((row) => row.kind), ["tip", "ppv"]);
+    assert.equal(own.items[0]?.amountCents, 500);
+    const still = (await listNotificationRows(sql, "c-alba", "dueña", { role: "owner" })).rows.find((row) => row.key === "tip");
+    assert.equal(still?.seenAt, null);
+    assert.deepEqual(dashboardCreatorIds(chatter, [{ creatorId: "c-alba" }, { creatorId: "c-nora" }]), ["c-alba"]);
+    const first = await listNotificationRows(sql, "c-alba", "dueña", { role: "owner", cursor: "no-es-json" });
+    const clean = await listNotificationRows(sql, "c-alba", "dueña", { role: "owner" });
+    assert.deepEqual(first.rows.map((row) => row.key), clean.rows.map((row) => row.key));
+  } finally {
+    await pg.close();
+  }
+});
+
+test("un aviso sin fecha caduca desde la primera vez que se vio", async () => {
+  const { pg, sql } = await database();
+  try {
+    await saveNotificationRead(sql, "c-alba", {
+      captured: true,
+      reason: null,
+      items: [item("suelto", "like", null)],
+    });
+    const old = new Date(Date.now() - 100 * 86_400_000).toISOString();
+    await sql.query("update of_notification set first_seen_at = $2 where creator_id = $1 and notification_key = $3", [
+      "c-alba",
+      old,
+      "suelto",
+    ]);
+    await saveNotificationRead(sql, "c-alba", { captured: true, reason: null, items: [] });
+    const rows = (await listNotificationRows(sql, "c-alba", "dueña", { role: "owner" })).rows;
+    assert.equal(rows.some((row) => row.key === "suelto"), false);
+  } finally {
+    await pg.close();
+  }
+});
+
+function item(key: string, kind: "agency" | "other" | "tip" | "ppv" | "like", occurredAt: string | null) {
+  return {
+    key,
+    kind,
+    body: kind,
+    fanKey: "7",
+    fanName: "Ana",
+    threadKey: null,
+    amountCents: 500,
+    occurredAt,
+    pending: false,
+  };
+}
 
 function site(origin: string) {
   return {

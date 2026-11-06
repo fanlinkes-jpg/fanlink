@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { createHash } from "node:crypto";
 import {
+  decodeNotificationCursor,
   filterNotifications,
   isNotificationResponseUrl,
   mergeKind,
@@ -99,7 +101,11 @@ test("filtra por pestaña, texto y fechas, y cuenta no leídas", () => {
   assert.equal(merged[0]?.body, "ahora");
   assert.equal(merged[0]?.fanKey, "7");
   assert.equal(mergeKind("tip", "other"), "tip");
-  assert.equal(mergeKind("other", "tip"), "tip");
+  assert.equal(mergeKind("agency", "tip"), "agency");
+  assert.equal(mergeKind("agency", "ppv"), "agency");
+  assert.equal(mergeKind("other", "like"), "other");
+  assert.equal(mergeKind("other", "message"), "other");
+  assert.equal(mergeKind("other", "tip"), "other");
   const payout = parseNotificationPayload({ list: [{ id: "p1", type: "payout", text: "Pago de la agencia $80", createdAt: "2026-11-05T10:00:00.000Z", amount: 80 }] });
   assert.equal(payout[0]?.kind, "agency");
   const unknown = parseNotificationPayload({ list: [{ id: "u1", type: "bonus", text: "Has ganado $12", createdAt: "2026-11-05T10:00:00.000Z", amount: 12 }] });
@@ -111,11 +117,16 @@ test("filtra por pestaña, texto y fechas, y cuenta no leídas", () => {
       { type: "like", text: "dos", createdAt: "2026-11-05T10:00:00.000Z", user: { id: 7 } },
     ],
   });
-  assert.equal(sameTime.length, 2);
-  const longA = notificationKey({ id: `${"a".repeat(130)}x`, kind: "like", rawType: "like", occurredAt: null, fanKey: null, threadKey: null, body: null });
-  const longB = notificationKey({ id: `${"a".repeat(130)}y`, kind: "like", rawType: "like", occurredAt: null, fanKey: null, threadKey: null, body: null });
+  assert.equal(sameTime.length, 1);
+  const longId = `${"a".repeat(130)}x`;
+  const longA = notificationKey({ id: longId, kind: "like", rawType: "like", occurredAt: null, fanKey: null, threadKey: null });
+  const longB = notificationKey({ id: `${"a".repeat(130)}y`, kind: "like", rawType: "like", occurredAt: null, fanKey: null, threadKey: null });
+  const digest = createHash("sha256").update(longId).digest("hex").slice(0, 32);
+  assert.equal(longA, `${longId.slice(0, 80)}\u001f${digest}`);
+  assert.equal(createHash("sha256").update("abc").digest("hex"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
   assert.notEqual(longA, longB);
-  assert.ok((longA ?? "").length <= 120);
+  assert.equal(decodeNotificationCursor("no-es-json"), null);
+  assert.equal(decodeNotificationCursor('{"at":"ayer","key":"x"}'), null);
   assert.equal(redactedNotificationUrl("https://onlyfans.com/api2/v2/users/notifications?offset=0&token=sekret"), "https://onlyfans.com/api2/v2/users/notifications");
   assert.equal(redactedNotificationUrl("https://user:secret@onlyfans.com/api2/v2/users/notifications"), null);
   assert.equal(notificationReadBusy(["otra-cuenta"], "c-alba"), false);

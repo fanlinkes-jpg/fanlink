@@ -110,9 +110,9 @@ Las pestañas son las de OnlyFans: All, Interactions, Purchases, Subscriptions, 
 
 Un chatter ve las notificaciones de las cuentas que tiene asignadas, y en el servidor, no solo en el navegador. Ve la compra, la propina y la suscripción de cada fan de esas cuentas, con el importe que ese fan gastó. No ve cifras de la agencia (ingresos totales, ganancias, payout, saldo) ni un tipo desconocido, sobre todo si trae importe: eso queda en la dueña. Las alertas del Resumen también se recortan en el servidor a las cuentas asignadas.
 
-Marcar como leída es de cada persona, no de la cuenta: si un chatter la marca, la dueña sigue viéndola nueva. El listado va de 50 en 50. Lo que tiene fecha y pasa de 90 días se borra en la siguiente escucha. Si el filtro de fechas deja fuera avisos sin fecha, salen aparte con el aviso «Sin fecha».
+Marcar como leída es de cada persona, no de la cuenta: si un chatter la marca, la dueña sigue viéndola nueva. El listado va de 50 en 50, y el recorte por rol se hace en la consulta, antes del límite. Lo que tiene fecha y pasa de 90 días se borra en la siguiente escucha. Un aviso sin fecha cuenta esos 90 días desde la primera vez que se vio. Si el filtro de fechas deja fuera avisos sin fecha, salen aparte con el aviso «Sin fecha».
 
-La clave de un aviso sin id incluye el texto, el hilo y el tipo. Si pasa de 120 caracteres no se corta por el principio: se guarda un resumen con una huella, para no juntar dos eventos.
+La clave de un aviso sin id es la fecha, el tipo, el fan y el hilo. No usa el texto: si OnlyFans lo cambia, no sale un duplicado. Si la clave pasa de 120 caracteres, el resto es un SHA-256 recortado. Un aviso de agencia o desconocido no pasa después a un tipo que vea el chatter.
 
 ### Escucha
 

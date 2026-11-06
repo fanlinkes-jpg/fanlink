@@ -45,7 +45,7 @@ export function RealChatsPage() {
   const vault = useCrm((s) => s.vault);
   const saveNote = useCrm((s) => s.saveNote);
   const teamAccess = useCrm((s) => s.teamAccess);
-  const reads = useOfReads();
+  const reads = useOfReads("chat");
   const [data, setData] = useState<CreatorChatList | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);

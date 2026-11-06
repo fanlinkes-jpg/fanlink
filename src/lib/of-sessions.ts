@@ -203,9 +203,10 @@ export type CreatorChatList = {
 
 export const listCreatorReads = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
-  .handler(async ({ context }): Promise<CreatorReadList> => {
+  .validator((input: { scope?: "dashboard" | "chat" } | undefined) => input ?? {})
+  .handler(async ({ context, data }): Promise<CreatorReadList> => {
     const { listCreatorReadViews } = await import("./of-sessions-runtime.server");
-    return listCreatorReadViews(context.userId);
+    return listCreatorReadViews(context.userId, data.scope === "chat" ? "chat" : "dashboard");
   });
 
 export const setSyncInterval = createServerFn({ method: "POST" })

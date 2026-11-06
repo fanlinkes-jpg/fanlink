@@ -1,6 +1,14 @@
+import { WorkspaceAccessError } from "../../../src/lib/access-policy.ts";
 import {
+  canReadCreatorNotifications,
+  chatterVisibleKinds,
   decodeNotificationCursor,
   encodeNotificationCursor,
+  isFanSpendKind,
+  isOwnerOnlyKind,
+  notificationLabels,
+  tabOf,
+  NOTIFICATION_KINDS,
   NOTIFICATION_PAGE_SIZE,
   NOTIFICATION_RETENTION_DAYS,
   type ParsedNotification,
@@ -41,12 +49,15 @@ export async function saveNotificationRead(
     await sql.query(
       `insert into of_notification (
          creator_id, notification_key, kind, body, fan_key, fan_name, thread_key,
-         amount_cents, occurred_at, pending, synced_at, origin
-       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         amount_cents, occurred_at, pending, first_seen_at, synced_at, origin
+       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
        on conflict (creator_id, notification_key) do update set
          kind = case
-           when of_notification.kind in ('tip', 'ppv', 'subscription', 'renewal', 'agency')
-            and excluded.kind not in ('tip', 'ppv', 'subscription', 'renewal', 'agency')
+           when of_notification.kind in ('agency', 'other')
+            and excluded.kind not in ('agency', 'other')
+           then of_notification.kind
+           when of_notification.kind in ('tip', 'ppv', 'subscription', 'renewal')
+            and excluded.kind not in ('tip', 'ppv', 'subscription', 'renewal')
            then of_notification.kind
            else excluded.kind
          end,
@@ -70,6 +81,7 @@ export async function saveNotificationRead(
         item.occurredAt,
         item.pending,
         syncedAt,
+        syncedAt,
         ORIGIN,
       ],
     );
@@ -80,12 +92,21 @@ export async function saveNotificationRead(
      where creator_id = $1
        and notification_key in (
          select notification_key from of_notification
-         where creator_id = $1 and occurred_at is not null and occurred_at < $2::timestamptz
+         where creator_id = $1
+           and (
+             (occurred_at is not null and occurred_at < $2::timestamptz)
+             or (occurred_at is null and first_seen_at < $2::timestamptz)
+           )
        )`,
     [creatorId, cutoff],
   );
   await sql.query(
-    "delete from of_notification where creator_id = $1 and occurred_at is not null and occurred_at < $2::timestamptz",
+    `delete from of_notification
+     where creator_id = $1
+       and (
+         (occurred_at is not null and occurred_at < $2::timestamptz)
+         or (occurred_at is null and first_seen_at < $2::timestamptz)
+       )`,
     [creatorId, cutoff],
   );
 }
@@ -99,22 +120,23 @@ export async function listNotificationRows(
   sql: NotificationSql,
   creatorId: string,
   userId: string,
-  options: { limit?: number; cursor?: string | null } = {},
+  options: { limit?: number; cursor?: string | null; role?: "owner" | "member" } = {},
 ): Promise<NotificationPage> {
   const limit = Math.min(100, Math.max(1, options.limit ?? NOTIFICATION_PAGE_SIZE));
   const cursor = decodeNotificationCursor(options.cursor);
-  const params: unknown[] = [creatorId, userId];
+  const kinds = options.role === "member" ? chatterVisibleKinds() : [...NOTIFICATION_KINDS];
+  const params: unknown[] = [creatorId, userId, kinds];
   let cursorSql = "";
   if (cursor?.at) {
     params.push(cursor.at, cursor.key);
     cursorSql = `and (
-      n.occurred_at < $3::timestamptz
-      or (n.occurred_at = $3::timestamptz and n.notification_key < $4)
+      n.occurred_at < $4::timestamptz
+      or (n.occurred_at = $4::timestamptz and n.notification_key < $5)
       or n.occurred_at is null
     )`;
   } else if (cursor) {
     params.push(cursor.key);
-    cursorSql = "and n.occurred_at is null and n.notification_key < $3";
+    cursorSql = "and n.occurred_at is null and n.notification_key < $4";
   }
   params.push(limit + 1);
   const rows = await sql.query<{
@@ -137,6 +159,7 @@ export async function listNotificationRows(
       and s.notification_key = n.notification_key
       and s.user_id = $2
      where n.creator_id = $1
+       and n.kind = any($3::text[])
      ${cursorSql}
      order by n.occurred_at desc nulls last, n.notification_key desc
      limit $${params.length}`,
@@ -186,6 +209,78 @@ export async function listNotificationMeta(sql: NotificationSql): Promise<Notifi
     consecutiveFailures: Number(row.consecutive_failures) || 0,
     lastAttemptAt: asIso(row.last_attempt_at),
   }));
+}
+
+export async function notificationPageFor(
+  sql: NotificationSql,
+  access: { userId: string; role: "owner" | "member"; creatorIds: string[] },
+  creatorId: string,
+  cursor?: string | null,
+) {
+  if (!canReadCreatorNotifications(access, creatorId)) {
+    return { role: access.role, syncedAt: null as string | null, items: [] as NotificationListRow[], nextCursor: null as string | null };
+  }
+  const [page, syncedAt] = await Promise.all([
+    listNotificationRows(sql, creatorId, access.userId, { cursor, role: access.role }),
+    notificationSyncedAt(sql, creatorId),
+  ]);
+  return {
+    role: access.role,
+    syncedAt,
+    nextCursor: page.nextCursor,
+    items: page.rows.flatMap((row) => {
+      const labels = notificationLabels(row, access.role);
+      if (!labels) return [];
+      return [
+        {
+          key: row.key,
+          kind: row.kind,
+          tab: tabOf(row.kind),
+          body: row.body,
+          fanKey: row.fanKey,
+          fanName: row.fanName,
+          threadKey: row.threadKey,
+          amountCents: access.role === "owner" || isFanSpendKind(row.kind) ? row.amountCents : null,
+          occurredAt: row.occurredAt,
+          pending: row.pending,
+          seen: Boolean(row.seenAt),
+          labels,
+        },
+      ];
+    }),
+  };
+}
+
+export type NotificationListRow = {
+  key: string;
+  kind: NotificationRecord["kind"];
+  tab: ReturnType<typeof tabOf>;
+  body: string | null;
+  fanKey: string | null;
+  fanName: string | null;
+  threadKey: string | null;
+  amountCents: number | null;
+  occurredAt: string | null;
+  pending: boolean;
+  seen: boolean;
+  labels: NonNullable<ReturnType<typeof notificationLabels>>;
+};
+
+export async function markNotificationPage(
+  sql: NotificationSql,
+  access: { userId: string; role: "owner" | "member"; creatorIds: string[] },
+  creatorId: string,
+  keys: string[] | null,
+): Promise<number> {
+  if (!canReadCreatorNotifications(access, creatorId)) {
+    throw new WorkspaceAccessError("No tienes esa cuenta.");
+  }
+  const visible = new Set(
+    (await notificationKinds(sql, creatorId, keys ?? []))
+      .filter((row) => access.role === "owner" || !isOwnerOnlyKind(row.kind))
+      .map((row) => row.key),
+  );
+  return markNotificationsSeen(sql, creatorId, access.userId, (keys ?? []).filter((key) => visible.has(key)));
 }
 
 export async function notificationKinds(
