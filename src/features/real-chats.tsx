@@ -6,11 +6,34 @@ import { useCrm, type VaultItem } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
 import { useOfReads } from "@/lib/use-of-reads";
 import { FanInsights } from "@/features/fan-insights";
-import { ChatBubble } from "@/features/chat-bubble";
 import { MessagePriceDialog } from "@/features/message-price-dialog";
 import { FULL_EMOJIS, QUICK_EMOJIS, TEXT_COLORS, authorLabel, matchScripts, mentionToken, paymentLabel, slashQuery, wrapSelection } from "@/lib/composer-tools";
 import { pendingForThread } from "@/lib/pending-thread";
 import { spendTone } from "@/lib/spend-tiers";
+
+function ThreadMessage({ message }: { message: {
+  fromFan: boolean;
+  body: string;
+  authorName: string | null;
+  automatic: boolean | null;
+  mediaCount: number | null;
+  media: Array<unknown> | null;
+  priceCents: number | null;
+  purchased: boolean | null;
+} }) {
+  const hasMedia = (message.mediaCount ?? 0) > 0 || (message.media?.length ?? 0) > 0;
+  const who = message.fromFan ? "" : message.authorName ? authorLabel(message.authorName, false) : authorLabel(null, message.automatic);
+  const pay = paymentLabel(message);
+  return (
+    <li className={message.fromFan ? "" : "text-right"}>
+      <div className={`inline-block max-w-[70%] rounded-2xl px-3 py-2 text-left text-sm ${message.fromFan ? "bg-[#f4f6fb]" : "bg-[#e7f0ff]"}`}>
+        {hasMedia ? <p className="mb-1 rounded bg-[#eceef2] px-2 py-3 text-center text-xs text-[#6d7585]">Medio</p> : null}
+        {message.body ? <p>{message.body}</p> : null}
+      </div>
+      {who || pay ? <p className="mt-1 text-[10px] text-[#6d7585]">{[who, pay].filter(Boolean).join(" · ")}</p> : null}
+    </li>
+  );
+}
 
 export function RealChatsPage() {
   const creators = useCrm((s) => s.creators);
@@ -428,7 +451,7 @@ export function RealChatsPage() {
                 </li>
               ))}
               {messages.map((message) => (
-                <ChatBubble key={message.messageKey} message={message} avatarUrl={message.fromFan ? selected?.avatarUrl ?? null : null} />
+                <ThreadMessage key={message.messageKey} message={message} />
               ))}
               {messages.some((message) => message.fromFan) && fanTranslation ? <li className="text-[10px] text-[#6d7585]">Traducción: Sin datos</li> : null}
             </ol>

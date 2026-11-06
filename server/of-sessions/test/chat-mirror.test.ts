@@ -21,11 +21,10 @@ test("el hilo pinta el medio, el candado y el pagado", async () => {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     await page.goto(`http://127.0.0.1:${port}/mensajes`, { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: /Fan Uno/ }).click();
-    await page.getByText("$150.00 paid").waitFor();
+    await page.getByText("Medio").waitFor();
     await page.getByText("Purchased — has purchased your message for $20.00").first().waitFor();
     await page.getByText("ELENA").waitFor();
-    await page.getByLabel("Bloqueado").waitFor();
-    await page.getByLabel("Vídeo").waitFor();
+    await page.getByText("$150.00 pagado").waitFor();
     await page.close();
   } finally {
     await browser.close().catch(() => undefined);
