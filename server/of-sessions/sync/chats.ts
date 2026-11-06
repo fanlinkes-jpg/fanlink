@@ -64,6 +64,8 @@ export type ChatMedia = {
   kind: "foto" | "video" | "audio" | null;
   seconds: number | null;
   preview: string | null;
+  /** Archivo completo (mp4, audio o m3u8) si el JSON lo trae. */
+  full: string | null;
   locked: boolean | null;
   priceCents: number | null;
   paid: boolean | null;
@@ -513,7 +515,8 @@ export function mediaItems(record: Record<string, unknown>): ChatMedia[] {
     if (!item || typeof item !== "object" || Array.isArray(item)) return [];
     const row = item as Record<string, unknown>;
     const files = nested(row.files);
-    const preview = mediaUrl(row.thumb ?? row.preview ?? row.src ?? files?.thumb ?? nested(files?.thumb)?.url ?? files?.squarePreview);
+    const preview = mediaUrl(row.thumb ?? row.preview ?? files?.thumb ?? nested(files?.thumb)?.url ?? files?.squarePreview);
+    const full = fullMediaUrl(row, files);
     const secondsValue = row.duration ?? row.durationSeconds;
     const seconds = typeof secondsValue === "number" && Number.isFinite(secondsValue) && secondsValue >= 0 ? Math.round(secondsValue) : null;
     const ownPrice = priceCents(row.price);
@@ -523,6 +526,7 @@ export function mediaItems(record: Record<string, unknown>): ChatMedia[] {
       kind: mediaKind(row.type ?? row.mediaType),
       seconds,
       preview,
+      full,
       locked,
       priceCents: ownPrice ?? messagePrice,
       paid: opened ?? messagePaid,
@@ -562,6 +566,23 @@ function eventFrom(record: Record<string, unknown>, body: string): { kind: "comp
 function centsInText(body: string): number | null {
   const match = body.match(/\$(\d+(?:\.\d{1,2})?)/);
   return match?.[1] ? priceCents(match[1]) : null;
+}
+
+function fullMediaUrl(row: Record<string, unknown>, files: Record<string, unknown> | null): string | null {
+  const sources = nested(row.videoSources);
+  const ranked = sources
+    ? Object.entries(sources).sort((left, right) => Number(right[0]) - Number(left[0])).map((entry) => mediaUrl(entry[1]))
+    : [];
+  const drm = nested(files?.drm);
+  const manifest = nested(drm?.manifest);
+  return mediaUrl(files?.full)
+    ?? mediaUrl(files?.source)
+    ?? mediaUrl(row.source)
+    ?? mediaUrl(row.src)
+    ?? ranked.find((item): item is string => item != null)
+    ?? mediaUrl(manifest?.hls)
+    ?? mediaUrl(files?.hls)
+    ?? null;
 }
 
 function mediaUrl(value: unknown): string | null {
