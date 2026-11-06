@@ -396,9 +396,8 @@ export function TeamPage() {
   );
 }
 
-function centsLabel(cents: number, currency: string): string {
-  const major = (cents / 100).toLocaleString("es-ES", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  return `${major} ${currency}`;
+function centsLabel(cents: number, _currency?: string): string {
+  return `$${(cents / 100).toFixed(2)}`;
 }
 
 function sumCents(rows: CreatorEarningView[]): number {
@@ -587,8 +586,8 @@ function TransactionList({
             {tx.fanKey ? ` · ${tx.fanKey}` : ""}
           </span>
           <span className="tabular-nums">
-            {(tx.grossCents / 100).toFixed(2)} {tx.currency}
-            {tx.netCents == null ? " · neto Sin datos" : ` · neto ${(tx.netCents / 100).toFixed(2)}`}
+            {`$${(tx.grossCents / 100).toFixed(2)}`}
+            {tx.netCents == null ? " · neto Sin datos" : ` · neto $${(tx.netCents / 100).toFixed(2)}`}
           </span>
         </li>
       ))}
@@ -955,7 +954,7 @@ export function SettingsPage() {
         <ul className="mt-3 space-y-1 text-sm text-muted">
           <li>Sin compras: ×0,55 sobre la base.</li>
           <li>Sin compra este mes, pero ya compró: ×0,70.</li>
-          <li>Compra poco, menos de 50 € en 30 días: ×0,80.</li>
+          <li>Compra poco, menos de $50.00 en 30 días: ×0,80.</li>
           <li>Gasto medio: el precio base.</li>
           <li>Compra mucho: ×1,30.</li>
           <li>Máximo gasto, ballenas: ×1,55.</li>

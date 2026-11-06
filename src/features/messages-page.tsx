@@ -52,7 +52,7 @@ const GLOSS: Record<string, string> = {
 };
 
 function eur(n: number) {
-  return new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR", minimumFractionDigits: 2 }).format(n);
+  return `$${n.toFixed(2)}`;
 }
 
 function when(ts: number) {
@@ -364,7 +364,7 @@ export function MessagesPage() {
                     value={price}
                     onChange={(e) => setPrice(e.target.value)}
                     inputMode="numeric"
-                    placeholder="PPV €"
+                    placeholder="PPV $"
                     aria-label="Precio base del PPV"
                     className="w-16 rounded-md border border-[#e6e8ee] px-2 py-1 text-xs text-[#1c2333]"
                   />

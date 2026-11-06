@@ -35,12 +35,12 @@ test("la ficha no inventa gasto, propinas ni suscripción", () => {
     ],
     ppvPrices: [500, 300],
   });
-  assert.equal(filled.total, "15.00 USD");
-  assert.match(filled.last, /8.00 USD · message · 2026-11-05/);
-  assert.equal(filled.ppvTotal, "8.00 USD");
-  assert.equal(filled.ppvAvg, "4.00 USD");
-  assert.equal(filled.tipTotal, "2.00 USD");
-  assert.equal(filled.max, "8.00 USD · 2026-11-05");
+  assert.equal(filled.total, "$15.00");
+  assert.match(filled.last, /\$8.00 · message · 2026-11-05/);
+  assert.equal(filled.ppvTotal, "$8.00");
+  assert.equal(filled.ppvAvg, "$4.00");
+  assert.equal(filled.tipTotal, "$2.00");
+  assert.equal(filled.max, "$8.00 · 2026-11-05");
   assert.equal(filled.renew, "Sí");
   assert.equal(filled.notes, "vip");
 });

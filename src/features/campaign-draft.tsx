@@ -133,7 +133,7 @@ export function CampaignDrafts() {
             <p className="font-medium">{draft.name} · {draft.recipientCount} destinatarios · {draft.status === "scheduled" ? "programada" : "borrador"}</p>
             <p className="text-muted">
               Compras: {draft.purchases == null ? "Sin datos" : draft.purchases}
-              {" · "}Ingresos: {draft.revenueCents == null ? "Sin datos" : (draft.revenueCents / 100).toFixed(2)}
+              {" · "}Ingresos: {draft.revenueCents == null ? "Sin datos" : `$${(draft.revenueCents / 100).toFixed(2)}`}
               {" · "}Conversión: {formatRatio(draft.purchases == null || draft.recipientCount <= 0 ? null : draft.purchases / draft.recipientCount)}
             </p>
             <p className="text-muted">{draft.body}</p>

@@ -130,7 +130,7 @@ export function CampaignsPage() {
           <Select value={trigger} onChange={(e) => setTrigger(e.target.value)} aria-label="Disparador">
             {["Manual", "Nuevo suscriptor", "Expiración", "Compra", "Fan en línea"].map((t) => <option key={t}>{t}</option>)}
           </Select>
-          <Field value={price} onChange={(e) => setPrice(e.target.value)} placeholder="Precio base €" inputMode="numeric" />
+          <Field value={price} onChange={(e) => setPrice(e.target.value)} placeholder="Precio base $" inputMode="numeric" />
           <textarea value={body} onChange={(e) => setBody(e.target.value)} required rows={3} placeholder="Hola {nombre}, tengo un set para ti" className="rounded-md border border-line bg-bg px-3 py-2 text-sm md:col-span-2" />
           <p className="text-xs text-muted md:col-span-2">{"{nombre}"} se cambia por el nombre de cada fan. Si el precio se parte en varios tramos, la app manda un masivo por tramo.</p>
           <Button type="submit">Guardar</Button>

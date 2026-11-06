@@ -33,7 +33,7 @@ export type InsightModel = {
 
 export function moneyOrEmpty(cents: number | null): string {
   if (cents == null) return "Sin datos";
-  return `${(cents / 100).toFixed(2)} USD`;
+  return `$${(cents / 100).toFixed(2)}`;
 }
 
 /** Solo usa cifras que ya vienen de OnlyFans. Lo que falta queda en Sin datos. */

@@ -181,11 +181,11 @@ function freshData() {
   ];
 
   const lists: SmartList[] = [
-    { id: "l-ballenas", name: "Ballenas", detail: "Gasto de vida ≥ 500 €", kind: "ballenas", minSpend: 500 },
+    { id: "l-ballenas", name: "Ballenas", detail: "Gasto de vida ≥ $500.00", kind: "ballenas", minSpend: 500 },
     { id: "l-nuevos", name: "Nuevos 7 días", detail: "Suscripción de 7 días o menos", kind: "nuevos", minSpend: 0 },
     { id: "l-riesgo", name: "En riesgo", detail: "Renovación o ya expirados", kind: "riesgo", minSpend: 0 },
     { id: "l-online", name: "En línea ahora", detail: "Conectados en este momento", kind: "online", minSpend: 0 },
-    { id: "l-frio", name: "Sin compra 30 días", detail: "Activos con 0 € este mes", kind: "sincompra", minSpend: 0 },
+    { id: "l-frio", name: "Sin compra 30 días", detail: "Activos con $0.00 este mes", kind: "sincompra", minSpend: 0 },
   ];
 
   return {
@@ -494,7 +494,7 @@ export const useCrm = create<CrmState>()((set, get) => ({
             {
               id: uid(),
               name: name.trim() || "Lista nueva",
-              detail: `Gasto 30 días ≥ ${minSpend} €`,
+              detail: `Gasto 30 días ≥ $${Number(minSpend).toFixed(2)}`,
               kind: "custom",
               minSpend,
               custom: true,

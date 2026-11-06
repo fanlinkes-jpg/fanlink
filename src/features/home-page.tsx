@@ -54,5 +54,5 @@ export function HomePage() {
 function money(cents: number | null, owner: boolean): string {
   if (!owner) return "Los ingresos los ve la dueña";
   if (cents == null) return "Sin datos";
-  return (cents / 100).toFixed(2);
+  return `$${(cents / 100).toFixed(2)}`;
 }
