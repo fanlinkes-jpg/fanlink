@@ -1,28 +1,39 @@
 import type { Page } from "playwright";
 import { DEV_USER_ID, authConfigured } from "@/lib/auth/verify.server";
-import { creatorIdsForChats } from "@/lib/access-policy";
+import { canSeeAgencyEarnings, creatorIdsForChats } from "@/lib/access-policy";
 import { getSql } from "@/lib/db";
 import { getOfSessionManager } from "@/lib/of-sessions-runtime.server";
 import { ensureStaff } from "@/lib/workspace-store";
 import { onlyFansSite } from "../../server/of-sessions/sessions/onlyfans.ts";
 import { canReadVault } from "../../server/of-sessions/sync/vault-access.ts";
-import { listVault, saveVaultRead, vaultCursor } from "../../server/of-sessions/sync/vault-store.ts";
-import { captureVault, continueVault, vaultForBrowser, vaultPaceMs, type VaultPageLike } from "../../server/of-sessions/sync/vault.ts";
+import { listVault, saveVaultRead, sendsForFan, vaultCursor } from "../../server/of-sessions/sync/vault-store.ts";
+import { captureVault, continueVault, priceRuleFromEnv, vaultForBrowser, vaultForRole, vaultPaceMs, type VaultPageLike, type VaultSend } from "../../server/of-sessions/sync/vault.ts";
 
-export async function listVaultView(userId: string, creatorId: string) {
+export async function listVaultView(userId: string, creatorId: string, fanKey: string | null) {
   const access = await accessFor(userId);
+  const canSeeRevenue = canSeeAgencyEarnings(access);
   if (!canReadVault({ localOpen: access.devMode, role: access.role, perms: access.perms })) {
-    return { items: [], folders: [], notice: "Sin datos" };
+    return { items: [], folders: [], sends: [], canSeeRevenue, priceRule: priceRuleFromEnv(process.env.FANLINK_PRICE_RULE), notice: "Sin datos" };
   }
   if (!creatorId || !creatorIdsForChats(access, [creatorId]).includes(creatorId)) {
-    return { items: [], folders: [], notice: "Sin datos" };
+    return { items: [], folders: [], sends: [], canSeeRevenue, priceRule: priceRuleFromEnv(process.env.FANLINK_PRICE_RULE), notice: "Sin datos" };
   }
-  const stored = await listVault(await getSql(), creatorId);
+  const sql = await getSql();
+  const stored = await listVault(sql, creatorId);
+  const sends = (await sendsForFan(sql, creatorId, fanKey)).map((send) => hideSendPrice(send, canSeeRevenue));
   return {
-    items: stored.items.map(vaultForBrowser),
+    items: stored.items.map((item) => vaultForRole(vaultForBrowser(item), canSeeRevenue)),
     folders: stored.folders,
+    sends,
+    canSeeRevenue,
+    priceRule: priceRuleFromEnv(process.env.FANLINK_PRICE_RULE),
     notice: stored.items.length === 0 && stored.folders.length === 0 ? "Sin datos" : null,
   };
+}
+
+function hideSendPrice(send: VaultSend, canSeeRevenue: boolean): VaultSend {
+  if (canSeeRevenue) return send;
+  return { ...send, priceCents: null };
 }
 
 export async function syncVaultView(userId: string, creatorId: string, mode: "sync" | "continue") {

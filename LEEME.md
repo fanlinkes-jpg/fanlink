@@ -74,7 +74,7 @@ Fragilidad: si OnlyFans cambia la ruta del chat o los campos `withUser`, `lastMe
 
 ## Vídeo del hilo
 
-El mensaje guarda foto, vídeo o audio: duración, miniatura, candado, precio y si se pagó. Hace falta `npm run db:migrate` para `0028_message_media.sql`. El reproductor no envía nada y no toca `FANLINK_ENABLE_SEND`. El compositor sigue dejando el texto como pendiente; el botón de envío real sigue apagado. Adjuntar desde la bóveda llega en otra fase y, cuando exista, solo adjuntará: el envío real sigue en la rama del chat, detrás de ese flag.
+El mensaje guarda foto, vídeo o audio: duración, miniatura, candado, precio y si se pagó. Hace falta `npm run db:migrate` para `0028_message_media.sql`. El reproductor no envía nada y no toca `FANLINK_ENABLE_SEND`. El compositor deja el texto como pendiente. El botón de envío real sigue apagado. Adjuntar desde la bóveda guarda el id del medio, aparte del texto: el título interno no se escribe en el mensaje.
 
 Lo que envía la cuenta se reproduce si hay URL completa, aunque OnlyFans marque `locked`. Lo del fan sigue `canView`: si está bloqueado, la miniatura sale borrosa, con candado y precio (o «Sin datos» si el precio no vino). Esa URL completa no se manda al navegador. El play pide `/api/chat-media?variant=full` y el servidor lee la URL guardada.
 
@@ -90,9 +90,11 @@ La miniatura se corta a 5 MB, con 8 s de silencio y 20 s de reloj total. El víd
 
 La lectura abre `https://onlyfans.com/my/vault` y guarda el JSON que esa página pide. No se construye ni se firma una llamada a `api2`. Va de una página en una, con al menos 5 segundos de espera (`FANLINK_VAULT_PACE_MS` no puede bajar de eso). **Sync now** empieza. **Continue** solo sigue si el JSON anterior trajo cursor; si no, dice «Sin datos». Hace falta `0029_vault_media.sql`.
 
-Si falta el título, la duración, el precio, la pareja o el historial, se muestra «Sin datos». El precio sugerido solo sale con duración y carpeta: sola o individual entre $12 y $17 (unos $1.08 por minuto), pareja entre $19 y $29, anal o película en el techo, y un dólar por encima de la última compra de ese fan dentro de la banda. `NO VENDER` y `SIN EDITAR` no se adjuntan. Si un mensaje de la cuenta ya guardó el id de esa pieza para ese fan, se avisa con fecha, precio, compra y chatter.
+Si falta el título, la duración, el precio, la pareja o el historial, se muestra «Sin datos». La cifra que dice **Regla** no es un dato de OnlyFans: es la regla por defecto (sola $12–17, unos $1.08 por minuto; pareja $19–29; anal o película en el techo). Se puede cambiar con `FANLINK_PRICE_RULE`, un JSON con `soloMin`, `soloMax`, `soloPerMinute`, `coupleMin`, `coupleMax`, `couplePerMinute` y `step`. El escalón solo mira compras reales (`purchased`), no un envío que lleve precio. `NO VENDER` y `SIN EDITAR` (también `No-vender` o `no vender`) no se adjuntan, y una subcarpeta hereda el bloqueo. El servidor lo rechaza aunque la pantalla lo deje pasar. Las ventas y el precio de cada pieza solo los ve la dueña.
 
-Las listas quedan a la izquierda y el grid a la derecha. Se puede buscar en la carpeta abierta o en toda la bóveda, por texto, tipo, pareja, gratis o PPV, enviado a este fan y el resto de filtros. El orden es fecha, duración, ventas o precio. Cada chatter recuerda los suyos en este navegador.
+«Ya enviado» sale de los mensajes guardados de ese fan, no solo del hilo que está abierto. El id del medio en el chat es el mismo que el de la bóveda. Si no hay fan, «Sin datos».
+
+Las listas quedan a la izquierda y el grid a la derecha. Se puede buscar en la carpeta abierta o en toda la bóveda, por texto, tipo, pareja, gratis o PPV, enviado a este fan y el resto de filtros. El orden es fecha, duración, ventas (solo la dueña) o precio. Cada chatter recuerda los suyos en este navegador. Una playlist HLS master se reescribe hacia la variante, y la variante hacia los segmentos.
 
 ## Avisos de WhatsApp
 

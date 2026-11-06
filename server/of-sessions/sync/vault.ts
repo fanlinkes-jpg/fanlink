@@ -119,36 +119,99 @@ export function coupleFromName(name: string | null): VaultCouple | null {
   return null;
 }
 
+function normalizeLabel(value: string): string {
+  return value.normalize("NFD").replace(/\p{M}/gu, "").toUpperCase().replace(/[^A-Z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/** "No-vender", "no vender" y "SIN-EDITAR" cuentan igual. */
 export function sendBlock(...parts: Array<string | null>): VaultBlock | null {
-  const text = parts.filter(Boolean).join(" ").toUpperCase();
-  if (text.includes("NO VENDER")) return "NO VENDER";
-  if (text.includes("SIN EDITAR")) return "SIN EDITAR";
+  const text = normalizeLabel(parts.filter((part): part is string => Boolean(part)).join(" "));
+  if (!text) return null;
+  if (/(^| )NO VENDER( |$)/.test(text)) return "NO VENDER";
+  if (/(^| )SIN EDITAR( |$)/.test(text)) return "SIN EDITAR";
   return null;
+}
+
+/** Una subcarpeta hereda el bloqueo de cualquiera de sus padres. */
+export function inheritedBlock(folders: VaultFolder[], folderId: string | null): VaultBlock | null {
+  const byId = new Map(folders.map((folder) => [folder.id, folder]));
+  const seen = new Set<string>();
+  let current = folderId;
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    const folder = byId.get(current);
+    if (!folder) return null;
+    const block = sendBlock(folder.name);
+    if (block) return block;
+    current = folder.parentId;
+  }
+  return null;
+}
+
+/** Regla de agencia, no un precio leído de OnlyFans. Se puede sustituir. */
+export type PriceRule = {
+  soloMin: number;
+  soloMax: number;
+  soloPerMinute: number;
+  coupleMin: number;
+  coupleMax: number;
+  couplePerMinute: number;
+  step: number;
+};
+
+export const DEFAULT_PRICE_RULE: PriceRule = {
+  soloMin: 1200,
+  soloMax: 1700,
+  soloPerMinute: 108,
+  coupleMin: 1900,
+  coupleMax: 2900,
+  couplePerMinute: 160,
+  step: 100,
+};
+
+export const PRICE_RULE_LABEL = "Regla";
+
+export type FanPurchase = { priceCents: number | null; purchased: boolean | null };
+
+export function priceRuleFromEnv(raw: string | undefined): PriceRule {
+  if (raw == null || raw.trim() === "") return { ...DEFAULT_PRICE_RULE };
+  try {
+    const parsed = JSON.parse(raw) as Partial<PriceRule>;
+    const rule = { ...DEFAULT_PRICE_RULE, ...parsed };
+    const values = [rule.soloMin, rule.soloMax, rule.soloPerMinute, rule.coupleMin, rule.coupleMax, rule.couplePerMinute, rule.step];
+    if (values.some((value) => !Number.isInteger(value) || value < 0)) return { ...DEFAULT_PRICE_RULE };
+    if (rule.soloMin > rule.soloMax || rule.coupleMin > rule.coupleMax) return { ...DEFAULT_PRICE_RULE };
+    return rule;
+  } catch {
+    return { ...DEFAULT_PRICE_RULE };
+  }
 }
 
 /**
  * Sola, unos $1.08 por minuto, entre $12 y $17.
- * Pareja, entre $19 y $29. Anal, película o más de 10 minutos, el techo.
- * Con histórico, un dólar por encima de la última compra, dentro de esa banda.
+ * Pareja, entre $19 y $29. Anal o película, el techo.
+ * El escalón solo sube desde compras reales (purchased), no desde un envío con precio.
  */
 export function suggestPriceCents(input: {
   seconds: number | null;
   couple: VaultCouple | null;
   act: string | null;
-  fanPaidCents?: number[];
+  purchases?: FanPurchase[];
+  rule?: PriceRule;
 }): number | null {
   if (input.seconds == null || input.seconds < 0 || input.couple == null) return null;
+  const rule = input.rule ?? DEFAULT_PRICE_RULE;
   const couple = input.couple === "B/G" || input.couple === "G/G";
-  const min = couple ? 1900 : 1200;
-  const max = couple ? 2900 : 1700;
-  const perMinute = couple ? 160 : 108;
+  const min = couple ? rule.coupleMin : rule.soloMin;
+  const max = couple ? rule.coupleMax : rule.soloMax;
+  const perMinute = couple ? rule.couplePerMinute : rule.soloPerMinute;
   const high = input.couple === "PELICULA" || (input.act ?? "").toLowerCase().includes("anal");
   let price = Math.min(max, Math.max(min, Math.round((input.seconds / 60) * perMinute)));
   if (high) price = max;
-  const paid = input.fanPaidCents?.filter((value) => Number.isFinite(value) && value >= 0) ?? [];
-  if (!high && paid.length > 0) {
-    const last = paid[paid.length - 1] ?? min;
-    price = Math.min(max, Math.max(min, last + 100));
+  const bought = (input.purchases ?? []).filter((row) => row.purchased === true && row.priceCents != null && row.priceCents >= 0);
+  if (!high && bought.length > 0) {
+    const last = bought[bought.length - 1]?.priceCents ?? min;
+    price = Math.min(max, Math.max(min, last + rule.step));
   }
   return price;
 }
@@ -157,7 +220,7 @@ export function parseVaultPayload(payload: unknown): VaultRead {
   const row = record(payload);
   const folders = foldersFrom(row);
   const folderNames = new Map(folders.map((folder) => [folder.id, folder.name]));
-  const items = itemsFrom(row, folderNames);
+  const items = itemsFrom(row, folderNames, folders);
   const hasMore = row?.hasMore === true || row?.has_more === true;
   const cursor = text(row?.nextOffset ?? row?.next_offset ?? row?.offset);
   return {
@@ -295,6 +358,12 @@ export function vaultForBrowser(item: VaultItem): Omit<VaultItem, "preview" | "f
   return { ...rest, hasPreview: Boolean(preview) };
 }
 
+/** Ventas y precio por pieza son ingresos. Un chatter no los recibe. */
+export function vaultForRole<T extends { sales: number | null; priceCents: number | null }>(item: T, canSeeRevenue: boolean): T {
+  if (canSeeRevenue) return item;
+  return { ...item, sales: null, priceCents: null };
+}
+
 export type VaultPageLike = {
   goto(url: string): Promise<void>;
   on(event: "response", handler: (response: { url(): string; status(): number; text(): Promise<string> }) => void): void;
@@ -365,7 +434,7 @@ function compareVault(left: VaultItem, right: VaultItem, sort: VaultFilters["sor
   return (left.createdAt ?? "").localeCompare(right.createdAt ?? "");
 }
 
-function itemsFrom(row: Record<string, unknown> | null, folderNames: Map<string, string>): VaultItem[] {
+function itemsFrom(row: Record<string, unknown> | null, folderNames: Map<string, string>, folders: VaultFolder[]): VaultItem[] {
   const list = arrayOf(row, ["list", "items", "media", "files"]);
   const items: VaultItem[] = [];
   for (const entry of list) {
@@ -377,7 +446,7 @@ function itemsFrom(row: Record<string, unknown> | null, folderNames: Map<string,
     const folderName = folderId ? folderNames.get(folderId) ?? text(record(item.vaultList)?.name) : null;
     const tags = tagsFrom(item);
     const title = text(item.title ?? item.name ?? item.fileName);
-    const blocked = sendBlock(title, folderName);
+    const blocked = sendBlock(title, folderName) ?? inheritedBlock(folders, folderId);
     items.push({
       id,
       title,

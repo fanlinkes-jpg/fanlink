@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { mediaItems } from "../sync/chats.ts";
 import {
   EMPTY_FILTERS,
   applyVaultFilters,
@@ -14,7 +15,12 @@ import {
   plannedVaultNavigation,
   sendToFan,
   sendsFromMessages,
+  inheritedBlock,
+  PRICE_RULE_LABEL,
+  priceRuleFromEnv,
+  sendBlock,
   suggestPriceCents,
+  vaultForRole,
   vaultForBrowser,
   vaultPaceMs,
   type VaultItem,
@@ -38,6 +44,13 @@ const sola: VaultItem = {
   act: null,
   blocked: null,
 };
+
+test("el id del medio del chat coincide con el de la bóveda", () => {
+  const chat = mediaItems({ media: [{ id: 99, type: "video" }] });
+  const vault = parseVaultPayload({ list: [{ id: 99, type: "video", name: "tarde" }] });
+  assert.equal(chat[0]?.vaultId, "99");
+  assert.equal(vault.items[0]?.id, chat[0]?.vaultId);
+});
 
 test("el listado sale del JSON de la página, con carpetas y etiquetas", () => {
   const read = parseVaultPayload({
@@ -124,8 +137,25 @@ test("el precio sugerido sigue la banda y el histórico, y no inventa duración"
   assert.equal(suggestPriceCents({ seconds: 60, couple: "B/G", act: null }), 1900);
   assert.equal(suggestPriceCents({ seconds: 20 * 60, couple: "G/G", act: null }), 2900);
   assert.equal(suggestPriceCents({ seconds: 60, couple: "PELICULA", act: null }), 1700);
-  assert.equal(suggestPriceCents({ seconds: 180, couple: "SOLA", act: null, fanPaidCents: [1300] }), 1400);
-  assert.equal(suggestPriceCents({ seconds: 180, couple: "SOLA", act: null, fanPaidCents: [5000] }), 1700);
+  assert.equal(suggestPriceCents({ seconds: 180, couple: "SOLA", act: null, purchases: [{ priceCents: 1300, purchased: true }] }), 1400);
+  assert.equal(suggestPriceCents({ seconds: 180, couple: "SOLA", act: null, purchases: [{ priceCents: 1300, purchased: false }] }), 1200);
+  assert.equal(suggestPriceCents({ seconds: 180, couple: "SOLA", act: null, purchases: [{ priceCents: 5000, purchased: true }] }), 1700);
+  assert.equal(PRICE_RULE_LABEL, "Regla");
+  assert.equal(priceRuleFromEnv(undefined).soloMin, 1200);
+  assert.equal(priceRuleFromEnv("{\"soloMin\":1500}").soloMin, 1500);
+  assert.equal(priceRuleFromEnv("no-json").soloMin, 1200);
+  assert.equal(sendBlock("No-vender"), "NO VENDER");
+  assert.equal(sendBlock("no vender"), "NO VENDER");
+  assert.equal(sendBlock("SIN-EDITAR"), "SIN EDITAR");
+  const folders = [
+    { id: "root", name: "NO VENDER", parentId: null },
+    { id: "child", name: "tarde", parentId: "root" },
+  ];
+  assert.equal(inheritedBlock(folders, "child"), "NO VENDER");
+  assert.equal(inheritedBlock([{ id: "ok", name: "SOLA", parentId: null }], "ok"), null);
+  const hidden = vaultForRole({ sales: 4, priceCents: 1200 }, false);
+  assert.equal(hidden.sales, null);
+  assert.equal(hidden.priceCents, null);
 });
 
 test("NO VENDER y SIN EDITAR no se adjuntan, y el historial avisa solo si consta", () => {

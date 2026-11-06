@@ -1,9 +1,9 @@
 import { BROWSER_FINGERPRINT } from "../sessions/browser-factory.ts";
 import { PREVIEW_MAX_BYTES, mediaHostAllowed, nextMediaUrl } from "./history.ts";
+import { PREVIEW_TOTAL_TIMEOUT_MS, readPreviewBody } from "./media-body.ts";
 import { MEDIA_FETCH_TIMEOUT_MS, MEDIA_MAX_BYTES, type UpstreamResponse } from "./media-stream.ts";
 
-/** Reloj de toda la miniatura. history.ts del hilo solo corta por silencio. */
-export const PREVIEW_TOTAL_TIMEOUT_MS = 20_000;
+export { PREVIEW_TOTAL_TIMEOUT_MS };
 
 /**
  * `context.request` de la sesión. Comparte proxy, cookies y huella del perfil.
@@ -17,6 +17,8 @@ export type SessionResponse = {
   status(): number;
   headers(): Record<string, string> | { get(name: string): string | null };
   body(): Promise<Uint8Array>;
+  /** Si viene, se lee por trozos. Sin content-length no se usa body(). */
+  stream?: ReadableStream<Uint8Array> | null;
 };
 
 /** Con sesión, la miniatura sale del navegador. Sin sesión, un GET sin cookies. */
@@ -79,6 +81,10 @@ export async function readSessionMedia(
     if (status < 200 || status >= 300) return null;
     const announced = Number(headerValue(response.headers(), "content-length") ?? "");
     if (Number.isFinite(announced) && announced > maxBytes) return null;
+    if (response.stream) {
+      return readPreviewBody(response.stream, maxBytes, Math.min(remaining, PREVIEW_TOTAL_TIMEOUT_MS), remaining);
+    }
+    if (!Number.isFinite(announced)) return null;
     const bytes = await response.body();
     if (bytes.byteLength === 0 || bytes.byteLength > maxBytes) return null;
     return bytes;
@@ -119,6 +125,7 @@ export async function sessionUpstream(
     return { status: 416, location: null, headers: out, body: null };
   }
   if (status < 200 || status >= 300) return { status, location: null, headers: out, body: null };
+  if (response.stream) return { status, location: null, headers: out, body: response.stream };
   const bytes = await response.body();
   if (bytes.byteLength > maxBytes) return { status: 416, location: null, headers: out, body: null };
   const body = new ReadableStream<Uint8Array>({

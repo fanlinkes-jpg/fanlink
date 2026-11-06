@@ -12,7 +12,9 @@ import { pruneMediaCache, shouldPruneMediaCache } from "../../../server/of-sessi
 import { loadPreviewBytes, openPlayable, type SessionRun } from "../../../server/of-sessions/sync/media-load.ts";
 import { mediaPlay } from "../../../server/of-sessions/sync/media-play.ts";
 import { playwrightSessionRequest } from "../../../server/of-sessions/sync/media-session.ts";
-import { isHlsUrl, loadPlaylistCached, playlistUrls, rewritePlaylist } from "../../../server/of-sessions/sync/media-stream.ts";
+import { hlsUrlAllowed, rewriteHls } from "../../../server/of-sessions/sync/media-hls.ts";
+import { runMediaTask } from "../../../server/of-sessions/sync/media-gate.ts";
+import { isHlsUrl, loadPlaylistCached, playlistUrls } from "../../../server/of-sessions/sync/media-stream.ts";
 import { decodeMedia, mediaHostAllowed } from "../../../server/of-sessions/sync/history.ts";
 
 export const Route = createFileRoute("/api/chat-media")({
@@ -63,20 +65,39 @@ async function streamMedia(
   const decision = mediaPlay({ ...item, full: item.full ?? null }, rows[0].from_fan);
   if (!decision.play) return new Response(decision.notice, { status: decision.notice.includes("bloqueado") ? 403 : 410 });
   const session = await sessionRun(creatorId);
-  if (decision.hls && variant === "full") {
-    const playlist = await loadPlaylistCached(`${creatorId}\n${decision.url}`, Date.now(), () => readPlaylist(decision.url, session));
+  if (decision.hls && (variant === "full" || variant === "playlist")) {
+    const source = variant === "playlist" && segmentUrl ? segmentUrl : decision.url;
+    const master = await loadPlaylistCached(`${creatorId}\n${decision.url}`, Date.now(), () => readPlaylist(decision.url, session));
+    if (!master) return new Response("Enlace caducado, recarga el chat", { status: 410 });
+    if (source !== decision.url && !hlsUrlAllowed(master, decision.url, [], source)) {
+      return new Response("Enlace caducado, recarga el chat", { status: 403 });
+    }
+    const playlist = source === decision.url
+      ? master
+      : await loadPlaylistCached(`${creatorId}\n${source}`, Date.now(), () => readPlaylist(source, session));
     if (!playlist) return new Response("Enlace caducado, recarga el chat", { status: 410 });
-    const body = rewritePlaylist(playlist, decision.url, (absolute) => {
+    const body = rewriteHls(playlist, source, (absolute, kind) => {
       if (!mediaHostAllowed(absolute)) return null;
-      const params = new URLSearchParams({ creatorId, threadKey, messageKey, index: String(index), variant: "segment", u: absolute });
+      const params = new URLSearchParams({
+        creatorId,
+        threadKey,
+        messageKey,
+        index: String(index),
+        variant: kind === "playlist" ? "playlist" : "segment",
+        u: absolute,
+      });
       return `/api/chat-media?${params.toString()}`;
     });
     return new Response(body, { headers: { "content-type": "application/vnd.apple.mpegurl", "cache-control": "private, no-store" } });
   }
   let target = decision.url;
   if (variant === "segment") {
-    const playlist = await loadPlaylistCached(`${creatorId}\n${decision.url}`, Date.now(), () => readPlaylist(decision.url, session));
-    if (!segmentUrl || !decision.hls || !playlistUrls(playlist ?? "", decision.url).includes(segmentUrl)) {
+    const master = await loadPlaylistCached(`${creatorId}\n${decision.url}`, Date.now(), () => readPlaylist(decision.url, session));
+    const nested = playlistUrls(master ?? "", decision.url)
+      .filter((url) => /\.m3u8(\?|$)/i.test(url))
+      .map(async (url) => ({ url, body: await loadPlaylistCached(`${creatorId}\n${url}`, Date.now(), () => readPlaylist(url, session)) ?? "" }));
+    const lists = await Promise.all(nested);
+    if (!segmentUrl || !decision.hls || !master || !hlsUrlAllowed(master, decision.url, lists, segmentUrl)) {
       return new Response("Enlace caducado, recarga el chat", { status: 403 });
     }
     target = segmentUrl;
@@ -126,13 +147,13 @@ async function sessionRun(creatorId: string): Promise<SessionRun | null> {
     const sessions = await getOfSessionManager();
     const account = (await sessions.listAccounts()).find((item) => item.creatorId === creatorId);
     if (!account || account.status !== "active" || !account.hasStorageState) return null;
-    return async (task) => {
+    return async (task) => runMediaTask(creatorId, async () => {
       try {
         return await sessions.withSession(account.id, (context) => task(playwrightSessionRequest(context.request)));
       } catch {
         return null;
       }
-    };
+    });
   } catch {
     return null;
   }

@@ -71,6 +71,53 @@ test("el trozo de vídeo por la sesión tampoco copia cookies", async () => {
   assert.equal(bytes.byteLength, 1);
 });
 
+test("sin content-length la miniatura se corta en streaming y no lee el cuerpo entero", async () => {
+  let bodyCalls = 0;
+  let cancelled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      controller.enqueue(new Uint8Array(1_000_000));
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  const bytes = await readSessionMedia(client(async () => ({
+    status: () => 200,
+    headers: () => ({}),
+    stream,
+    body: async () => {
+      bodyCalls += 1;
+      return new Uint8Array([1]);
+    },
+  })), "https://cdn2.onlyfans.com/a.jpg", { maxBytes: 1_500_000, totalMs: 2_000 });
+  assert.equal(bytes, null);
+  assert.equal(bodyCalls, 0);
+  assert.equal(cancelled, true);
+});
+
+test("el trozo con stream no se junta en memoria", async () => {
+  let bodyCalls = 0;
+  const opened = await sessionUpstream(client(async () => ({
+    status: () => 200,
+    headers: () => ({ "content-type": "video/mp4" }),
+    stream: new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1]));
+        controller.enqueue(new Uint8Array([2]));
+        controller.close();
+      },
+    }),
+    body: async () => {
+      bodyCalls += 1;
+      return new Uint8Array(8);
+    },
+  })), "https://cdn2.onlyfans.com/v.mp4", new Headers());
+  assert.equal(bodyCalls, 0);
+  const bytes = new Uint8Array(await new Response(opened.body ?? undefined).arrayBuffer());
+  assert.deepEqual([...bytes], [1, 2]);
+});
+
 function client(get: SessionRequest["get"]): SessionRequest {
   return { get };
 }

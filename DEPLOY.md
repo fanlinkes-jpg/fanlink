@@ -66,7 +66,11 @@ export FANLINK_WHATSAPP_PHONE_ID=
 
 `GET /api/chat-live` es un stream SSE. El proxy no puede acumular la respuesta: nginx necesita `proxy_buffering off;` y la app ya manda `X-Accel-Buffering: no`. El timeout de lectura tiene que aguantar la conexión abierta (minutos, no el timeout corto de una API). Sin eso el navegador se entera del mensaje tarde o la conexión se corta.
 
-`npm run db:migrate` aplica también `0019_chat_author.sql` (autor del mensaje y borradores salientes), `0020_chat_card.sql` (ficha del fan), `0028_message_media.sql` (miniatura y archivo del mensaje) y `0029_vault_media.sql` (bóveda). La 0021 a la 0027 quedan para el hilo y los masivos.
+`npm run db:migrate` aplica `0019_chat_author.sql`, `0020_chat_card.sql`, `0028_message_media.sql`, `0029_vault_media.sql` y `0030_outbound_media.sql`. La 0021 a la 0027 quedan para el hilo y los masivos. `0028` usa `add column if not exists`: si el #4 ya creó `media_count`, `media_seconds`, `media_preview` y `media_json`, no falla.
+
+La miniatura de la bóveda se cachea en `data/media-cache` y responde con el content-type real y `X-Content-Type-Options: nosniff`. Las lecturas de medio de una misma cuenta van de una en una, para no retrasar la sincronización. El vídeo con URL firmada se reenvía en streaming; la sesión solo entra si esa lectura caduca. Una playlist HLS master se reescribe a la variante y la variante a los segmentos.
+
+`FANLINK_PRICE_RULE` sustituye la regla de precio de la bóveda. Sin esa variable se usa la regla por defecto, que en pantalla se llama **Regla** y no es un precio leído de OnlyFans. Las ventas y el precio por pieza solo salen para la dueña. El adjunto de la bóveda se guarda en `of_outbound_media` por id: el título no va en el texto del borrador. `NO VENDER` y `SIN EDITAR` se niegan en el servidor.
 
 ## 6. Masivos
 

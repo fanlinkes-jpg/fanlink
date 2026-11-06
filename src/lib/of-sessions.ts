@@ -246,7 +246,7 @@ export const listDashboard = createServerFn({ method: "GET" })
 
 export const recordChatOutbound = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; ofMessageKey: string | null }) => input)
+  .validator((input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; ofMessageKey: string | null; mediaIds?: string[] }) => input)
   .handler(async ({ context, data }) => {
     const { recordChatOutboundView } = await import("./of-sessions-runtime.server");
     return recordChatOutboundView(context.userId, data);

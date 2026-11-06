@@ -1,5 +1,6 @@
+import { decodeMedia } from "./history.ts";
 import type { ReadSql } from "./store.ts";
-import type { VaultFolder, VaultItem, VaultRead } from "./vault.ts";
+import { inheritedBlock, sendBlock, type VaultBlock, type VaultFolder, type VaultItem, type VaultRead, type VaultSend } from "./vault.ts";
 
 export async function saveVaultRead(sql: ReadSql, creatorId: string, read: VaultRead, now = new Date()): Promise<void> {
   const syncedAt = now.toISOString();
@@ -81,4 +82,68 @@ export async function listVault(sql: ReadSql, creatorId: string): Promise<{ item
       blocked: row.blocked === "NO VENDER" || row.blocked === "SIN EDITAR" ? row.blocked : null,
     })),
   };
+}
+
+export function blockForStored(item: VaultItem, folders: VaultFolder[]): VaultBlock | null {
+  return sendBlock(item.title, item.act) ?? item.blocked ?? inheritedBlock(folders, item.folderId);
+}
+
+export async function blockForMediaIds(sql: ReadSql, creatorId: string, mediaIds: string[]): Promise<VaultBlock | null> {
+  if (!mediaIds.length) return null;
+  const stored = await listVault(sql, creatorId);
+  for (const id of mediaIds) {
+    const item = stored.items.find((row) => row.id === id);
+    if (!item) continue;
+    const block = blockForStored(item, stored.folders);
+    if (block) return block;
+  }
+  return null;
+}
+
+/** Historial por fan en la base. El id del medio del chat es el de la bóveda. */
+export async function sendsForFan(sql: ReadSql, creatorId: string, fanKey: string | null): Promise<VaultSend[]> {
+  if (!fanKey) return [];
+  const rows = await sql.query<{
+    sent_at: Date | string;
+    price_cents: number | null;
+    purchased: boolean | string | null;
+    author_name: string | null;
+    media_json: string | null;
+    fan_key: string | null;
+  }>(
+    `select m.sent_at, m.price_cents, m.purchased, p.display_name as author_name, m.media_json, m.fan_key
+     from of_chat_message m
+     left join staff_profile p on p.user_id = m.author_id
+     where m.creator_id = $1 and m.fan_key = $2 and m.from_fan = false
+     order by m.sent_at`,
+    [creatorId, fanKey],
+  );
+  const sends: VaultSend[] = [];
+  for (const row of rows) {
+    if (!row.fan_key) continue;
+    const purchased = row.purchased == null ? null : row.purchased === true || row.purchased === "t" || row.purchased === "true";
+    const sentAt = row.sent_at instanceof Date ? row.sent_at.toISOString() : String(row.sent_at);
+    for (const media of decodeMedia(row.media_json) ?? []) {
+      if (!media.vaultId) continue;
+      sends.push({
+        mediaId: media.vaultId,
+        fanKey: row.fan_key,
+        sentAt,
+        priceCents: row.price_cents,
+        purchased,
+        chatterName: row.author_name,
+      });
+    }
+  }
+  return sends;
+}
+
+export async function recordOutboundMedia(sql: ReadSql, outboundId: string, mediaIds: string[]): Promise<void> {
+  for (const [position, mediaId] of mediaIds.entries()) {
+    await sql.query(
+      `insert into of_outbound_media (outbound_id, media_id, position) values ($1, $2, $3)
+       on conflict (outbound_id, media_id) do nothing`,
+      [outboundId, mediaId, position],
+    );
+  }
 }

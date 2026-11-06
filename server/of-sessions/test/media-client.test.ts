@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readPreviewBody, loadPreviewBytes } from "../sync/media-load.ts";
+import { mediaHeaders, readPreviewBody } from "../sync/media-body.ts";
+import { loadPreviewBytes } from "../sync/media-load.ts";
 import { mediaForBrowser } from "../sync/media-client.ts";
 import type { ChatMedia } from "../sync/chats.ts";
 
@@ -14,6 +15,12 @@ const hidden: ChatMedia = {
   paid: false,
   opened: false,
 };
+
+test("la miniatura de la bóveda dice el tipo real y nosniff", () => {
+  const headers = mediaHeaders(new Uint8Array([0xff, 0xd8, 0xff]));
+  assert.equal(headers["content-type"], "image/jpeg");
+  assert.equal(headers["x-content-type-options"], "nosniff");
+});
 
 test("el navegador no recibe la URL completa de un medio bloqueado del fan", () => {
   const fan = mediaForBrowser([hidden], true);

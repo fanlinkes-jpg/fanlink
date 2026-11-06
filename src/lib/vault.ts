@@ -21,18 +21,38 @@ export type VaultViewItem = {
   blocked: "NO VENDER" | "SIN EDITAR" | null;
 };
 
+export type VaultViewSend = {
+  mediaId: string;
+  fanKey: string;
+  sentAt: string;
+  priceCents: number | null;
+  purchased: boolean | null;
+  chatterName: string | null;
+};
+
 export type VaultView = {
   items: VaultViewItem[];
   folders: Array<{ id: string; name: string; parentId: string | null }>;
+  sends: VaultViewSend[];
+  canSeeRevenue: boolean;
+  priceRule: {
+    soloMin: number;
+    soloMax: number;
+    soloPerMinute: number;
+    coupleMin: number;
+    coupleMax: number;
+    couplePerMinute: number;
+    step: number;
+  };
   notice: string | null;
 };
 
 export const listVault = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
-  .validator((input: { creatorId: string }) => input)
+  .validator((input: { creatorId: string; fanKey?: string | null }) => input)
   .handler(async ({ context, data }): Promise<VaultView> => {
     const { listVaultView } = await import("./vault-runtime.server");
-    return listVaultView(context.userId, data.creatorId);
+    return listVaultView(context.userId, data.creatorId, data.fanKey ?? null);
   });
 
 export const syncVault = createServerFn({ method: "POST" })

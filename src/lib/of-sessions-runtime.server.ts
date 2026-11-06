@@ -29,6 +29,8 @@ import { chatIntervalMinutes, inboxIsOpen, activeThreadWatches } from "../../ser
 import { openWatchContext, runInboxWatch } from "../../server/of-sessions/sync/inbox-watch.ts";
 import { pickAccountWatch } from "../../server/of-sessions/sync/watch-plan.ts";
 import { listChatMeta, listChats, listPendingOutbounds, recordOutbound, saveChatRead } from "../../server/of-sessions/sync/chat-store.ts";
+import { prepareOutbound } from "../../server/of-sessions/sync/composer-draft.ts";
+import { blockForMediaIds, recordOutboundMedia } from "../../server/of-sessions/sync/vault-store.ts";
 import { mediaForBrowser } from "../../server/of-sessions/sync/media-client.ts";
 import { intervalMinFromEnv, startSyncLoop, type ScheduleAccount } from "../../server/of-sessions/sync/schedule.ts";
 import {
@@ -672,25 +674,30 @@ export async function listTeamMetricViews(userId: string): Promise<Array<{
 
 export async function recordChatOutboundView(
   userId: string,
-  input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; ofMessageKey: string | null },
+  input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; ofMessageKey: string | null; mediaIds?: string[] },
 ): Promise<{ ok: true; sent: false }> {
   const access = await accessFor(userId);
   if (access.role !== "owner" && !access.perms.includes("mensajes")) {
     throw new WorkspaceAccessError("No tienes permiso para escribir.");
   }
-  const body = input.body.replace(/\s+/g, " ").trim();
-  if (!body) throw new WorkspaceAccessError("Escribe un mensaje.");
-  await recordOutbound(await getSql(), {
-    id: crypto.randomUUID(),
+  const attachments = (input.mediaIds ?? []).map((id) => ({ id, title: null }));
+  const sql = await getSql();
+  const blocked = await blockForMediaIds(sql, input.creatorId, attachments.map((item) => item.id));
+  const prepared = prepareOutbound(input.body, attachments, blocked);
+  if (!prepared.ok) throw new WorkspaceAccessError(prepared.notice);
+  const id = crypto.randomUUID();
+  await recordOutbound(sql, {
+    id,
     creatorId: input.creatorId,
     threadKey: input.threadKey,
     fanKey: input.fanKey,
     authorId: access.userId,
-    body,
+    body: prepared.body,
     priceCents: input.priceCents,
     createdAt: new Date().toISOString(),
     ofMessageKey: input.ofMessageKey,
   });
+  await recordOutboundMedia(sql, id, prepared.mediaIds);
   return { ok: true, sent: false };
 }
 

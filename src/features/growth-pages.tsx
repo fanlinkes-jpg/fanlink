@@ -195,7 +195,6 @@ export function VaultPage() {
       fanName={null}
       fanKey={null}
       chatterId={teamAccess?.userId ?? null}
-      messages={[]}
       onAttach={() => undefined}
     />
   );

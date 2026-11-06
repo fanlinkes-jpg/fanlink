@@ -7,6 +7,7 @@ import { useOfReads } from "@/lib/use-of-reads";
 import { ChatBubble } from "@/features/chat-bubble";
 import { FanInsights } from "@/features/fan-insights";
 import { VaultBrowser } from "@/features/vault-browser";
+import { composerDraft } from "../../server/of-sessions/sync/composer-draft.ts";
 
 const EMOJIS = ["😊", "🔥", "❤️", "😘", "🎁"];
 
@@ -228,8 +229,7 @@ export function RealChatsPage() {
                   disabled={!draft.trim() && attachments.length === 0}
                   onClick={() => {
                     if (!selected || (!draft.trim() && attachments.length === 0)) return;
-                    const attached = attachments.map((item) => `[adjunto] ${item.title}`).join("\n");
-                    const body = [draft.trim(), attached].filter(Boolean).join("\n");
+                    const prepared = composerDraft(draft, attachments);
                     setDraft("");
                     setAttachments([]);
                     void recordChatOutbound({
@@ -237,12 +237,13 @@ export function RealChatsPage() {
                         creatorId: selected.creatorId,
                         fanKey: selected.fanKey,
                         threadKey: selected.threadKey,
-                        body,
+                        body: prepared.body,
+                        mediaIds: prepared.mediaIds,
                         priceCents: null,
                         ofMessageKey: null,
                       },
                     }).then(() => refresh()).catch((err: unknown) => {
-                      setDraft(body);
+                      setDraft(prepared.body);
                       setError(sessionErrorText(err));
                     });
                   }}
@@ -279,7 +280,6 @@ export function RealChatsPage() {
               fanName={selected.fanName}
               fanKey={selected.fanKey}
               chatterId={teamAccess?.userId ?? null}
-              messages={messages}
               onAttach={(item, warning) => {
                 setAttachments((current) => current.some((row) => row.id === item.id) ? current : [...current, { id: item.id, title: item.title ?? "Sin datos", warning }]);
               }}

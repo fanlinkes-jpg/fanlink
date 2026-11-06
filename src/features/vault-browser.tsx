@@ -1,14 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
-import { listVault, syncVault, type VaultViewItem } from "@/lib/vault";
+import { useEffect, useState } from "react";
+import { listVault, syncVault, type VaultViewItem, type VaultViewSend } from "@/lib/vault";
 import {
   EMPTY_FILTERS,
+  PRICE_RULE_LABEL,
   applyVaultFilters,
   attachVaultItem,
   decodeFilters,
   encodeFilters,
   filterStorageKey,
+  priceRuleFromEnv,
   sendToFan,
-  sendsFromMessages,
   suggestPriceCents,
   type VaultFilters,
   type VaultItem,
@@ -16,15 +17,6 @@ import {
 } from "../../server/of-sessions/sync/vault.ts";
 
 type Folder = { id: string; name: string; parentId: string | null };
-type ChatRow = {
-  fromFan: boolean;
-  fanKey: string | null;
-  sentAt: string;
-  priceCents: number | null;
-  purchased: boolean | null;
-  authorName: string | null;
-  media: Array<{ vaultId?: string | null }> | null;
-};
 
 export function VaultBrowser({
   creatorId,
@@ -32,7 +24,6 @@ export function VaultBrowser({
   fanName,
   fanKey,
   chatterId,
-  messages,
   onAttach,
 }: {
   creatorId: string;
@@ -40,15 +31,16 @@ export function VaultBrowser({
   fanName: string | null;
   fanKey: string | null;
   chatterId: string | null;
-  messages: ChatRow[];
   onAttach: (item: VaultItem, warning: string | null) => void;
 }) {
   const [items, setItems] = useState<VaultItem[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
+  const [sends, setSends] = useState<VaultSend[]>([]);
+  const [canSeeRevenue, setCanSeeRevenue] = useState(false);
+  const [priceRule, setPriceRule] = useState(priceRuleFromEnv(undefined));
   const [notice, setNotice] = useState<string | null>(null);
   const [filters, setFilters] = useState<VaultFilters>(EMPTY_FILTERS);
   const [listQuery, setListQuery] = useState("");
-  const sends = useMemo(() => sendsFromMessages(messages), [messages]);
   const storageKey = filterStorageKey(chatterId);
 
   useEffect(() => {
@@ -63,28 +55,37 @@ export function VaultBrowser({
 
   useEffect(() => {
     let alive = true;
-    void listVault({ data: { creatorId } }).then((view) => {
+    void listVault({ data: { creatorId, fanKey } }).then((view) => {
       if (!alive) return;
       setItems(view.items.map(asItem));
       setFolders(view.folders);
+      setSends(view.sends.map(asSend));
+      setCanSeeRevenue(view.canSeeRevenue);
+      setPriceRule(view.priceRule);
       setNotice(view.notice);
     }).catch(() => {
       if (alive) setNotice("Sin datos");
     });
     return () => { alive = false; };
-  }, [creatorId]);
+  }, [creatorId, fanKey]);
 
   const visibleFolders = folders.filter((folder) => folder.name.toLowerCase().includes(listQuery.trim().toLowerCase()));
-  const visible = applyVaultFilters(items, folders, filters, sends, fanKey);
-  const paid = sends.filter((send) => send.fanKey === fanKey && send.priceCents != null).map((send) => send.priceCents ?? 0);
+  const activeFilters = canSeeRevenue || filters.sort !== "ventas" ? filters : { ...filters, sort: "fecha" as const };
+  const visible = applyVaultFilters(items, folders, activeFilters, sends, fanKey);
+  const purchases = sends
+    .filter((send) => send.fanKey === fanKey)
+    .map((send) => ({ priceCents: send.priceCents, purchased: send.purchased }));
 
   async function run(mode: "sync" | "continue") {
     const result = await syncVault({ data: { creatorId, mode } }).catch(() => ({ notice: "Sin datos" }));
     if (result.notice) setNotice(result.notice);
-    const view = await listVault({ data: { creatorId } }).catch(() => null);
+    const view = await listVault({ data: { creatorId, fanKey } }).catch(() => null);
     if (!view) return;
     setItems(view.items.map(asItem));
     setFolders(view.folders);
+    setSends(view.sends.map(asSend));
+    setCanSeeRevenue(view.canSeeRevenue);
+    setPriceRule(view.priceRule);
     if (!result.notice) setNotice(view.notice);
   }
 
@@ -125,7 +126,7 @@ export function VaultBrowser({
           <select aria-label="Orden" value={filters.sort} onChange={(event) => setFilters({ ...filters, sort: event.target.value as VaultFilters["sort"] })} className="rounded border border-[#e6e8ee] px-2 py-1">
             <option value="fecha">Fecha</option>
             <option value="duracion">Duración</option>
-            <option value="ventas">Ventas</option>
+            {canSeeRevenue ? <option value="ventas">Ventas</option> : null}
             <option value="precio">Precio</option>
           </select>
           <select aria-label="Alcance" value={filters.scope} onChange={(event) => setFilters({ ...filters, scope: event.target.value === "boveda" ? "boveda" : "carpeta" })} className="rounded border border-[#e6e8ee] px-2 py-1">
@@ -152,7 +153,7 @@ export function VaultBrowser({
           {visible.length === 0 ? <p className="text-sm text-[#6d7585]">Sin datos</p> : null}
           {visible.map((item) => {
             const sent = sendToFan(sends, item.id, fanKey);
-            const suggested = suggestPriceCents({ seconds: item.seconds, couple: item.couple, act: item.act, fanPaidCents: paid });
+            const suggested = suggestPriceCents({ seconds: item.seconds, couple: item.couple, act: item.act, purchases, rule: priceRule });
             const choice = attachVaultItem(item);
             return (
               <article key={item.id} className="overflow-hidden rounded-lg border border-[#e6e8ee]">
@@ -163,13 +164,13 @@ export function VaultBrowser({
                 )}
                 <div className="space-y-1 p-2 text-xs">
                   <p className="font-medium">{item.title ?? "Sin datos"}</p>
-                  <p>{item.seconds == null ? "Sin datos" : formatSeconds(item.seconds)} · {priceMark(item)}</p>
+                  <p>{item.seconds == null ? "Sin datos" : formatSeconds(item.seconds)}{canSeeRevenue ? ` · ${priceMark(item)}` : ""}</p>
                   <p className="flex gap-1">
                     {item.tags.includes("feed") ? <span className="rounded bg-[#e7f0ff] px-1">Feed</span> : null}
                     {item.tags.includes("sent") ? <span className="rounded bg-[#f3f4f6] px-1">Sent</span> : null}
                     {item.trailer ? <span className="rounded bg-[#e7f6ec] px-1">Free</span> : null}
                   </p>
-                  <p>Sugerido {suggested == null ? "Sin datos" : `$${(suggested / 100).toFixed(0)}`}</p>
+                  <p>{PRICE_RULE_LABEL} {suggested == null ? "Sin datos" : `$${(suggested / 100).toFixed(0)}`}</p>
                   <p>{sent ? historyLine(sent) : "Sin datos"}</p>
                   {sent ? <p className="text-[#8a5a12]">Ya se le envió a este fan</p> : null}
                   <button
@@ -192,6 +193,10 @@ export function VaultBrowser({
 
 function asItem(item: VaultViewItem): VaultItem {
   return { ...item, preview: item.hasPreview ? "proxy" : null, full: null };
+}
+
+function asSend(send: VaultViewSend): VaultSend {
+  return send;
 }
 
 function coupleOrNull(value: string): VaultFilters["couple"] {
