@@ -21,7 +21,7 @@ export type Creator = {
   platform: Platform;
   city: string;
   subscribers: number;
-  revenue30: number;
+  revenue30: number | null;
   growth: number;
   split: number;
   status: "activa" | "pausa";
@@ -600,7 +600,7 @@ export const useCrm = create<CrmState>()((set, get) => ({
               city: city.trim() || "España",
               tag: tag.trim() || "general",
               subscribers: 0,
-              revenue30: 0,
+              revenue30: null,
               growth: 0,
               split: 25,
               status: "activa",

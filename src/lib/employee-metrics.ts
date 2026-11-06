@@ -13,7 +13,7 @@ export function employeeMetricCells(row: {
 } | null): string[] {
   if (!row) return ["Sin datos", "Sin datos", "Sin datos", "Sin datos"];
   return [
-    row.grossCents == null ? "Sin datos" : String(row.grossCents),
+    row.grossCents == null ? "Sin datos" : `${(row.grossCents / 100).toFixed(2)} USD`,
     row.ppvSent == null ? "Sin datos" : String(row.ppvSent),
     row.firstReplyMinutes == null ? "Sin datos" : `${row.firstReplyMinutes} min`,
     row.threads == null ? "Sin datos" : String(row.threads),
