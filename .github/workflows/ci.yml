@@ -6,7 +6,11 @@ on:
     branches:
       - main
       - cursor/of-session-crm-617f
+<<<<<<< HEAD
       - cursor/mass-message-617f
+=======
+      - cursor/chat-followups-617f
+>>>>>>> 1e05ff3 (Dispara el CI al empujar esta rama)
 
 concurrency:
   # El push y el pull request no comparten grupo: uno no cancela al otro.
