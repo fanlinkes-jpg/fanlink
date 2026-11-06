@@ -400,6 +400,15 @@ export async function markOutboundSent(sql: ReadSql, id: string, messageId: stri
   );
 }
 
+export async function markOutboundAwaiting(sql: ReadSql, id: string): Promise<void> {
+  await sql.query(
+    `update of_chat_outbound
+     set status = 'pending', of_message_key = null, error_reason = 'Pendiente de confirmar'
+     where id = $1 and coalesce(status, 'pending') <> 'sent'`,
+    [id],
+  );
+}
+
 export async function markOutboundError(sql: ReadSql, id: string, reason: string): Promise<void> {
   await sql.query(
     `update of_chat_outbound

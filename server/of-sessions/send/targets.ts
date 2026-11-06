@@ -1,4 +1,4 @@
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 
@@ -143,6 +143,29 @@ export function readChatHtml(): string {
   return clone.outerHTML.slice(0, 180_000);
 }
 
+const SEND_FAIL_KEEP = 20;
+const SEND_FAIL_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Borra volcados de más de una semana y deja como mucho 20 pares. */
+export async function pruneSendFailures(dir = "logs", now = Date.now()): Promise<void> {
+  const names = await readdir(dir).catch(() => [] as string[]);
+  const rows = await Promise.all(names.filter((name) => /^send-fail-.+\.(json|png)$/.test(name)).map(async (name) => {
+    const full = path.join(dir, name);
+    const info = await stat(full).catch(() => null);
+    return info ? { full, mtime: info.mtimeMs, json: name.endsWith(".json") } : null;
+  }));
+  const live = rows.filter((row): row is { full: string; mtime: number; json: boolean } => row != null);
+  const stale = live.filter((row) => now - row.mtime > SEND_FAIL_MAX_AGE_MS);
+  const fresh = live.filter((row) => now - row.mtime <= SEND_FAIL_MAX_AGE_MS).sort((left, right) => left.mtime - right.mtime);
+  const jsons = fresh.filter((row) => row.json);
+  const extra = jsons.slice(0, Math.max(0, jsons.length - SEND_FAIL_KEEP));
+  const drop = new Set<string>([
+    ...stale.map((row) => row.full),
+    ...extra.flatMap((row) => [row.full, row.full.replace(/\.json$/, ".png")]),
+  ]);
+  await Promise.all([...drop].map((full) => rm(full, { force: true })));
+}
+
 export async function writeSendFailure(page: Page, dir = "logs"): Promise<{ json: string; png: string | null }> {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   await mkdir(dir, { recursive: true });
@@ -153,11 +176,24 @@ export async function writeSendFailure(page: Page, dir = "logs"): Promise<{ json
   const png = path.join(dir, `send-fail-${stamp}.png`);
   await writeFile(json, JSON.stringify({ html }, null, 2));
   try {
-    await page.screenshot({ path: png, type: "png" });
+    const chat = page.locator(".b-chat").first();
+    const box = await chat.boundingBox().catch(() => null);
+    const viewport = page.viewportSize();
+    if (box && viewport && box.width > 1 && box.height > 1) {
+      const x = Math.max(0, Math.min(box.x, viewport.width - 1));
+      const y = Math.max(0, Math.min(box.y, viewport.height - 1));
+      const width = Math.max(1, Math.min(box.width, viewport.width - x));
+      const height = Math.max(1, Math.min(box.height, viewport.height - y));
+      await page.screenshot({ path: png, type: "png", clip: { x, y, width, height } });
+    } else {
+      await page.screenshot({ path: png, type: "png" });
+    }
     const info = await stat(png);
+    await pruneSendFailures(dir);
     if (info.size < 32) return { json, png: null };
+    return { json, png };
   } catch {
+    await pruneSendFailures(dir);
     return { json, png: null };
   }
-  return { json, png };
 }

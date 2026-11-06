@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { chromium } from "playwright";
 import { composeChat } from "../send/compose.ts";
-import { navigationNote, publicChatUrl, readFooterNodes, threadIdKind } from "../send/targets.ts";
+import { navigationNote, pruneSendFailures, publicChatUrl, readFooterNodes, threadIdKind } from "../send/targets.ts";
 import { startFixture } from "./fixture-site.ts";
 
 test("el id del hilo es el withUser y la url pública no lleva query", () => {
@@ -73,6 +73,7 @@ test("la caja y el Send del DOM real envían y el volcado no copia el mensaje", 
         priceCents: null,
         typeDelayMs: 0,
         confirmMs: 600,
+        settleMs: 400,
       });
       assert.equal(stuck.messageId, null);
       assert.equal(lines.filter((line) => line.includes("[fanlink:send] inicio")).length, 1);
@@ -86,6 +87,7 @@ test("la caja y el Send del DOM real envían y el volcado no copia el mensaje", 
       assert.equal(dump.includes("\"[]\""), false);
       const png = await stat(pngPath);
       assert.ok(png.size > 32);
+      assert.equal(lines.some((line) => line.includes("muestra=")), false);
     } finally {
       console.info = previous;
     }
@@ -95,3 +97,74 @@ test("la caja y el Send del DOM real envían y el volcado no copia el mensaje", 
     await rm(logs, { recursive: true, force: true });
   }
 });
+
+test("un click que vacía la caja tarde no se reenvía con Enter", async () => {
+  const sent = await sendOnce("6", "tarde");
+  assert.equal(sent.composed, 1);
+  assert.equal(sent.messageId, "300");
+  assert.equal(sent.enters, 0);
+});
+
+test("si el click no sale, Enter se prueba una sola vez", async () => {
+  const sent = await sendOnce("4", "solo enter", 500);
+  assert.equal(sent.composed, 1);
+  assert.equal(sent.messageId, "300");
+  assert.equal(sent.enters, 1);
+});
+
+test("los volcados viejos se borran y no se guardan más de 20", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "fanlink-send-prune-"));
+  try {
+    const old = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+    await writeFile(path.join(dir, "send-fail-old.json"), "{}");
+    await utimes(path.join(dir, "send-fail-old.json"), old, old);
+    for (let index = 0; index < 21; index += 1) {
+      await writeFile(path.join(dir, `send-fail-${String(index).padStart(2, "0")}.json`), "{}");
+    }
+    await pruneSendFailures(dir);
+    assert.equal(await readFile(path.join(dir, "send-fail-20.json"), "utf8"), "{}");
+    await assert.rejects(readFile(path.join(dir, "send-fail-old.json"), "utf8"));
+    await assert.rejects(readFile(path.join(dir, "send-fail-00.json"), "utf8"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+async function sendOnce(threadKey: string, body: string, settleMs = 2_500): Promise<{ composed: number; messageId: string | null; enters: number }> {
+  const fixture = await startFixture();
+  const browser = await chromium.launch({ headless: true });
+  const lines: string[] = [];
+  const previous = console.info;
+  console.info = (...args: unknown[]) => {
+    lines.push(args.map((item) => String(item)).join(" "));
+    previous(...args);
+  };
+  try {
+    const context = await browser.newContext();
+    await context.addCookies([
+      { name: "sess", value: "ok-1", url: fixture.origin },
+      { name: "auth_id", value: "42", url: fixture.origin },
+    ]);
+    const sent = await composeChat(context, {
+      chatsUrl: `${fixture.origin}/my/chats`,
+      siteId: "onlyfans",
+      threadKey,
+      fanKey: threadKey,
+      accountUserId: "42",
+      body,
+      priceCents: null,
+      typeDelayMs: 0,
+      settleMs,
+      confirmMs: 4_000,
+    });
+    return {
+      composed: fixture.composed.length,
+      messageId: sent.messageId,
+      enters: lines.filter((line) => line.includes("[fanlink:send] enter")).length,
+    };
+  } finally {
+    console.info = previous;
+    await browser.close();
+    await fixture.close();
+  }
+}
