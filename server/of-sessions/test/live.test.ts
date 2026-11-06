@@ -41,5 +41,10 @@ function thread(id: string, unread: number, at: string): ChatThread {
     tipsCents: null,
     postsCents: null,
     messagesCents: null,
+    avatarUrl: null,
+    online: null,
+    subPriceCents: null,
+    subExpiresAt: null,
+    renewAuto: null,
   };
 }

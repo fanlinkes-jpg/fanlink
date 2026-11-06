@@ -318,6 +318,11 @@ export async function listCreatorChatViews(userId: string): Promise<CreatorChatL
       tipsCents: thread.tipsCents,
       postsCents: thread.postsCents,
       messagesCents: thread.messagesCents,
+      avatarUrl: thread.avatarUrl,
+      online: thread.online,
+      subPriceCents: thread.subPriceCents,
+      subExpiresAt: thread.subExpiresAt,
+      renewAuto: thread.renewAuto,
     })),
     messages: stored.messages.map((message) => ({
       creatorId: message.creatorId,
@@ -331,6 +336,8 @@ export async function listCreatorChatViews(userId: string): Promise<CreatorChatL
       purchased: message.purchased,
       authorId: message.authorId,
       authorName: message.authorName,
+      seen: message.seen,
+      automatic: message.automatic,
     })),
     meta: stored.meta.map((item) => ({
       creatorId: item.creatorId,

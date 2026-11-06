@@ -135,6 +135,11 @@ export type CreatorChatList = {
     tipsCents: number | null;
     postsCents: number | null;
     messagesCents: number | null;
+    avatarUrl: string | null;
+    online: boolean | null;
+    subPriceCents: number | null;
+    subExpiresAt: string | null;
+    renewAuto: boolean | null;
   }>;
   messages: Array<{
     creatorId: string;
@@ -148,6 +153,8 @@ export type CreatorChatList = {
     purchased: boolean | null;
     authorId: string | null;
     authorName: string | null;
+    seen: boolean | null;
+    automatic: boolean | null;
   }>;
   meta: Array<{
     creatorId: string;

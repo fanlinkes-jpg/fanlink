@@ -22,6 +22,11 @@ export type ChatThread = {
   tipsCents: number | null;
   postsCents: number | null;
   messagesCents: number | null;
+  avatarUrl: string | null;
+  online: boolean | null;
+  subPriceCents: number | null;
+  subExpiresAt: string | null;
+  renewAuto: boolean | null;
 };
 
 export type ChatMessage = {
@@ -37,6 +42,10 @@ export type ChatMessage = {
   purchased: boolean | null;
   /** Id de OnlyFans de quien lo envió. Vacío de chatter: no se atribuye a un empleado. */
   fromUserId: string | null;
+  /** Null si OnlyFans no dice si el mensaje se vio. */
+  seen: boolean | null;
+  /** Null si no dice si salió de una automatización. */
+  automatic: boolean | null;
 };
 
 export type FanMessageEvent = {
@@ -60,6 +69,11 @@ export type ChatUser = {
   tipsCents: number | null;
   postsCents: number | null;
   messagesCents: number | null;
+  avatarUrl: string | null;
+  online: boolean | null;
+  subPriceCents: number | null;
+  subExpiresAt: string | null;
+  renewAuto: boolean | null;
 };
 
 export const CHAT_OPEN_LIMIT = 8;
@@ -199,6 +213,11 @@ function combineThread(left: ChatThread, right: ChatThread): ChatThread {
     tipsCents: newer.tipsCents ?? older.tipsCents,
     postsCents: newer.postsCents ?? older.postsCents,
     messagesCents: newer.messagesCents ?? older.messagesCents,
+    avatarUrl: newer.avatarUrl ?? older.avatarUrl,
+    online: newer.online ?? older.online,
+    subPriceCents: newer.subPriceCents ?? older.subPriceCents,
+    subExpiresAt: newer.subExpiresAt ?? older.subExpiresAt,
+    renewAuto: newer.renewAuto ?? older.renewAuto,
   };
 }
 
@@ -237,6 +256,11 @@ export function mergeUsers(current: ChatUser[], incoming: ChatUser[]): ChatUser[
       tipsCents: row.tipsCents ?? prev.tipsCents,
       postsCents: row.postsCents ?? prev.postsCents,
       messagesCents: row.messagesCents ?? prev.messagesCents,
+      avatarUrl: row.avatarUrl ?? prev.avatarUrl,
+      online: row.online ?? prev.online,
+      subPriceCents: row.subPriceCents ?? prev.subPriceCents,
+      subExpiresAt: row.subExpiresAt ?? prev.subExpiresAt,
+      renewAuto: row.renewAuto ?? prev.renewAuto,
     } : row);
   }
   return [...map.values()];
@@ -256,6 +280,11 @@ export function applyUserDirectory(threads: ChatThread[], users: ChatUser[]): Ch
       tipsCents: thread.tipsCents ?? user.tipsCents,
       postsCents: thread.postsCents ?? user.postsCents,
       messagesCents: thread.messagesCents ?? user.messagesCents,
+      avatarUrl: thread.avatarUrl ?? user.avatarUrl,
+      online: thread.online ?? user.online,
+      subPriceCents: thread.subPriceCents ?? user.subPriceCents,
+      subExpiresAt: thread.subExpiresAt ?? user.subExpiresAt,
+      renewAuto: thread.renewAuto ?? user.renewAuto,
     };
   });
 }
@@ -381,6 +410,8 @@ function messageFrom(
     fanKey,
     fromFan: flag ?? isFromFan(record, fanKey),
     fromUserId,
+    seen: seenFlag(record),
+    automatic: record.isFromQueue === true || record.isAutomated === true ? true : null,
     body,
     sentAt,
     priceCents: priceCents(record.price ?? record.ppvPrice),
@@ -407,13 +438,30 @@ export function fromFanFlag(fromUserId: string | null, fanKey: string | null, ac
   return null;
 }
 
-function emptySpend(): Pick<ChatThread, "spentCents" | "subscribesCents" | "tipsCents" | "postsCents" | "messagesCents"> {
-  return { spentCents: null, subscribesCents: null, tipsCents: null, postsCents: null, messagesCents: null };
+function emptySpend(): Pick<ChatThread, "spentCents" | "subscribesCents" | "tipsCents" | "postsCents" | "messagesCents" | "avatarUrl" | "online" | "subPriceCents" | "subExpiresAt" | "renewAuto"> {
+  return {
+    spentCents: null,
+    subscribesCents: null,
+    tipsCents: null,
+    postsCents: null,
+    messagesCents: null,
+    avatarUrl: null,
+    online: null,
+    subPriceCents: null,
+    subExpiresAt: null,
+    renewAuto: null,
+  };
+}
+
+function seenFlag(record: Record<string, unknown>): boolean | null {
+  if (typeof record.isOpened === "boolean") return record.isOpened;
+  if (typeof record.isNew === "boolean") return !record.isNew;
+  return null;
 }
 
 function readFanSpend(
   record: Record<string, unknown> | null,
-): Pick<ChatThread, "spentCents" | "subscribesCents" | "tipsCents" | "postsCents" | "messagesCents"> | null {
+): Pick<ChatThread, "spentCents" | "subscribesCents" | "tipsCents" | "postsCents" | "messagesCents" | "avatarUrl" | "online" | "subPriceCents" | "subExpiresAt" | "renewAuto"> | null {
   if (!record) return null;
   const nestedSpend = nested(record.subscribedOnData) ?? nested(record.subscribedByData);
   const source = nestedSpend ?? record;
@@ -423,8 +471,15 @@ function readFanSpend(
   const messagesCents = money(source.messagesSumm ?? source.messagesSum);
   const parts = [subscribesCents, tipsCents, postsCents, messagesCents].filter((value): value is number => value != null);
   const spentCents = money(source.totalSumm ?? source.spent ?? source.totalSpent) ?? (parts.length ? parts.reduce((sum, value) => sum + value, 0) : null);
-  if (spentCents == null && parts.length === 0) return null;
-  return { spentCents, subscribesCents, tipsCents, postsCents, messagesCents };
+  const avatarUrl = clean(record.avatar, 400);
+  const online = typeof record.isOnline === "boolean" ? record.isOnline : typeof record.online === "boolean" ? record.online : null;
+  const subPriceCents = money(source.price ?? source.subscribePrice ?? source.regularPrice);
+  const subExpiresAt = iso(source.expiredAt ?? source.expireDate);
+  const renewRaw = source.autoRenew ?? source.renewedAuto ?? record.autoRenew;
+  const renewAuto = renewRaw === true || renewRaw === false ? renewRaw : null;
+  const card = { spentCents, subscribesCents, tipsCents, postsCents, messagesCents, avatarUrl, online, subPriceCents, subExpiresAt, renewAuto };
+  if (spentCents == null && parts.length === 0 && !avatarUrl && online == null && subPriceCents == null && !subExpiresAt && renewAuto == null) return null;
+  return card;
 }
 
 function money(value: unknown): number | null {

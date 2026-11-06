@@ -80,11 +80,12 @@ test("suma todas las respuestas de chats y completa el nombre con users/list", (
   assert.equal(merged.find((row) => row.threadKey === "7")?.excerpt, "Hola");
   assert.equal(merged.find((row) => row.threadKey === "7")?.unread, 2);
   const named = applyUserDirectory(merged, parseUsersDirectory({
-    "7": { id: 7, username: "fanuno", name: "Fan Uno", avatar: "https://cdn.example/secret-avatar.jpg" },
+    "7": { id: 7, username: "fanuno", name: "Fan Uno", avatar: "https://cdn.example/a.jpg", password: "no-guardar" },
   }));
   assert.equal(named.find((row) => row.threadKey === "7")?.fanHandle, "fanuno");
   assert.equal(named.find((row) => row.threadKey === "7")?.fanName, "Fan Uno");
-  assert.equal(JSON.stringify(named).includes("secret-avatar"), false);
+  assert.equal(named.find((row) => row.threadKey === "7")?.avatarUrl, "https://cdn.example/a.jpg");
+  assert.equal(JSON.stringify(named).includes("no-guardar"), false);
   const messages = mergeMessages(
     parseChatMessages({ list: [], hasMore: true }, "7", "7"),
     parseChatMessages({
@@ -142,7 +143,7 @@ test("el último mensaje abre el hilo y el gasto sale de la ficha, sin inventarl
     hasMore: false,
   };
   const named = applyUserDirectory(parseChatList(payload, accountId), parseUsersDirectory({
-    "9": { id: 9, username: "angela", name: "Angela", avatar: "https://cdn.example/no-guardar.jpg" },
+    "9": { id: 9, username: "angela", name: "Angela", avatar: "https://cdn.example/angela.jpg", password: "no-guardar" },
     "3": { id: 3, name: "Otra" },
   }));
   const angela = named.find((row) => row.threadKey === "9");
@@ -194,7 +195,7 @@ test("el simulador entrega el chat y solo avisa de mensajes nuevos", { timeout: 
   const pg = new PGlite();
   const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../migrations");
   try {
-    for (const name of ["0007_of_reads.sql", "0008_sync_schedule.sql", "0009_of_chats.sql", "0013_chat_price.sql", "0018_chat_preview.sql", "0019_chat_author.sql"]) {
+    for (const name of ["0007_of_reads.sql", "0008_sync_schedule.sql", "0009_of_chats.sql", "0013_chat_price.sql", "0018_chat_preview.sql", "0019_chat_author.sql", "0020_chat_card.sql"]) {
       await pg.exec(await readFile(path.join(dir, name), "utf8"));
     }
     const sql: ReadSql = {

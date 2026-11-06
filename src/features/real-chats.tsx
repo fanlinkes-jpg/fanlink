@@ -4,16 +4,20 @@ import { fanProfiles } from "@/lib/fan-metrics";
 import { useCrm } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
 import { useOfReads } from "@/lib/use-of-reads";
+import { FanInsights } from "@/features/fan-insights";
 
 export function RealChatsPage() {
   const creatorId = useCrm((s) => s.creatorId);
   const crmFans = useCrm((s) => s.fans);
+  const saveNote = useCrm((s) => s.saveNote);
   const teamAccess = useCrm((s) => s.teamAccess);
   const reads = useOfReads();
   const [data, setData] = useState<CreatorChatList | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [filter, setFilter] = useState<"todos" | "propinas" | "online">("todos");
+  const [insightsOpen, setInsightsOpen] = useState(false);
 
   async function refresh() {
     try {
@@ -36,8 +40,13 @@ export function RealChatsPage() {
   const threads = (data?.threads ?? []).filter(
     (thread) => creatorId === "all" || thread.creatorId === creatorId,
   );
+  const knowsOnline = threads.some((thread) => thread.online != null);
+  const visible = [...threads]
+    .filter((thread) => filter !== "propinas" || (thread.tipsCents != null && thread.tipsCents > 0))
+    .filter((thread) => filter !== "online" || thread.online === true)
+    .sort((left, right) => (right.lastMessageAt ?? "").localeCompare(left.lastMessageAt ?? ""));
   const selected =
-    threads.find((thread) => `${thread.creatorId}:${thread.threadKey}` === selectedKey) ?? threads[0] ?? null;
+    visible.find((thread) => `${thread.creatorId}:${thread.threadKey}` === selectedKey) ?? visible[0] ?? null;
   const messages = (data?.messages ?? []).filter(
     (message) => message.creatorId === selected?.creatorId && message.threadKey === selected?.threadKey,
   );
@@ -50,24 +59,45 @@ export function RealChatsPage() {
       <section className="flex w-full min-w-0 flex-col border-r border-[#e6e8ee] md:w-[340px]">
         <div className="px-4 py-3">
           <h1 className="text-lg font-semibold">Chat</h1>
-          <p className="text-xs text-[#6d7585]">Lectura de lo guardado. Abrir esta pantalla no sincroniza ni envía.</p>
+          <p className="text-xs text-[#6d7585]">Más recientes. Abrir esta pantalla no envía.</p>
+          <div className="mt-2 flex flex-wrap gap-1">
+            {([["todos", "Todos"], ["propinas", "Con propinas"]] as const).map(([id, label]) => (
+              <button key={id} type="button" onClick={() => setFilter(id)} className={`rounded-full px-2 py-1 text-xs ${filter === id ? "bg-[#e7f0ff] text-[#2456c7]" : "text-[#6d7585]"}`}>{label}</button>
+            ))}
+            {knowsOnline ? (
+              <button type="button" onClick={() => setFilter("online")} className={`rounded-full px-2 py-1 text-xs ${filter === "online" ? "bg-[#e7f0ff] text-[#2456c7]" : "text-[#6d7585]"}`}>Fans en línea</button>
+            ) : (
+              <span className="rounded-full px-2 py-1 text-xs text-[#6d7585]">Fans en línea: Sin datos</span>
+            )}
+          </div>
         </div>
         {error ? <p className="px-4 text-sm text-[#8a5a12]">{error}</p> : null}
-        {threads.length === 0 ? (
-          <p className="px-4 py-8 text-sm text-[#6d7585]">{emptyChatsLabel(data)}</p>
+        {visible.length === 0 ? (
+          <p className="px-4 py-8 text-sm text-[#6d7585]">{threads.length === 0 ? emptyChatsLabel(data) : "Sin datos"}</p>
         ) : (
           <ul className="min-h-0 flex-1 overflow-y-auto">
-            {threads.map((thread) => (
+            {visible.map((thread) => (
               <li key={`${thread.creatorId}:${thread.threadKey}`}>
                 <button
                   type="button"
                   onClick={() => setSelectedKey(`${thread.creatorId}:${thread.threadKey}`)}
-                  className={`block w-full px-4 py-3 text-left ${selected?.threadKey === thread.threadKey ? "bg-[#f4f6fb]" : ""}`}
+                  className={`flex w-full gap-3 px-4 py-3 text-left ${selected?.threadKey === thread.threadKey ? "bg-[#f4f6fb]" : ""}`}
                 >
-                  <span className="block font-medium">{thread.fanName ?? thread.fanHandle ?? "Fan"}</span>
-                  <span className="block truncate text-xs text-[#6d7585]">
-                    {previewLabel(thread)}
-                    {thread.excerpt ? `${previewLabel(thread) ? " · " : ""}${thread.excerpt}` : ""}
+                  {thread.avatarUrl ? (
+                    <img src={thread.avatarUrl} alt="" className="h-10 w-10 rounded-full object-cover" />
+                  ) : (
+                    <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#eef2ff] text-sm">{(thread.fanName ?? "F").slice(0, 1)}</span>
+                  )}
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-baseline justify-between gap-2">
+                      <span className="truncate font-medium">{thread.fanName ?? thread.fanHandle ?? "Fan"}</span>
+                      <span className="shrink-0 text-[10px] text-[#6d7585]">{thread.lastMessageAt ? thread.lastMessageAt.slice(11, 16) : "Sin datos"}</span>
+                    </span>
+                    <span className="block truncate text-xs text-[#6d7585]">{thread.fanHandle ? `@${thread.fanHandle.replace(/^@/, "")}` : "Sin datos"} · {thread.spentCents == null ? "Sin datos" : `${(thread.spentCents / 100).toFixed(2)} USD`}</span>
+                    <span className="block truncate text-xs text-[#6d7585]">
+                      {previewLabel(thread)}
+                      {thread.excerpt ? `${previewLabel(thread) ? " · " : ""}${thread.excerpt}` : ""}
+                    </span>
                   </span>
                 </button>
               </li>
@@ -96,6 +126,7 @@ export function RealChatsPage() {
                   {meta?.syncedAt ? ` · ${syncAge(meta.syncedAt)}` : ""}
                 </p>
               </div>
+              <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs xl:hidden" onClick={() => setInsightsOpen(true)}>Ficha</button>
               {canForce ? (
                 <button
                   type="button"
@@ -121,10 +152,7 @@ export function RealChatsPage() {
                     {message.priceCents != null ? ` · ${(message.priceCents / 100).toFixed(2)}` : ""}
                     {message.purchased === true ? " · comprado" : message.purchased === false ? " · no comprado" : ""}
                   </p>
-                  <p className="mt-1 text-[10px] text-[#6d7585]">
-                    {message.sentAt.slice(0, 16).replace("T", " ")}
-                    {message.fromFan ? "" : ` · ${message.authorName ?? "Cuenta"}`}
-                  </p>
+                  <p className="mt-1 text-[10px] text-[#6d7585]">{messageCaption(message)}</p>
                 </li>
               ))}
             </ol>
@@ -134,8 +162,83 @@ export function RealChatsPage() {
           <p className="p-6 text-sm text-[#6d7585]">Sin sincronizar</p>
         )}
       </section>
+      <div className="hidden h-full w-[320px] shrink-0 border-l border-[#e6e8ee] xl:block">
+        {selected ? <InsightPane thread={selected} reads={reads.byCreator} crmFans={crmFans} messages={messages} onNotes={saveNote} /> : null}
+      </div>
+      {insightsOpen && selected ? (
+        <div className="fixed inset-0 z-40 bg-black/30 xl:hidden" onClick={() => setInsightsOpen(false)}>
+          <div className="absolute inset-y-0 right-0 w-[min(100%,360px)] shadow-xl" onClick={(event) => event.stopPropagation()}>
+            <InsightPane thread={selected} reads={reads.byCreator} crmFans={crmFans} messages={messages} onNotes={saveNote} />
+          </div>
+        </div>
+      ) : null}
     </div>
   );
+}
+
+function InsightPane({
+  thread,
+  reads,
+  crmFans,
+  messages,
+  onNotes,
+}: {
+  thread: {
+    creatorId: string;
+    fanKey: string | null;
+    fanName: string | null;
+    fanHandle: string | null;
+    spentCents: number | null;
+    tipsCents: number | null;
+    subPriceCents: number | null;
+    subExpiresAt: string | null;
+    renewAuto: boolean | null;
+  };
+  reads: Map<string, CreatorReadView>;
+  crmFans: Array<{ id: string; creatorId: string; handle: string; name: string; notes: string }>;
+  messages: Array<{ fromFan: boolean; priceCents: number | null; purchased: boolean | null }>;
+  onNotes: (fanId: string, notes: string) => void;
+}) {
+  const read = reads.get(thread.creatorId);
+  const ofFan = read?.fans.find((fan) => fan.fanKey === thread.fanKey) ?? null;
+  const crm = crmFans.find((fan) => {
+    if (fan.creatorId !== thread.creatorId) return false;
+    if (thread.fanHandle && fan.handle.replace(/^@/, "") === thread.fanHandle.replace(/^@/, "")) return true;
+    return thread.fanName != null && fan.name === thread.fanName;
+  });
+  return (
+    <FanInsights
+      name={thread.fanName}
+      handle={thread.fanHandle}
+      spentCents={thread.spentCents ?? ofFan?.spentCents ?? null}
+      tipsCents={thread.tipsCents}
+      status={ofFan?.status ?? null}
+      expiresAt={thread.subExpiresAt ?? ofFan?.expiresAt ?? null}
+      renewAuto={thread.renewAuto ?? ofFan?.renewAuto ?? null}
+      subPriceCents={thread.subPriceCents}
+      notes={crm?.notes ?? ""}
+      notesEditable={crm != null}
+      onNotes={(value) => {
+        if (crm) onNotes(crm.id, value);
+      }}
+      transactions={(read?.transactions ?? []).filter((row) => row.fanKey === thread.fanKey).map((row) => ({
+        occurredAt: row.occurredAt,
+        grossCents: row.grossCents,
+        kind: row.kind,
+      }))}
+      ppvPrices={messages.flatMap((message) => (
+        !message.fromFan && message.purchased === true && message.priceCents != null && message.priceCents > 0 ? [message.priceCents] : []
+      ))}
+    />
+  );
+}
+
+function messageCaption(message: { sentAt: string; fromFan: boolean; authorName: string | null; automatic: boolean | null; seen: boolean | null }): string {
+  const time = message.sentAt.slice(0, 16).replace("T", " ");
+  const seen = message.seen == null ? "" : message.seen ? " · Visto" : " · No visto";
+  if (message.fromFan) return `${time}${seen}`;
+  const who = message.automatic ? "Mensaje automático" : message.authorName ?? "Cuenta";
+  return `${time} · ${who}${seen}`;
 }
 
 const SEGMENT_LABEL: Record<"whale" | "risk" | "asleep" | "new", string> = {
