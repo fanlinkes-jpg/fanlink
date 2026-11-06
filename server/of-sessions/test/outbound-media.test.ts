@@ -153,7 +153,7 @@ test("una 0030 ya aplicada gana creadora y clave foránea", async () => {
 test("un borrador con medios no se escribe en el formulario", async () => {
   assert.equal(mediaSendGate(1).allowed, false);
   assert.equal(mediaSendGate(0).allowed, true);
-  const calls = { fill: 0, type: 0, press: 0, insertText: 0, pressSequentially: 0, evaluate: 0, click: 0, dispatchEvent: 0, setInputFiles: 0 };
+  const calls = { fill: 0, type: 0, press: 0, insertText: 0, down: 0, up: 0, pressSequentially: 0, evaluate: 0, click: 0, dispatchEvent: 0, setInputFiles: 0 };
   const page = {
     fill() { calls.fill += 1; },
     type() { calls.type += 1; },
@@ -163,7 +163,11 @@ test("un borrador con medios no se escribe en el formulario", async () => {
     dispatchEvent() { calls.dispatchEvent += 1; },
     setInputFiles() { calls.setInputFiles += 1; },
     pressSequentially() { calls.pressSequentially += 1; },
-    keyboard: { insertText() { calls.insertText += 1; } },
+    keyboard: {
+      insertText() { calls.insertText += 1; },
+      down() { calls.down += 1; },
+      up() { calls.up += 1; },
+    },
     goto() { throw new Error("abrió el envío"); },
   } as unknown as Page;
   const blocked = await deliverDrafts(page, {
@@ -178,6 +182,8 @@ test("un borrador con medios no se escribe en el formulario", async () => {
   assert.equal(calls.type, 0);
   assert.equal(calls.press, 0);
   assert.equal(calls.insertText, 0);
+  assert.equal(calls.down, 0);
+  assert.equal(calls.up, 0);
   assert.equal(calls.pressSequentially, 0);
   assert.equal(calls.evaluate, 0);
   assert.equal(calls.click, 0);
@@ -195,12 +201,17 @@ test("un borrador con medios no se escribe en el formulario", async () => {
 
 test("send no escribe en el formulario sin la gate", async () => {
   // Al juntar el #3, deliverChatSend necesita un Page falso en el que fill, type,
-  // press, keyboard.insertText, pressSequentially, evaluate, click, dispatchEvent
-  // y setInputFiles queden a 0. compose.ts todavía no está en esta rama.
+  // press, keyboard.insertText, keyboard.down, keyboard.up, pressSequentially,
+  // evaluate, click, dispatchEvent y setInputFiles queden a 0.
+  // compose.ts todavía no está en esta rama.
   const commented = "// deliverIfNoMedia(\npage.fill('x', 'y')";
   assert.equal(formWriteWithoutGate(commented), true);
   assert.equal(formWriteWithoutGate("/* deliverIfNoMedia( */ page.click('button')"), true);
-  assert.equal(formWriteWithoutGate("await deliverIfNoMedia(sql, id, async () => { await page.fill('x', 'y'); })"), false);
+  assert.equal(formWriteWithoutGate("function otra() { deliverIfNoMedia(sql, id, async () => {}); }\nfunction envia() { page.fill('x', 'y'); }"), true);
+  assert.equal(formWriteWithoutGate("function envia() { page.fill('x', 'y'); deliverIfNoMedia(sql, id, async () => {}); }"), true);
+  assert.equal(formWriteWithoutGate("function envia() { await deliverIfNoMedia(sql, id, async () => {}); await page.fill('x', 'y'); }"), false);
+  assert.equal(formWriteWithoutGate("function envia() { await deliverIfNoMedia(sql, id, async () => { await page.keyboard.down('Shift'); }); }"), false);
+  assert.equal(formWriteWithoutGate("function envia() { page.keyboard.up('Shift'); }"), true);
   const files = await tsFiles(path.join(root, "server/of-sessions/send"));
   assert.ok(files.length > 0);
   for (const file of files) {
@@ -330,11 +341,155 @@ function queryOf(source: { query: (text: string, params?: unknown[]) => Promise<
   };
 }
 
-const FORM_WRITE = /\.(fill|type|press|evaluate|click|dispatchEvent|setInputFiles)\s*\(|keyboard\.insertText\s*\(|pressSequentially\s*\(/;
+const FORM_WRITE = /\.(fill|type|press|evaluate|click|dispatchEvent|setInputFiles)\s*\(|keyboard\.(insertText|down|up)\s*\(|pressSequentially\s*\(/;
 
 function formWriteWithoutGate(source: string): boolean {
-  const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
-  return FORM_WRITE.test(code) && !/deliverIfNoMedia\s*\(/.test(code);
+  const code = source.replace(/\/\*[\s\S]*?\*\//g, (block) => " ".repeat(block.length)).replace(/\/\/.*$/gm, (line) => " ".repeat(line.length));
+  const functions = functionSpans(code);
+  for (const match of code.matchAll(new RegExp(FORM_WRITE.source, "g"))) {
+    const at = match.index ?? 0;
+    if (!writeFollowsGate(code, functions, at)) return true;
+  }
+  return false;
+}
+
+/** La llamada tiene que estar en la misma función, antes de la escritura. Un comentario no cuenta. */
+function writeFollowsGate(code: string, functions: FunctionSpan[], at: number): boolean {
+  const owner = innermostFunction(functions, at);
+  const from = owner ? owner.bodyStart : 0;
+  const to = owner ? owner.end : code.length;
+  if (at < from || at > to) return false;
+  if (callBefore(code, from, at, functions, owner)) return true;
+  return insideGateCall(code, at);
+}
+
+function callBefore(code: string, from: number, at: number, functions: FunctionSpan[], owner: FunctionSpan | null): boolean {
+  const nested = functions.filter((fn) => fn !== owner && fn.start >= from && fn.end <= at);
+  let cursor = from;
+  for (const fn of nested.sort((left, right) => left.start - right.start)) {
+    if (fn.start < cursor) continue;
+    if (/deliverIfNoMedia\s*\(/.test(code.slice(cursor, fn.start))) return true;
+    cursor = fn.end + 1;
+  }
+  return /deliverIfNoMedia\s*\(/.test(code.slice(cursor, at));
+}
+
+function insideGateCall(code: string, at: number): boolean {
+  const marker = /deliverIfNoMedia\s*\(/g;
+  for (const match of code.matchAll(marker)) {
+    const open = (match.index ?? 0) + match[0].length - 1;
+    const close = matchingParen(code, open);
+    if (close > open && at > open && at < close) return true;
+  }
+  return false;
+}
+
+type FunctionSpan = { start: number; bodyStart: number; end: number };
+
+function functionSpans(code: string): FunctionSpan[] {
+  const spans: FunctionSpan[] = [];
+  const stack: Array<number | null> = [];
+  let i = 0;
+  while (i < code.length) {
+    const stringEnd = skipString(code, i);
+    if (stringEnd > i) {
+      i = stringEnd;
+      continue;
+    }
+    if (isFunctionKeyword(code, i)) {
+      const brace = nextFunctionBrace(code, i + "function".length);
+      if (brace >= 0) {
+        spans.push({ start: i, bodyStart: brace + 1, end: -1 });
+        stack.push(spans.length - 1);
+        i = brace + 1;
+        continue;
+      }
+    }
+    if (code.startsWith("=>", i)) {
+      let brace = i + 2;
+      while (code[brace] === " " || code[brace] === "\n" || code[brace] === "\r" || code[brace] === "\t") brace += 1;
+      if (code[brace] === "{") {
+        spans.push({ start: i, bodyStart: brace + 1, end: -1 });
+        stack.push(spans.length - 1);
+        i = brace + 1;
+        continue;
+      }
+    }
+    if (code[i] === "{") {
+      stack.push(null);
+      i += 1;
+      continue;
+    }
+    if (code[i] === "}") {
+      const top = stack.pop();
+      if (top != null) spans[top].end = i;
+      i += 1;
+      continue;
+    }
+    i += 1;
+  }
+  return spans.filter((span) => span.end >= 0);
+}
+
+function innermostFunction(functions: FunctionSpan[], at: number): FunctionSpan | null {
+  let owner: FunctionSpan | null = null;
+  for (const fn of functions) {
+    if (at < fn.bodyStart || at > fn.end) continue;
+    if (!owner || fn.bodyStart >= owner.bodyStart) owner = fn;
+  }
+  return owner;
+}
+
+function isFunctionKeyword(code: string, index: number): boolean {
+  if (!code.startsWith("function", index)) return false;
+  const before = index === 0 ? " " : code[index - 1];
+  const after = code[index + "function".length] ?? " ";
+  return !/[A-Za-z0-9_$]/.test(before) && !/[A-Za-z0-9_$]/.test(after);
+}
+
+function nextFunctionBrace(code: string, from: number): number {
+  let parens = 0;
+  for (let i = from; i < code.length; i += 1) {
+    const stringEnd = skipString(code, i);
+    if (stringEnd > i) {
+      i = stringEnd - 1;
+      continue;
+    }
+    if (code[i] === "(") parens += 1;
+    else if (code[i] === ")") parens -= 1;
+    else if (code[i] === "{" && parens === 0) return i;
+  }
+  return -1;
+}
+
+function matchingParen(code: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < code.length; i += 1) {
+    const stringEnd = skipString(code, i);
+    if (stringEnd > i) {
+      i = stringEnd - 1;
+      continue;
+    }
+    if (code[i] === "(") depth += 1;
+    else if (code[i] === ")") {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+function skipString(code: string, index: number): number {
+  const quote = code[index];
+  if (quote !== "'" && quote !== "\"" && quote !== "`") return index;
+  for (let i = index + 1; i < code.length; i += 1) {
+    if (code[i] === "\\") {
+      i += 1;
+      continue;
+    }
+    if (code[i] === quote) return i + 1;
+  }
+  return code.length;
 }
 
 async function tsFiles(dir: string): Promise<string[]> {
