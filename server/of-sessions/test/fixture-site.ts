@@ -90,23 +90,24 @@ function dashboardHtml(mode: FixtureMode): string {
   }
 }
 
-function ofChatHtml(mode: "live" | "slow" | "late" | "enter" | "stuck" = "live", chatId = "9"): string {
+function ofChatHtml(mode: "live" | "slow" | "late" | "verylate" | "enter" | "stuck" = "live", chatId = "9"): string {
   const sendScript = mode === "stuck"
     ? `document.querySelector("[at-attr='send_btn']").disabled = true;`
     : `const box = document.querySelector("[at-attr='chat_input']");
        const send = document.querySelector("[at-attr='send_btn']");
-       const lateMs = "${mode}" === "late" ? 4000 : "${mode}" === "slow" ? 800 : 0;
+       const lateMs = "${mode}" === "verylate" ? 13000 : "${mode}" === "late" ? 4000 : "${mode}" === "slow" ? 800 : 0;
        const post = async (waitMs) => {
          if (send.disabled) return;
          const go = async () => {
            const body = box.value;
            const price = document.querySelector("[at-attr='price_input']").dataset.saved || "";
            await fetch("/fixture/compose", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ body, price, file: "" }) });
-           await fetch("/api2/v2/chats/${chatId}/messages?order=desc");
+           const slow = "${mode}" === "verylate" && waitMs !== 0 ? "&slow=1" : "";
+           await fetch("/api2/v2/chats/${chatId}/messages?order=desc" + slow);
            box.value = "";
            send.disabled = true;
          };
-         if (waitMs > 0) setTimeout(() => { void go(); }, waitMs);
+         if (waitMs > 0 && "${mode}" !== "verylate") setTimeout(() => { void go(); }, waitMs);
          else await go();
        };
        send.disabled = true;
@@ -472,13 +473,15 @@ async function handle(
     );
     return;
   }
-  if (req.method === "GET" && /^\/api2\/v2\/chats\/(?:3|4|6|9)\/messages$/.test(url.pathname)) {
+  if (req.method === "GET" && /^\/api2\/v2\/chats\/(?:2|3|4|6|9)\/messages$/.test(url.pathname)) {
     if (!accepted(req, epoch())) {
       res.writeHead(401, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "no" }));
       return;
     }
+    const slow = url.searchParams.get("slow") === "1";
     res.writeHead(200, { "content-type": "application/json" });
+    if (slow) await new Promise((resolve) => setTimeout(resolve, 13_000));
     res.end(JSON.stringify({
       list: confirmSends.on ? composed.map((item, index) => ({
         id: 300 + index,
@@ -502,6 +505,14 @@ async function handle(
       return;
     }
     html(res, ofChatHtml("stuck"));
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/my/chats/chat/2") {
+    if (!accepted(req, epoch())) {
+      redirect(res, "/login");
+      return;
+    }
+    html(res, ofChatHtml("verylate", "2"));
     return;
   }
   if (req.method === "GET" && url.pathname === "/my/chats/chat/3") {

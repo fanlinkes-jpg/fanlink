@@ -47,6 +47,15 @@ export type ComposeResult = {
 export async function composeChat(context: BrowserContext, request: ComposeRequest): Promise<ComposeResult> {
   const page = await openWorkPage(context);
   const payloads: string[] = [];
+  let pendingNet = 0;
+  const trackNet = (delta: number, rawUrl: string) => {
+    const path = pathOf(rawUrl);
+    if (!path.includes("message") && !path.includes("chat")) return;
+    pendingNet += delta;
+  };
+  page.on("request", (request) => trackNet(1, request.url()));
+  page.on("requestfinished", (request) => trackNet(-1, request.url()));
+  page.on("requestfailed", (request) => trackNet(-1, request.url()));
   const onResponse = (response: { url(): string; status(): number; text(): Promise<string> }) => {
     if (response.status() < 200 || response.status() >= 300) return;
     const path = pathOf(response.url());
@@ -112,6 +121,7 @@ export async function composeChat(context: BrowserContext, request: ComposeReque
       await page.getByRole("button", { name: /^(Save|Guardar)$/ }).click();
     }
     const before = payloads.length;
+    const netAtClick = pendingNet;
     const beforeDom = await messageCount(page);
     const send = await firstReady(page, SEND_SELECTORS, 8_000);
     if (!send) return await giveUp(page, "no está el botón Send");
@@ -128,6 +138,16 @@ export async function composeChat(context: BrowserContext, request: ComposeReque
       return { messageId: first.id, reason: null };
     }
     if (first.kind === "visto") {
+      console.info("[fanlink:send] confirmado via=pendiente");
+      return { messageId: null, reason: null, awaitingId: true };
+    }
+    const missed = await clickMissed(roleBox, page, payloads, before, request, beforeDom, () => pendingNet > netAtClick);
+    if (!missed) {
+      const lateId = idFromPayloads(payloads, before, request);
+      if (lateId) {
+        console.info("[fanlink:send] confirmado via=json");
+        return { messageId: lateId, reason: null };
+      }
       console.info("[fanlink:send] confirmado via=pendiente");
       return { messageId: null, reason: null, awaitingId: true };
     }
@@ -247,6 +267,31 @@ async function watchSend(
   const id = idFromPayloads(payloads, from, request);
   if (id) return { kind: "id", id };
   return left ? { kind: "visto" } : { kind: "no" };
+}
+
+/** Enter solo si la red y la burbuja confirman que el click no salió. */
+async function clickMissed(
+  box: Locator,
+  page: Page,
+  payloads: string[],
+  from: number,
+  request: ComposeRequest,
+  beforeDom: number,
+  networkOpen: () => boolean,
+): Promise<boolean> {
+  const drain = Date.now() + 20_000;
+  while (Date.now() < drain && (networkOpen() || payloads.slice(from).some((item) => item === ""))) {
+    if (idFromPayloads(payloads, from, request)) return false;
+    await delay(100);
+  }
+  if (idFromPayloads(payloads, from, request)) return false;
+  if (networkOpen() || payloads.slice(from).some((item) => item === "")) return false;
+  const needle = request.body.trim();
+  if (needle && payloads.slice(from).some((item) => item.includes(needle))) return false;
+  if (!(await boxText(box)).trim()) return false;
+  const dom = await messageCount(page);
+  if (dom > beforeDom && await threadHasBody(page, request.body)) return false;
+  return true;
 }
 
 function idFromPayloads(payloads: string[], from: number, request: ComposeRequest): string | null {
