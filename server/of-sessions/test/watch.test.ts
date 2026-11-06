@@ -27,12 +27,11 @@ test("sin socket solo se recarga el hilo pasado el mínimo de 15 s", async () =>
     target: () => accountTarget([{ threadKey: "7", watchers: 1 }]),
     open: async () => session,
     save: async () => undefined,
-    onBlock: () => undefined,
+    onBlock: () => 15_000,
     now: () => now,
     sleep: async (ms) => {
       now += ms;
     },
-    blockMs: 15_000,
   });
   await task;
   assert.equal(gotos[0]?.url, "https://onlyfans.com/my/chats");
@@ -51,6 +50,33 @@ test("sin socket solo se recarga el hilo pasado el mínimo de 15 s", async () =>
     blockedUntil: null,
   });
   assert.equal(early, "hold");
+});
+
+test("un frame sin chatId no se asigna al hilo de la pestaña si el usuario no coincide", () => {
+  const foreign = parseLivePayload(
+    JSON.stringify({
+      list: [{ id: 3, text: "ajeno", createdAt: "2026-11-06T10:00:00.000Z", fromUser: { id: "9" } }],
+    }),
+    "7",
+    "7",
+  );
+  assert.equal(foreign.messages.length, 0);
+  const checked = parseLivePayload(
+    JSON.stringify({
+      list: [{
+        id: 4,
+        text: "de este hilo",
+        createdAt: "2026-11-06T10:00:00.000Z",
+        fromUser: { id: "cuenta" },
+        withUser: { id: "7" },
+      }],
+    }),
+    "7",
+    "7",
+  );
+  assert.equal(checked.messages.length, 1);
+  assert.equal(checked.messages[0]?.threadKey, "7");
+  assert.equal(checked.messages[0]?.body, "de este hilo");
 });
 
 test("un frame reparte cada mensaje a su chat aunque la pestaña sea de la cuenta", () => {
@@ -108,6 +134,38 @@ test("el respaldo rota por watchers, con 15 s por hilo y tope de 8", () => {
   }
   assert.equal(seen.has(outside ?? ""), false);
   assert.equal(seen.size, MAX_FALLBACK_THREADS);
+});
+
+test("un 429 no reabre la pestaña antes de la pausa que devuelve el backoff", async () => {
+  let now = 0;
+  let calls = 0;
+  const gotos: number[] = [];
+  const session: WatchSession = {
+    async goto() {
+      calls += 1;
+      gotos.push(now);
+      return calls === 1 ? 429 : 200;
+    },
+    listen() {
+      return undefined;
+    },
+    async close() {
+      return undefined;
+    },
+  };
+  await runInboxWatch({
+    stopped: () => now > 70_000,
+    target: () => accountTarget([{ threadKey: "7", watchers: 1 }]),
+    open: async () => session,
+    save: async () => undefined,
+    onBlock: () => 60_000,
+    now: () => now,
+    sleep: async (ms) => {
+      now += ms;
+    },
+  });
+  assert.deepEqual(gotos.filter((at) => at < 60_000), [0]);
+  assert.ok((gotos[1] ?? 0) >= 60_000);
 });
 
 function accountTarget(threads: WatchTarget["threads"]): WatchTarget {

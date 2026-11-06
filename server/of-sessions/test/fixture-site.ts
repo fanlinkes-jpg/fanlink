@@ -3,6 +3,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
+import type { Socket } from "node:net";
 import { InvalidArgumentError } from "../types.ts";
 import { messages } from "../messages.ts";
 import type { SiteAdapter } from "../sessions/site.ts";
@@ -24,6 +25,8 @@ export interface Fixture {
   invalidate(): void;
   pushFanMessage(text: string): void;
   sent: Array<{ fan: string; body: string; price: string }>;
+  composed: Array<{ body: string; price: string; file: string }>;
+  confirmSends: { on: boolean };
   close(): Promise<void>;
 }
 
@@ -88,6 +91,134 @@ function dashboardHtml(mode: FixtureMode): string {
   }
 }
 
+function ofChatHtml(mode: "live" | "slow" | "late" | "verylate" | "hang" | "posting" | "reject" | "enter" | "stuck" = "live", chatId = "9"): string {
+  if (mode === "posting" || mode === "reject") {
+    const sendScript = `const box = document.querySelector("[at-attr='chat_input']");
+       const send = document.querySelector("[at-attr='send_btn']");
+       send.disabled = true;
+       box.addEventListener("input", () => { send.disabled = box.value.trim() === ""; });
+       send.onclick = async () => {
+         const body = box.value;
+         await fetch("/fixture/compose", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ body, price: "", file: "" }) });
+         box.value = "\\n";
+         const item = document.createElement("div");
+         item.className = "b-chat__message m-sending";
+         item.textContent = body;
+         document.querySelector(".b-chat").appendChild(item);
+         const response = await fetch("/api2/v2/chats/${chatId}/messages", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+         if (response.ok) item.className = "b-chat__message";
+       };
+       void fetch("/api2/v2/chats/${chatId}/messages/read", { method: "POST" });`;
+    return pageHtml(
+      "Hilo",
+      "",
+      `<div class="b-chat">
+         <textarea at-attr="chat_input" placeholder="Type a message..."></textarea>
+         <button at-attr="send_btn" type="button">Send</button>
+         <button at-attr="price_btn" type="button">Price</button>
+         <input at-attr="price_input" />
+         <button at-attr="vault_btn" type="button">Vault</button>
+       </div>
+       <script>${sendScript}</script>`,
+    );
+  }
+  const sendScript = mode === "stuck"
+    ? `document.querySelector("[at-attr='send_btn']").disabled = true;`
+    : `const box = document.querySelector("[at-attr='chat_input']");
+       const send = document.querySelector("[at-attr='send_btn']");
+       const lateMs = "${mode}" === "verylate" ? 13000 : "${mode}" === "late" ? 4000 : "${mode}" === "slow" ? 800 : 0;
+       const post = async (waitMs) => {
+         if (send.disabled) return;
+         const go = async () => {
+           const body = box.value;
+           const price = document.querySelector("[at-attr='price_input']").dataset.saved || "";
+           await fetch("/fixture/compose", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ body, price, file: "" }) });
+           const slow = "${mode}" === "verylate" && waitMs !== 0 ? "&slow=1" : "";
+           const hang = "${mode}" === "hang" ? "&hang=1" : "";
+           await fetch("/api2/v2/chats/${chatId}/messages?order=desc" + slow + hang);
+           box.value = "";
+           send.disabled = true;
+         };
+         if (waitMs > 0 && "${mode}" !== "verylate") setTimeout(() => { void go(); }, waitMs);
+         else await go();
+       };
+       send.disabled = true;
+       box.addEventListener("input", () => { send.disabled = box.value.trim() === ""; });
+       send.onclick = () => { if ("${mode}" === "enter") return; void post(lateMs); };
+       box.addEventListener("keydown", (event) => {
+         if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void post(false); }
+       });
+       document.querySelector("[at-attr='vault_btn']").onclick = () => { void fetch("/fixture/vault"); };
+       void fetch("/api2/v2/chats/${chatId}/messages/read", { method: "POST" });`;
+  return pageHtml(
+    "Hilo",
+    "",
+    `<div style="height:70vh"></div>
+     <div class="b-chat">
+       <ul class="b-chat__messages"><li class="b-chat__item">mensaje secreto del fan</li></ul>
+       <form class="b-chat__form">
+         <div class="b-chat__message-input">
+           <textarea placeholder="Type a message..." at-attr="chat_input"></textarea>
+         </div>
+         <button type="button" at-attr="price_btn" aria-label="Price">Price</button>
+         <button type="button" at-attr="vault_btn" aria-label="Add from media vault">Vault</button>
+         <button type="button" at-attr="send_btn">Send</button>
+       </form>
+       <div id="price-box" role="dialog" aria-label="Message price" hidden>
+         <input at-attr="price_input" placeholder="Free" />
+         <button type="button" at-attr="submit_post">Save</button>
+       </div>
+     </div>
+     <script>
+       document.querySelector("[at-attr='price_btn']").onclick = () => { document.getElementById("price-box").hidden = false; };
+       document.querySelector("[at-attr='submit_post']").onclick = () => {
+         document.querySelector("[at-attr='price_input']").dataset.saved = document.querySelector("[at-attr='price_input']").value;
+         document.getElementById("price-box").hidden = true;
+       };
+       ${sendScript}
+     </script>`,
+  );
+}
+
+function chatComposerHtml(): string {
+  return pageHtml(
+    "Hilo",
+    "",
+    `<textarea data-fanlink-composer aria-label="Message"></textarea>
+     <button type="button" data-fanlink-price aria-label="Price">Price</button>
+     <button type="button" data-fanlink-send aria-label="Send">Send</button>
+     <input data-fanlink-file type="file" aria-label="Add media" />
+     <div id="price-box" role="dialog" aria-label="Message price" hidden>
+       <input data-fanlink-amount aria-label="Price amount" placeholder="Free" />
+       <button type="button" data-fanlink-price-save>Save</button>
+     </div>
+     <input type="hidden" data-fanlink-price-value value="" />
+     <div data-fanlink-history style="height:80px;overflow:auto"><div style="height:400px">hilo</div></div>
+     <script>
+       const history = document.querySelector("[data-fanlink-history]");
+       history.scrollTop = 200;
+       let older = false;
+       history.onscroll = async () => {
+         if (older || history.scrollTop > 0) return;
+         older = true;
+         await fetch("/api2/v2/chats/7/messages?before=2");
+       };
+       document.querySelector("[data-fanlink-price]").onclick = () => { document.getElementById("price-box").hidden = false; };
+       document.querySelector("[data-fanlink-price-save]").onclick = () => {
+         document.querySelector("[data-fanlink-price-value]").value = document.querySelector("[data-fanlink-amount]").value;
+         document.getElementById("price-box").hidden = true;
+       };
+       document.querySelector("[data-fanlink-send]").onclick = async () => {
+         const body = document.querySelector("[data-fanlink-composer]").value;
+         const price = document.querySelector("[data-fanlink-price-value]").value;
+         const file = document.querySelector("[data-fanlink-file]").files[0];
+         await fetch("/fixture/compose", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ body, price, file: file ? file.name : "" }) });
+         await fetch("/api2/v2/chats/7/messages?order=desc");
+       };
+     </script>`,
+  );
+}
+
 const blankHtml = `<!doctype html>
 <html lang="es"><head><meta charset="utf-8"><title>Blank</title></head><body>blank</body></html>`;
 
@@ -96,11 +227,18 @@ export async function startFixture(mode: FixtureMode = "users-me"): Promise<Fixt
   const hits: FixtureHits = { login: 0, session: 0, dashboard: 0 };
   const extraMessages: Array<{ id: number; text: string; at: string }> = [];
   const sent: Array<{ fan: string; body: string; price: string }> = [];
+  const composed: Array<{ body: string; price: string; file: string }> = [];
+  const confirmSends = { on: true };
+  const sockets = new Set<Socket>();
   const server = createServer((req, res) => {
-    void handle(req, res, () => epoch, hits, mode, extraMessages, sent).catch(() => {
+    void handle(req, res, () => epoch, hits, mode, extraMessages, sent, composed, confirmSends).catch(() => {
       if (!res.headersSent) res.writeHead(500);
       res.end();
     });
+  });
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -118,6 +256,8 @@ export async function startFixture(mode: FixtureMode = "users-me"): Promise<Fixt
       epoch += 1;
     },
     sent,
+    composed,
+    confirmSends,
     pushFanMessage(text: string) {
       extraMessages.push({
         id: 200 + extraMessages.length,
@@ -127,6 +267,7 @@ export async function startFixture(mode: FixtureMode = "users-me"): Promise<Fixt
     },
     close: () =>
       new Promise((resolve, reject) => {
+        for (const socket of sockets) socket.destroy();
         server.close((error) => (error ? reject(error) : resolve()));
       }),
   };
@@ -140,6 +281,8 @@ async function handle(
   mode: FixtureMode,
   extraMessages: Array<{ id: number; text: string; at: string }>,
   sent: Array<{ fan: string; body: string; price: string }>,
+  composed: Array<{ body: string; price: string; file: string }>,
+  confirmSends: { on: boolean },
 ): Promise<void> {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   if (req.method === "GET" && url.pathname === "/login") {
@@ -295,6 +438,15 @@ async function handle(
       return;
     }
     const latest = extraMessages.at(-1);
+    if (url.searchParams.get("page") === "2") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        list: [
+          { id: 8, withUser: { id: 8, username: "fanexp", name: "Fan Exp" }, unreadMessagesCount: 0, lastMessage: { id: 80, text: "antiguo", createdAt: "2026-10-01T10:00:00.000Z", fromUser: { id: 8 } } },
+        ],
+      }));
+      return;
+    }
     res.writeHead(200, { "content-type": "application/json" });
     res.end(
       JSON.stringify({
@@ -319,6 +471,22 @@ async function handle(
       res.end(JSON.stringify({ error: "no" }));
       return;
     }
+    if (url.searchParams.get("before") === "2") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        list: [{
+          id: 1,
+          text: "el primero",
+          createdAt: "2026-11-01T10:00:00.000Z",
+          fromUser: { id: 42 },
+          isFavorite: true,
+          isFromQueue: true,
+          replyToMessage: { id: 9, text: "cita" },
+          media: [{ type: "video", duration: 12, canView: true, isOpened: true, files: { thumb: { url: "https://cdn.example/thumb.jpg" } } }],
+        }],
+      }));
+      return;
+    }
     res.writeHead(200, { "content-type": "application/json" });
     res.end(
       JSON.stringify({
@@ -331,9 +499,181 @@ async function handle(
             createdAt: item.at,
             fromUser: { id: 7 },
           })),
+          ...(confirmSends.on ? composed.map((item, index) => ({
+            id: 300 + index,
+            text: item.body,
+            createdAt: "2026-11-06T12:00:00.000Z",
+            fromUser: { id: 42 },
+            price: item.price ? Number(item.price) : undefined,
+            isMine: true,
+          })) : []),
         ],
       }),
     );
+    return;
+  }
+  if (req.method === "GET" && /^\/api2\/v2\/chats\/(?:1|2|3|4|6|9)\/messages$/.test(url.pathname)) {
+    if (!accepted(req, epoch())) {
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "no" }));
+      return;
+    }
+    const slow = url.searchParams.get("slow") === "1";
+    if (url.searchParams.get("hang") === "1") {
+      res.writeHead(200, { "content-type": "application/json" });
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    if (slow) await new Promise((resolve) => setTimeout(resolve, 13_000));
+    res.end(JSON.stringify({
+      list: confirmSends.on ? composed.map((item, index) => ({
+        id: 300 + index,
+        text: item.body,
+        createdAt: "2026-11-06T12:00:00.000Z",
+        fromUser: { id: 42 },
+        price: item.price ? Number(item.price) : undefined,
+        isMine: true,
+      })) : [],
+    }));
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/fixture/vault") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ list: [{ id: "v1", type: "photo", title: "playa" }] }));
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/my/chats/chat/8") {
+    if (!accepted(req, epoch())) {
+      redirect(res, "/login");
+      return;
+    }
+    html(res, ofChatHtml("stuck"));
+    return;
+  }
+  if (req.method === "POST" && /^\/api2\/v2\/chats\/[^/]+\/messages\/read$/.test(url.pathname)) {
+    res.writeHead(400, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "read" }));
+    return;
+  }
+  if (req.method === "POST" && /^\/api2\/v2\/chats\/(?:0|5)\/messages$/.test(url.pathname)) {
+    if (url.pathname.endsWith("/chats/0/messages")) {
+      res.writeHead(500, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "no" }));
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      list: composed.map((item, index) => ({
+        id: 300 + index,
+        text: item.body,
+        createdAt: new Date().toISOString(),
+        fromUser: { id: 42 },
+        isMine: true,
+      })),
+    }));
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/my/chats/chat/0") {
+    if (!accepted(req, epoch())) {
+      redirect(res, "/login");
+      return;
+    }
+    html(res, ofChatHtml("reject", "0"));
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/my/chats/chat/5") {
+    if (!accepted(req, epoch())) {
+      redirect(res, "/login");
+      return;
+    }
+    html(res, ofChatHtml("posting", "5"));
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/my/chats/chat/1") {
+    if (!accepted(req, epoch())) {
+      redirect(res, "/login");
+      return;
+    }
+    html(res, ofChatHtml("hang", "1"));
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/my/chats/chat/2") {
+    if (!accepted(req, epoch())) {
+      redirect(res, "/login");
+      return;
+    }
+    html(res, ofChatHtml("verylate", "2"));
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/my/chats/chat/3") {
+    if (!accepted(req, epoch())) {
+      redirect(res, "/login");
+      return;
+    }
+    html(res, ofChatHtml("late", "3"));
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/my/chats/chat/6") {
+    if (!accepted(req, epoch())) {
+      redirect(res, "/login");
+      return;
+    }
+    html(res, ofChatHtml("slow", "6"));
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/my/chats/chat/4") {
+    if (!accepted(req, epoch())) {
+      redirect(res, "/login");
+      return;
+    }
+    html(res, ofChatHtml("enter", "4"));
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/my/chats/chat/9") {
+    if (!accepted(req, epoch())) {
+      redirect(res, "/login");
+      return;
+    }
+    html(res, ofChatHtml());
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/my/chats/full") {
+    if (!accepted(req, epoch())) {
+      redirect(res, "/login");
+      return;
+    }
+    html(res, pageHtml(
+      "Chats",
+      "",
+      `<div data-fanlink-chats style="height:80px;overflow:auto"><div style="height:400px">lista</div></div>
+       <script>
+         const box = document.querySelector("[data-fanlink-chats]");
+         box.scrollTop = 0;
+         let more = false;
+         box.onscroll = async () => {
+           if (more || box.scrollTop < 40) return;
+           more = true;
+           await fetch("/api2/v2/chats?page=2");
+         };
+       </script>`,
+    ));
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/my/chats/chat/7") {
+    if (!accepted(req, epoch())) {
+      redirect(res, "/login");
+      return;
+    }
+    html(res, chatComposerHtml());
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/fixture/compose") {
+    const raw = await readBodyText(req);
+    const body = JSON.parse(raw) as { body?: string; price?: string; file?: string };
+    composed.push({ body: body.body ?? "", price: body.price ?? "", file: body.file ?? "" });
+    res.writeHead(204);
+    res.end();
     return;
   }
   if (req.method === "GET" && url.pathname === "/my/chats") {
@@ -386,6 +726,10 @@ async function handle(
   }
   if (req.method === "GET" && url.pathname === "/simulate-sent") {
     html(res, pageHtml("Enviado", "", "<p>ok</p>"));
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/tall") {
+    html(res, pageHtml("Alto", "", `<div style="height:5000px">sin chat</div>`));
     return;
   }
   if (req.method === "GET" && url.pathname === "/blank") {

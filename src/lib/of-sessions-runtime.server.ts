@@ -28,7 +28,12 @@ import { chatIntervalMinFromEnv } from "../../server/of-sessions/sync/chats.ts";
 import { chatIntervalMinutes, inboxIsOpen, activeThreadWatches } from "../../server/of-sessions/sync/live.ts";
 import { openWatchContext, runInboxWatch } from "../../server/of-sessions/sync/inbox-watch.ts";
 import { pickAccountWatch } from "../../server/of-sessions/sync/watch-plan.ts";
-import { listChatMeta, listChats, listPendingOutbounds, recordOutbound, saveChatRead } from "../../server/of-sessions/sync/chat-store.ts";
+import { listChatMeta, listChats, listPendingOutbounds, markOutboundAwaiting, markOutboundError, markOutboundSent, recordOutbound, saveChatRead } from "../../server/of-sessions/sync/chat-store.ts";
+import { chatSendGate, publicSendReason, type SendAccount } from "../../server/of-sessions/send/gate.ts";
+import { deliverChatSend, sendLimitFromEnv } from "../../server/of-sessions/send/deliver.ts";
+import { composeChat } from "../../server/of-sessions/send/compose.ts";
+import { listFanProfiles, saveFanProfile } from "../../server/of-sessions/sync/fan-profile.ts";
+import { listFanNotes, saveFanNote } from "../../server/of-sessions/sync/fan-note.ts";
 import { intervalMinFromEnv, startSyncLoop, type ScheduleAccount } from "../../server/of-sessions/sync/schedule.ts";
 import {
   listCreatorReads,
@@ -161,6 +166,7 @@ export function kickInboxWatch(): void {
     onBlock: (accountId, reason) => {
       const delay = noteAccountBlock(accountId, reason);
       console.info(`[fanlink:chat] escucha pausada cuenta=${accountId} motivo=${reason} espera=${delay}`);
+      return delay;
     },
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -410,6 +416,7 @@ export async function listCreatorChatViews(userId: string): Promise<CreatorChatL
       subPriceCents: thread.subPriceCents,
       subExpiresAt: thread.subExpiresAt,
       renewAuto: thread.renewAuto,
+      lists: thread.lists ?? null,
     })),
     messages: stored.messages.map((message) => ({
       creatorId: message.creatorId,
@@ -425,6 +432,9 @@ export async function listCreatorChatViews(userId: string): Promise<CreatorChatL
       authorName: message.authorName,
       seen: message.seen,
       automatic: message.automatic,
+      mediaCount: message.mediaCount ?? null,
+      mediaSeconds: message.mediaSeconds ?? null,
+      mediaPreview: message.mediaPreview ?? null,
     })),
     meta: stored.meta.map((item) => ({
       creatorId: item.creatorId,
@@ -433,6 +443,8 @@ export async function listCreatorChatViews(userId: string): Promise<CreatorChatL
       reason: publicSyncReason(item.reason),
     })),
     pending: await listPendingOutbounds(sql, creatorIds),
+    profiles: await listFanProfiles(sql, creatorIds),
+    notes: await listFanNotes(sql, creatorIds),
   };
 }
 
@@ -668,9 +680,44 @@ export async function listTeamMetricViews(userId: string): Promise<Array<{
   );
 }
 
+export async function saveFanNoteView(
+  userId: string,
+  input: { creatorId: string; fanKey: string; body: string },
+): Promise<{ ok: true }> {
+  const access = await accessFor(userId);
+  if (access.role !== "owner" && !access.perms.includes("mensajes")) {
+    throw new WorkspaceAccessError("No tienes permiso para escribir.");
+  }
+  if (!input.fanKey.trim()) throw new WorkspaceAccessError("Sin datos del fan.");
+  await saveFanNote(await getSql(), { ...input, updatedBy: access.userId });
+  return { ok: true };
+}
+
+export async function saveFanProfileView(
+  userId: string,
+  input: {
+    creatorId: string;
+    fanKey: string;
+    nickname: string | null;
+    birthday: string | null;
+    timezone: string | null;
+    source: string | null;
+    salaryCents: number | null;
+    lastPayDate: string | null;
+  },
+): Promise<{ ok: true }> {
+  const access = await accessFor(userId);
+  if (access.role !== "owner" && !access.perms.includes("mensajes")) {
+    throw new WorkspaceAccessError("No tienes permiso para escribir.");
+  }
+  if (!input.fanKey.trim()) throw new WorkspaceAccessError("Sin datos del fan.");
+  await saveFanProfile(await getSql(), { ...input, updatedBy: access.userId });
+  return { ok: true };
+}
+
 export async function recordChatOutboundView(
   userId: string,
-  input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; ofMessageKey: string | null },
+  input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; ofMessageKey: string | null; scheduledAt?: string | null },
 ): Promise<{ ok: true; sent: false }> {
   const access = await accessFor(userId);
   if (access.role !== "owner" && !access.perms.includes("mensajes")) {
@@ -688,8 +735,107 @@ export async function recordChatOutboundView(
     priceCents: input.priceCents,
     createdAt: new Date().toISOString(),
     ofMessageKey: input.ofMessageKey,
+    scheduledAt: input.scheduledAt ?? null,
   });
   return { ok: true, sent: false };
+}
+
+export async function chatSendAccessView(userId: string): Promise<{ creatorIds: string[] }> {
+  const access = await accessFor(userId);
+  if (access.role !== "owner" && !access.perms.includes("mensajes")) return { creatorIds: [] };
+  const sessions = await getOfSessionManager();
+  const accounts = await sessions.listAccounts();
+  return {
+    creatorIds: accounts.flatMap((account) => {
+      const allowed = chatSendGate(process.env.FANLINK_ENABLE_SEND, process.env.FANLINK_SEND_ALLOW_ACCOUNTS, sendAccount(account)).allowed;
+      return allowed && account.creatorId ? [account.creatorId] : [];
+    }),
+  };
+}
+
+export async function sendChatMessageView(
+  userId: string,
+  input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null },
+): Promise<{ sent: boolean; reason: string | null; messageId: string | null }> {
+  const access = await accessFor(userId);
+  if (access.role !== "owner" && !access.perms.includes("mensajes")) {
+    throw new WorkspaceAccessError("No tienes permiso para escribir.");
+  }
+  const body = input.body.replace(/\s+/g, " ").trim();
+  if (!body) throw new WorkspaceAccessError("Escribe un mensaje.");
+  if (!input.threadKey) return { sent: false, reason: "Sin hilo", messageId: null };
+  if (input.priceCents != null && input.priceCents > 0 && input.priceCents < 300) {
+    return { sent: false, reason: "Mínimo $3 USD o gratis", messageId: null };
+  }
+  const sessions = await getOfSessionManager();
+  const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
+  if (!account) return { sent: false, reason: "Envío real desactivado", messageId: null };
+  const fields = sendAccount(account);
+  const gate = chatSendGate(process.env.FANLINK_ENABLE_SEND, process.env.FANLINK_SEND_ALLOW_ACCOUNTS, fields);
+  if (!gate.allowed) return { sent: false, reason: gate.reason, messageId: null };
+  if (account.identityState === "mismatch") {
+    return { sent: false, reason: "Lecturas bloqueadas: la sesión guardada es de otra cuenta.", messageId: null };
+  }
+  const sql = await getSql();
+  const id = crypto.randomUUID();
+  await recordOutbound(sql, {
+    id,
+    creatorId: input.creatorId,
+    threadKey: input.threadKey,
+    fanKey: input.fanKey,
+    authorId: access.userId,
+    body,
+    priceCents: input.priceCents,
+    createdAt: new Date().toISOString(),
+    ofMessageKey: null,
+    scheduledAt: null,
+  });
+  try {
+    const result = await deliverChatSend({
+      flag: process.env.FANLINK_ENABLE_SEND,
+      allowlist: process.env.FANLINK_SEND_ALLOW_ACCOUNTS,
+      perMinute: sendLimitFromEnv(),
+      account: fields,
+      now: () => Date.now(),
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      open: () => sessions.withSession(account.id, (context) => composeChat(context, {
+        chatsUrl: onlyFansSite.chatsUrl ?? "https://onlyfans.com/my/chats",
+        siteId: onlyFansSite.id,
+        threadKey: input.threadKey ?? "",
+        fanKey: input.fanKey,
+        accountUserId: account.identityUserId,
+        body,
+        priceCents: input.priceCents,
+        typeDelayMs: null,
+      })),
+    });
+    if (result.sent && result.messageId) {
+      await markOutboundSent(sql, id, result.messageId);
+      return { sent: true, reason: null, messageId: result.messageId };
+    }
+    if (result.awaitingId) {
+      await markOutboundAwaiting(sql, id);
+      return { sent: false, reason: "Pendiente de confirmar", messageId: null };
+    }
+    const reason = result.reason ?? "No se envió";
+    await markOutboundError(sql, id, reason);
+    return { sent: false, reason, messageId: null };
+  } catch (error) {
+    const reason = publicSendReason(error instanceof Error ? error.message : "No se envió");
+    console.info(`[fanlink:send] error motivo=${reason}`);
+    await markOutboundError(sql, id, reason);
+    return { sent: false, reason, messageId: null };
+  }
+}
+
+function sendAccount(account: Account): SendAccount {
+  return {
+    creatorId: account.creatorId,
+    accountId: account.id,
+    handle: account.identityHandle,
+    userId: account.identityUserId,
+    label: account.label,
+  };
 }
 
 function txCursorOf(row: { txCursor: string | null; txCursorKey: string | null } | undefined) {

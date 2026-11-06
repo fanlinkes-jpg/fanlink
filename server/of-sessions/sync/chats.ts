@@ -1,7 +1,9 @@
 /**
  * Lectura de chats. Fragilidad: no hay un contrato. Se aceptan listas con
  * `withUser`, `lastMessage` y mensajes con `text` y `createdAt`. Si OnlyFans
- * cambia esos nombres, el chat queda vacío y la razón lo dice. No se envía nada.
+ * cambia esos nombres, el chat queda vacío y la razón lo dice. Un chat se
+ * envía solo con FANLINK_ENABLE_SEND=true y la cuenta en
+ * FANLINK_SEND_ALLOW_ACCOUNTS. Los masivos siguen apagados.
  */
 import { sectionFailure, type SectionOutcome } from "./parse.ts";
 
@@ -27,6 +29,8 @@ export type ChatThread = {
   subPriceCents: number | null;
   subExpiresAt: string | null;
   renewAuto: boolean | null;
+  /** Nombres de listas de OnlyFans. Null si el JSON no las trae. */
+  lists?: string[] | null;
 };
 
 export type ChatMessage = {
@@ -46,6 +50,9 @@ export type ChatMessage = {
   seen: boolean | null;
   /** Null si no dice si salió de una automatización. */
   automatic: boolean | null;
+  mediaCount?: number | null;
+  mediaSeconds?: number | null;
+  mediaPreview?: string | null;
 };
 
 export type FanMessageEvent = {
@@ -168,10 +175,11 @@ export function parseChatMessages(
   threadKey: string,
   fanKey: string | null,
   accountId: string | null = null,
+  source: "page" | "socket" = "page",
 ): ChatMessage[] {
   const rows: ChatMessage[] = [];
   walk(value, 0, (record) => {
-    const message = messageFrom(record, threadKey, fanKey, accountId);
+    const message = messageFrom(record, threadKey, fanKey, accountId, source);
     if (message) rows.push(message);
   });
   return mergeMessages([], rows);
@@ -218,6 +226,7 @@ function combineThread(left: ChatThread, right: ChatThread): ChatThread {
     subPriceCents: newer.subPriceCents ?? older.subPriceCents,
     subExpiresAt: newer.subExpiresAt ?? older.subExpiresAt,
     renewAuto: newer.renewAuto ?? older.renewAuto,
+    lists: newer.lists ?? older.lists ?? null,
   };
 }
 
@@ -380,7 +389,24 @@ function threadFrom(record: Record<string, unknown>, accountId: string | null): 
     lastFromUserId,
     lastFromFan: fromFanFlag(lastFromUserId, fanKey, accountId),
     ...spend,
+    lists: readFanLists(user),
   };
+}
+
+export function readFanLists(user: Record<string, unknown> | null): string[] | null {
+  if (!user) return null;
+  const raw = user.lists ?? user.listsStates ?? user.listStates;
+  if (!Array.isArray(raw)) return null;
+  const names = raw.flatMap((item) => {
+    if (typeof item === "string") {
+      const name = item.replace(/\s+/g, " ").trim();
+      return name ? [name.slice(0, 80)] : [];
+    }
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const name = clean((item as Record<string, unknown>).name, 80);
+    return name ? [name] : [];
+  });
+  return [...new Set(names)];
 }
 
 function previewMessage(record: Record<string, unknown>, accountId: string | null): ChatMessage | null {
@@ -397,6 +423,7 @@ function messageFrom(
   threadKey: string,
   fanKey: string | null,
   accountId: string | null,
+  source: "page" | "socket" = "page",
 ): ChatMessage | null {
   const body = visibleText(record.text ?? record.body, 2000);
   const sentAt = iso(record.createdAt ?? record.created_at ?? record.at);
@@ -404,9 +431,13 @@ function messageFrom(
   if (!body || !sentAt || !messageKey) return null;
   const chat = nested(record.chat);
   const ownThread = clean(record.chatId, 40) ?? clean(record.chat_id, 40) ?? clean(chat?.id, 40);
-  const thread = ownThread ?? threadKey;
+  const fromId = clean(nested(record.fromUser)?.id, 40);
+  const withId = clean(nested(record.withUser)?.id, 40);
+  const verified = threadKey && (fromId === threadKey || withId === threadKey) ? threadKey : null;
+  const thread = ownThread ?? (source === "socket" ? verified : threadKey);
+  if (!thread) return null;
   const fan = ownThread ?? fanKey;
-  const fromUserId = clean(nested(record.fromUser)?.id, 40);
+  const fromUserId = fromId;
   const flag = fromFanFlag(fromUserId, fan, accountId);
   return {
     messageKey,
@@ -419,7 +450,8 @@ function messageFrom(
     body,
     sentAt,
     priceCents: priceCents(record.price ?? record.ppvPrice),
-    purchased: purchasedFlag(record),
+    purchased: purchasedFlag(record, priceCents(record.price ?? record.ppvPrice)),
+    ...mediaFacts(record),
   };
 }
 
@@ -429,9 +461,37 @@ function priceCents(value: unknown): number | null {
   return null;
 }
 
-function purchasedFlag(record: Record<string, unknown>): boolean | null {
+function purchasedFlag(record: Record<string, unknown>, price: number | null): boolean | null {
   if (typeof record.purchased === "boolean") return record.purchased;
+  if (typeof record.isPurchased === "boolean") return record.isPurchased;
+  if (price == null || price <= 0) return null;
+  if (typeof record.canPurchase === "boolean") return !record.canPurchase;
+  if (typeof record.isOpened === "boolean") return record.isOpened;
   return null;
+}
+
+function mediaFacts(record: Record<string, unknown>): { mediaCount: number | null; mediaSeconds: number | null; mediaPreview: string | null } {
+  const raw = record.media ?? record.previews ?? record.attachments;
+  if (!Array.isArray(raw)) return { mediaCount: null, mediaSeconds: null, mediaPreview: null };
+  const items = raw.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item));
+  let seconds = 0;
+  let haveSeconds = false;
+  let preview: string | null = null;
+  for (const item of items) {
+    const duration = item.duration ?? item.durationSeconds;
+    if (typeof duration === "number" && Number.isFinite(duration) && duration >= 0) {
+      seconds += duration;
+      haveSeconds = true;
+    }
+    if (!preview) preview = mediaUrl(item.thumb ?? item.preview ?? item.src ?? nested(item.files)?.thumb);
+  }
+  return { mediaCount: items.length, mediaSeconds: haveSeconds ? Math.round(seconds) : null, mediaPreview: preview };
+}
+
+function mediaUrl(value: unknown): string | null {
+  const nestedUrl = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>).url : value;
+  if (typeof nestedUrl !== "string" || !/^https?:\/\//.test(nestedUrl) || nestedUrl.length > 400) return null;
+  return nestedUrl;
 }
 
 export function fromFanFlag(fromUserId: string | null, fanKey: string | null, accountId: string | null): boolean | null {

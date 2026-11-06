@@ -69,8 +69,9 @@ export async function collectChats(
     pending.push(observe(response, notes));
   };
   context.on("response", onResponse);
+  let page: Page | undefined;
   try {
-    const page = await context.newPage();
+    page = await context.newPage();
     if (!site.chatsUrl) {
       return { threads: [], messages: [], reason: "sin respuesta de chats", jsonPaths: [] };
     }
@@ -146,6 +147,7 @@ export async function collectChats(
     };
   } finally {
     context.off("response", onResponse);
+    await page?.close().catch(() => undefined);
   }
 }
 

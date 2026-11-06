@@ -12,7 +12,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../.
 
 test("un pendiente de la bandeja queda atribuido en el hilo y en Equipo al sincronizar", async () => {
   const db = new PGlite();
-  const files = ["0007_of_reads.sql", "0008_sync_schedule.sql", "0009_of_chats.sql", "0013_chat_price.sql", "0018_chat_preview.sql", "0019_chat_author.sql", "0020_chat_card.sql"];
+  const files = ["0007_of_reads.sql", "0008_sync_schedule.sql", "0009_of_chats.sql", "0013_chat_price.sql", "0018_chat_preview.sql", "0019_chat_author.sql", "0020_chat_card.sql", "0021_fan_profile.sql", "0022_message_media.sql", "0024_outbound_schedule.sql", "0025_outbound_send.sql"];
   for (const file of files) await db.exec(await readFile(path.join(root, "migrations", file), "utf8"));
   const sql: ReadSql = {
     async query<T>(text: string, params?: unknown[]): Promise<T[]> {
@@ -35,6 +35,23 @@ test("un pendiente de la bandeja queda atribuido en el hilo y en Equipo al sincr
   const pending = await listPendingOutbounds(sql, ["creator-1"]);
   assert.equal(pending.length, 1);
   assert.equal(pending[0]?.body, "hola");
+  assert.equal(pending[0]?.scheduledAt, null);
+  await recordOutbound(sql, {
+    id: "out-2",
+    createdAt: new Date().toISOString(),
+    scheduledAt: "2026-12-01T18:00:00.000Z",
+    creatorId: "creator-1",
+    fanKey: "fan-7",
+    threadKey: "fan-7",
+    authorId: "e-1",
+    body: "luego",
+    priceCents: null,
+    ofMessageKey: null,
+  });
+  const scheduled = (await listPendingOutbounds(sql, ["creator-1"])).find((item) => item.id === "out-2");
+  assert.equal(scheduled?.authorName, "Ana");
+  assert.match(scheduled?.scheduledAt ?? "", /2026-12-01/);
+  await sql.query("delete from of_chat_outbound where id = $1", ["out-2"]);
   await saveChatRead(sql, "creator-1", {
     reason: null,
     jsonPaths: [],

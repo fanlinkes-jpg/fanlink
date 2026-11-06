@@ -62,15 +62,29 @@ Hasta que exista una sincronización, Analítica y Fans muestran **Sin sincroniz
 
 El servidor sincroniza solo cada cuenta con sesión activa. Por defecto cada 30 minutos (`FANLINK_SYNC_INTERVAL_MIN`). La dueña puede cambiarlo en Analítica, entre 5 y 1440 minutos; ese valor guardado manda sobre la variable. Va de una en una, con un margen al azar de 15 a 90 segundos entre cuentas. No entra una cuenta con identidad **No coincide**, ni una sesión caducada o sin guardar. Si esa cuenta ya se está sincronizando (también a mano), no se lanza otra. Tras dos fallos seguidos la siguiente espera es el doble, luego el cuádruple, hasta 16 veces el intervalo. `FANLINK_SYNC_ENABLED=false` apaga el planificador. En la fila se ve «Última sincronización: hace X min» y el estado: en curso, OK o error con el motivo.
 
+## Permisos
+
+Decisión del dueño, del 2026-11-06: cualquier chatter ve el gasto de cada fan en todas las creadoras. El código lo mantiene así.
+
+- Un miembro con permiso de mensajes ve y trabaja los chats de todas las cuentas. `creatorIdsForChats` devuelve todas, y `canOperateCreator` con `mensajes` no mira la asignación. La asignación se guarda, pero no recorta el chat.
+- El gasto de cada fan (`spentCents`) sale en la bandeja y en la ficha del fan para cualquier chatter, en todas las creadoras. `presentRead` no lo quita a un miembro.
+- Los ingresos agregados de una creadora los ve solo la dueña. `canSeeAgencyEarnings` es cierto solo para el rol owner. Un miembro recibe `earnings` y `transactions` en null, y en Inicio `dayGrossCents` y `monthGrossCents` también en null.
+- El bruto de otro chatter lo ve solo la dueña. Cada chatter ve el suyo (`canSeeChatterFigures`).
+- Forzar la sincronización solo lo puede la dueña.
+
 ## Chats, solo lectura
 
-El mismo planificador abre `https://onlyfans.com/my/chats` y, por defecto, hasta 8 hilos, primero los no leídos (`FANLINK_CHAT_OPEN_UNREAD=false` lo deja en los más recientes). La ruta del hilo es `/my/chats/chat/{id}`. Escucha el JSON que esas páginas piden y no llama endpoints por su cuenta. No envía mensajes a OnlyFans: `FANLINK_ENABLE_SEND` sigue apagado. Si un chatter escribe en el CRM, se guarda su autor y, al sincronizar, se casa con el mensaje real por texto, hora, precio o id.
+El mismo planificador abre `https://onlyfans.com/my/chats` y, por defecto, hasta 8 hilos, primero los no leídos (`FANLINK_CHAT_OPEN_UNREAD=false` lo deja en los más recientes). La ruta del hilo es `/my/chats/chat/{id}`. Escucha el JSON que esas páginas piden y no llama endpoints por su cuenta. Si un chatter deja un mensaje pendiente, se guarda su autor y, al sincronizar, se casa con el mensaje real por texto, hora, precio o id.
+
+La migración `0033_outbound_match_unique.sql` deja un solo borrador por mensaje de OnlyFans (el de menor diferencia de hora, o el más antiguo si ese mensaje ya no está) y crea el índice único de `matched_message_key`. Hay que aplicarla con `npm run db:migrate` antes de arrancar contra una base que ya tenga chats.
+
+El envío real de un chat solo sale si `FANLINK_ENABLE_SEND=true` y la creadora está en `FANLINK_SEND_ALLOW_ACCOUNTS` (ids o handles, con o sin `@`, separados por coma). Cualquier otra cuenta sigue apagada en el servidor, no solo en el botón. Abre el perfil persistente de Chromium, entra en `/my/chats/chat/{id}`, escribe en la caja nativa y pulsa Send. El precio usa el modal Price nativo. No firma ni llama `api2` por su cuenta: espera a ver el mensaje propio en el JSON o el WebSocket que la página recibe, y entonces marca `of_chat_outbound` como enviado con el autor y el id de OnlyFans. Si no aparece, queda en error con el motivo y no se reintenta. Va de uno en uno por cuenta, con un tope por minuto (`FANLINK_SEND_PER_MINUTE`, por defecto 4) y un retardo entre teclas. Los masivos de Campañas siguen sin salir a OnlyFans.
 
 Por defecto el barrido de hilos es cada 2 minutos (`FANLINK_CHAT_SYNC_MIN`, entre 1 y 30). Tener la bandeja abierta no lo acorta. Mientras alguien mira una cuenta, el perfil deja abierta una sola pestaña de esa cuenta y escucha el WebSocket, que trae los mensajes de todos los chats, no solo del hilo que está en pantalla. No se envía ningún frame ni se llama a un endpoint. Ese mensaje llega a la base al recibirlo y la pantalla lo pinta en menos de 2 segundos. Si el socket no trae mensajes, se recargan los hilos que alguien tiene abiertos, primero el que más gente mira, nunca antes de 15 segundos por hilo y nunca más de un hilo cada 15 segundos, con un tope de 8. La pestaña se cierra a los 5 minutos sin nadie mirando. El perfil solo admite una cuenta a la vez: si hay dos, se queda la que más bandejas tiene abiertas y la otra espera.
 
 Los hilos y los mensajes se guardan por creadora y por fan, y los ve todo el equipo. Un mensaje nuevo de un fan crea el evento interno `new_fan_message`. La segunda lectura del mismo mensaje no lo repite. Solo la dueña ve **Forzar sincronización**; el servidor se lo niega a un miembro. Un miembro con permiso de mensajes puede operar el chat de cualquier cuenta: la asignación no lo recorta.
 
-Fragilidad: si OnlyFans cambia la ruta del chat o los campos `withUser`, `lastMessage`, `text` y `createdAt`, la lista puede quedar vacía y la razón será `sin respuesta de chats` o `página cambiada (chats)`. El envío no existe en esta versión.
+Fragilidad: si OnlyFans cambia la ruta del chat, la caja, el botón Send o los campos `withUser`, `lastMessage`, `text` y `createdAt`, la lista puede quedar vacía o el envío queda en error con el motivo, sin reintento.
 
 ## Avisos de WhatsApp
 
@@ -87,7 +101,7 @@ El teléfono y el interruptor se guardan en Equipo, en el acceso del servidor. N
 
 En Campañas, el bloque «Borrador con fans sincronizados» arma un masivo con fans reales: activos, expirados, con gasto mínimo o sin interacción reciente. Se escribe el mensaje (`{nombre}`), el precio de PPV, los medios del vault, se ve la estimación y se puede programar. Guardar no envía.
 
-`FANLINK_ENABLE_SEND` está apagado. El botón dice **Envío real desactivado** y no se puede pulsar. Aunque se activara, el servidor no envía a `onlyfans.com`. El adaptador del navegador solo se prueba contra el sitio local de pruebas.
+Los masivos siguen sin enviarse a OnlyFans aunque `FANLINK_ENABLE_SEND=true`. Ese flag, junto con `FANLINK_SEND_ALLOW_ACCOUNTS`, solo abre el envío de un chat de las cuentas de la lista. El botón de Campañas dice **Envío real desactivado**.
 
 El masivo nuevo (`of_mass_message`, migración `0027`) tampoco sale de aquí. Además de `FANLINK_ENABLE_SEND=true` hace falta `FANLINK_ENABLE_MASS_SEND=true` y la cuenta en `FANLINK_SEND_ALLOW_ACCOUNTS`. Las dos siguen apagadas. Crear el borrador lo hace la dueña o quien tenga el permiso `masivos`. Un chatter no ve los ingresos ni el buy rate de ese masivo.
 
@@ -124,7 +138,7 @@ Usa la clave que ya tienes. No generes otra. Misma terminal: Control+C, `git pul
 1. **Creadoras.** El handle de la ficha debe ser el de la cuenta. Si Conexión sale Caducada o el texto dice que OnlyFans pide iniciar sesión, pulsa Reconectar. Entra tú, incluido el segundo factor. La ventana se cierra sola solo cuando `users/me` trae tu username. Luego Comprobar. La fila ya no tiene Sincronizar: muestra «Última sincronización: hace X min» y OK, en curso o un error corto. La dueña puede abrir Más y pulsar Forzar sincronización. Un miembro no ve ese botón.
 2. **Automática.** Al arrancar el servidor, la primera pasada sale hacia el minuto. Luego sigue el intervalo (30 min si no lo cambias). En la terminal, una línea por pasada: cuenta, resultado, fans e ingresos. No salen cookies, tokens ni listas de URLs en la pantalla.
 3. **Analítica.** La dueña ve ingresos, fans y el equipo. Un chatter, en Equipo, ve solo su bruto atribuido. No ve el de la agencia ni el de otro. El estado dice en curso, OK o error, y «Última sincronización: hace X min».
-4. **Chat.** Conversaciones leídas, no el demo antiguo. Solo la dueña ve Forzar sincronización. Hay caja de texto. El botón de OnlyFans dice «Envío real desactivado» y no se pulsa. «Dejar pendiente» guarda el texto con tu nombre y lo muestra como «Pendiente · no enviado», no como enviado al fan.
+4. **Chat.** Conversaciones leídas, no el demo antiguo. Solo la dueña ve Forzar sincronización. Hay caja de texto y solo el botón Enviar. Sin la allowlist, Enviar se ve deshabilitado y el tooltip dice «Envío real desactivado en esta cuenta». Con `FANLINK_ENABLE_SEND=true` y la cuenta en `FANLINK_SEND_ALLOW_ACCOUNTS`, el hilo muestra **Envío real** y Enviar escribe en la caja nativa. Programar sigue guardando el envío en `of_chat_outbound` con autor y hora, sin mandarlo todavía. Un fallo queda como «Error · motivo · sin reintento».
 5. **Equipo.** Teléfono `+34…`, interruptor Avisos y minutos entre avisos. Sin claves de WhatsApp, el aviso sale como `simulado` en la terminal cuando un fan escribe.
 6. **Campañas.** Borrador con fans sincronizados: vista previa y guardar. El botón dice «Envío real desactivado» y no se pulsa.
 7. **Inicio, listas, vault y enlaces.** No son cifras de OnlyFans. Deben decir que están sin sincronizar o que son ejemplo local.
@@ -144,13 +158,16 @@ Con Postgres (`DATABASE_URL`) la tabla persiste. Sin esa variable el CRM usa el 
 
 ## Variables
 
-- `FANLINK_SESSION_KEY` — 32 bytes en base64 o hex. Obligatoria para guardar la sesión.
+- `FANLINK_SESSION_KEY` — 32 bytes en base64 o hex. Obligatoria para guardar la sesión. No generes otra si ya hay `data/sessions`.
+- `FANLINK_ENABLE_SEND` — `true` solo si vas a enviar chats de verdad. Sin esta variable, o con otro valor, no se envía nada.
+- `FANLINK_SEND_ALLOW_ACCOUNTS` — ids o handles de las creadoras que sí pueden enviar. Ejemplo de la cuenta de prueba: `9ikis52,@bigpoppa1111`. El resto sigue apagado.
+- `FANLINK_SEND_PER_MINUTE` — tope de envíos de una cuenta en un minuto. Por defecto 4. Entre 1 y 30.
 - `FANLINK_DATA_DIR` — por defecto `./data`.
 - `FANLINK_LOGIN_TIMEOUT_MS` — por defecto 15 minutos.
 - `FANLINK_OPEN_LOGIN_ON_INVALIDATE=true` — reabre Chromium si la sesión deja de valer. En el CRM, el valor por defecto es no reabrir.
 - `DISPLAY` o `WAYLAND_DISPLAY` — escritorio para la ventana de login.
 
-La ventana de login no es headless. Comprobar, Sincronizar y Chats reabren el mismo perfil de Chromium (`data/profiles/<cuenta>`) con el mismo user agent, viewport, idioma `es-ES` y zona `Europe/Madrid`, y el mismo modo visible o headless que Conectar. No basta el archivo de cookies: OnlyFans puede tratar un navegador distinto como invitado y pedir login (`users/me` sin username, `webauthn/login` o `/posts/login`). La sesión solo se guarda cuando `users/me` trae un username. Si pide iniciar sesión, Conexión pasa a **Caducada** y el texto es «OnlyFans pide iniciar sesión: pulsa Reconectar». Las rutas vistas quedan en el log del servidor.
+La ventana de Conectar sigue siendo visible. Comprobar, sincronizar, escuchar y enviar usan el mismo perfil de Chromium (`data/profiles/<cuenta>`), una sola instancia por cuenta, en segundo plano. `FANLINK_HEADFUL=true` la deja visible solo para depurar. El user agent, el viewport, el idioma `es-ES` y la zona `Europe/Madrid` no cambian. No basta el archivo de cookies: OnlyFans puede tratar un navegador distinto como invitado y pedir login (`users/me` sin username, `webauthn/login` o `/posts/login`). La sesión solo se guarda cuando `users/me` trae un username. Si pide iniciar sesión, Conexión pasa a **Caducada** y el texto es «OnlyFans pide iniciar sesión: pulsa Reconectar». Las rutas vistas quedan en el log del servidor. El envío escribe `[fanlink:send] inicio`, `navegado`, `escrito`, `click`, `confirmado` o `error motivo=…`, sin el texto del mensaje.
 
 El proxy de cada cuenta, Postgres y WhatsApp en un VPS están en `DEPLOY.md`.
 

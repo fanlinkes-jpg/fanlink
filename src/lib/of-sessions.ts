@@ -140,6 +140,7 @@ export type CreatorChatList = {
     subPriceCents: number | null;
     subExpiresAt: string | null;
     renewAuto: boolean | null;
+    lists: string[] | null;
   }>;
   messages: Array<{
     creatorId: string;
@@ -155,6 +156,9 @@ export type CreatorChatList = {
     authorName: string | null;
     seen: boolean | null;
     automatic: boolean | null;
+    mediaCount: number | null;
+    mediaSeconds: number | null;
+    mediaPreview: string | null;
   }>;
   meta: Array<{
     creatorId: string;
@@ -167,6 +171,28 @@ export type CreatorChatList = {
     creatorId: string;
     threadKey: string | null;
     body: string;
+    scheduledAt: string | null;
+    authorName: string | null;
+    status: "pending" | "error";
+    errorReason: string | null;
+  }>;
+  notes: Array<{
+    creatorId: string;
+    fanKey: string;
+    body: string;
+    authorId: string;
+    authorName: string | null;
+    updatedAt: string;
+  }>;
+  profiles: Array<{
+    creatorId: string;
+    fanKey: string;
+    nickname: string | null;
+    birthday: string | null;
+    timezone: string | null;
+    source: string | null;
+    salaryCents: number | null;
+    lastPayDate: string | null;
   }>;
 };
 
@@ -233,9 +259,49 @@ export const listDashboard = createServerFn({ method: "GET" })
     return listDashboardView(context.userId);
   });
 
+export const saveFanNote = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string; fanKey: string; body: string }) => input)
+  .handler(async ({ context, data }) => {
+    const { saveFanNoteView } = await import("./of-sessions-runtime.server");
+    return saveFanNoteView(context.userId, data);
+  });
+
+export const saveFanProfile = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: {
+    creatorId: string;
+    fanKey: string;
+    nickname: string | null;
+    birthday: string | null;
+    timezone: string | null;
+    source: string | null;
+    salaryCents: number | null;
+    lastPayDate: string | null;
+  }) => input)
+  .handler(async ({ context, data }) => {
+    const { saveFanProfileView } = await import("./of-sessions-runtime.server");
+    return saveFanProfileView(context.userId, data);
+  });
+
+export const chatSendAccess = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }): Promise<{ creatorIds: string[] }> => {
+    const { chatSendAccessView } = await import("./of-sessions-runtime.server");
+    return chatSendAccessView(context.userId);
+  });
+
+export const sendChatMessage = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null }) => input)
+  .handler(async ({ context, data }) => {
+    const { sendChatMessageView } = await import("./of-sessions-runtime.server");
+    return sendChatMessageView(context.userId, data);
+  });
+
 export const recordChatOutbound = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; ofMessageKey: string | null }) => input)
+  .validator((input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; ofMessageKey: string | null; scheduledAt?: string | null }) => input)
   .handler(async ({ context, data }) => {
     const { recordChatOutboundView } = await import("./of-sessions-runtime.server");
     return recordChatOutboundView(context.userId, data);

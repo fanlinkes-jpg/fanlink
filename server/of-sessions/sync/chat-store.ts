@@ -1,4 +1,4 @@
-import { matchOutboundAuthor, type OutboundDraft } from "./author-match.ts";
+import { outboundTextDelta, OUTBOUND_TIE_MS, type OutboundDraft } from "./author-match.ts";
 import { newFanEvents, type ChatMessage, type ChatThread, type FanMessageEvent } from "./chats.ts";
 import type { ReadSql } from "./store.ts";
 
@@ -46,8 +46,8 @@ export async function saveChatRead(
         `insert into of_chat_thread (
            creator_id, thread_key, fan_key, fan_handle, fan_name, last_message_at, excerpt, unread, synced_at, origin,
            last_from_fan, spent_cents, subscribes_cents, tips_cents, posts_cents, messages_cents,
-           avatar_url, is_online, sub_price_cents, sub_expires_at, renew_auto
-         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+           avatar_url, is_online, sub_price_cents, sub_expires_at, renew_auto, fan_lists
+         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
          on conflict (creator_id, thread_key) do update set
            fan_key = excluded.fan_key,
            fan_handle = excluded.fan_handle,
@@ -66,7 +66,8 @@ export async function saveChatRead(
            is_online = excluded.is_online,
            sub_price_cents = excluded.sub_price_cents,
            sub_expires_at = excluded.sub_expires_at,
-           renew_auto = excluded.renew_auto`,
+           renew_auto = excluded.renew_auto,
+           fan_lists = excluded.fan_lists`,
         [
           creatorId,
           thread.threadKey,
@@ -89,14 +90,16 @@ export async function saveChatRead(
           thread.subPriceCents,
           thread.subExpiresAt,
           thread.renewAuto,
+          thread.lists?.length ? thread.lists.join("\n") : null,
         ],
       );
     }
     for (const message of read.messages) {
       await sql.query(
         `insert into of_chat_message (
-           creator_id, message_key, thread_key, fan_key, from_fan, body, sent_at, price_cents, purchased, synced_at, origin, author_id, seen, automatic
-         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, null, $12, $13)
+           creator_id, message_key, thread_key, fan_key, from_fan, body, sent_at, price_cents, purchased, synced_at, origin, author_id, seen, automatic,
+           media_count, media_seconds, media_preview
+         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, null, $12, $13, $14, $15, $16)
          on conflict (creator_id, message_key) do update set
            body = excluded.body,
            from_fan = excluded.from_fan,
@@ -106,7 +109,10 @@ export async function saveChatRead(
            synced_at = excluded.synced_at,
            author_id = coalesce(of_chat_message.author_id, excluded.author_id),
            seen = excluded.seen,
-           automatic = excluded.automatic`,
+           automatic = excluded.automatic,
+           media_count = excluded.media_count,
+           media_seconds = excluded.media_seconds,
+           media_preview = excluded.media_preview`,
         [
           creatorId,
           message.messageKey,
@@ -121,10 +127,13 @@ export async function saveChatRead(
           ORIGIN,
           message.seen,
           message.automatic,
+          message.mediaCount ?? null,
+          message.mediaSeconds ?? null,
+          message.mediaPreview ?? null,
         ],
       );
     }
-    await attachOutboundAuthors(sql, creatorId, read.messages);
+    await attachOutboundAuthors(sql, creatorId, read.messages, await outboundSendStateReady(sql));
     for (const event of events) {
       await sql.query(
         `insert into of_fan_message_event (id, creator_id, fan_key, fan_name, excerpt, sent_at)
@@ -167,14 +176,14 @@ export async function listChats(
   const threads = await sql.query<ThreadRow>(
     `select creator_id, thread_key, fan_key, fan_handle, fan_name, last_message_at, excerpt, unread, synced_at,
             last_from_fan, spent_cents, subscribes_cents, tips_cents, posts_cents, messages_cents,
-            avatar_url, is_online, sub_price_cents, sub_expires_at, renew_auto
+            avatar_url, is_online, sub_price_cents, sub_expires_at, renew_auto, fan_lists
      from of_chat_thread where creator_id in (${filter})
      order by last_message_at desc nulls last`,
     creatorIds,
   );
   const messages = await sql.query<MessageRow>(
     `select m.creator_id, m.message_key, m.thread_key, m.fan_key, m.from_fan, m.body, m.sent_at, m.price_cents, m.purchased, m.synced_at,
-            m.author_id, p.display_name as author_name, m.seen, m.automatic
+            m.author_id, p.display_name as author_name, m.seen, m.automatic, m.media_count, m.media_seconds, m.media_preview
      from of_chat_message m
      left join staff_profile p on p.user_id = m.author_id
      where m.creator_id in (${filter})
@@ -208,6 +217,7 @@ export async function listChats(
       subPriceCents: centsOrNull(row.sub_price_cents),
       subExpiresAt: iso(row.sub_expires_at),
       renewAuto: flagOrNull(row.renew_auto),
+      lists: row.fan_lists ? row.fan_lists.split("\n").filter(Boolean) : null,
       syncedAt: iso(row.synced_at) ?? "",
     })),
     messages: messages.map((row) => ({
@@ -225,6 +235,9 @@ export async function listChats(
       authorName: row.author_name,
       seen: flagOrNull(row.seen),
       automatic: flagOrNull(row.automatic),
+      mediaCount: row.media_count == null ? null : Number(row.media_count),
+      mediaSeconds: row.media_seconds == null ? null : Number(row.media_seconds),
+      mediaPreview: row.media_preview,
       syncedAt: iso(row.synced_at) ?? "",
     })),
     meta: meta.map((row) => ({
@@ -273,6 +286,7 @@ type ThreadRow = {
   sub_price_cents: number | string | null;
   sub_expires_at: Date | string | null;
   renew_auto: boolean | string | null;
+  fan_lists: string | null;
 };
 
 type MessageRow = {
@@ -290,6 +304,9 @@ type MessageRow = {
   author_name: string | null;
   seen: boolean | string | null;
   automatic: boolean | string | null;
+  media_count: number | string | null;
+  media_seconds: number | string | null;
+  media_preview: string | null;
 };
 
 type MetaRow = {
@@ -309,7 +326,138 @@ function iso(value: Date | string | null | undefined): string | null {
   return parsed.toISOString();
 }
 
-async function attachOutboundAuthors(sql: ReadSql, creatorId: string, messages: ChatMessage[]): Promise<void> {
+/** No se declara fallido hasta que pasó este margen y el mismo hilo siguió. */
+export const OUTBOUND_MISS_MARGIN_MS = 120_000;
+
+export type OutboundSyncMessage = {
+  messageKey: string;
+  threadKey: string;
+  fromFan: boolean;
+  body: string;
+  sentAt: string;
+  priceCents: number | null;
+};
+
+export type OutboundReconcile =
+  | { id: string; action: "sent"; messageKey: string }
+  | { id: string; action: "missing" | "keep" };
+
+/**
+ * Empareja 1 a 1 en todo el lote. El id de OnlyFans gana; el texto desempata
+ * por cercanía y, si dos autores quedan a menos de 60 s, no se lo queda ninguno.
+ * Un mensaje ya casado en la base no vuelve a usarse.
+ */
+export function reconcileOutboundBatch(
+  drafts: ReadonlyArray<OutboundDraft & { errorReason?: string | null }>,
+  messages: readonly OutboundSyncMessage[],
+  now = Date.now(),
+  claimedMessageKeys: ReadonlySet<string> = new Set(),
+): OutboundReconcile[] {
+  const assignments = new Map<string, string>();
+  const used = new Set<string>();
+  const usedMessages = new Set<string>();
+  const own = messages.filter((message) => !message.fromFan && !claimedMessageKeys.has(message.messageKey));
+  for (const message of own) {
+    const exact = drafts.find((draft) => (
+      !used.has(draft.id)
+      && !confirmedOutboundFailure(draft.errorReason)
+      && draft.ofMessageKey != null
+      && draft.ofMessageKey === message.messageKey
+      && draft.threadKey === message.threadKey
+    ));
+    if (!exact) continue;
+    used.add(exact.id);
+    usedMessages.add(message.messageKey);
+    assignments.set(exact.id, message.messageKey);
+  }
+  const pairs: Array<{ draftId: string; messageKey: string; delta: number; authorId: string }> = [];
+  for (const message of own) {
+    if (usedMessages.has(message.messageKey)) continue;
+    for (const draft of drafts) {
+      if (used.has(draft.id) || confirmedOutboundFailure(draft.errorReason) || draft.threadKey !== message.threadKey) continue;
+      const delta = outboundTextDelta({
+        messageKey: message.messageKey,
+        threadKey: message.threadKey,
+        fanKey: null,
+        body: message.body,
+        sentAt: message.sentAt,
+        priceCents: message.priceCents,
+      }, draft);
+      if (delta == null) continue;
+      pairs.push({ draftId: draft.id, messageKey: message.messageKey, delta, authorId: draft.authorId });
+    }
+  }
+  const blocked = new Set<string>();
+  for (const messageKey of new Set(pairs.map((pair) => pair.messageKey))) {
+    const ranked = pairs.filter((pair) => pair.messageKey === messageKey).sort((left, right) => left.delta - right.delta);
+    const best = ranked[0];
+    const next = ranked[1];
+    if (best && next && next.authorId !== best.authorId && next.delta - best.delta < OUTBOUND_TIE_MS) blocked.add(messageKey);
+  }
+  const ordered = pairs
+    .filter((pair) => !blocked.has(pair.messageKey))
+    .sort((left, right) => left.delta - right.delta || left.messageKey.localeCompare(right.messageKey));
+  for (const pair of ordered) {
+    if (used.has(pair.draftId) || usedMessages.has(pair.messageKey)) continue;
+    used.add(pair.draftId);
+    usedMessages.add(pair.messageKey);
+    assignments.set(pair.draftId, pair.messageKey);
+  }
+  return drafts.map((draft) => {
+    const messageKey = assignments.get(draft.id);
+    if (messageKey) return { id: draft.id, action: "sent", messageKey };
+    return { id: draft.id, action: outboundMiss(draft, messages, now) };
+  });
+}
+
+/**
+ * Primero casa por texto y fecha en el mismo hilo y solo con mensajes propios.
+ * Un hilo distinto o un mensaje del fan no lo marcan. Si no casa y el hilo
+ * ya avanzó pasado el margen, no se envió.
+ */
+export function reconcilePendingOutbound(
+  draft: OutboundDraft & { errorReason?: string | null },
+  messages: readonly OutboundSyncMessage[],
+  now = Date.now(),
+): { action: "sent"; messageKey: string } | { action: "missing" } | { action: "keep" } {
+  const [decision] = reconcileOutboundBatch([draft], messages, now);
+  if (!decision || decision.action !== "sent") return { action: decision?.action ?? "keep" };
+  return { action: "sent", messageKey: decision.messageKey };
+}
+
+/** Un 4xx o un «no enviado» ya confirmado no vuelve a competir por el texto. */
+export function confirmedOutboundFailure(reason: string | null | undefined): boolean {
+  if (!reason) return false;
+  if (reason === "no enviado") return true;
+  return /\b4\d\d\b/.test(reason);
+}
+
+function outboundMiss(
+  draft: OutboundDraft & { errorReason?: string | null },
+  messages: readonly OutboundSyncMessage[],
+  now: number,
+): "missing" | "keep" {
+  if (draft.errorReason !== "Pendiente de confirmar" || draft.scheduledAt) return "keep";
+  const created = Date.parse(draft.createdAt);
+  if (!Number.isFinite(created) || now < created + OUTBOUND_MISS_MARGIN_MS) return "keep";
+  const sawLater = messages.some((message) => {
+    if (message.fromFan || message.threadKey !== draft.threadKey) return false;
+    const sent = Date.parse(message.sentAt);
+    return Number.isFinite(sent) && sent >= created + OUTBOUND_MISS_MARGIN_MS;
+  });
+  return sawLater ? "missing" : "keep";
+}
+
+/** Si la sincronización ya pasó por ese hilo y el mensaje propio no está, no se envió. */
+export function outboundStillMissing(
+  draft: OutboundDraft & { errorReason?: string | null },
+  messages: readonly OutboundSyncMessage[],
+  now = Date.now(),
+): boolean {
+  return reconcilePendingOutbound(draft, messages, now).action === "missing";
+}
+
+async function attachOutboundAuthors(sql: ReadSql, creatorId: string, messages: ChatMessage[], hasSendState: boolean): Promise<void> {
   const drafts = await sql.query<{
     id: string;
     author_id: string;
@@ -334,31 +482,131 @@ async function attachOutboundAuthors(sql: ReadSql, creatorId: string, messages: 
     fanKey: row.fan_key,
     ofMessageKey: row.of_message_key,
   }));
-  const used = new Set<string>();
-  for (const message of messages) {
-    const match = matchOutboundAuthor(message, pending.filter((draft) => !used.has(draft.id)));
-    if (!match) continue;
-    used.add(match.draftId);
-    await sql.query(
-      `update of_chat_message set author_id = $1
-       where creator_id = $2 and message_key = $3 and author_id is null`,
-      [match.authorId, creatorId, message.messageKey],
-    );
-    await sql.query("update of_chat_outbound set matched_message_key = $2 where id = $1", [match.draftId, message.messageKey]);
+  const flags = hasSendState
+    ? await sql.query<{ id: string; error_reason: string | null; scheduled_at: Date | string | null }>(
+      `select id, error_reason, scheduled_at from of_chat_outbound where creator_id = $1 and matched_message_key is null`,
+      [creatorId],
+    )
+    : [];
+  const flagOf = new Map(flags.map((row) => [row.id, row]));
+  const synced: OutboundSyncMessage[] = messages.map((message) => ({
+    messageKey: message.messageKey,
+    threadKey: message.threadKey,
+    fromFan: message.fromFan,
+    body: message.body,
+    sentAt: message.sentAt,
+    priceCents: message.priceCents,
+  }));
+  const claimed = await claimedOutboundMessages(sql, creatorId, synced.map((message) => message.messageKey));
+  const ready = pending.map((draft) => {
+    const flag = flagOf.get(draft.id);
+    const scheduledAt = flag?.scheduled_at == null
+      ? null
+      : flag.scheduled_at instanceof Date ? flag.scheduled_at.toISOString() : String(flag.scheduled_at);
+    return { ...draft, scheduledAt, errorReason: flag?.error_reason ?? null };
+  });
+  for (const decision of reconcileOutboundBatch(ready, synced, Date.now(), claimed)) {
+    const draft = pending.find((item) => item.id === decision.id);
+    if (!draft) continue;
+    if (decision.action === "sent") {
+      const claimedOk = await claimOutboundMatch(sql, creatorId, draft.id, decision.messageKey);
+      if (!claimedOk) continue;
+      await sql.query(
+        `update of_chat_message set author_id = $1
+         where creator_id = $2 and message_key = $3 and author_id is null`,
+        [draft.authorId, creatorId, decision.messageKey],
+      );
+      if (hasSendState) {
+        await sql.query("update of_chat_outbound set status = 'sent', error_reason = null where id = $1", [draft.id]);
+      }
+      continue;
+    }
+    if (decision.action === "missing" && hasSendState) await markOutboundError(sql, draft.id, "no enviado");
   }
+}
+
+/**
+ * Un solo borrador se queda el mensaje. Si otro proceso ya lo casó, esta fila
+ * se descarta y la transacción de la lectura sigue.
+ */
+export async function claimOutboundMatch(
+  sql: ReadSql,
+  creatorId: string,
+  draftId: string,
+  messageKey: string,
+): Promise<boolean> {
+  await sql.query("savepoint claim_outbound");
+  try {
+    const claimed = await sql.query<{ id: string }>(
+      `update of_chat_outbound set matched_message_key = $2
+       where id = $1 and matched_message_key is null
+         and not exists (
+           select 1 from of_chat_outbound other
+           where other.creator_id = $3 and other.matched_message_key = $2
+         )
+       returning id`,
+      [draftId, messageKey, creatorId],
+    );
+    await sql.query("release savepoint claim_outbound");
+    if (claimed.length === 0) {
+      console.info(`[fanlink:chat] emparejamiento descartado creator=${creatorId} borrador=${draftId} mensaje=${messageKey}`);
+      return false;
+    }
+    return true;
+  } catch (error) {
+    await sql.query("rollback to savepoint claim_outbound").catch(() => undefined);
+    if (!uniqueViolation(error)) throw error;
+    console.info(`[fanlink:chat] emparejamiento descartado creator=${creatorId} borrador=${draftId} mensaje=${messageKey} codigo=23505`);
+    return false;
+  }
+}
+
+function uniqueViolation(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  if ("code" in error && error.code === "23505") return true;
+  const message = "message" in error ? String(error.message) : "";
+  return message.includes("23505") || message.toLowerCase().includes("duplicate key");
+}
+
+async function claimedOutboundMessages(sql: ReadSql, creatorId: string, messageKeys: string[]): Promise<Set<string>> {
+  if (messageKeys.length === 0) return new Set();
+  const slots = messageKeys.map((_, index) => `$${index + 2}`).join(", ");
+  const rows = await sql.query<{ message_key: string | null }>(
+    `select matched_message_key as message_key from of_chat_outbound
+     where creator_id = $1 and matched_message_key in (${slots})
+     union
+     select message_key from of_chat_message
+     where creator_id = $1 and author_id is not null and message_key in (${slots})`,
+    [creatorId, ...messageKeys],
+  );
+  return new Set(rows.flatMap((row) => row.message_key ? [row.message_key] : []));
+}
+
+const outboundSendState = new WeakMap<object, boolean>();
+
+/** Si la columna existe se recuerda. Si la migración aún no llegó, se vuelve a mirar. */
+export async function outboundSendStateReady(sql: ReadSql): Promise<boolean> {
+  if (outboundSendState.get(sql) === true) return true;
+  const columns = await sql.query<{ column_name: string }>(
+    "select column_name from information_schema.columns where table_name = 'of_chat_outbound' and column_name = 'error_reason'",
+  );
+  const ready = columns.length > 0;
+  if (ready) outboundSendState.set(sql, true);
+  return ready;
 }
 
 export async function listPendingOutbounds(
   sql: ReadSql,
   creatorIds: string[],
-): Promise<Array<{ id: string; creatorId: string; threadKey: string | null; body: string }>> {
+): Promise<Array<{ id: string; creatorId: string; threadKey: string | null; body: string; scheduledAt: string | null; authorName: string | null; status: "pending" | "error"; errorReason: string | null }>> {
   if (!creatorIds.length) return [];
   const filter = creatorIds.map((_, index) => `$${index + 1}`).join(", ");
-  const rows = await sql.query<{ id: string; creator_id: string; thread_key: string | null; body: string }>(
-    `select id, creator_id, thread_key, body
-     from of_chat_outbound
-     where creator_id in (${filter}) and matched_message_key is null
-     order by created_at`,
+  const rows = await sql.query<{ id: string; creator_id: string; thread_key: string | null; body: string; scheduled_at: Date | string | null; author_name: string | null; status: string | null; error_reason: string | null }>(
+    `select o.id, o.creator_id, o.thread_key, o.body, o.scheduled_at, p.display_name as author_name, o.status, o.error_reason
+     from of_chat_outbound o
+     left join staff_profile p on p.user_id = o.author_id
+     where o.creator_id in (${filter}) and o.matched_message_key is null and coalesce(o.status, 'pending') <> 'sent'
+     order by o.created_at`,
     creatorIds,
   );
   return rows.map((row) => ({
@@ -366,14 +614,45 @@ export async function listPendingOutbounds(
     creatorId: row.creator_id,
     threadKey: row.thread_key,
     body: row.body,
+    scheduledAt: row.scheduled_at == null ? null : row.scheduled_at instanceof Date ? row.scheduled_at.toISOString() : String(row.scheduled_at),
+    authorName: row.author_name,
+    status: row.status === "error" ? "error" : "pending",
+    errorReason: row.error_reason,
   }));
+}
+
+export async function markOutboundSent(sql: ReadSql, id: string, messageId: string): Promise<void> {
+  await sql.query(
+    `update of_chat_outbound
+     set status = 'sent', of_message_key = $2, sent_at = now(), error_reason = null
+     where id = $1 and coalesce(status, 'pending') <> 'sent'`,
+    [id, messageId],
+  );
+}
+
+export async function markOutboundAwaiting(sql: ReadSql, id: string): Promise<void> {
+  await sql.query(
+    `update of_chat_outbound
+     set status = 'pending', of_message_key = null, error_reason = 'Pendiente de confirmar'
+     where id = $1 and coalesce(status, 'pending') <> 'sent'`,
+    [id],
+  );
+}
+
+export async function markOutboundError(sql: ReadSql, id: string, reason: string): Promise<void> {
+  await sql.query(
+    `update of_chat_outbound
+     set status = 'error', error_reason = $2
+     where id = $1 and coalesce(status, 'pending') = 'pending'`,
+    [id, reason.slice(0, 180)],
+  );
 }
 
 export async function recordOutbound(sql: ReadSql, draft: OutboundDraft & { creatorId: string }): Promise<void> {
   await sql.query(
-    `insert into of_chat_outbound (id, creator_id, thread_key, fan_key, author_id, body, price_cents, created_at, of_message_key)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-    [draft.id, draft.creatorId, draft.threadKey, draft.fanKey, draft.authorId, draft.body, draft.priceCents, draft.createdAt, draft.ofMessageKey],
+    `insert into of_chat_outbound (id, creator_id, thread_key, fan_key, author_id, body, price_cents, created_at, of_message_key, scheduled_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+    [draft.id, draft.creatorId, draft.threadKey, draft.fanKey, draft.authorId, draft.body, draft.priceCents, draft.createdAt, draft.ofMessageKey, draft.scheduledAt ?? null],
   );
 }
 

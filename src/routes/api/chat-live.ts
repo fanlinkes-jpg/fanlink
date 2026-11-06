@@ -32,7 +32,10 @@ export const Route = createFileRoute("/api/chat-live")({
                 if (request.signal.aborted) return;
                 const sql = await getSql();
                 const rows = await sql.query<{ cursor: string | null }>(
-                  "select max(synced_at)::text as cursor from of_chat_message",
+                  `select greatest(
+                     (select max(synced_at) from of_chat_message),
+                     (select max(updated_at) from of_fan_note)
+                   )::text as cursor`,
                 );
                 const next = rows[0]?.cursor ?? null;
                 if (!liveCursorChanged(cursor, next)) return;
