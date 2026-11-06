@@ -1,7 +1,9 @@
 /**
  * Lectura de chats. Fragilidad: no hay un contrato. Se aceptan listas con
  * `withUser`, `lastMessage` y mensajes con `text` y `createdAt`. Si OnlyFans
- * cambia esos nombres, el chat queda vacío y la razón lo dice. No se envía nada.
+ * cambia esos nombres, el chat queda vacío y la razón lo dice. Un chat se
+ * envía solo con FANLINK_ENABLE_SEND=true y la cuenta en
+ * FANLINK_SEND_ALLOW_ACCOUNTS. Los masivos siguen apagados.
  */
 import { sectionFailure, type SectionOutcome } from "./parse.ts";
 
