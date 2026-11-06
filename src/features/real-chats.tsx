@@ -1,13 +1,17 @@
 import { useEffect, useState } from "react";
 import { listCreatorChats, syncCreatorChats, type CreatorChatList, type CreatorReadView } from "@/lib/of-sessions";
-import { fanProfiles } from "@/lib/fan-metrics";
+import { campaignSendFlag } from "@/lib/of-campaigns";
 import { useCrm } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
 import { useOfReads } from "@/lib/use-of-reads";
 import { FanInsights } from "@/features/fan-insights";
 
+const EMOJIS = ["😊", "🔥", "❤️", "😘", "🎁"];
+
 export function RealChatsPage() {
+  const creators = useCrm((s) => s.creators);
   const creatorId = useCrm((s) => s.creatorId);
+  const setCreator = useCrm((s) => s.setCreator);
   const crmFans = useCrm((s) => s.fans);
   const saveNote = useCrm((s) => s.saveNote);
   const teamAccess = useCrm((s) => s.teamAccess);
@@ -18,6 +22,9 @@ export function RealChatsPage() {
   const [pending, setPending] = useState(false);
   const [filter, setFilter] = useState<"todos" | "propinas" | "online">("todos");
   const [insightsOpen, setInsightsOpen] = useState(false);
+  const [menu, setMenu] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [sendEnabled, setSendEnabled] = useState(false);
 
   async function refresh() {
     try {
@@ -30,6 +37,7 @@ export function RealChatsPage() {
 
   useEffect(() => {
     void refresh();
+    void campaignSendFlag().then((flag) => setSendEnabled(flag.sendEnabled)).catch(() => setSendEnabled(false));
     const source = new EventSource("/api/chat-live");
     source.addEventListener("chats", () => {
       void refresh();
@@ -47,28 +55,40 @@ export function RealChatsPage() {
     .sort((left, right) => (right.lastMessageAt ?? "").localeCompare(left.lastMessageAt ?? ""));
   const selected =
     visible.find((thread) => `${thread.creatorId}:${thread.threadKey}` === selectedKey) ?? visible[0] ?? null;
-  const messages = (data?.messages ?? []).filter(
-    (message) => message.creatorId === selected?.creatorId && message.threadKey === selected?.threadKey,
-  );
+  const messages = (data?.messages ?? [])
+    .filter((message) => message.creatorId === selected?.creatorId && message.threadKey === selected?.threadKey)
+    .sort((left, right) => left.sentAt.localeCompare(right.sentAt));
   const meta = data?.meta.find((item) => item.creatorId === selected?.creatorId);
   const running = selected ? data?.runningCreatorIds.includes(selected.creatorId) : false;
   const canForce = teamAccess?.role === "owner" && selected != null;
+  const creatorName = creatorId === "all"
+    ? "Todas las cuentas"
+    : creators.find((creator) => creator.id === creatorId)?.name ?? "Cuenta";
+  const unread = threads.reduce((sum, thread) => sum + thread.unread, 0);
 
   return (
     <div className="flex h-full min-h-0 bg-white text-[#1c2333]">
       <section className="flex w-full min-w-0 flex-col border-r border-[#e6e8ee] md:w-[340px]">
-        <div className="px-4 py-3">
-          <h1 className="text-lg font-semibold">Chat</h1>
-          <p className="text-xs text-[#6d7585]">Más recientes. Abrir esta pantalla no envía.</p>
-          <div className="mt-2 flex flex-wrap gap-1">
-            {([["todos", "Todos"], ["propinas", "Con propinas"]] as const).map(([id, label]) => (
-              <button key={id} type="button" onClick={() => setFilter(id)} className={`rounded-full px-2 py-1 text-xs ${filter === id ? "bg-[#e7f0ff] text-[#2456c7]" : "text-[#6d7585]"}`}>{label}</button>
-            ))}
+        <div className="space-y-3 border-b border-[#e6e8ee] px-3 py-3">
+          <h1 className="truncate text-sm font-semibold uppercase tracking-wide">{creatorName}</h1>
+          <div className="flex gap-2">
             {knowsOnline ? (
-              <button type="button" onClick={() => setFilter("online")} className={`rounded-full px-2 py-1 text-xs ${filter === "online" ? "bg-[#e7f0ff] text-[#2456c7]" : "text-[#6d7585]"}`}>Fans en línea</button>
+              <button type="button" onClick={() => setFilter(filter === "online" ? "todos" : "online")} className={`rounded-lg px-3 py-1.5 text-xs font-medium ${filter === "online" ? "bg-[#3b6cff] text-white" : "bg-[#eef2ff] text-[#2456c7]"}`}>Fans en línea</button>
             ) : (
-              <span className="rounded-full px-2 py-1 text-xs text-[#6d7585]">Fans en línea: Sin datos</span>
+              <span className="rounded-lg bg-[#f3f4f6] px-3 py-1.5 text-xs text-[#6d7585]">Fans en línea: Sin datos</span>
             )}
+            <span className="rounded-lg bg-[#e8f8ef] px-3 py-1.5 text-xs text-[#137333]">Notificaciones {threads.length === 0 ? "Sin datos" : unread}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <select value={creatorId} onChange={(event) => setCreator(event.target.value)} className="h-8 min-w-0 flex-1 rounded-lg border border-[#e6e8ee] px-2 text-xs" aria-label="Bandeja">
+              <option value="all">Todas las bandejas</option>
+              {creators.map((creator) => <option key={creator.id} value={creator.id}>{creator.name}</option>)}
+            </select>
+            <span className="shrink-0 text-[10px] text-[#6d7585]">Más recientes</span>
+          </div>
+          <div className="flex gap-2">
+            <button type="button" onClick={() => setFilter("todos")} className={`rounded-full px-3 py-1 text-xs ${filter === "todos" ? "bg-[#3b6cff] text-white" : "bg-[#f3f4f6] text-[#6d7585]"}`}>Todos</button>
+            <button type="button" onClick={() => setFilter("propinas")} className={`rounded-full px-3 py-1 text-xs ${filter === "propinas" ? "bg-[#3b6cff] text-white" : "bg-[#f3f4f6] text-[#6d7585]"}`}>Con propinas</button>
           </div>
         </div>
         {error ? <p className="px-4 text-sm text-[#8a5a12]">{error}</p> : null}
@@ -81,22 +101,28 @@ export function RealChatsPage() {
                 <button
                   type="button"
                   onClick={() => setSelectedKey(`${thread.creatorId}:${thread.threadKey}`)}
-                  className={`flex w-full gap-3 px-4 py-3 text-left ${selected?.threadKey === thread.threadKey ? "bg-[#f4f6fb]" : ""}`}
+                  className={`flex w-full gap-3 px-3 py-3 text-left ${selected?.threadKey === thread.threadKey && selected.creatorId === thread.creatorId ? "bg-[#f4f7ff]" : ""}`}
                 >
-                  {thread.avatarUrl ? (
-                    <img src={thread.avatarUrl} alt="" className="h-10 w-10 rounded-full object-cover" />
-                  ) : (
-                    <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#eef2ff] text-sm">{(thread.fanName ?? "F").slice(0, 1)}</span>
-                  )}
-                  <span className="min-w-0 flex-1">
-                    <span className="flex items-baseline justify-between gap-2">
-                      <span className="truncate font-medium">{thread.fanName ?? thread.fanHandle ?? "Fan"}</span>
-                      <span className="shrink-0 text-[10px] text-[#6d7585]">{thread.lastMessageAt ? thread.lastMessageAt.slice(11, 16) : "Sin datos"}</span>
+                  <span className="flex w-12 shrink-0 flex-col items-center gap-1">
+                    {thread.avatarUrl ? (
+                      <img src={thread.avatarUrl} alt="" className="h-10 w-10 rounded-full object-cover" />
+                    ) : (
+                      <span className="grid h-10 w-10 place-items-center rounded-full bg-[#eef2ff] text-sm">{(thread.fanName ?? "F").slice(0, 1)}</span>
+                    )}
+                    <span className={`text-[10px] font-medium ${thread.spentCents == null ? "text-[#6d7585]" : "text-[#137333]"}`}>
+                      {thread.spentCents == null ? "Sin datos" : `$${(thread.spentCents / 100).toFixed(2)}`}
                     </span>
-                    <span className="block truncate text-xs text-[#6d7585]">{thread.fanHandle ? `@${thread.fanHandle.replace(/^@/, "")}` : "Sin datos"} · {thread.spentCents == null ? "Sin datos" : `${(thread.spentCents / 100).toFixed(2)} USD`}</span>
-                    <span className="block truncate text-xs text-[#6d7585]">
-                      {previewLabel(thread)}
-                      {thread.excerpt ? `${previewLabel(thread) ? " · " : ""}${thread.excerpt}` : ""}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-1">
+                      <span className="truncate text-sm font-medium">{thread.fanName ?? "Fan"}</span>
+                      {thread.unread > 0 ? <span className="rounded bg-[#e7f0ff] px-1 text-[10px] font-semibold text-[#2456c7]">NEW</span> : null}
+                      {thread.online === false ? <span className="rounded bg-[#f3f4f6] px-1 text-[10px] text-[#6d7585]">OFF</span> : null}
+                    </span>
+                    <span className="block truncate text-xs text-[#6d7585]">{thread.fanHandle ? `@${thread.fanHandle.replace(/^@/, "")}` : "Sin datos"}</span>
+                    <span className="mt-1 flex items-baseline justify-between gap-2 text-xs text-[#6d7585]">
+                      <span className="truncate">{thread.excerpt ?? "Sin datos"}</span>
+                      <span className="shrink-0">{thread.lastMessageAt ? thread.lastMessageAt.slice(11, 16) : "Sin datos"}</span>
                     </span>
                   </span>
                 </button>
@@ -109,54 +135,62 @@ export function RealChatsPage() {
         {selected ? (
           <>
             <header className="flex items-center justify-between gap-3 border-b border-[#e6e8ee] px-4 py-3">
-              <div>
-                <p className="font-medium">{selected.fanName ?? selected.fanHandle}</p>
-                <FanFacts
-                  creatorId={selected.creatorId}
-                  fanKey={selected.fanKey}
-                  fanHandle={selected.fanHandle}
-                  fanName={selected.fanName}
-                  threadSpend={selected}
-                  reads={reads.byCreator}
-                  crmFans={crmFans}
-                  ppvSynced={meta?.status === "ok"}
-                />
-                <p className="text-xs text-[#6d7585]">
-                  {running ? "En curso" : meta?.status === "error" ? `Error · ${shortReason(meta.reason)}` : meta?.status === "ok" ? "OK" : "Sin sincronizar"}
-                  {meta?.syncedAt ? ` · ${syncAge(meta.syncedAt)}` : ""}
-                </p>
+              <p className="truncate font-medium">{selected.fanName ?? selected.fanHandle ?? "Fan"}</p>
+              <div className="flex items-center gap-2">
+                <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => void refresh()}>Recargar</button>
+                <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs xl:hidden" onClick={() => setInsightsOpen(true)}>Ficha</button>
+                <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => setMenu((open) => !open)} aria-label="Menú">Menú</button>
               </div>
-              <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs xl:hidden" onClick={() => setInsightsOpen(true)}>Ficha</button>
-              {canForce ? (
-                <button
-                  type="button"
-                  disabled={pending || running}
-                  onClick={() => {
-                    setPending(true);
-                    void syncCreatorChats({ data: { creatorId: selected.creatorId } })
-                      .then(() => refresh())
-                      .catch((err: unknown) => setError(sessionErrorText(err)))
-                      .finally(() => setPending(false));
-                  }}
-                  className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs disabled:opacity-50"
-                >
-                  {pending || running ? "Sincronizando…" : "Forzar sincronización"}
-                </button>
-              ) : null}
             </header>
-            <ol className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-4">
+            {menu ? (
+              <div className="border-b border-[#e6e8ee] px-4 py-2 text-xs text-[#6d7585]">
+                {running ? "En curso" : meta?.status === "error" ? `Error · ${shortReason(meta.reason)}` : meta?.status === "ok" ? "OK" : "Sin sincronizar"}
+                {meta?.syncedAt ? ` · ${syncAge(meta.syncedAt)}` : ""}
+                {canForce ? (
+                  <button
+                    type="button"
+                    disabled={pending || running}
+                    onClick={() => {
+                      setPending(true);
+                      void syncCreatorChats({ data: { creatorId: selected.creatorId } })
+                        .then(() => refresh())
+                        .catch((err: unknown) => setError(sessionErrorText(err)))
+                        .finally(() => setPending(false));
+                    }}
+                    className="ml-3 rounded border border-[#e6e8ee] px-2 py-1 disabled:opacity-50"
+                  >
+                    {pending || running ? "Sincronizando…" : "Forzar sincronización"}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+            <ol className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
+              {messages.length === 0 ? <li className="text-sm text-[#6d7585]">Sin datos</li> : null}
               {messages.map((message) => (
                 <li key={message.messageKey} className={message.fromFan ? "text-left" : "text-right"}>
                   <p className={`inline-block max-w-[70%] rounded-2xl px-3 py-2 text-sm ${message.fromFan ? "bg-[#f4f6fb]" : "bg-[#e7f0ff]"}`}>
                     {message.body}
-                    {message.priceCents != null ? ` · ${(message.priceCents / 100).toFixed(2)}` : ""}
-                    {message.purchased === true ? " · comprado" : message.purchased === false ? " · no comprado" : ""}
                   </p>
                   <p className="mt-1 text-[10px] text-[#6d7585]">{messageCaption(message)}</p>
                 </li>
               ))}
             </ol>
-            <p className="border-t border-[#e6e8ee] px-4 py-3 text-xs text-[#6d7585]">Lectura. No se envía nada a OnlyFans.</p>
+            <form className="border-t border-[#e6e8ee] p-3" onSubmit={(event) => event.preventDefault()}>
+              <div className="mb-2 flex gap-1">
+                {EMOJIS.map((emoji) => (
+                  <button key={emoji} type="button" className="rounded px-1 text-base" onClick={() => setDraft((value) => `${value}${emoji}`)}>{emoji}</button>
+                ))}
+                <button type="button" disabled className="ml-auto rounded px-2 text-xs text-[#b0b6c2]" title="Sin datos">Traducción</button>
+                <button type="button" disabled className="rounded px-2 text-xs text-[#b0b6c2]" title="Sin datos">Guiones</button>
+                <button type="button" disabled className="rounded px-2 text-xs text-[#b0b6c2]" title="Sin datos">Galería</button>
+              </div>
+              <div className="flex items-end gap-2">
+                <textarea value={draft} onChange={(event) => setDraft(event.target.value)} rows={2} placeholder="Escribe un mensaje" className="min-h-12 flex-1 resize-none rounded-xl border border-[#e6e8ee] px-3 py-2 text-sm" />
+                <button type="button" disabled={!sendEnabled} title="Envío real desactivado" className="rounded-full bg-[#3b6cff] px-4 py-2 text-sm text-white disabled:bg-[#d7dbe3]">
+                  {sendEnabled ? "Enviar" : "Envío real desactivado"}
+                </button>
+              </div>
+            </form>
           </>
         ) : (
           <p className="p-6 text-sm text-[#6d7585]">Sin sincronizar</p>
@@ -214,6 +248,7 @@ function InsightPane({
       tipsCents={thread.tipsCents}
       status={ofFan?.status ?? null}
       expiresAt={thread.subExpiresAt ?? ofFan?.expiresAt ?? null}
+      subscribedAt={ofFan?.subscribedAt ?? null}
       renewAuto={thread.renewAuto ?? ofFan?.renewAuto ?? null}
       subPriceCents={thread.subPriceCents}
       notes={crm?.notes ?? ""}
@@ -235,91 +270,10 @@ function InsightPane({
 
 function messageCaption(message: { sentAt: string; fromFan: boolean; authorName: string | null; automatic: boolean | null; seen: boolean | null }): string {
   const time = message.sentAt.slice(0, 16).replace("T", " ");
-  const seen = message.seen == null ? "" : message.seen ? " · Visto" : " · No visto";
+  const seen = message.seen == null ? "" : message.seen ? " · ✓" : "";
   if (message.fromFan) return `${time}${seen}`;
   const who = message.automatic ? "Mensaje automático" : message.authorName ?? "Cuenta";
-  return `${time} · ${who}${seen}`;
-}
-
-const SEGMENT_LABEL: Record<"whale" | "risk" | "asleep" | "new", string> = {
-  whale: "ballena",
-  risk: "riesgo",
-  asleep: "dormido",
-  new: "nuevo",
-};
-
-function previewLabel(thread: { lastFromFan: boolean | null; fanName: string | null }): string {
-  if (thread.lastFromFan === true) return thread.fanName ?? "Fan";
-  if (thread.lastFromFan === false) return "Tú";
-  return "";
-}
-
-function FanFacts({
-  creatorId,
-  fanKey,
-  fanHandle,
-  fanName,
-  threadSpend,
-  reads,
-  crmFans,
-  ppvSynced,
-}: {
-  creatorId: string;
-  fanKey: string | null;
-  fanHandle: string | null;
-  fanName: string | null;
-  threadSpend: {
-    spentCents: number | null;
-    subscribesCents: number | null;
-    tipsCents: number | null;
-    postsCents: number | null;
-    messagesCents: number | null;
-  };
-  reads: Map<string, CreatorReadView>;
-  crmFans: Array<{ creatorId: string; handle: string; name: string; notes: string }>;
-  ppvSynced: boolean;
-}) {
-  const ofFan = reads.get(creatorId)?.fans.find((fan) => fan.fanKey === fanKey) ?? null;
-  const note = crmFans.find((fan) => {
-    if (fan.creatorId !== creatorId) return false;
-    if (fanHandle && fan.handle.replace(/^@/, "") === fanHandle.replace(/^@/, "")) return true;
-    return fanName != null && fan.name === fanName;
-  })?.notes.trim() ?? "";
-  const profile = ofFan
-    ? fanProfiles({
-        now: new Date(),
-        ppvSynced,
-        fans: [{
-          fanKey: ofFan.fanKey,
-          name: ofFan.displayName ?? ofFan.handle,
-          status: ofFan.status,
-          subscribedAt: ofFan.subscribedAt,
-          renewAuto: ofFan.renewAuto,
-          spentCents: ofFan.spentCents,
-          lastInteractionAt: null,
-        }],
-        purchases: (reads.get(creatorId)?.transactions ?? []).filter((row) => row.fanKey === ofFan.fanKey),
-        ppv: [],
-      })[0]
-    : null;
-  const spend = threadSpend.spentCents ?? profile?.ltvCents ?? ofFan?.spentCents ?? null;
-  const segments = profile?.segments.map((segment) => SEGMENT_LABEL[segment]) ?? [];
-  const parts = [
-    ["suscripciones", threadSpend.subscribesCents],
-    ["propinas", threadSpend.tipsCents],
-    ["posts", threadSpend.postsCents],
-    ["mensajes", threadSpend.messagesCents],
-  ].filter((part): part is [string, number] => part[1] != null);
-  return (
-    <p className="text-xs text-[#6d7585]">
-      Gasto {spend == null ? "Sin datos" : `${(spend / 100).toFixed(2)} USD`}
-      {parts.length ? ` (${parts.map(([label, cents]) => `${label} ${(cents / 100).toFixed(2)}`).join(", ")})` : ""}
-      {" · "}
-      Segmento {segments.length ? segments.join(", ") : "Sin datos"}
-      {" · "}
-      Notas {note || "Sin datos"}
-    </p>
-  );
+  return `${time}${seen} · ${who}`;
 }
 
 function emptyChatsLabel(data: CreatorChatList | null): string {
