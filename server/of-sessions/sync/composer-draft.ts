@@ -12,15 +12,9 @@ export const MAX_PPV_CENTS = 20_000;
 
 const MIN_GUARDED_CHARS = 3;
 
-/**
- * El texto del borrador es lo que escribió el chatter.
- * Una línea `[adjunto]` es la marca del compositor, no una frase suya.
- */
+/** El texto del borrador es lo que escribió el chatter. */
 export function composerDraft(text: string, attachments: ComposerAttachment[]): { body: string; mediaIds: string[] } {
   const body = text
-    .split("\n")
-    .filter((line) => !/^\[adjunto\]/i.test(line.trim()))
-    .join("\n")
     .replace(/[ \t]+/g, " ")
     .replace(/ *\n */g, "\n")
     .trim();
@@ -32,14 +26,20 @@ export function composerDraft(text: string, attachments: ComposerAttachment[]): 
 
 /**
  * El título y el acto, si tienen cuerpo bastante y son palabras completas,
- * no se borran del texto: se rechaza el borrador. La pareja no cuenta.
- * Los acentos no distinguen. Una letra o un número no cuentan.
+ * no se borran del texto: se rechaza el borrador y el aviso dice la palabra.
+ * La pareja no cuenta. Los acentos no distinguen. Una letra o un número no cuentan.
+ * Una línea que empieza por [adjunto] también se rechaza.
  */
 export function vaultTextNotice(text: string, attachments: ComposerAttachment[]): string | null {
+  if (text.split("\n").some((line) => /^\[adjunto\]/i.test(line.trim()))) {
+    return "Quita la marca [adjunto] del mensaje";
+  }
   const foldedText = foldWords(text);
   for (const item of attachments) {
-    if (guardedPhrase(foldedText, item.title)) return "Quita el título del mensaje";
-    if (guardedPhrase(foldedText, item.act)) return "Quita el acto del mensaje";
+    const title = guardedPhrase(foldedText, item.title);
+    if (title) return `Quita «${title}» del mensaje`;
+    const act = guardedPhrase(foldedText, item.act);
+    if (act) return `Quita «${act}» del mensaje`;
   }
   return null;
 }
@@ -66,14 +66,16 @@ export function prepareOutbound(
   return { ok: true, body: draft.body, mediaIds: draft.mediaIds };
 }
 
-function guardedPhrase(foldedText: string, phrase: string | null | undefined): boolean {
-  const folded = foldWords(phrase ?? "");
-  if (folded.length < MIN_GUARDED_CHARS || /^\d+$/.test(folded)) return false;
-  return new RegExp(`(^| )${escapeRegExp(folded)}( |$)`).test(foldedText);
+function guardedPhrase(foldedText: string, phrase: string | null | undefined): string | null {
+  const raw = phrase?.trim() ?? "";
+  const folded = foldWords(raw);
+  if (folded.length < MIN_GUARDED_CHARS || /^\d+$/.test(folded)) return null;
+  if (!new RegExp(`(^| )${escapeRegExp(folded)}( |$)`, "u").test(foldedText)) return null;
+  return raw;
 }
 
 function foldWords(value: string): string {
-  return value.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+  return value.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/g, " ").trim();
 }
 
 function escapeRegExp(value: string): string {

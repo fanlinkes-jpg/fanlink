@@ -14,8 +14,18 @@ test("las migraciones aplican en Postgres cuando hay DATABASE_URL", async (t) =>
     const names = applied.rows.map((row) => row.name);
     assert.equal(names.includes("0012_extended_read.sql"), true);
     assert.equal(names.includes("0016_campaign_results.sql"), true);
+    assert.equal(names.includes("0028_message_media.sql"), true);
+    assert.equal(names.includes("0029_vault_media.sql"), true);
+    assert.equal(names.includes("0030_outbound_media.sql"), true);
+    assert.equal(names.includes("0031_outbound_media_owner.sql"), true);
     const table = await pool.query<{ to_regclass: string | null }>("select to_regclass('public.of_transaction') as to_regclass");
     assert.equal(table.rows[0]?.to_regclass, "of_transaction");
+    const media = await pool.query<{ to_regclass: string | null }>("select to_regclass('public.of_outbound_media') as to_regclass");
+    assert.equal(media.rows[0]?.to_regclass, "of_outbound_media");
+    const column = await pool.query<{ column_name: string }>(
+      "select column_name from information_schema.columns where table_name = 'of_outbound_media' and column_name = 'creator_id'",
+    );
+    assert.equal(column.rows[0]?.column_name, "creator_id");
   } finally {
     await pool.end();
   }

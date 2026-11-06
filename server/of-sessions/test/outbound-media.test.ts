@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
+import pg from "pg";
 import type { Page } from "playwright";
 import { deliverDrafts, type DraftDelivery } from "../campaigns/deliver.ts";
 import { deliverIfNoMedia, mediaSendGate } from "../send/media-gate.ts";
@@ -57,7 +58,7 @@ test("un id ajeno no se guarda, la cadena incompleta se bloquea y el envío de m
   assert.equal(seen.some((query) => query.text.includes("from of_vault_folder")), false);
   const leaked = prepareOutbound(`mira ${own.items[0]?.title} con ${own.items[0]?.couple} y ${own.items[0]?.act}`, own.items, null);
   assert.equal(leaked.ok, false);
-  if (!leaked.ok) assert.equal(leaked.notice, "Quita el título del mensaje");
+  if (!leaked.ok) assert.equal(leaked.notice, "Quita «SECRETO INTERNO» del mensaje");
   const twice = await decideMediaAttach(sql, "c-1", ["v1", "v1"]);
   assert.equal(twice.ok, true);
   if (twice.ok) assert.equal(twice.items.length, 1);
@@ -152,13 +153,18 @@ test("una 0030 ya aplicada gana creadora y clave foránea", async () => {
 test("un borrador con medios no se escribe en el formulario", async () => {
   assert.equal(mediaSendGate(1).allowed, false);
   assert.equal(mediaSendGate(0).allowed, true);
-  const calls = { fill: 0, type: 0, press: 0 };
+  const calls = { fill: 0, type: 0, press: 0, insertText: 0, pressSequentially: 0, evaluate: 0, click: 0, dispatchEvent: 0, setInputFiles: 0 };
   const page = {
     fill() { calls.fill += 1; },
     type() { calls.type += 1; },
     press() { calls.press += 1; },
+    evaluate() { calls.evaluate += 1; },
+    click() { calls.click += 1; },
+    dispatchEvent() { calls.dispatchEvent += 1; },
+    setInputFiles() { calls.setInputFiles += 1; },
+    pressSequentially() { calls.pressSequentially += 1; },
+    keyboard: { insertText() { calls.insertText += 1; } },
     goto() { throw new Error("abrió el envío"); },
-    click() { throw new Error("pulsó el envío"); },
   } as unknown as Page;
   const blocked = await deliverDrafts(page, {
     flag: "true",
@@ -171,6 +177,12 @@ test("un borrador con medios no se escribe en el formulario", async () => {
   assert.equal(calls.fill, 0);
   assert.equal(calls.type, 0);
   assert.equal(calls.press, 0);
+  assert.equal(calls.insertText, 0);
+  assert.equal(calls.pressSequentially, 0);
+  assert.equal(calls.evaluate, 0);
+  assert.equal(calls.click, 0);
+  assert.equal(calls.dispatchEvent, 0);
+  assert.equal(calls.setInputFiles, 0);
   const omitted = await deliverDrafts(page, {
     flag: "true",
     hostname: "127.0.0.1",
@@ -182,14 +194,18 @@ test("un borrador con medios no se escribe en el formulario", async () => {
 });
 
 test("send no escribe en el formulario sin la gate", async () => {
-  const dir = path.join(root, "server/of-sessions/send");
-  const files = (await readdir(dir)).filter((file) => file.endsWith(".ts"));
+  // Al juntar el #3, deliverChatSend necesita un Page falso en el que fill, type,
+  // press, keyboard.insertText, pressSequentially, evaluate, click, dispatchEvent
+  // y setInputFiles queden a 0. compose.ts todavía no está en esta rama.
+  const commented = "// deliverIfNoMedia(\npage.fill('x', 'y')";
+  assert.equal(formWriteWithoutGate(commented), true);
+  assert.equal(formWriteWithoutGate("/* deliverIfNoMedia( */ page.click('button')"), true);
+  assert.equal(formWriteWithoutGate("await deliverIfNoMedia(sql, id, async () => { await page.fill('x', 'y'); })"), false);
+  const files = await tsFiles(path.join(root, "server/of-sessions/send"));
   assert.ok(files.length > 0);
   for (const file of files) {
-    const source = await readFile(path.join(dir, file), "utf8");
-    if (/\.(fill|type|press)\s*\(/.test(source)) {
-      assert.match(source, /deliverIfNoMedia/);
-    }
+    const source = await readFile(file, "utf8");
+    assert.equal(formWriteWithoutGate(source), false, file);
   }
 });
 
@@ -217,41 +233,119 @@ test("el borrador y el medio se guardan juntos o no se guarda ninguno", async ()
     createdAt: "2026-11-06T12:00:00.000Z",
     ofMessageKey: null,
   };
-  const failing = transactional(db, true);
-  await assert.rejects(commitOutbound(failing, draft, ["v1"]));
+  await db.exec("alter table of_outbound_media add constraint outbound_media_rollback_fail check (media_id <> 'boom')");
+  await assert.rejects(commitOutbound(pgliteSql(db), draft, ["boom"]));
   assert.equal(Number((await db.query<{ n: number }>("select count(*)::int as n from of_chat_outbound")).rows[0]?.n), 0);
   assert.equal(Number((await db.query<{ n: number }>("select count(*)::int as n from of_outbound_media")).rows[0]?.n), 0);
-  await commitOutbound(transactional(db, false), draft, ["v1"]);
+  await db.exec("alter table of_outbound_media drop constraint outbound_media_rollback_fail");
+  await commitOutbound(pgliteSql(db), draft, ["v1"]);
   assert.equal(Number((await db.query<{ n: number }>("select count(*)::int as n from of_chat_outbound")).rows[0]?.n), 1);
   const kept = await db.query<{ creator_id: string }>("select creator_id from of_outbound_media where outbound_id = 'out-1'");
   assert.equal(kept.rows[0]?.creator_id, "c-1");
   await db.close();
 });
 
-function transactional(db: PGlite, failMedia: boolean): ReadSql & { transaction<T>(run: (tx: ReadSql) => Promise<T>): Promise<T> } {
+test("el rollback de Postgres deshace el borrador si falla el medio", async (t) => {
+  const databaseUrl = process.env.FANLINK_TEST_DATABASE_URL;
+  if (!databaseUrl) {
+    t.skip("sin FANLINK_TEST_DATABASE_URL");
+    return;
+  }
+  const pool = new pg.Pool({ connectionString: databaseUrl, max: 1 });
+  const client = await pool.connect();
+  try {
+    await client.query("delete from of_outbound_media where outbound_id = 'out-pg'");
+    await client.query("delete from of_chat_outbound where id = 'out-pg'");
+    await client.query("delete from staff_profile where user_id = 'u-pg'");
+    await client.query("alter table of_outbound_media drop constraint if exists outbound_media_rollback_fail");
+    await client.query("insert into staff_profile (user_id, display_name, role) values ('u-pg', 'Ana', 'owner')");
+    await client.query("alter table of_outbound_media add constraint outbound_media_rollback_fail check (media_id <> 'boom')");
+    await assert.rejects(commitOutbound(pgSql(client), pgDraft, ["boom"]));
+    const outbound = await client.query<{ n: number }>("select count(*)::int as n from of_chat_outbound where id = 'out-pg'");
+    const media = await client.query<{ n: number }>("select count(*)::int as n from of_outbound_media where outbound_id = 'out-pg'");
+    assert.equal(Number(outbound.rows[0]?.n), 0);
+    assert.equal(Number(media.rows[0]?.n), 0);
+    await client.query("alter table of_outbound_media drop constraint outbound_media_rollback_fail");
+    await commitOutbound(pgSql(client), pgDraft, ["v1"]);
+    const kept = await client.query<{ creator_id: string }>("select creator_id from of_outbound_media where outbound_id = 'out-pg'");
+    assert.equal(kept.rows[0]?.creator_id, "c-1");
+  } finally {
+    await client.query("alter table of_outbound_media drop constraint if exists outbound_media_rollback_fail").catch(() => undefined);
+    await client.query("delete from of_outbound_media where outbound_id = 'out-pg'").catch(() => undefined);
+    await client.query("delete from of_chat_outbound where id = 'out-pg'").catch(() => undefined);
+    await client.query("delete from staff_profile where user_id = 'u-pg'").catch(() => undefined);
+    client.release();
+    await pool.end();
+  }
+});
+
+const pgDraft = {
+  id: "out-pg",
+  creatorId: "c-1",
+  threadKey: "7",
+  fanKey: "7",
+  authorId: "u-pg",
+  body: "hola",
+  priceCents: null as number | null,
+  createdAt: "2026-11-06T12:00:00.000Z",
+  ofMessageKey: null,
+};
+
+function pgliteSql(db: PGlite): ReadSql & { transaction<T>(run: (tx: ReadSql) => Promise<T>): Promise<T> } {
+  return {
+    async query() {
+      throw new Error("fuera de la transacción");
+    },
+    transaction(run) {
+      return db.transaction(async (tx) => run(queryOf(tx)));
+    },
+  };
+}
+
+function pgSql(client: pg.PoolClient): ReadSql & { transaction<T>(run: (tx: ReadSql) => Promise<T>): Promise<T> } {
   return {
     async query() {
       throw new Error("fuera de la transacción");
     },
     async transaction(run) {
-      await db.exec("BEGIN");
-      const tx: ReadSql = {
-        async query<T>(text: string, params?: unknown[]): Promise<T[]> {
-          if (failMedia && text.includes("insert into of_outbound_media")) throw new Error("media");
-          const result = await db.query<T>(text, params);
-          return result.rows;
-        },
-      };
+      await client.query("BEGIN");
       try {
-        const result = await run(tx);
-        await db.exec("COMMIT");
+        const result = await run(queryOf(client));
+        await client.query("COMMIT");
         return result;
       } catch (error) {
-        await db.exec("ROLLBACK");
+        await client.query("ROLLBACK");
         throw error;
       }
     },
   };
+}
+
+function queryOf(source: { query: (text: string, params?: unknown[]) => Promise<{ rows: unknown[] }> }): ReadSql {
+  return {
+    async query<T>(text: string, params?: unknown[]): Promise<T[]> {
+      const result = await source.query(text, params);
+      return result.rows as T[];
+    },
+  };
+}
+
+const FORM_WRITE = /\.(fill|type|press|evaluate|click|dispatchEvent|setInputFiles)\s*\(|keyboard\.insertText\s*\(|pressSequentially\s*\(/;
+
+function formWriteWithoutGate(source: string): boolean {
+  const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  return FORM_WRITE.test(code) && !/deliverIfNoMedia\s*\(/.test(code);
+}
+
+async function tsFiles(dir: string): Promise<string[]> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) files.push(...await tsFiles(full));
+    else if (entry.name.endsWith(".ts")) files.push(full);
+  }
+  return files;
 }
 
 test("la playlist y el trozo de chat-media llevan nosniff", async () => {
