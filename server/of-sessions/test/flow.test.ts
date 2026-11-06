@@ -42,6 +42,7 @@ test("flujo completo contra el simulador: conectar, comprobar, sincronizar, chat
       "0009_of_chats.sql",
       "0010_staff_alerts.sql",
       "0012_extended_read.sql",
+      "0017_tx_cursor_key.sql",
       "0013_chat_price.sql",
     ]) {
       await pg.exec(await readFile(path.join(dir, name), "utf8"));

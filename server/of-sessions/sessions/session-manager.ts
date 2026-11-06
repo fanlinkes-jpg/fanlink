@@ -42,6 +42,7 @@ import { preparePrivateDir } from "./private-dir.ts";
 import type { SiteAdapter } from "./site.ts";
 import { hasLiveCookies } from "./site.ts";
 import { collectCreatorRead, type CollectedRead } from "../sync/collect.ts";
+import type { TxCursor } from "../sync/parse.ts";
 import { collectChats, type CollectedChats } from "../sync/collect-chats.ts";
 import {
   judgeStorageState,
@@ -293,7 +294,7 @@ export class SessionManager {
     });
   }
 
-  readCreatorData(accountId: string, includeEarnings: boolean, sinceTx?: string | null): Promise<CollectedRead> {
+  readCreatorData(accountId: string, includeEarnings: boolean, sinceTx?: TxCursor | null): Promise<CollectedRead> {
     if (this.reading.size > 0) {
       return Promise.resolve({
         earnings: [],
@@ -357,7 +358,7 @@ export class SessionManager {
     }
   }
 
-  private async readCreatorDataNow(accountId: string, includeEarnings: boolean, sinceTx?: string | null): Promise<CollectedRead> {
+  private async readCreatorDataNow(accountId: string, includeEarnings: boolean, sinceTx?: TxCursor | null): Promise<CollectedRead> {
     const empty: CollectedRead = {
       earnings: [],
       fans: [],

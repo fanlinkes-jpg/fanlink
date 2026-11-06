@@ -12,6 +12,13 @@ export type SegmentKind = "active" | "expired" | "spent" | "quiet" | "whale" | "
 
 export const SEGMENT_KINDS: SegmentKind[] = ["active", "expired", "spent", "quiet", "whale", "risk", "asleep", "new"];
 
+const SPEND_SEGMENTS = new Set<SegmentKind>(["spent", "whale"]);
+
+export function memberMayUseSegment(role: "owner" | "member", segment: SegmentKind): boolean {
+  if (role === "owner") return true;
+  return !SPEND_SEGMENTS.has(segment);
+}
+
 export function fansInSegment(
   fans: SegmentFan[],
   segment: SegmentKind,

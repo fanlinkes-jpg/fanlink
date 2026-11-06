@@ -14,12 +14,14 @@ En el servidor, con la clave que ya usas:
 
 ```bash
 export FANLINK_SESSION_KEY="la clave que ya tienes"
+export POSTGRES_PASSWORD="una clave solo de esta base"
 docker compose up --build
 ```
 
-- Postgres queda en el volumen `pgdata`.
-- La app usa `DATABASE_URL=postgres://fanlink:fanlink@postgres:5432/fanlink`.
-- Al arrancar, `npm run build` ejecuta las migraciones de `migrations/` contra esa URL.
+- Postgres queda en el volumen `pgdata` y no publica el puerto 5432 al host.
+- La contraseña sale de `POSTGRES_PASSWORD`. No hay una clave fija en el compose.
+- `VITE_AUTH_ENABLED` queda en `true`. Con `DATABASE_URL`, apagar el acceso dejaría la app cerrada a propósito.
+- Al arrancar el proceso con Postgres, el planificador de sincronización también arranca. No hace falta abrir antes una página.
 - `data/profiles` y `data/sessions` viven en el volumen `fanlink-data`, montado en `/app/data`.
 
 La imagen usa `NITRO_PRESET=node-server` y arranca con `node .output/server/index.mjs`. Playwright va en la imagen base.
@@ -27,7 +29,7 @@ La imagen usa `NITRO_PRESET=node-server` y arranca con `node .output/server/inde
 Para comprobar Postgres sin Docker, con la base ya creada:
 
 ```bash
-export DATABASE_URL="postgres://fanlink:fanlink@127.0.0.1:5432/fanlink"
+export DATABASE_URL="postgres://fanlink:${POSTGRES_PASSWORD}@127.0.0.1:5432/fanlink"
 npm run db:migrate
 ```
 

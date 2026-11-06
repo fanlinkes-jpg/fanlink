@@ -43,9 +43,13 @@ export function fanProfiles(input: {
     const priced = input.ppv.filter((row) => row.fanKey === fan.fanKey && row.priceCents != null);
     const segments: FanProfile["segments"] = [];
     if (ltvCents != null && ltvCents >= whale) segments.push("whale");
-    if (fan.renewAuto === false || (fan.status === "active" && stale(fan.lastInteractionAt, input.now, 14))) segments.push("risk");
+    if (fan.renewAuto === false || (fan.status === "active" && fan.lastInteractionAt != null && stale(fan.lastInteractionAt, input.now, 14))) {
+      segments.push("risk");
+    }
     const isNew = fan.subscribedAt != null && Date.parse(fan.subscribedAt) >= input.now.getTime() - 14 * 86_400_000;
-    if (fan.status === "active" && !isNew && stale(fan.lastInteractionAt, input.now, 30)) segments.push("asleep");
+    if (fan.status === "active" && !isNew && fan.lastInteractionAt != null && stale(fan.lastInteractionAt, input.now, 30)) {
+      segments.push("asleep");
+    }
     if (isNew) segments.push("new");
     return {
       fanKey: fan.fanKey,
@@ -66,6 +70,6 @@ export function rankFans(profiles: FanProfile[]): FanProfile[] {
 }
 
 function stale(iso: string | null, now: Date, days: number): boolean {
-  if (!iso) return true;
+  if (!iso) return false;
   return Date.parse(iso) < now.getTime() - days * 86_400_000;
 }

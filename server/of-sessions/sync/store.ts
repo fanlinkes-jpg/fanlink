@@ -22,7 +22,14 @@ export type StoredCreatorRead = {
   fans: StoredFan[];
   transactions: StoredTransaction[];
   txCursor: string | null;
+  txCursorKey: string | null;
 };
+
+export function unseenFanKeys(stored: string[], seen: string[], complete: boolean): string[] {
+  if (!complete) return [];
+  const live = new Set(seen);
+  return stored.filter((key) => !live.has(key));
+}
 
 export type SyncMeta = {
   creatorId: string;
@@ -39,6 +46,7 @@ export async function saveCreatorRead(
     earnings: EarningRow[];
     fans: FanRow[];
     transactions?: TransactionRow[];
+    fansComplete?: boolean;
     earningsCaptured: boolean;
     fansCaptured: boolean;
     reason: string | null;
@@ -91,6 +99,15 @@ export async function saveCreatorRead(
           ],
         );
       }
+      if (read.fansComplete) {
+        const existing = await sql.query<{ fan_key: string }>("select fan_key from of_fan_read where creator_id = $1", [creatorId]);
+        for (const key of unseenFanKeys(existing.map((row) => row.fan_key), read.fans.map((row) => row.fanKey), true)) {
+          await sql.query(
+            "update of_fan_read set status = 'expired', synced_at = $3 where creator_id = $1 and fan_key = $2",
+            [creatorId, key, syncedAt],
+          );
+        }
+      }
     }
     for (const row of read.transactions ?? []) {
       await sql.query(
@@ -140,8 +157,10 @@ export async function saveCreatorRead(
         failed ? "error" : "ok",
       ],
     );
-    const newest = (read.transactions ?? []).reduce<string | null>((max, row) => {
-      if (!max || row.occurredAt > max) return row.occurredAt;
+    const newest = (read.transactions ?? []).reduce<{ at: string; key: string } | null>((max, row) => {
+      if (!max || row.occurredAt > max.at || (row.occurredAt === max.at && row.txKey > max.key)) {
+        return { at: row.occurredAt, key: row.txKey };
+      }
       return max;
     }, null);
     if (newest) {
@@ -150,9 +169,13 @@ export async function saveCreatorRead(
          set tx_cursor = case
            when tx_cursor is null or tx_cursor < $2::timestamptz then $2::timestamptz
            else tx_cursor
+         end,
+         tx_cursor_key = case
+           when tx_cursor is null or tx_cursor < $2::timestamptz or tx_cursor = $2::timestamptz then $3
+           else tx_cursor_key
          end
          where creator_id = $1`,
-        [creatorId, newest],
+        [creatorId, newest.at, newest.key],
       );
     }
     await sql.query("commit");
@@ -181,8 +204,8 @@ export async function listCreatorReads(sql: ReadSql, creatorIds: string[]): Prom
      from of_transaction where creator_id in (${filter}) order by occurred_at`,
     creatorIds,
   );
-  const cursors = await sql.query<{ creator_id: string; tx_cursor: Date | string | null }>(
-    `select creator_id, tx_cursor from of_sync_state where creator_id in (${filter})`,
+  const cursors = await sql.query<{ creator_id: string; tx_cursor: Date | string | null; tx_cursor_key: string | null }>(
+    `select creator_id, tx_cursor, tx_cursor_key from of_sync_state where creator_id in (${filter})`,
     creatorIds,
   );
   const fans = await sql.query<FanDb>(
@@ -235,6 +258,7 @@ export async function listCreatorReads(sql: ReadSql, creatorIds: string[]): Prom
         syncedAt: iso(row.synced_at) ?? "",
       })),
     txCursor: iso(cursors.find((row) => row.creator_id === state.creator_id)?.tx_cursor ?? null),
+    txCursorKey: cursors.find((row) => row.creator_id === state.creator_id)?.tx_cursor_key ?? null,
   }));
 }
 

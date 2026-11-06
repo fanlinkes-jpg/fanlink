@@ -21,7 +21,7 @@ export function AnalyticsPage() {
   const [period, setPeriod] = useState<MetricPeriod>("month");
   const [teamRows, setTeamRows] = useState<TeamMetricView[]>([]);
   const [ppvSynced, setPpvSynced] = useState(false);
-  const [ppvRows, setPpvRows] = useState<Array<{ creatorId: string; fanKey: string | null; priceCents: number | null; purchased: boolean | null }>>([]);
+  const [ppvRows, setPpvRows] = useState<Array<{ creatorId: string; fanKey: string | null; sentAt: string; priceCents: number | null; purchased: boolean | null }>>([]);
   useEffect(() => {
     void listTeamMetrics().then(setTeamRows).catch(() => setTeamRows([]));
     void listCreatorChats()
@@ -29,6 +29,7 @@ export function AnalyticsPage() {
         setPpvRows(data.messages.map((message) => ({
           creatorId: message.creatorId,
           fanKey: message.fanKey,
+          sentAt: message.sentAt,
           priceCents: message.priceCents,
           purchased: message.purchased,
         })));
@@ -37,14 +38,11 @@ export function AnalyticsPage() {
       .catch(() => setPpvSynced(false));
   }, []);
   const creators = useCrm((s) => s.creators);
-  const employees = useCrm((s) => s.employees);
-  const messages = useCrm((s) => s.messages);
   const creatorId = useCrm((s) => s.creatorId);
   const teamAccess = useCrm((s) => s.teamAccess);
   const reads = useOfReads();
   const owner = reads.role === "owner" || teamAccess?.role === "owner";
   const scopedCreators = creators.filter((c) => creatorId === "all" || c.id === creatorId);
-  const recent = messages.filter((m) => isLast24h(m.at) && m.from === "team" && m.status === "enviado" && !m.unsent);
   const report = owner ? scopedReport(scopedCreators.map((c) => c.id), reads.byCreator, period) : null;
   const chart = report?.series.map((point) => ({ day: point.label, amountCents: point.grossCents, currency: "USD" })) ?? [];
 
@@ -132,32 +130,7 @@ export function AnalyticsPage() {
         <p className="rounded-lg border border-line px-4 py-8 text-sm text-muted">Los ingresos los ve la dueña. Aquí no hay cifras globales.</p>
       )}
 
-      {view === "equipo" && (
-        <div className="overflow-x-auto rounded-lg border border-line">
-          <table className="w-full min-w-[640px] text-left text-sm">
-            <thead className="bg-surface text-xs text-muted">
-              <tr>{["Persona", "Rol", "Mensajes 24 h", "Ingresos", "Respuesta", "Turno hoy"].map((h) => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr>
-            </thead>
-            <tbody>
-              {employees.map((e) => {
-                const mine = recent.filter((m) => m.creditedTo === e.id);
-                const day = (new Date().getDay() + 6) % 7;
-                return (
-                  <tr key={e.id} className="border-t border-line">
-                    <td className="px-3 py-3">{e.name}{e.online ? " · en línea" : ""}</td>
-                    <td className="px-3 py-3">{e.role}</td>
-                    <td className="px-3 py-3 tabular-nums">{mine.length}</td>
-                    <td className="px-3 py-3 text-muted">Sin datos</td>
-                    <td className="px-3 py-3 text-muted">Sin datos</td>
-                    <td className="px-3 py-3 capitalize">{e.shifts[day]}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          <TeamBoard rows={teamRows} />
-        </div>
-      )}
+      {view === "equipo" && <TeamBoard rows={owner ? teamRows : teamRows.filter((row) => row.userId === teamAccess?.userId)} />}
 
       {view === "fans" && (
         <FanBoard
@@ -173,8 +146,12 @@ export function AnalyticsPage() {
                 status: fan.status,
                 subscribedAt: fan.subscribedAt,
                 renewAuto: fan.renewAuto,
-                spentCents: fan.spentCents,
-                lastInteractionAt: null,
+                spentCents: owner ? fan.spentCents : null,
+                lastInteractionAt: ppvRows
+                  .filter((row) => row.creatorId === creator.id && row.fanKey === fan.fanKey)
+                  .map((row) => row.sentAt)
+                  .sort()
+                  .at(-1) ?? null,
               })),
               purchases: (read.transactions ?? []).map((tx) => ({ fanKey: tx.fanKey, occurredAt: tx.occurredAt, grossCents: tx.grossCents })),
               ppv: ppvRows.filter((row) => row.creatorId === creator.id),
@@ -472,7 +449,7 @@ function CreatorPeriod({
         <Metric label="Neto" value={report.netCents == null ? "Sin datos" : centsLabel(report.netCents, "USD")} hint={report.previousNetCents == null ? "Sin comparación" : `Anterior ${centsLabel(report.previousNetCents, "USD")}`} />
         <Metric label="ARPU" value={report.arpuCents == null ? "Sin datos" : centsLabel(report.arpuCents, "USD")} hint="Ingreso medio por fan activo" />
         <Metric label="Fans activos" value={report.activeFans == null ? "Sin datos" : String(report.activeFans)} hint={`Nuevos ${report.newFans ?? "Sin datos"} · expirados ${report.expiredFans ?? "Sin datos"}`} />
-        <Metric label="Renovación" value={report.renewalRatio == null ? "Sin datos" : `${Math.round(report.renewalRatio * 100)}%`} hint="Sobre fans con el dato" />
+        <Metric label="Auto-renovación" value={report.renewalRatio == null ? "Sin datos" : `${Math.round(report.renewalRatio * 100)}%`} hint="Fans con el dato, no es la tasa del periodo" />
         <Metric label="Tipos" value={report.byKind.length === 0 ? "Sin datos" : report.byKind.map((item) => `${KIND_LABEL[item.kind] ?? item.kind} ${centsLabel(item.grossCents, "USD")}`).join(" · ")} hint="Desglose del periodo" />
       </div>
     </Panel>
@@ -517,8 +494,8 @@ function ProxyForm({ creatorId, label, onSaved }: { creatorId: string; label: st
 
 function TeamBoard({ rows }: { rows: TeamMetricView[] }) {
   return (
-    <div className="mt-4">
-      <p className="mb-2 text-sm text-muted">Cifras de los chats y propinas sincronizados. Un chatter solo ve las suyas. El turno de arriba no sale de OnlyFans.</p>
+    <div>
+      <p className="mb-2 text-sm text-muted">Cifras de los chats y propinas sincronizados. Cada chatter ve su bruto atribuido, no el de la agencia ni el de otro.</p>
       {rows.length === 0 ? <p className="text-sm text-muted">Sin datos</p> : (
         <table className="w-full text-left text-sm">
           <thead className="text-xs text-muted">

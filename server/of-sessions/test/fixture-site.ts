@@ -324,7 +324,7 @@ async function handle(
       JSON.stringify({
         list: [
           { id: 100, text: "Hola, ¿sigues ahí?", createdAt: "2026-11-05T10:00:00.000Z", fromUser: { id: 7 } },
-          { id: 101, text: "Sí, dime.", createdAt: "2026-11-05T10:05:00.000Z", fromUser: { id: 42 }, price: 5, isOpened: true },
+          { id: 101, text: "Sí, dime.", createdAt: "2026-11-05T10:05:00.000Z", fromUser: { id: 42 }, price: 5, purchased: true },
           ...extraMessages.map((item) => ({
             id: item.id,
             text: item.text,

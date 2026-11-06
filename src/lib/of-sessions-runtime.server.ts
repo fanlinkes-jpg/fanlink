@@ -90,7 +90,7 @@ function bootSyncLoop(sessions: SessionManager): void {
       const account = (await sessions.listAccounts()).find((item) => item.id === accountId);
       const creatorId = account?.creatorId ?? accountId;
       const prior = account?.creatorId ? await listCreatorReads(await getSql(), [account.creatorId]) : [];
-      const read = await sessions.readCreatorData(accountId, true, prior[0]?.txCursor ?? null);
+      const read = await sessions.readCreatorData(accountId, true, txCursorOf(prior[0]));
       logCreatorRead(creatorId, read);
       if (read.alreadyRunning) return;
       if (read.loginRequired) await sessions.markLoginRequired(accountId);
@@ -199,7 +199,7 @@ export async function listCreatorSessionViews(userId: string): Promise<CreatorSe
     if (access.role !== "owner" && !access.creatorIds.includes(view.creatorId)) return [];
     return [view];
   });
-  if (!config.sessionKey) return views;
+  if (access.role !== "owner" || !config.sessionKey) return views;
   return Promise.all(views.map(async (view) => {
     const stored = await readAccountProxy(path.join(config.dataDir, "proxies", `${view.accountId}.bin`), config.sessionKey!);
     return { ...view, proxyLabel: proxyLabel(stored) };
@@ -356,7 +356,7 @@ export async function syncCreatorReadView(userId: string, creatorId: string): Pr
   if (!account) throw new Error("No hay sesión guardada para sincronizar.");
   const sql = await getSql();
   const prior = await listCreatorReads(sql, [id]);
-  const read = await sessions.readCreatorData(account.id, true, prior[0]?.txCursor ?? null);
+  const read = await sessions.readCreatorData(account.id, true, txCursorOf(prior[0]));
   logCreatorRead(id, read);
   if (read.loginRequired) await sessions.markLoginRequired(account.id);
   if (!read.alreadyRunning) {
@@ -496,7 +496,7 @@ export async function listDashboardView(userId: string): Promise<{
         if (!read) return [];
         return [{ name: account.label, status: read.lastStatus, reason: read.lastReason }];
       }),
-      whalesAtRisk: whales,
+      whalesAtRisk: owner ? whales : [],
       drops,
     }),
   };
@@ -570,6 +570,11 @@ export async function listTeamMetricViews(userId: string): Promise<Array<{
     firstReplyMinutes: row.firstReplyMinutes,
     threads: row.threads,
   }));
+}
+
+function txCursorOf(row: { txCursor: string | null; txCursorKey: string | null } | undefined) {
+  if (!row?.txCursor) return null;
+  return { at: row.txCursor, key: row.txCursorKey ?? "" };
 }
 
 function logCreatorRead(

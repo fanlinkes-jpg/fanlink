@@ -127,7 +127,7 @@ export function parseEarningsJson(value: unknown, now = new Date()): EarningRow[
 export function parseFansJson(value: unknown, now = new Date()): FanRow[] {
   const rows: FanRow[] = [];
   walkFans(value, rows, 0, now);
-  return dedupeFans(rows).slice(0, 200);
+  return dedupeFans(rows).slice(0, 5000);
 }
 
 export function parseEarningsDom(items: unknown, now = new Date()): EarningRow[] {
@@ -162,7 +162,20 @@ export function parseFansDom(items: unknown, now = new Date()): FanRow[] {
     }, now);
     if (row) rows.push(row);
   }
-  return dedupeFans(rows).slice(0, 200);
+  return dedupeFans(rows).slice(0, 5000);
+}
+
+export type TxCursor = { at: string; key: string };
+
+/** Misma hora y otra clave sigue siendo un movimiento nuevo. La clave ya vista, no. */
+export function isAfterTxCursor(
+  row: { occurredAt: string; txKey: string },
+  cursor: TxCursor | null,
+): boolean {
+  if (!cursor?.at) return true;
+  if (row.occurredAt > cursor.at) return true;
+  if (row.occurredAt < cursor.at) return false;
+  return row.txKey !== cursor.key;
 }
 
 export function readFailureReason(input: {
@@ -214,24 +227,32 @@ function walkEarnings(value: unknown, currency: string, rows: EarningRow[], dept
   }
 }
 
+const KIND_PRIORITY: Array<{ kind: EarningKind; keys: string[] }> = [
+  { kind: "subscription", keys: ["subscriptions", "subscription", "subscribes", "subs"] },
+  { kind: "tip", keys: ["tips", "tip"] },
+  { kind: "message", keys: ["messages", "message", "chat_messages", "chat", "ppv"] },
+  { kind: "post", keys: ["posts", "post"] },
+  { kind: "total", keys: ["total", "gross", "amount", "earnings"] },
+];
+
 function pushEarningPoint(record: Record<string, unknown>, currency: string, rows: EarningRow[]): void {
   const day = DATE_KEYS.map((key) => dayOf(record[key])).find((value) => value != null) ?? null;
   if (!day) return;
-  let pushed = false;
-  for (const [key, kind] of Object.entries(KIND_KEYS)) {
-    if (!(key in record)) continue;
-    const amount = cents(record[key]);
-    if (amount == null) continue;
-    rows.push({ day, kind, amountCents: amount, currency });
-    pushed = true;
+  for (const group of KIND_PRIORITY) {
+    for (const key of group.keys) {
+      if (!(key in record)) continue;
+      const amount = cents(record[key]);
+      if (amount == null) continue;
+      rows.push({ day, kind: group.kind, amountCents: amount, currency });
+      break;
+    }
   }
-  if (!pushed) return;
 }
 
 function walkFans(value: unknown, rows: FanRow[], depth: number, now: Date): void {
-  if (!value || typeof value !== "object" || depth > 4 || rows.length > 200) return;
+  if (!value || typeof value !== "object" || depth > 4 || rows.length > 5000) return;
   if (Array.isArray(value)) {
-    for (const item of value.slice(0, 200)) {
+    for (const item of value.slice(0, 5000)) {
       if (item && typeof item === "object" && !Array.isArray(item)) {
         const row = fanFrom(item as Record<string, unknown>, now);
         if (row) rows.push(row);
@@ -289,7 +310,7 @@ function fanFrom(record: Record<string, unknown>, now: Date): FanRow | null {
 function walkTransactions(value: unknown, rows: TransactionRow[], depth: number, now: Date): void {
   if (!value || typeof value !== "object" || depth > 4 || rows.length > 400) return;
   if (Array.isArray(value)) {
-    for (const item of value.slice(0, 200)) {
+    for (const item of value.slice(0, 2000)) {
       if (!item || typeof item !== "object" || Array.isArray(item)) continue;
       const row = transactionFrom(item as Record<string, unknown>, now);
       if (row) rows.push(row);
@@ -299,7 +320,7 @@ function walkTransactions(value: unknown, rows: TransactionRow[], depth: number,
   const record = value as Record<string, unknown>;
   for (const [key, child] of Object.entries(record)) {
     if (SECRET.test(key)) continue;
-    if (key === "transactions" || key === "history" || key === "operations" || key === "list") {
+    if (key === "transactions" || key === "history" || key === "operations" || key === "list" || key === "data" || key === "items") {
       walkTransactions(child, rows, depth + 1, now);
     }
   }

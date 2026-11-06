@@ -8,8 +8,10 @@ import {
   parseEarningsJson,
   parseFansDom,
   parseFansJson,
+  isAfterTxCursor,
   parseTransactions,
   readFailureReason,
+  type TxCursor,
   type EarningRow,
   type FanRow,
   type TransactionRow,
@@ -19,6 +21,7 @@ export type CollectedRead = {
   earnings: EarningRow[];
   fans: FanRow[];
   transactions: TransactionRow[];
+  fansComplete?: boolean;
   reason: string | null;
   jsonPaths: string[];
   earningsCaptured: boolean;
@@ -35,7 +38,7 @@ export type CollectedRead = {
 export async function collectCreatorRead(
   context: BrowserContext,
   site: SiteAdapter,
-  options: { paceMs: number; waitMs: number; includeEarnings: boolean; now?: Date; sinceTx?: string | null },
+  options: { paceMs: number; waitMs: number; includeEarnings: boolean; now?: Date; sinceTx?: TxCursor | null },
 ): Promise<CollectedRead> {
   const now = options.now ?? new Date();
   const notes = {
@@ -64,9 +67,9 @@ export async function collectCreatorRead(
       if (options.includeEarnings && site.earningsUrl) {
         await openPage(page, site.earningsUrl, options, notes, pending, false, site);
       }
-      if (site.subscribersUrl) {
-        await openPage(page, site.subscribersUrl, options, notes, pending, true, site);
-      }
+    if (site.subscribersUrl) {
+      await openPage(page, site.subscribersUrl, options, notes, pending, true, site, () => notes.fans.length);
+    }
     }
     const markers = await page.evaluate(readSyncMarkers).catch(() => null);
     if (options.includeEarnings && notes.earnings.length === 0 && markers) {
@@ -95,8 +98,9 @@ export async function collectCreatorRead(
     }
     return {
       earnings: notes.earnings,
-      fans: notes.fans.slice(0, 200),
-      transactions: notes.transactions.filter((row) => !options.sinceTx || row.occurredAt > options.sinceTx).slice(0, 400),
+      fans: notes.fans.slice(0, 5000),
+      transactions: notes.transactions.filter((row) => isAfterTxCursor(row, options.sinceTx ?? null)).slice(0, 400),
+      fansComplete: Boolean(site.subscribersUrl) && !notes.redirected && !loginRequired && !notes.fansRedirect,
       reason,
       jsonPaths: notes.paths,
       earningsCaptured: notes.earnings.length > 0,
@@ -125,6 +129,7 @@ async function warmOnlyFans(
     sawLoggedIn: boolean;
     earningsRedirect: boolean;
     fansRedirect: boolean;
+    fans: { length: number };
   },
   pending: Promise<void>[],
 ): Promise<void> {
@@ -138,9 +143,9 @@ async function warmOnlyFans(
   if (options.includeEarnings && site.earningsUrl) {
     notes.earningsRedirect = await openPage(page, site.earningsUrl, options, notes, pending, false, site);
   }
-  if (site.subscribersUrl) {
-    notes.fansRedirect = await openPage(page, site.subscribersUrl, options, notes, pending, true, site);
-  }
+    if (site.subscribersUrl) {
+      notes.fansRedirect = await openPage(page, site.subscribersUrl, options, notes, pending, true, site, () => notes.fans.length);
+    }
 }
 
 function pageLoginReason(earnings: boolean, fans: boolean): string {
@@ -157,6 +162,7 @@ async function openPage(
   pending: Promise<void>[],
   scroll: boolean,
   site: SiteAdapter,
+  fanCount?: () => number,
 ): Promise<boolean> {
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
   await Promise.race([
@@ -171,8 +177,12 @@ async function openPage(
   if (login > 0) redirected = true;
   if (redirected) notes.redirected = true;
   if (scroll && !redirected) {
-    for (let step = 0; step < 3; step += 1) {
-      await page.mouse.wheel(0, 700).catch(() => undefined);
+    let previous = -1;
+    for (let step = 0; step < 12; step += 1) {
+      const seen = fanCount?.() ?? 0;
+      if (step > 0 && seen === previous) break;
+      previous = seen;
+      await page.mouse.wheel(0, 900).catch(() => undefined);
       await delay(options.paceMs);
       await drain(pending);
     }

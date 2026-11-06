@@ -190,7 +190,6 @@ function priceCents(value: unknown): number | null {
 }
 
 function purchasedFlag(record: Record<string, unknown>): boolean | null {
-  if (typeof record.isOpened === "boolean") return record.isOpened;
   if (typeof record.purchased === "boolean") return record.purchased;
   return null;
 }

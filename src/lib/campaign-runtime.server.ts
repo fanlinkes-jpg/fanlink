@@ -3,7 +3,7 @@ import { getSql } from "@/lib/db";
 import { canOperateCreator, WorkspaceAccessError } from "@/lib/access-policy";
 import { ensureStaff } from "@/lib/workspace-store";
 import { DEV_USER_ID, authConfigured } from "@/lib/auth/verify.server";
-import { fansInSegment, previewBody, sendGate, type SegmentKind } from "../../server/of-sessions/campaigns/segment.ts";
+import { fansInSegment, memberMayUseSegment, previewBody, sendGate, type SegmentKind } from "../../server/of-sessions/campaigns/segment.ts";
 import { onlyFansSite } from "../../server/of-sessions/sessions/onlyfans.ts";
 
 export type CampaignDraftView = {
@@ -31,8 +31,11 @@ export async function previewCampaignView(
   userId: string,
   input: { creatorId: string; segment: string; body: string; minSpentCents: number; quietDays: number },
 ): Promise<{ count: number; samples: string[] }> {
-  await assertCreator(userId, input.creatorId);
+  const access = await assertCreator(userId, input.creatorId);
   const segment = parseSegment(input.segment);
+  if (!memberMayUseSegment(access.role, segment)) {
+    throw new WorkspaceAccessError("Solo la dueña consulta segmentos por gasto.");
+  }
   const fans = fansInSegment(await loadFans(input.creatorId), segment, {
     minSpentCents: Math.max(0, input.minSpentCents),
     quietDays: Math.max(1, input.quietDays),
@@ -58,8 +61,11 @@ export async function saveCampaignDraftView(
     quietDays: number;
   },
 ): Promise<CampaignDraftView> {
-  await assertCreator(userId, input.creatorId);
+  const access = await assertCreator(userId, input.creatorId);
   const segment = parseSegment(input.segment);
+  if (!memberMayUseSegment(access.role, segment)) {
+    throw new WorkspaceAccessError("Solo la dueña consulta segmentos por gasto.");
+  }
   const fans = fansInSegment(await loadFans(input.creatorId), segment, {
     minSpentCents: Math.max(0, input.minSpentCents),
     quietDays: Math.max(1, input.quietDays),
@@ -135,8 +141,8 @@ export async function listCampaignDraftViews(userId: string): Promise<CampaignDr
         vaultIds: row.vault_ids ? row.vault_ids.split(",").filter(Boolean) : [],
         scheduledAt: row.scheduled_at == null ? null : new Date(row.scheduled_at).toISOString(),
         recipientCount: Number(row.recipient_count),
-        purchases: row.purchases == null ? null : Number(row.purchases),
-        revenueCents: row.revenue_cents == null ? null : Number(row.revenue_cents),
+        purchases: access.role === "owner" && row.purchases != null ? Number(row.purchases) : null,
+        revenueCents: access.role === "owner" && row.revenue_cents != null ? Number(row.revenue_cents) : null,
         status: row.status === "scheduled" ? "scheduled" : "draft",
       },
     ];
@@ -192,4 +198,5 @@ async function assertCreator(userId: string, creatorId: string) {
   if (!canOperateCreator(access, creatorId, "campanas") && access.role !== "owner") {
     throw new WorkspaceAccessError("No tienes acceso a las campañas de esa creadora.");
   }
+  return access;
 }

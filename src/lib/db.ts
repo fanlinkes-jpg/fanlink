@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { pendingMigrations } from "../../scripts/migration-plan.mjs";
+import { bootTasks } from "./boot-plan.ts";
 
 /** Which database backend is active. */
 export type DbSource = "neon" | "pglite";
@@ -239,7 +240,7 @@ export function ensureDbReady(): Promise<void> {
 const globalBoot = globalThis as typeof globalThis & {
   __pgBootstrapPromise__?: Promise<void>;
 };
-if (typeof window === "undefined" && dbSource === "pglite") {
+if (typeof window === "undefined" && bootTasks(dbSource).includes("database")) {
   globalBoot.__pgBootstrapPromise__ ??= ensureDbReady()
     .then(async () => {
       const sync = await import("./of-sessions-runtime.server.ts");
@@ -250,4 +251,7 @@ if (typeof window === "undefined" && dbSource === "pglite") {
       console.error("[db] PGLite bootstrap failed:", err);
       throw err;
     });
+}
+if (typeof window === "undefined" && dbSource === "neon" && bootTasks(dbSource).includes("scheduler")) {
+  void import("./of-sessions-runtime.server.ts").then((sync) => sync.ensureSyncScheduler());
 }
