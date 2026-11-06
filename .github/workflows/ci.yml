@@ -6,6 +6,7 @@ on:
     branches:
       - main
       - cursor/of-session-crm-617f
+      - cursor/mass-message-617f
 
 concurrency:
   # El push y el pull request no comparten grupo: uno no cancela al otro.
