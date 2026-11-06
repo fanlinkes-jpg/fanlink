@@ -2,7 +2,7 @@ import type { BrowserContext, CDPSession, FileChooser, Page } from "playwright";
 import { chatPageUrl } from "../sync/chats.ts";
 import { parseChatMessages } from "../sync/chats.ts";
 import { openWorkPage } from "../sessions/work-page.ts";
-import { deskCommand, liveControlAllowed, liveHistoryGuardSource, liveLog, liveQuality, liveRequestAllowed, liveThreadClick, liveTypingEnabled, mapPointer, type DeskInput } from "./desk.ts";
+import { deskCommand, liveControlAllowed, liveHistoryGuardSource, liveLog, liveQuality, liveRequestAllowed, liveSocketGuardSource, liveThreadClick, liveTypingEnabled, mapPointer, type DeskInput } from "./desk.ts";
 
 export type LiveFrame = { jpeg: Buffer; width: number; height: number };
 
@@ -33,6 +33,7 @@ export async function startLiveCast(input: {
   let fileWait: ((file: { name: string; mimeType: string; buffer: Buffer } | null) => void) | null = null;
   console.info(liveLog("inicio", { accountId: input.accountId, fps }));
   await page.addInitScript({ content: liveHistoryGuardSource(chatUrl) });
+  await page.addInitScript({ content: liveSocketGuardSource(typing) });
   cdp = await input.context.newCDPSession(page);
   await cdp.send("Network.enable").catch(() => undefined);
   await cdp.send("Network.setBypassServiceWorker", { bypass: true }).catch(() => undefined);

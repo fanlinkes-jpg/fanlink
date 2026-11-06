@@ -81,9 +81,73 @@ function liveHostPathAllowed(host: string, path: string): boolean {
 
 function liveWriteBlocked(method: string, path: string, typing: boolean): boolean {
   if (typing || !LIVE_WRITES.has(method.toUpperCase())) return false;
+  if (path.startsWith("/ws") || path.startsWith("/socket")) return true;
   return path === "/my/chats" || path.startsWith("/my/chats/")
     || path === "/api2/v2/chats" || path.startsWith("/api2/v2/chats/")
     || path === "/api2/v2/messages" || path.startsWith("/api2/v2/messages/");
+}
+
+/** En solo lectura no sale un frame por /ws ni /socket. La conexión sigue para poder recibir. */
+export function liveOutgoingSocketBlocked(raw: string, typing: boolean): boolean {
+  if (typing) return false;
+  let url: URL;
+  try {
+    url = new URL(raw, "https://onlyfans.com");
+  } catch {
+    return false;
+  }
+  const host = url.hostname.toLowerCase();
+  if (host !== "onlyfans.com" && !host.endsWith(".onlyfans.com")) return false;
+  let path = url.pathname.toLowerCase();
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    return false;
+  }
+  return path.startsWith("/ws") || path.startsWith("/socket");
+}
+
+/** Envuelve WebSocket.send en la página. page.route no ve los frames. */
+export function liveSocketGuardSource(typing: boolean): string {
+  return `(() => {
+    const Native = window.WebSocket;
+    if (!Native || Native.prototype.__fanlinkSendGuard) return;
+    const typing = ${typing ? "true" : "false"};
+    const blocked = (raw) => {
+      if (typing) return false;
+      try {
+        const url = new URL(String(raw), location.origin);
+        const host = url.hostname.toLowerCase();
+        if (host !== "onlyfans.com" && !host.endsWith(".onlyfans.com")) return false;
+        const path = decodeURIComponent(url.pathname).toLowerCase();
+        return path.startsWith("/ws") || path.startsWith("/socket");
+      } catch { return false; }
+    };
+    const send = Native.prototype.send;
+    Native.prototype.send = function (data) {
+      if (blocked(this.url)) return;
+      return send.call(this, data);
+    };
+    Native.prototype.__fanlinkSendGuard = true;
+  })();`;
+}
+
+/** El tecleo del cliente llega tecla a tecla. El borrador tiene que seguir ese texto, también al borrar. */
+export function draftAfterKey(body: string, key: string, down: boolean): string {
+  if (!down) return body;
+  const chars = Array.from(body);
+  if (key === "Backspace" || key === "Delete") {
+    chars.pop();
+    return chars.join("");
+  }
+  const typed = Array.from(key);
+  if (typed.length !== 1) return body;
+  chars.push(typed[0] ?? "");
+  return chars.join("").slice(0, 4000);
+}
+
+export function draftAfterPaste(body: string, text: string): string {
+  return Array.from(body + text).slice(0, 4000).join("");
 }
 
 /** El mismo filtro, dentro de la página, para pushState, window.open y vistas que no cambian la ruta. */

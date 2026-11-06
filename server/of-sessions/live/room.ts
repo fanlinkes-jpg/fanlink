@@ -3,6 +3,8 @@ import type { RawData, WebSocket } from "ws";
 import { attributeLiveSend, liveSendMatchesGesture } from "../sync/chat-store.ts";
 import {
   claimControl,
+  draftAfterKey,
+  draftAfterPaste,
   liveControlAllowed,
   liveFps,
   liveLog,
@@ -228,7 +230,8 @@ async function onClientMessage(room: Room, viewer: Viewer, raw: string): Promise
   }
   if (!liveControlAllowed(typing, viewer.role, event.type)) return;
   if (typing && event.type === "key" && event.key === "Enter") room.lastGestureAt = new Date().toISOString();
-  if (typing && event.type === "text") room.draftBody = event.text;
+  if (typing && event.type === "key") room.draftBody = draftAfterKey(room.draftBody, event.key, event.down);
+  if (typing && event.type === "text") room.draftBody = draftAfterPaste(room.draftBody, event.text);
   if (event.type === "release") {
     const freed = releaseControl(room.holder, viewer.userId, room.viewers.map((item) => item.userId));
     applyHolder(room, freed.holder);

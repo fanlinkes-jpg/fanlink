@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import vm from "node:vm";
 import { test } from "node:test";
 import { attributeLiveSend, liveSendAttributable, liveSendMatchesGesture } from "../sync/chat-store.ts";
 import type { ReadSql } from "../sync/store.ts";
@@ -6,12 +7,16 @@ import {
   LIVE_MAX_PAYLOAD,
   claimControl,
   deskCommand,
+  draftAfterKey,
+  draftAfterPaste,
   liveControlAllowed,
   liveFps,
   liveLog,
   liveOriginAllowed,
+  liveOutgoingSocketBlocked,
   liveRequestAllowed,
   liveRoomKey,
+  liveSocketGuardSource,
   liveTypingEnabled,
   liveUpgradeAllowed,
   liveViewerAccepted,
@@ -75,6 +80,40 @@ test("sin FANLINK_ENABLE_SEND no hay teclado, Enter ni archivos", () => {
   assert.equal(liveRequestAllowed("https://onlyfans.com/api2/v2/chats/1/messages", "GET", false), true);
   assert.equal(liveRequestAllowed("https://unknown.onlyfans.com/secret"), false);
   assert.equal(liveRequestAllowed("https://api2.onlyfans.com/api2/v2/chats/1/messages"), true);
+  assert.equal(liveRequestAllowed("https://ws2.onlyfans.com/ws2/", "POST", false), false);
+  assert.equal(liveRequestAllowed("https://ws2.onlyfans.com/socket.io/", "PUT", false), false);
+  assert.equal(liveRequestAllowed("wss://ws2.onlyfans.com/ws2/", "GET", false), true);
+});
+
+test("el borrador acumula las teclas y el borrado", () => {
+  let body = "";
+  for (const key of ["h", "o", "l", "a"]) body = draftAfterKey(body, key, true);
+  assert.equal(body, "hola");
+  body = draftAfterKey(body, "a", false);
+  assert.equal(body, "hola");
+  body = draftAfterKey(body, "Backspace", true);
+  body = draftAfterKey(body, "Backspace", false);
+  assert.equal(body, "hol");
+  body = draftAfterKey(body, "Enter", true);
+  assert.equal(body, "hol");
+  body = draftAfterPaste(body, "a");
+  body = draftAfterKey(body, "🙂", true);
+  body = draftAfterKey(body, "Delete", true);
+  assert.equal(body, "hola");
+});
+
+test("en solo lectura no sale un frame por /ws", () => {
+  assert.equal(liveOutgoingSocketBlocked("wss://ws2.onlyfans.com/ws2/?x=1", false), true);
+  assert.equal(liveOutgoingSocketBlocked("wss://ws.onlyfans.com/socket.io/", false), true);
+  assert.equal(liveOutgoingSocketBlocked("wss://ws2.onlyfans.com/ws2/", true), false);
+  assert.equal(liveOutgoingSocketBlocked("https://onlyfans.com/api2/v2/chats/1/messages", false), false);
+  const quiet = socketSends(liveSocketGuardSource(false));
+  quiet("wss://ws2.onlyfans.com/ws2/", "escribir");
+  quiet("wss://ws2.onlyfans.com/api2/v2/chats/1/messages", "leer");
+  assert.deepEqual(quiet.sent, ["leer"]);
+  const typing = socketSends(liveSocketGuardSource(true));
+  typing("wss://ws2.onlyfans.com/ws2/", "escribir");
+  assert.deepEqual(typing.sent, ["escribir"]);
 });
 
 test("el ratón del canvas cae en el viewport y Enter no es texto", () => {
@@ -255,3 +294,29 @@ test("solo un visor tiene el control de la cuenta", () => {
   assert.equal(freed.holder, "luis");
   assert.equal(freed.next, "luis");
 });
+
+function socketSends(source: string): { (url: string, data: string): void; sent: string[] } {
+  const sent: string[] = [];
+  class Socket {
+    url: string;
+    constructor(url: string) {
+      this.url = url;
+    }
+    send(data: string) {
+      sent.push(data);
+    }
+  }
+  const context = vm.createContext({
+    window: { WebSocket: Socket },
+    location: { origin: "https://onlyfans.com" },
+    URL,
+    decodeURIComponent,
+  });
+  vm.runInContext(source, context);
+  const send = (url: string, data: string) => {
+    const socket = new context.window.WebSocket(url);
+    socket.send(data);
+  };
+  send.sent = sent;
+  return send;
+}
