@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { fanInsightModel } from "@/lib/fan-insights";
+import { ppvTimeline, type PpvSource } from "@/lib/ppv-timeline";
 
 export type FanProfileFields = {
   creatorId: string;
@@ -30,6 +31,8 @@ export type FanInsightProps = {
   lists?: string[] | null;
   profile?: FanProfileFields | null;
   onProfile?: (profile: FanProfileFields) => void;
+  threadMessages?: PpvSource[];
+  onCopyDraft?: (body: string, priceCents: number) => void;
 };
 
 const TABS = ["Insights", "Ventas", "Notas"] as const;
@@ -67,14 +70,7 @@ export function FanInsights(props: FanInsightProps) {
             />
           </label>
         ) : tab === "Ventas" ? (
-          <Card title="Ventas">
-            <Pair label="Último gasto" value={`${model.lastAgo} · ${model.last}`} />
-            <Pair label="PPV total" value={model.ppvTotal} />
-            <Pair label="PPV medio" value={model.ppvAvg} />
-            <Pair label="Propinas" value={model.tipTotal} />
-            <Pair label="Propina media" value={model.tipAvg} />
-            <Pair label="Gasto máximo" value={model.max} />
-          </Card>
+          <SalesPane messages={props.threadMessages ?? []} onCopy={props.onCopyDraft} />
         ) : (
           <div className="space-y-3">
             <Card title="Comportamiento de gasto">
@@ -125,6 +121,35 @@ export function FanInsights(props: FanInsightProps) {
         ))}
       </div>
     </aside>
+  );
+}
+
+function SalesPane({ messages, onCopy }: { messages: PpvSource[]; onCopy?: (body: string, priceCents: number) => void }) {
+  const timeline = ppvTimeline(messages);
+  return (
+    <div className="space-y-3">
+      <Card title="PPV">
+        <Pair label="Buy rate" value={timeline.rate} />
+        <Pair label="Precio más alto" value={timeline.high} />
+        <Pair label="Precio más bajo" value={timeline.low} />
+      </Card>
+      {timeline.rows.length === 0 ? <p className="text-sm text-[#6d7585]">Sin datos</p> : timeline.rows.map((row) => (
+        <article key={row.messageKey} className="rounded-xl border border-[#e6e8ee] bg-white p-3">
+          <div className="flex items-center justify-between gap-2 text-sm">
+            <span className="font-medium">{row.price}</span>
+            <span className={row.state === "comprado" ? "text-[#137333]" : row.state === "no comprado" ? "text-[#b4234a]" : "text-[#6d7585]"}>
+              {row.state === "comprado" ? "$ comprado" : row.state === "no comprado" ? "candado · no comprado" : "Sin datos"}
+            </span>
+          </div>
+          <p className="mt-1 text-xs text-[#6d7585]">{row.sentAt.slice(0, 16).replace("T", " ")}</p>
+          <p className="mt-2 text-sm">{row.body}</p>
+          {row.preview ? <img src={row.preview} alt="" className="mt-2 h-16 w-16 rounded object-cover" /> : <p className="mt-2 text-xs text-[#6d7585]">{row.media}</p>}
+          {onCopy ? (
+            <button type="button" className="mt-2 rounded border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => onCopy(row.body, row.priceCents)}>Copiar como borrador</button>
+          ) : null}
+        </article>
+      ))}
+    </div>
   );
 }
 

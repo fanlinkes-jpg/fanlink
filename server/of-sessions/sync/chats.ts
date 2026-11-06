@@ -48,6 +48,9 @@ export type ChatMessage = {
   seen: boolean | null;
   /** Null si no dice si salió de una automatización. */
   automatic: boolean | null;
+  mediaCount?: number | null;
+  mediaSeconds?: number | null;
+  mediaPreview?: string | null;
 };
 
 export type FanMessageEvent = {
@@ -445,7 +448,8 @@ function messageFrom(
     body,
     sentAt,
     priceCents: priceCents(record.price ?? record.ppvPrice),
-    purchased: purchasedFlag(record),
+    purchased: purchasedFlag(record, priceCents(record.price ?? record.ppvPrice)),
+    ...mediaFacts(record),
   };
 }
 
@@ -455,9 +459,37 @@ function priceCents(value: unknown): number | null {
   return null;
 }
 
-function purchasedFlag(record: Record<string, unknown>): boolean | null {
+function purchasedFlag(record: Record<string, unknown>, price: number | null): boolean | null {
   if (typeof record.purchased === "boolean") return record.purchased;
+  if (typeof record.isPurchased === "boolean") return record.isPurchased;
+  if (price == null || price <= 0) return null;
+  if (typeof record.canPurchase === "boolean") return !record.canPurchase;
+  if (typeof record.isOpened === "boolean") return record.isOpened;
   return null;
+}
+
+function mediaFacts(record: Record<string, unknown>): { mediaCount: number | null; mediaSeconds: number | null; mediaPreview: string | null } {
+  const raw = record.media ?? record.previews ?? record.attachments;
+  if (!Array.isArray(raw)) return { mediaCount: null, mediaSeconds: null, mediaPreview: null };
+  const items = raw.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item));
+  let seconds = 0;
+  let haveSeconds = false;
+  let preview: string | null = null;
+  for (const item of items) {
+    const duration = item.duration ?? item.durationSeconds;
+    if (typeof duration === "number" && Number.isFinite(duration) && duration >= 0) {
+      seconds += duration;
+      haveSeconds = true;
+    }
+    if (!preview) preview = mediaUrl(item.thumb ?? item.preview ?? item.src ?? nested(item.files)?.thumb);
+  }
+  return { mediaCount: items.length, mediaSeconds: haveSeconds ? Math.round(seconds) : null, mediaPreview: preview };
+}
+
+function mediaUrl(value: unknown): string | null {
+  const nestedUrl = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>).url : value;
+  if (typeof nestedUrl !== "string" || !/^https?:\/\//.test(nestedUrl) || nestedUrl.length > 400) return null;
+  return nestedUrl;
 }
 
 export function fromFanFlag(fromUserId: string | null, fanKey: string | null, accountId: string | null): boolean | null {

@@ -428,6 +428,9 @@ export async function listCreatorChatViews(userId: string): Promise<CreatorChatL
       authorName: message.authorName,
       seen: message.seen,
       automatic: message.automatic,
+      mediaCount: message.mediaCount ?? null,
+      mediaSeconds: message.mediaSeconds ?? null,
+      mediaPreview: message.mediaPreview ?? null,
     })),
     meta: stored.meta.map((item) => ({
       creatorId: item.creatorId,
