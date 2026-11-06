@@ -9,6 +9,7 @@ import { parseCreatorId } from "../../server/of-sessions/types.ts";
 import { assertNoCredentials } from "../../server/of-sessions/credentials.ts";
 import { loadCrmSessionConfig } from "../../server/of-sessions/config.ts";
 import { onlyFansSite } from "../../server/of-sessions/sessions/onlyfans.ts";
+import { openWorkPage } from "../../server/of-sessions/sessions/work-page.ts";
 import { createPlaywrightFactory } from "../../server/of-sessions/sessions/browser-factory.ts";
 import type { SessionManager } from "../../server/of-sessions/sessions/session-manager.ts";
 import { createSessionRuntime } from "../../server/of-sessions/runtime.ts";
@@ -32,10 +33,10 @@ import { listChatMeta, listChats, listOpenHistory, listPendingOutbounds, markCha
 import { historyPerMinute, listPageDone, nextHistoryThread, oldestCursor, pageFinished } from "../../server/of-sessions/sync/history.ts";
 import { captureChatListPage, captureOlderMessages } from "../../server/of-sessions/sync/history-scroll.ts";
 import { chatPageUrl } from "../../server/of-sessions/sync/chats.ts";
-import { sendPace } from "../../server/of-sessions/send/gate.ts";
-import { chatSendGate, publicSendReason, type SendAccount } from "../../server/of-sessions/send/gate.ts";
+import { chatSendGate, publicSendReason, sendPace, type SendAccount } from "../../server/of-sessions/send/gate.ts";
 import { deliverChatSend, sendLimitFromEnv } from "../../server/of-sessions/send/deliver.ts";
 import { composeChat } from "../../server/of-sessions/send/compose.ts";
+import { threadIdKind } from "../../server/of-sessions/send/targets.ts";
 import { listFanProfiles, saveFanProfile } from "../../server/of-sessions/sync/fan-profile.ts";
 import { listFanNotes, saveFanNote } from "../../server/of-sessions/sync/fan-note.ts";
 import { intervalMinFromEnv, startSyncLoop, type ScheduleAccount } from "../../server/of-sessions/sync/schedule.ts";
@@ -233,7 +234,7 @@ async function pullOlder(sessions: SessionManager, accountId: string, creatorId:
   const row = open.find((item) => item.threadKey === threadKey);
   if (row?.done) return;
   const ran = await sessions.runQueued(accountId, async (context) => {
-    const page = await context.newPage();
+    const page = await openWorkPage(context);
     try {
       await page.goto(chatPageUrl(onlyFansSite.chatsUrl ?? "https://onlyfans.com/my/chats", threadKey, onlyFansSite.id), { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
       return await captureOlderMessages(page, { threadKey, fanKey: null, accountUserId, waitMs: 6_000 });
@@ -862,7 +863,9 @@ export async function sendChatMessageView(
       account: fields,
       now: () => Date.now(),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-      open: () => sessions.withSession(account.id, (context) => composeChat(context, {
+      open: () => {
+        console.info(`[fanlink:send] inicio hilo=${input.threadKey ?? ""} origen=${threadIdKind(input.threadKey ?? "", input.fanKey)}`);
+        return sessions.withSession(account.id, (context) => composeChat(context, {
         chatsUrl: onlyFansSite.chatsUrl ?? "https://onlyfans.com/my/chats",
         siteId: onlyFansSite.id,
         threadKey: input.threadKey ?? "",
@@ -871,7 +874,8 @@ export async function sendChatMessageView(
         body,
         priceCents: input.priceCents,
         typeDelayMs: null,
-      })),
+      }));
+      },
     });
     if (result.sent && result.messageId) {
       await markOutboundSent(sql, id, result.messageId);
@@ -882,6 +886,7 @@ export async function sendChatMessageView(
     return { sent: false, reason, messageId: null };
   } catch (error) {
     const reason = publicSendReason(error instanceof Error ? error.message : "No se envió");
+    console.info(`[fanlink:send] error motivo=${reason}`);
     await markOutboundError(sql, id, reason);
     return { sent: false, reason, messageId: null };
   }
@@ -910,7 +915,7 @@ export async function loadMoreChatsView(userId: string, input: { creatorId: stri
   const sql = await getSql();
   const previous = (await listChats(sql, [input.creatorId])).threads.map((thread) => thread.threadKey);
   const ran = await sessions.runQueued(account.id, async (context) => {
-    const page = await context.newPage();
+    const page = await openWorkPage(context);
     try {
       await page.goto(onlyFansSite.chatsUrl ?? "https://onlyfans.com/my/chats", { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
       return await captureChatListPage(page, account.identityUserId);

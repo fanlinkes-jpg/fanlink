@@ -66,6 +66,18 @@ test("el botón Enviar se ve entero sin scroll de página", async () => {
       assert.equal(await send.getAttribute("title"), "Envío real desactivado en esta cuenta");
       assert.equal(await composer.getByRole("button", { name: "Dejar pendiente" }).count(), 0);
       await composer.getByText("Pulsa / + palabra para buscar guiones").waitFor();
+      const box = composer.getByRole("textbox", { name: "Mensaje" });
+      await box.click();
+      await page.keyboard.type("hola");
+      await page.keyboard.press("Enter");
+      assert.equal((await box.innerText()).includes("\n"), false);
+      await page.keyboard.down("Shift");
+      await page.keyboard.press("Enter");
+      await page.keyboard.up("Shift");
+      assert.equal((await box.innerText()).includes("\n"), true);
+      await box.evaluate((node) => {
+        node.textContent = "";
+      });
       if (viewport.capture) {
         await page.screenshot({ path: path.join(shots, `mensajes-${viewport.width}x${viewport.height}.png`) });
       }

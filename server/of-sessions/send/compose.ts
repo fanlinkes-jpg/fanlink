@@ -1,6 +1,17 @@
-import type { BrowserContext, Page } from "playwright";
+import type { BrowserContext, Locator, Page } from "playwright";
+import { openWorkPage } from "../sessions/work-page.ts";
 import { chatPageUrl, parseChatMessages } from "../sync/chats.ts";
 import { confirmedOwnMessage, humanTypeDelay, publicSendReason } from "./gate.ts";
+import {
+  COMPOSER_SELECTORS,
+  MESSAGE_LIST_SELECTOR,
+  PRICE_BUTTON_SELECTORS,
+  PRICE_FIELD_SELECTORS,
+  SEND_SELECTORS,
+  navigationNote,
+  threadIdKind,
+  writeSendFailure,
+} from "./targets.ts";
 
 export type ComposeRequest = {
   chatsUrl: string;
@@ -27,7 +38,7 @@ export type ComposeResult = { messageId: string | null; reason: string | null };
  * solo escucha el JSON o el WebSocket que la propia página recibe.
  */
 export async function composeChat(context: BrowserContext, request: ComposeRequest): Promise<ComposeResult> {
-  const page = await context.newPage();
+  const page = await openWorkPage(context);
   const payloads: string[] = [];
   const onResponse = (response: { url(): string; status(): number; text(): Promise<string> }) => {
     if (response.status() < 200 || response.status() >= 300) return;
@@ -48,14 +59,21 @@ export async function composeChat(context: BrowserContext, request: ComposeReque
   });
   try {
     const url = chatPageUrl(request.chatsUrl, request.threadKey, request.siteId);
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
+    console.info(`[fanlink:send] inicio hilo=${request.threadKey} origen=${threadIdKind(request.threadKey, request.fanKey)}`);
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    const landed = navigationNote(url, page.url());
+    console.info(`[fanlink:send] navegado url=${landed.url} redirigido=${landed.redirected ? "si" : "no"}`);
+    if (page.url() === "about:blank") return giveUp(page, "no se abrió el hilo");
     if (/\/login(?:\/|$)/i.test(new URL(page.url()).pathname)) {
-      return { messageId: null, reason: "OnlyFans pide iniciar sesión: pulsa Reconectar" };
+      return giveUp(page, "OnlyFans pide iniciar sesión: pulsa Reconectar");
     }
-    const box = page.locator("[data-fanlink-composer], textarea[aria-label='Message'], .b-chat__message-input [contenteditable='true'], .b-chat__message-input textarea").last();
-    await box.waitFor({ timeout: 8_000 });
-    await box.click();
+    await page.locator(MESSAGE_LIST_SELECTOR).first().waitFor({ timeout: 20_000 }).catch(() => undefined);
+    const box = await firstReady(page, COMPOSER_SELECTORS, 20_000);
+    const roleBox = box ?? await roleTextbox(page);
+    if (!roleBox) return giveUp(page, "no está la caja del chat");
+    await roleBox.click();
     await typeBody(page, request.body, request.typeDelayMs);
+    console.info("[fanlink:send] escrito");
     if (request.bold) {
       const format = page.locator("[data-fanlink-format], button[aria-label='Format text'], button[aria-label='Formato de texto']").first();
       await format.click();
@@ -68,7 +86,7 @@ export async function composeChat(context: BrowserContext, request: ComposeReque
     }
     if (request.priceCents != null && request.priceCents > 0) {
       const opened = await setNativePrice(page, request.priceCents, request.typeDelayMs);
-      if (!opened) return { messageId: null, reason: "No está el precio nativo" };
+      if (!opened) return giveUp(page, "No está el precio nativo");
     }
     if (request.files && request.files.length > 0) {
       const input = page.locator("input[type='file']").first();
@@ -86,16 +104,18 @@ export async function composeChat(context: BrowserContext, request: ComposeReque
       await page.getByRole("button", { name: /^(Save|Guardar)$/ }).click();
     }
     const before = payloads.length;
-    const send = page.locator("[data-fanlink-send], button[aria-label='Send'], button[aria-label='Enviar'], .b-chat__btn-submit").first();
-    await send.waitFor({ timeout: 4_000 });
+    const send = await firstReady(page, SEND_SELECTORS, 8_000);
+    if (!send) return giveUp(page, "no está el botón Send");
     if ((request.typeDelayMs ?? 1) > 0) await delay(280 + Math.floor(Math.random() * 220));
+    console.info("[fanlink:send] click");
     await send.click();
     const messageId = await waitForOwnMessage(payloads, before, request);
-    if (!messageId) return { messageId: null, reason: "No apareció el mensaje propio" };
+    if (!messageId) return giveUp(page, "No apareció el mensaje propio");
+    console.info("[fanlink:send] confirmado");
     return { messageId, reason: null };
   } catch (error) {
     const reason = error instanceof Error ? error.message : "No se envió";
-    return { messageId: null, reason: publicSendReason(reason) };
+    return giveUp(page, publicSendReason(reason));
   } finally {
     page.off("response", onResponse);
     await page.close().catch(() => undefined);
@@ -103,12 +123,12 @@ export async function composeChat(context: BrowserContext, request: ComposeReque
 }
 
 async function setNativePrice(page: Page, priceCents: number, typeDelayMs: number | null | undefined): Promise<boolean> {
-  const button = page.locator("[data-fanlink-price], button[aria-label='Price'], button[aria-label='Precio'], button[aria-label='Message price']").first();
-  if (await button.count() === 0) return false;
+  const button = await firstReady(page, PRICE_BUTTON_SELECTORS, 8_000);
+  if (!button) return false;
   await button.click();
   const dialog = page.getByRole("dialog").last();
-  await dialog.waitFor({ timeout: 4_000 });
-  const field = dialog.locator("input").first();
+  await dialog.waitFor({ timeout: 8_000 });
+  const field = await firstReady(dialog, PRICE_FIELD_SELECTORS, 4_000) ?? dialog.locator("input").first();
   await field.click();
   const dollars = (priceCents / 100).toFixed(2);
   const delayMs = typeDelayMs ?? 70;
@@ -158,6 +178,34 @@ function pathOf(raw: string): string {
   } catch {
     return "";
   }
+}
+
+async function firstReady(root: Page | Locator, selectors: string[], timeoutMs: number): Promise<Locator | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() <= deadline) {
+    for (const selector of selectors) {
+      const locator = root.locator(selector).first();
+      if (await locator.count()) return locator;
+    }
+    await delay(200);
+  }
+  return null;
+}
+
+async function roleTextbox(page: Page): Promise<Locator | null> {
+  const scoped = page.locator(".b-chat, .b-chat__form, form").getByRole("textbox").last();
+  if (await scoped.count()) return scoped;
+  const any = page.getByRole("textbox").last();
+  if (await any.count()) return any;
+  return null;
+}
+
+async function giveUp(page: Page, reason: string): Promise<ComposeResult> {
+  const motivo = publicSendReason(reason);
+  const files = await writeSendFailure(page).catch(() => null);
+  const where = files ? ` volcado=${files.json} captura=${files.png}` : "";
+  console.info(`[fanlink:send] error motivo=${motivo}${where}`);
+  return { messageId: null, reason: motivo };
 }
 
 function delay(ms: number): Promise<void> {
