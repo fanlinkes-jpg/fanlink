@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
-import { emptyVaultQuery, filterVault, rememberVaultQuery, vaultQueryFor, type VaultQuery } from "../sync/vault-filter.ts";
+import { emptyVaultQuery, filterVault, rememberVaultQuery, searchVaultLists, searchVaultMedia, vaultQueryFor, type VaultFolder, type VaultQuery } from "../sync/vault-filter.ts";
 import { historyFromMedia, mergeFanUses, suggestVaultPrice, vaultSaleBlocked, type VaultFile } from "../sync/vault-model.ts";
 import { loadVaultQuery, saveVaultQuery } from "../sync/vault-store.ts";
 import type { ReadSql } from "../sync/store.ts";
@@ -136,4 +136,22 @@ test("no vender bloquea, el precio sugerido sigue la banda y el historial no dup
   assert.equal(uses[0]?.priceCents, 1500);
   assert.equal(uses[0]?.purchased, true);
   assert.equal(uses[0]?.sentAt, "2026-11-02T00:00:00.000Z");
+});
+
+test("el buscador encuentra por etiqueta o por carpeta, dentro de la abierta o en todas", () => {
+  const folders: VaultFolder[] = [
+    { id: "sets", name: "Sets", parentId: null },
+    { id: "bg", name: "B/G", parentId: "sets" },
+    { id: "sola", name: "SOLA", parentId: null },
+  ];
+  const items = [
+    item({ id: "pareja", listId: "bg", listName: "B/G", folder: "B/G", tags: ["Feed"], title: "clip" }),
+    item({ id: "estudio", listId: "sola", listName: "SOLA", folder: "SOLA", tags: ["noche"], title: "toma" }),
+  ];
+  assert.deepEqual(searchVaultMedia(items, folders, { text: "noche", scope: "todas", folderId: null }).map((row) => row.id), ["estudio"]);
+  assert.deepEqual(searchVaultMedia(items, folders, { text: "b/g", scope: "todas", folderId: null }).map((row) => row.id), ["pareja"]);
+  assert.deepEqual(searchVaultMedia(items, folders, { text: "noche", scope: "carpeta", folderId: "bg" }).map((row) => row.id), []);
+  assert.deepEqual(searchVaultMedia(items, folders, { text: "", scope: "carpeta", folderId: "sets" }).map((row) => row.id), ["pareja"]);
+  assert.deepEqual(searchVaultLists(folders, "sola").map((folder) => folder.id), ["sola"]);
+  assert.deepEqual(searchVaultLists(folders, "b/g").map((folder) => folder.id), ["sets", "bg"]);
 });

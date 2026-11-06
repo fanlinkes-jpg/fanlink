@@ -437,7 +437,9 @@ export function RealChatsPage() {
             </ol>
             <form className="relative shrink-0 border-t border-[#e6e8ee] p-2" onSubmit={(event) => event.preventDefault()}>
               {panel && panel !== "guiones" ? (
-                <div role="region" aria-label={panelLabel(panel)} className="absolute inset-x-2 bottom-full z-20 mb-1 max-h-52 overflow-y-auto rounded-xl border border-[#e6e8ee] bg-white p-3 text-sm shadow-lg">
+                <div role="region" aria-label={panelLabel(panel)} className={panel === "vault"
+                  ? "absolute inset-x-2 bottom-full z-20 mb-1 flex h-[28rem] flex-col overflow-hidden rounded-xl border border-[#e6e8ee] bg-white text-sm shadow-lg"
+                  : "absolute inset-x-2 bottom-full z-20 mb-1 max-h-52 overflow-y-auto rounded-xl border border-[#e6e8ee] bg-white p-3 text-sm shadow-lg"}>
                   <ComposerPanelBody
                     panel={panel}
                     vaultItems={vaultItems}
@@ -757,9 +759,12 @@ function ComposerPanelBody({
   switch (panel) {
     case "vault":
       return (
-        <div className="space-y-2">
-          <button type="button" className="rounded border border-[#e6e8ee] px-2 py-1 text-xs" onClick={onReadVault}>Leer vault de OnlyFans</button>
-          <a href="/vault" className="block text-xs text-[#2456c7]">Abrir la bóveda</a>
+        <div className="flex h-full min-h-0 flex-col">
+          <div className="flex items-center justify-between gap-2 border-b border-[#e6e8ee] px-3 py-2">
+            <button type="button" className="rounded border border-[#e6e8ee] px-2 py-1 text-xs" onClick={onReadVault}>Leer vault de OnlyFans</button>
+            <a href="/vault" className="text-xs text-[#0091c7]">Abrir la bóveda</a>
+          </div>
+          <div className="min-h-0 flex-1">
           <VaultBrowser
             items={[
               ...ofVault,
@@ -777,6 +782,7 @@ function ComposerPanelBody({
             onQuery={onVaultQuery}
             onPick={onVault}
           />
+          </div>
         </div>
       );
     case "gif":

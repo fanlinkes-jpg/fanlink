@@ -5,6 +5,14 @@ export type VaultSort = "fecha" | "duracion" | "ventas" | "precio";
 export type VaultOffer = "todas" | "gratis" | "ppv";
 export type FanMark = "cualquiera" | "si" | "no";
 
+export type VaultSearchScope = "carpeta" | "todas";
+
+export type VaultFolder = {
+  id: string;
+  name: string;
+  parentId: string | null;
+};
+
 export type VaultQuery = {
   text: string;
   kinds: Array<Exclude<VaultKind, null>>;
@@ -13,6 +21,8 @@ export type VaultQuery = {
   uploadedFrom: string | null;
   uploadedTo: string | null;
   list: string | null;
+  folderId: string | null;
+  scope: VaultSearchScope;
   couples: CoupleTag[];
   offer: VaultOffer;
   minPriceCents: number | null;
@@ -42,6 +52,8 @@ export function emptyVaultQuery(): VaultQuery {
     uploadedFrom: null,
     uploadedTo: null,
     list: null,
+    folderId: null,
+    scope: "todas",
     couples: [],
     offer: "todas",
     minPriceCents: null,
@@ -52,6 +64,97 @@ export function emptyVaultQuery(): VaultQuery {
     minBuyRate: null,
     sort: "fecha",
   };
+}
+
+/** Carpetas que salen de las piezas y de las listas ya guardadas. */
+export function vaultFoldersFromMedia(items: readonly VaultFile[], extra: readonly VaultFolder[] = []): VaultFolder[] {
+  const map = new Map<string, VaultFolder>();
+  for (const folder of extra) map.set(folder.id, folder);
+  for (const item of items) {
+    const name = item.listName ?? item.folder;
+    const id = item.listId ?? name;
+    if (!id || !name || map.has(id)) continue;
+    map.set(id, { id, name, parentId: null });
+  }
+  return [...map.values()];
+}
+
+/** La columna izquierda: el texto recorta las listas y conserva a sus padres. */
+export function searchVaultLists(folders: readonly VaultFolder[], text: string): VaultFolder[] {
+  const needle = fold(text.trim());
+  if (!needle) return [...folders];
+  const byId = new Map(folders.map((folder) => [folder.id, folder]));
+  const keep = new Set<string>();
+  for (const folder of folders) {
+    if (!fold(folder.name).includes(needle)) continue;
+    keep.add(folder.id);
+    let parent = folder.parentId;
+    while (parent && byId.has(parent) && !keep.has(parent)) {
+      keep.add(parent);
+      parent = byId.get(parent)?.parentId ?? null;
+    }
+  }
+  return folders.filter((folder) => keep.has(folder.id));
+}
+
+export function folderAndChildren(folders: readonly VaultFolder[], folderId: string): Set<string> {
+  const children = new Map<string | null, string[]>();
+  for (const folder of folders) {
+    const list = children.get(folder.parentId) ?? [];
+    list.push(folder.id);
+    children.set(folder.parentId, list);
+  }
+  const out = new Set<string>([folderId]);
+  const pending = [folderId];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (!current) break;
+    for (const child of children.get(current) ?? []) {
+      if (out.has(child)) continue;
+      out.add(child);
+      pending.push(child);
+    }
+  }
+  return out;
+}
+
+/**
+ * Como el buscador del vault de OnlyFans: por etiqueta o por nombre de carpeta.
+ * En «carpeta» no sale de la lista abierta ni de sus hijas. En «todas» recorre la bóveda.
+ */
+export function searchVaultMedia(
+  items: readonly VaultFile[],
+  folders: readonly VaultFolder[],
+  input: { text: string; scope: VaultSearchScope; folderId: string | null },
+): VaultFile[] {
+  const open = input.scope === "carpeta" && input.folderId ? folderAndChildren(folders, input.folderId) : null;
+  const needle = fold(input.text.trim());
+  return items.filter((item) => {
+    if (open && !itemInFolders(item, open, folders)) return false;
+    if (!needle) return true;
+    if (item.tags.some((tag) => fold(tag).includes(needle))) return true;
+    return itemFolderNames(item, folders).some((name) => fold(name).includes(needle));
+  });
+}
+
+function itemInFolders(item: VaultFile, ids: ReadonlySet<string>, folders: readonly VaultFolder[]): boolean {
+  const names = new Set(folders.filter((folder) => ids.has(folder.id)).map((folder) => fold(folder.name)));
+  if (item.listId && ids.has(item.listId)) return true;
+  const own = [item.folder, item.listName].filter((value): value is string => Boolean(value));
+  return own.some((name) => ids.has(name) || names.has(fold(name)));
+}
+
+function itemFolderNames(item: VaultFile, folders: readonly VaultFolder[]): string[] {
+  const byId = new Map(folders.map((folder) => [folder.id, folder]));
+  const names = [item.folder, item.listName].filter((value): value is string => Boolean(value));
+  let current = item.listId ? byId.get(item.listId) : folders.find((folder) => names.some((name) => folder.id === name || fold(folder.name) === fold(name)));
+  const seen = new Set<string>();
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id);
+    names.push(current.name);
+    current = current.parentId ? byId.get(current.parentId) : undefined;
+  }
+  return names;
 }
 
 export function coupleTags(item: Pick<VaultFile, "folder" | "title" | "listName" | "description" | "tags">): CoupleTag[] {
@@ -112,6 +215,8 @@ export function vaultQueryFromUnknown(value: unknown): VaultQuery {
     uploadedFrom: dayOf(record.uploadedFrom),
     uploadedTo: dayOf(record.uploadedTo),
     list: typeof record.list === "string" && record.list.trim() ? record.list.slice(0, 80) : null,
+    folderId: typeof record.folderId === "string" && record.folderId.trim() ? record.folderId.slice(0, 80) : null,
+    scope: record.scope === "carpeta" ? "carpeta" : "todas",
     couples: coupleList(record.couples),
     offer: record.offer === "gratis" || record.offer === "ppv" ? record.offer : "todas",
     minPriceCents: bound(record.minPriceCents),
