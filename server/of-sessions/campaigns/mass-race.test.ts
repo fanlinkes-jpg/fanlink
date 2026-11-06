@@ -20,24 +20,31 @@ test("dos conexiones de Postgres no duplican el guardado ni el lanzamiento", asy
   const left = await pool.connect();
   const right = await pool.connect();
   const key = `race-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const accountId = `cuenta-${key}`;
+  const draftId = `mass-${key}`;
   try {
-    const migration = await readFile(
-      path.resolve(
-        path.dirname(fileURLToPath(import.meta.url)),
-        "../../../migrations/0027_mass_messages.sql",
-      ),
-      "utf8",
+    const present = await left.query<{ name: string | null }>(
+      "select to_regclass('public.of_mass_message') as name",
     );
-    await left.query(migration);
+    if (!present.rows[0]?.name) {
+      const migration = await readFile(
+        path.resolve(
+          path.dirname(fileURLToPath(import.meta.url)),
+          "../../../migrations/0027_mass_messages.sql",
+        ),
+        "utf8",
+      );
+      await left.query(migration);
+    }
     const composed = composeMass({
-      accountId: "cuenta-carrera",
+      accountId,
       name: "Carrera",
       body: "Hola {nombre}",
       priceCents: 300,
       scheduledAt: "2026-11-06T18:00:00.000Z",
       segment: { includeAll: true },
       now: new Date("2026-11-06T10:00:00.000Z"),
-      createId: () => `mass-${key}`,
+      createId: () => draftId,
       idempotencyKey: key,
     });
     assert.equal(composed.ok, true);
@@ -86,11 +93,28 @@ test("dos conexiones de Postgres no duplican el guardado ni el lanzamiento", asy
     assert.equal(row.rows[0]?.status, "sent");
     assert.equal(row.rows[0]?.launch_token_hash, null);
   } finally {
-    await left
-      .query("delete from of_mass_message where idempotency_key = $1", [key])
-      .catch(() => undefined);
+    await left.query("rollback").catch(() => undefined);
+    await right.query("rollback").catch(() => undefined);
     left.release();
     right.release();
+    const present = await pool.query<{ name: string | null }>(
+      "select to_regclass('public.of_mass_message') as name",
+    );
+    if (present.rows[0]?.name) {
+      await pool.query(
+        `delete from of_mass_message
+         where creator_id = $1
+            or idempotency_key = $2
+            or id = any($3::text[])`,
+        [accountId, key, [draftId, `${draftId}-b`]],
+      );
+      const leftBehind = await pool.query<{ total: number }>(
+        `select count(*)::int as total from of_mass_message
+         where creator_id = $1 or idempotency_key = $2 or id = any($3::text[])`,
+        [accountId, key, [draftId, `${draftId}-b`]],
+      );
+      assert.equal(Number(leftBehind.rows[0]?.total), 0);
+    }
     await pool.end();
   }
 });

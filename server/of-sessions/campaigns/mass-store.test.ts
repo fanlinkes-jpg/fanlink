@@ -168,6 +168,14 @@ test("el borrador se guarda y se vuelve a leer, y el dry-run sigue sin enviar", 
       () => updateMassStatus(sql, "mass-1", "sent", CHATTER),
       MassTransitionError,
     );
+    await assert.rejects(
+      () => saveMassDraft(sql, composed.draft, OWNER, { token: "nunca" }),
+      (error: unknown) => {
+        assert.ok(error instanceof MassTransitionError);
+        assert.match(error.message, /No hay confirmación abierta/);
+        return true;
+      },
+    );
     const opened = await openMassLaunch(sql, {
       draftId: "mass-1",
       actor: OWNER,

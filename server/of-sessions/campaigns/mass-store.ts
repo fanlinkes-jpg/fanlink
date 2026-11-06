@@ -335,7 +335,7 @@ function launchMiss(
 ): string | null {
   if (!row) return "No está el masivo.";
   if (row.status === "sent") return "El token ya se consumió.";
-  if (row.launch_token_hash == null) return null;
+  if (row.launch_token_hash == null) return "No hay confirmación abierta.";
   if (row.launch_issued_by !== adminId) {
     return "El token lo tiene que usar el admin que lo pidió.";
   }
