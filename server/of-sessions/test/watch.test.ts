@@ -27,12 +27,11 @@ test("sin socket solo se recarga el hilo pasado el mínimo de 15 s", async () =>
     target: () => accountTarget([{ threadKey: "7", watchers: 1 }]),
     open: async () => session,
     save: async () => undefined,
-    onBlock: () => undefined,
+    onBlock: () => 15_000,
     now: () => now,
     sleep: async (ms) => {
       now += ms;
     },
-    blockMs: 15_000,
   });
   await task;
   assert.equal(gotos[0]?.url, "https://onlyfans.com/my/chats");
@@ -108,6 +107,38 @@ test("el respaldo rota por watchers, con 15 s por hilo y tope de 8", () => {
   }
   assert.equal(seen.has(outside ?? ""), false);
   assert.equal(seen.size, MAX_FALLBACK_THREADS);
+});
+
+test("un 429 no reabre la pestaña antes de la pausa que devuelve el backoff", async () => {
+  let now = 0;
+  let calls = 0;
+  const gotos: number[] = [];
+  const session: WatchSession = {
+    async goto() {
+      calls += 1;
+      gotos.push(now);
+      return calls === 1 ? 429 : 200;
+    },
+    listen() {
+      return undefined;
+    },
+    async close() {
+      return undefined;
+    },
+  };
+  await runInboxWatch({
+    stopped: () => now > 70_000,
+    target: () => accountTarget([{ threadKey: "7", watchers: 1 }]),
+    open: async () => session,
+    save: async () => undefined,
+    onBlock: () => 60_000,
+    now: () => now,
+    sleep: async (ms) => {
+      now += ms;
+    },
+  });
+  assert.deepEqual(gotos.filter((at) => at < 60_000), [0]);
+  assert.ok((gotos[1] ?? 0) >= 60_000);
 });
 
 function accountTarget(threads: WatchTarget["threads"]): WatchTarget {

@@ -161,6 +161,7 @@ export function kickInboxWatch(): void {
     onBlock: (accountId, reason) => {
       const delay = noteAccountBlock(accountId, reason);
       console.info(`[fanlink:chat] escucha pausada cuenta=${accountId} motivo=${reason} espera=${delay}`);
+      return delay;
     },
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
