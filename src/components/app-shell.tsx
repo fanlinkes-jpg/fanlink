@@ -282,7 +282,7 @@ function ShellFrame({
 }) {
 
   return (
-    <div className="flex h-dvh bg-bg text-fg">
+    <div className="flex h-dvh overflow-hidden bg-bg text-fg">
       <aside className="relative z-50 hidden w-14 shrink-0 flex-col items-center gap-1 border-r border-line bg-surface py-3 md:flex">
         <Logo className="mb-2" />
         <Link
@@ -340,7 +340,7 @@ function ShellFrame({
         </div>
       )}
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex items-center gap-2 bg-[#1d2433] px-2 py-1.5 text-white">
           <button className="rounded-md p-2 md:hidden" onClick={() => setMobile(true)} aria-label="Abrir menú">
             <Menu className="h-4 w-4" />
@@ -397,16 +397,18 @@ function ShellFrame({
             className="hidden w-28 rounded-lg border border-white/15 bg-white/10 px-2 py-1 text-xs placeholder:text-white/50 lg:block"
           />
         </header>
-        <main className={cn("min-h-0 flex-1", bleed ? "overflow-hidden" : "overflow-auto pb-16 md:pb-0")}>
+        <main className={cn("flex min-h-0 flex-1 flex-col", bleed ? "overflow-hidden" : "overflow-auto pb-16 md:pb-0")}>
           {teamAccess.devMode && (
-            <p className="bg-[#fff6e8] px-4 py-2 text-xs text-[#8a5a12]">Modo local de un solo operador. Solo vale en localhost y no aísla a un equipo.</p>
+            <p className="shrink-0 bg-[#fff6e8] px-4 py-2 text-xs text-[#8a5a12]">Modo local de un solo operador. Solo vale en localhost y no aísla a un equipo.</p>
           )}
-          {workspaceNotice && <p className="bg-amber-50 px-4 py-2 text-xs text-amber-800">{workspaceNotice}</p>}
-          {currentOk ? children : (
-            <div className="grid h-full place-items-center p-6 text-center">
-              <p className="text-sm text-muted">{teamAccess.displayName} no tiene acceso a esta sección.</p>
-            </div>
-          )}
+          {workspaceNotice && <p className="shrink-0 bg-amber-50 px-4 py-2 text-xs text-amber-800">{workspaceNotice}</p>}
+          <div className={bleed ? "min-h-0 flex-1 overflow-hidden" : "shrink-0"}>
+            {currentOk ? children : (
+              <div className="grid h-full place-items-center p-6 text-center">
+                <p className="text-sm text-muted">{teamAccess.displayName} no tiene acceso a esta sección.</p>
+              </div>
+            )}
+          </div>
         </main>
         <nav className="fixed inset-x-0 bottom-0 z-30 flex border-t border-line bg-surface md:hidden">
           <Link to="/" className="flex flex-1 flex-col items-center py-2 text-xs text-muted"><Home className="h-4 w-4" />Inicio</Link>
