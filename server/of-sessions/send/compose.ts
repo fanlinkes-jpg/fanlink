@@ -119,7 +119,7 @@ export async function composeChat(context: BrowserContext, request: ComposeReque
     if ((request.typeDelayMs ?? 1) > 0) await delay(280 + Math.floor(Math.random() * 220));
     console.info(`[fanlink:send] click disabled=${enabled ? "no" : "si"} dom=${beforeDom}`);
     if (enabled) await send.click({ timeout: 5_000 }).catch(() => undefined);
-    const settleMs = request.settleMs ?? 3_000;
+    const settleMs = request.settleMs ?? 12_000;
     const first = await watchSend(roleBox, page, payloads, before, request, beforeDom, settleMs);
     const afterDom = await messageCount(page);
     console.info(`[fanlink:send] despues caracteres=${(await boxText(roleBox)).length} dom=${afterDom} antes=${beforeDom}`);
