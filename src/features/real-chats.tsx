@@ -6,7 +6,6 @@ import { sessionErrorText } from "@/lib/use-creator-sessions";
 import { useOfReads } from "@/lib/use-of-reads";
 
 export function RealChatsPage() {
-  const creators = useCrm((s) => s.creators);
   const creatorId = useCrm((s) => s.creatorId);
   const crmFans = useCrm((s) => s.fans);
   const teamAccess = useCrm((s) => s.teamAccess);
@@ -64,8 +63,8 @@ export function RealChatsPage() {
                 >
                   <span className="block font-medium">{thread.fanName ?? thread.fanHandle ?? "Fan"}</span>
                   <span className="block truncate text-xs text-[#6d7585]">
-                    {creators.find((creator) => creator.id === thread.creatorId)?.name ?? thread.creatorId}
-                    {thread.excerpt ? ` · ${thread.excerpt}` : ""}
+                    {previewLabel(thread)}
+                    {thread.excerpt ? `${previewLabel(thread) ? " · " : ""}${thread.excerpt}` : ""}
                   </span>
                 </button>
               </li>
@@ -84,6 +83,7 @@ export function RealChatsPage() {
                   fanKey={selected.fanKey}
                   fanHandle={selected.fanHandle}
                   fanName={selected.fanName}
+                  threadSpend={selected}
                   reads={reads.byCreator}
                   crmFans={crmFans}
                   ppvSynced={meta?.status === "ok"}
@@ -139,11 +139,18 @@ const SEGMENT_LABEL: Record<"whale" | "risk" | "asleep" | "new", string> = {
   new: "nuevo",
 };
 
+function previewLabel(thread: { lastFromFan: boolean | null; fanName: string | null }): string {
+  if (thread.lastFromFan === true) return thread.fanName ?? "Fan";
+  if (thread.lastFromFan === false) return "Tú";
+  return "";
+}
+
 function FanFacts({
   creatorId,
   fanKey,
   fanHandle,
   fanName,
+  threadSpend,
   reads,
   crmFans,
   ppvSynced,
@@ -152,6 +159,13 @@ function FanFacts({
   fanKey: string | null;
   fanHandle: string | null;
   fanName: string | null;
+  threadSpend: {
+    spentCents: number | null;
+    subscribesCents: number | null;
+    tipsCents: number | null;
+    postsCents: number | null;
+    messagesCents: number | null;
+  };
   reads: Map<string, CreatorReadView>;
   crmFans: Array<{ creatorId: string; handle: string; name: string; notes: string }>;
   ppvSynced: boolean;
@@ -179,11 +193,18 @@ function FanFacts({
         ppv: [],
       })[0]
     : null;
-  const spend = profile?.ltvCents ?? ofFan?.spentCents ?? null;
+  const spend = threadSpend.spentCents ?? profile?.ltvCents ?? ofFan?.spentCents ?? null;
   const segments = profile?.segments.map((segment) => SEGMENT_LABEL[segment]) ?? [];
+  const parts = [
+    ["suscripciones", threadSpend.subscribesCents],
+    ["propinas", threadSpend.tipsCents],
+    ["posts", threadSpend.postsCents],
+    ["mensajes", threadSpend.messagesCents],
+  ].filter((part): part is [string, number] => part[1] != null);
   return (
     <p className="text-xs text-[#6d7585]">
       Gasto {spend == null ? "Sin datos" : `${(spend / 100).toFixed(2)} USD`}
+      {parts.length ? ` (${parts.map(([label, cents]) => `${label} ${(cents / 100).toFixed(2)}`).join(", ")})` : ""}
       {" · "}
       Segmento {segments.length ? segments.join(", ") : "Sin datos"}
       {" · "}

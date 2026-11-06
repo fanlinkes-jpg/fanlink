@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { createSessionRuntime } from "../runtime.ts";
-import { applyUserDirectory, chatFailureReason, chatIntervalMinFromEnv, classifyChatPath, mergeMessages, mergeThreads, newFanEvents, parseChatList, parseChatMessages, parseUsersDirectory } from "../sync/chats.ts";
+import { applyAccountId, applyUserDirectory, chatFailureReason, chatIntervalMinFromEnv, chatPageUrl, classifyChatPath, mergeMessages, mergeThreads, newFanEvents, parseChatList, parseChatMessages, parsePreviewMessages, parseUsersDirectory, previewSender, threadsToOpen } from "../sync/chats.ts";
 import { preferOutcome } from "../sync/parse.ts";
 import { shapeSummary } from "../sync/shape.ts";
 import { saveChatRead } from "../sync/chat-store.ts";
@@ -108,6 +108,79 @@ test("suma todas las respuestas de chats y completa el nombre con users/list", (
   assert.equal(preferOutcome("changed", "ok"), "ok");
 });
 
+test("el último mensaje abre el hilo y el gasto sale de la ficha, sin inventarlo", () => {
+  const accountId = "42";
+  const payload = {
+    list: [
+      {
+        withUser: {
+          id: 9,
+          subscribedOnData: { totalSumm: 12.5, subscribesSum: 10, tipsSumm: 2.5, postsSumm: 0, messagesSumm: 0 },
+        },
+        unreadMessagesCount: 1,
+        canSendMessage: true,
+        lastMessage: {
+          id: 501,
+          text: "<p>hola angela</p>",
+          createdAt: "2026-11-05T12:00:00+00:00",
+          fromUser: { id: 9 },
+          price: 0,
+          isFree: true,
+        },
+      },
+      {
+        withUser: { id: 3 },
+        unreadMessagesCount: 0,
+        lastMessage: {
+          id: 502,
+          text: "te escribo yo",
+          createdAt: "2026-11-05T12:05:00.000Z",
+          fromUser: { id: 42 },
+        },
+      },
+    ],
+    hasMore: false,
+  };
+  const named = applyUserDirectory(parseChatList(payload, accountId), parseUsersDirectory({
+    "9": { id: 9, username: "angela", name: "Angela", avatar: "https://cdn.example/no-guardar.jpg" },
+    "3": { id: 3, name: "Otra" },
+  }));
+  const angela = named.find((row) => row.threadKey === "9");
+  const mine = named.find((row) => row.threadKey === "3");
+  assert.equal(angela?.fanName, "Angela");
+  assert.equal(angela?.spentCents, 1250);
+  assert.equal(angela?.subscribesCents, 1000);
+  assert.equal(angela?.tipsCents, 250);
+  assert.equal(angela?.postsCents, 0);
+  assert.equal(previewSender(angela ?? { lastFromFan: null, fanName: null }), "Angela");
+  assert.equal(previewSender(mine ?? { lastFromFan: null, fanName: null }), "Tú");
+  assert.equal(JSON.stringify(named).includes("no-guardar"), false);
+  const previews = parsePreviewMessages(payload, accountId);
+  assert.equal(previews.find((row) => row.threadKey === "9")?.body, "hola angela");
+  assert.equal(previews.find((row) => row.threadKey === "9")?.fromFan, true);
+  assert.equal(previews.find((row) => row.threadKey === "9")?.fromUserId, "9");
+  assert.equal(previews.find((row) => row.threadKey === "3")?.fromFan, false);
+  const filled = parseChatMessages({
+    list: [
+      { id: 501, text: "<p>hola angela</p>", createdAt: "2026-11-05T12:00:00+00:00", fromUser: { id: 9 } },
+      { id: 503, text: "segundo", createdAt: "2026-11-05T12:01:00.000Z", fromUser: { id: 42 } },
+    ],
+    hasMore: false,
+  }, "9", "9", accountId);
+  const threadMessages = mergeMessages(previews.filter((row) => row.threadKey === "9"), filled);
+  assert.equal(threadMessages.length, 2);
+  assert.equal(threadMessages.find((row) => row.messageKey === "503")?.fromFan, false);
+  assert.equal(chatPageUrl("https://onlyfans.com/my/chats", "9", "onlyfans"), "https://onlyfans.com/my/chats/chat/9");
+  const opened = threadsToOpen([
+    { ...named[0]!, unread: 0, lastMessageAt: "2026-11-05T18:00:00.000Z" },
+    { ...named[1]!, unread: 2, lastMessageAt: "2026-11-05T10:00:00.000Z" },
+  ]);
+  assert.equal(opened[0]?.unread, 2);
+  const bare = parseChatList({ list: [{ withUser: { id: 1 }, unreadMessagesCount: 0, lastMessage: { id: 1, text: "x", createdAt: "2026-11-05T10:00:00.000Z", fromUser: { id: 1 } } }] }, accountId);
+  assert.equal(bare[0]?.spentCents, null);
+  assert.equal(applyAccountId(bare, [], accountId).threads[0]?.lastFromFan, true);
+});
+
 test("el simulador entrega el chat y solo avisa de mensajes nuevos", { timeout: 60_000 }, async () => {
   const dataDir = await tempDataDir();
   const fixture = await startFixture();
@@ -121,7 +194,7 @@ test("el simulador entrega el chat y solo avisa de mensajes nuevos", { timeout: 
   const pg = new PGlite();
   const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../migrations");
   try {
-    for (const name of ["0007_of_reads.sql", "0008_sync_schedule.sql", "0009_of_chats.sql", "0013_chat_price.sql"]) {
+    for (const name of ["0007_of_reads.sql", "0008_sync_schedule.sql", "0009_of_chats.sql", "0013_chat_price.sql", "0018_chat_preview.sql"]) {
       await pg.exec(await readFile(path.join(dir, name), "utf8"));
     }
     const sql: ReadSql = {

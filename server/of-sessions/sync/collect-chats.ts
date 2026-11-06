@@ -3,8 +3,10 @@ import { isCurrentUserResponseUrl, isLoginChallengeUrl, jsonUrlWithoutSecrets, u
 import { messages } from "../messages.ts";
 import type { SiteAdapter } from "../sessions/site.ts";
 import {
+  applyAccountId,
   applyUserDirectory,
   chatFailureReason,
+  chatPageUrl,
   classifyChatPath,
   isUsersDirectoryUrl,
   mergeMessages,
@@ -13,7 +15,9 @@ import {
   parseChatDom,
   parseChatList,
   parseChatMessages,
+  parsePreviewMessages,
   parseUsersDirectory,
+  threadsToOpen,
   type ChatMessage,
   type ChatThread,
   type ChatUser,
@@ -58,6 +62,7 @@ export async function collectChats(
     chatShape: null as string | null,
     messageShape: null as string | null,
     userShape: null as string | null,
+    accountId: null as string | null,
   };
   const pending: Promise<void>[] = [];
   const onResponse = (response: { url(): string; status(): number; headers(): Record<string, string>; text(): Promise<string> }) => {
@@ -84,13 +89,14 @@ export async function collectChats(
       await openChat(page, site.chatsUrl, options, notes, pending, site, () => chatsReady(notes));
       logSection("chat", "chats", page.url(), notes.listUrl, notes.threads.length);
     }
-    const threads = notes.threads.slice(0, 2);
+    const threads = threadsToOpen(notes.threads);
     const threadBudget = site.id === "onlyfans" ? 10_000 : options.waitMs;
     for (const thread of threads) {
       if (notes.redirected || notes.pageLogin || notes.loginRequired) break;
-      notes.messageOutcome = "pending";
-      const url = threadUrl(site.chatsUrl, thread.threadKey);
-      const before = notes.messages.length;
+      resetMessageRead(notes);
+      const url = chatPageUrl(site.chatsUrl, thread.threadKey, site.id);
+      const before = notes.messages.filter((message) => message.threadKey === thread.threadKey).length;
+      await delay(options.paceMs);
       await openChat(
         page,
         url,
@@ -98,10 +104,14 @@ export async function collectChats(
         notes,
         pending,
         site,
-        () => notes.messages.length > before,
+        () => notes.messages.filter((message) => message.threadKey === thread.threadKey).length > before,
         threadBudget,
       );
-      logSection("chat", "mensajes", page.url(), notes.messageUrl, notes.messages.length - before);
+      const count = notes.messages.filter((message) => message.threadKey === thread.threadKey).length;
+      console.info(`[fanlink:chat] mensajes chat=${thread.threadKey} registros=${count}`);
+      if (notes.messageOutcome === "changed" && notes.messageShape) {
+        console.info(`[fanlink:chat] forma mensajes chat=${thread.threadKey} ${notes.messageShape}`);
+      }
     }
     if (notes.threads.length === 0 && notes.outcome === "pending") {
       const markers = await page.evaluate(readChatMarkers).catch(() => null);
@@ -113,7 +123,6 @@ export async function collectChats(
       }
     }
     logUnparsed("chat", "chats", notes.outcome, notes.chatShape);
-    logUnparsed("chat", "mensajes", notes.messageOutcome, notes.messageShape);
     if (!notes.sawDirectory && notes.userShape) console.info(`[fanlink:chat] forma usuarios ${notes.userShape}`);
     const loginRequired = site.id === "onlyfans" && !notes.sawLoggedIn && (notes.loginRequired || notes.redirected);
     const reason = loginRequired
@@ -190,6 +199,7 @@ async function observe(
     chatShape: string | null;
     messageShape: string | null;
     userShape: string | null;
+    accountId: string | null;
     loginRequired: boolean;
     sawLoggedIn: boolean;
   },
@@ -213,6 +223,12 @@ async function observe(
         if (verdict.kind === "logged_in") {
           notes.sawLoggedIn = true;
           notes.loginRequired = false;
+          if (verdict.identity.userId) {
+            notes.accountId = verdict.identity.userId;
+            const refreshed = applyAccountId(notes.threads, notes.messages, notes.accountId);
+            notes.threads = refreshed.threads;
+            notes.messages = refreshed.messages;
+          }
         } else if (verdict.kind === "guest") {
           notes.sawLoggedIn = false;
           notes.loginRequired = true;
@@ -247,17 +263,19 @@ async function observe(
     }
     const parsed = JSON.parse(raw) as unknown;
     if (kind === "list") {
-      const threads = parseChatList(parsed);
+      const threads = parseChatList(parsed, notes.accountId);
+      const previews = parsePreviewMessages(parsed, notes.accountId);
       if (threads.length) {
         if (notes.threadsSeenAt == null) notes.threadsSeenAt = Date.now();
         notes.threads = applyUserDirectory(mergeThreads(notes.threads, threads), notes.users);
       }
+      if (previews.length) notes.messages = mergeMessages(notes.messages, previews);
       rememberChat(notes, kind, safe, outcomeFromParsed(threads.length, parsed), parsed);
       return;
     }
     const threadKey = threadKeyFromUrl(url) ?? notes.threads[0]?.threadKey ?? "chat";
     const fanKey = notes.threads.find((thread) => thread.threadKey === threadKey)?.fanKey ?? notes.threads[0]?.fanKey ?? null;
-    const messages = parseChatMessages(parsed, threadKey, fanKey);
+    const messages = parseChatMessages(parsed, threadKey, fanKey, notes.accountId);
     if (messages.length) notes.messages = mergeMessages(notes.messages, messages);
     rememberChat(notes, kind, safe, outcomeFromParsed(messages.length, parsed), parsed);
   } catch {
@@ -266,6 +284,11 @@ async function observe(
     if (kind === "other") return;
     rememberChat(notes, kind, jsonUrlWithoutSecrets(url), "changed", null);
   }
+}
+
+function resetMessageRead(notes: { messageOutcome: SectionOutcome; messageShape: string | null }): void {
+  notes.messageOutcome = "pending";
+  notes.messageShape = null;
 }
 
 function chatsReady(notes: { threads: ChatThread[]; sawDirectory: boolean; threadsSeenAt: number | null }): boolean {
@@ -328,10 +351,6 @@ export function readChatMarkers(): {
     });
   }
   return { threads: threads.slice(0, 20), messages: messages.slice(0, 40) };
-}
-
-function threadUrl(listUrl: string, threadKey: string): string {
-  return `${listUrl.replace(/\/+$/, "")}/${encodeURIComponent(threadKey)}`;
 }
 
 function threadKeyFromUrl(url: string): string | null {

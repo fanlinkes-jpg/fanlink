@@ -129,6 +129,12 @@ export type CreatorChatList = {
     lastMessageAt: string | null;
     excerpt: string | null;
     unread: number;
+    lastFromFan: boolean | null;
+    spentCents: number | null;
+    subscribesCents: number | null;
+    tipsCents: number | null;
+    postsCents: number | null;
+    messagesCents: number | null;
   }>;
   messages: Array<{
     creatorId: string;

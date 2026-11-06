@@ -38,8 +38,9 @@ export async function saveChatRead(
     for (const thread of read.threads) {
       await sql.query(
         `insert into of_chat_thread (
-           creator_id, thread_key, fan_key, fan_handle, fan_name, last_message_at, excerpt, unread, synced_at, origin
-         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+           creator_id, thread_key, fan_key, fan_handle, fan_name, last_message_at, excerpt, unread, synced_at, origin,
+           last_from_fan, spent_cents, subscribes_cents, tips_cents, posts_cents, messages_cents
+         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
          on conflict (creator_id, thread_key) do update set
            fan_key = excluded.fan_key,
            fan_handle = excluded.fan_handle,
@@ -47,7 +48,13 @@ export async function saveChatRead(
            last_message_at = excluded.last_message_at,
            excerpt = excluded.excerpt,
            unread = excluded.unread,
-           synced_at = excluded.synced_at`,
+           synced_at = excluded.synced_at,
+           last_from_fan = excluded.last_from_fan,
+           spent_cents = excluded.spent_cents,
+           subscribes_cents = excluded.subscribes_cents,
+           tips_cents = excluded.tips_cents,
+           posts_cents = excluded.posts_cents,
+           messages_cents = excluded.messages_cents`,
         [
           creatorId,
           thread.threadKey,
@@ -59,6 +66,12 @@ export async function saveChatRead(
           thread.unread,
           syncedAt,
           ORIGIN,
+          thread.lastFromFan,
+          thread.spentCents,
+          thread.subscribesCents,
+          thread.tipsCents,
+          thread.postsCents,
+          thread.messagesCents,
         ],
       );
     }
@@ -129,7 +142,8 @@ export async function listChats(
   if (!creatorIds.length) return { threads: [], messages: [], meta: [] };
   const filter = creatorIds.map((_, index) => `$${index + 1}`).join(", ");
   const threads = await sql.query<ThreadRow>(
-    `select creator_id, thread_key, fan_key, fan_handle, fan_name, last_message_at, excerpt, unread, synced_at
+    `select creator_id, thread_key, fan_key, fan_handle, fan_name, last_message_at, excerpt, unread, synced_at,
+            last_from_fan, spent_cents, subscribes_cents, tips_cents, posts_cents, messages_cents
      from of_chat_thread where creator_id in (${filter})
      order by last_message_at desc nulls last`,
     creatorIds,
@@ -155,6 +169,13 @@ export async function listChats(
       lastMessageAt: iso(row.last_message_at),
       excerpt: row.excerpt,
       unread: Number(row.unread ?? 0),
+      lastFromUserId: null,
+      lastFromFan: flagOrNull(row.last_from_fan),
+      spentCents: centsOrNull(row.spent_cents),
+      subscribesCents: centsOrNull(row.subscribes_cents),
+      tipsCents: centsOrNull(row.tips_cents),
+      postsCents: centsOrNull(row.posts_cents),
+      messagesCents: centsOrNull(row.messages_cents),
       syncedAt: iso(row.synced_at) ?? "",
     })),
     messages: messages.map((row) => ({
@@ -167,6 +188,7 @@ export async function listChats(
       sentAt: iso(row.sent_at) ?? "",
       priceCents: row.price_cents == null ? null : Number(row.price_cents),
       purchased: row.purchased == null ? null : row.purchased === true || row.purchased === "t" || row.purchased === "true",
+      fromUserId: null,
       syncedAt: iso(row.synced_at) ?? "",
     })),
     meta: meta.map((row) => ({
@@ -204,6 +226,12 @@ type ThreadRow = {
   excerpt: string | null;
   unread: number | string | null;
   synced_at: Date | string;
+  last_from_fan: boolean | string | null;
+  spent_cents: number | string | null;
+  subscribes_cents: number | string | null;
+  tips_cents: number | string | null;
+  posts_cents: number | string | null;
+  messages_cents: number | string | null;
 };
 
 type MessageRow = {
@@ -234,6 +262,19 @@ function iso(value: Date | string | null | undefined): string | null {
   const parsed = new Date(String(value));
   if (Number.isNaN(parsed.getTime())) return String(value);
   return parsed.toISOString();
+}
+
+function flagOrNull(value: boolean | string | null): boolean | null {
+  if (value == null) return null;
+  if (value === true || value === "t" || value === "true") return true;
+  if (value === false || value === "f" || value === "false") return false;
+  return null;
+}
+
+function centsOrNull(value: number | string | null): number | null {
+  if (value == null || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
 }
 
 function clean(value: string | null): string | null {

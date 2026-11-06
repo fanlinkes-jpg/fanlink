@@ -308,6 +308,12 @@ export async function listCreatorChatViews(userId: string): Promise<CreatorChatL
       lastMessageAt: thread.lastMessageAt,
       excerpt: thread.excerpt,
       unread: thread.unread,
+      lastFromFan: thread.lastFromFan,
+      spentCents: thread.spentCents,
+      subscribesCents: thread.subscribesCents,
+      tipsCents: thread.tipsCents,
+      postsCents: thread.postsCents,
+      messagesCents: thread.messagesCents,
     })),
     messages: stored.messages.map((message) => ({
       creatorId: message.creatorId,
