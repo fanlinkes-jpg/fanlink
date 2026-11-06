@@ -179,6 +179,7 @@ test("dos conexiones no deshacen el emparejamiento si chocan en el mismo mensaje
     const right = await pool.connect();
     held.push(right);
     const claimInTx = async (client: pg.PoolClient, draftId: string): Promise<boolean> => {
+      await client.query("set statement_timeout = '8s'");
       await client.query("begin");
       try {
         const ok = await claimOutboundMatch(clientSql(client), creatorId, draftId, messageKey);
@@ -194,7 +195,7 @@ test("dos conexiones no deshacen el emparejamiento si chocan en el mismo mensaje
       claimInTx(right, rightId),
     ]);
     assert.equal([first, second].filter(Boolean).length, 1);
-    const kept = await pool.query<{ total: number }>(
+    const kept = await left.query<{ total: number }>(
       "select count(*)::int as total from of_chat_outbound where creator_id = $1 and matched_message_key = $2",
       [creatorId, messageKey],
     );
