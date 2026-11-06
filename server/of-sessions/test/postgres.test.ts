@@ -12,8 +12,11 @@ test("las migraciones aplican en Postgres cuando hay DATABASE_URL", async (t) =>
   try {
     const applied = await pool.query<{ name: string }>("select name from _migrations order by name");
     const names = applied.rows.map((row) => row.name);
+    assert.equal(names.includes("0001_auth.sql"), true);
     assert.equal(names.includes("0012_extended_read.sql"), true);
     assert.equal(names.includes("0016_campaign_results.sql"), true);
+    assert.equal(names.includes("0020_chat_card.sql"), true);
+    assert.equal(names.includes("0027_mass_messages.sql"), true);
     assert.equal(names.includes("0028_message_media.sql"), true);
     assert.equal(names.includes("0029_vault_media.sql"), true);
     assert.equal(names.includes("0030_outbound_media.sql"), true);
