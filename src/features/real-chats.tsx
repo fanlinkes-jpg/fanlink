@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { listCreatorChats, recordChatOutbound, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList, type CreatorReadView } from "@/lib/of-sessions";
 import { campaignSendFlag } from "@/lib/of-campaigns";
 import { useCrm } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
 import { useOfReads } from "@/lib/use-of-reads";
 import { FanInsights } from "@/features/fan-insights";
-import { FULL_EMOJIS, QUICK_EMOJIS, emojiRows, matchScripts, slashQuery } from "@/lib/composer-tools";
+import { FULL_EMOJIS, QUICK_EMOJIS, emojiRows, matchScripts, mentionToken, slashQuery, wrapSelection } from "@/lib/composer-tools";
 
 export function RealChatsPage() {
   const creators = useCrm((s) => s.creators);
@@ -31,6 +31,7 @@ export function RealChatsPage() {
   const [pendingOut, setPendingOut] = useState<Array<{ id: string; creatorId: string; threadKey: string; body: string; scheduledAt: string | null; authorName: string | null }>>([]);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [scheduleAt, setScheduleAt] = useState("");
+  const draftBox = useRef<HTMLTextAreaElement>(null);
 
   async function refresh() {
     try {
@@ -269,8 +270,21 @@ export function RealChatsPage() {
                 <button type="button" className="rounded px-2 py-0.5 text-xs text-[#2456c7]" onClick={() => setEmojiOpen((open) => !open)}>{emojiOpen ? "Cerrar emojis" : "Más emojis"}</button>
               </div>
               <div className="flex flex-wrap items-end gap-2">
-                <textarea value={draft} onChange={(event) => setDraft(event.target.value)} rows={2} placeholder="Escribe un mensaje" className="min-h-12 min-w-48 flex-1 resize-none rounded-xl border border-[#e6e8ee] px-3 py-2 text-sm" />
+                <textarea ref={draftBox} value={draft} onChange={(event) => setDraft(event.target.value)} rows={2} placeholder="Escribe un mensaje" className="min-h-12 min-w-48 flex-1 resize-none rounded-xl border border-[#e6e8ee] px-3 py-2 text-sm" />
                 <input value={draftPrice == null ? "" : (draftPrice / 100).toFixed(2)} onChange={(event) => setDraftPrice(event.target.value.trim() === "" ? null : Math.round(Number(event.target.value) * 100))} placeholder="Precio $" aria-label="Precio" className="h-10 w-24 rounded-xl border border-[#e6e8ee] px-2 text-sm" />
+              </div>
+              <div className="mt-1 flex items-center gap-1 overflow-x-auto text-xs">
+                <button type="button" disabled title="Envío real desactivado" className="shrink-0 rounded border border-[#e6e8ee] px-2 py-1 text-[#b0b6c2]">Almacén</button>
+                <button type="button" disabled title="Envío real desactivado" className="shrink-0 rounded border border-[#e6e8ee] px-2 py-1 text-[#b0b6c2]">GIF</button>
+                <button type="button" disabled title="Envío real desactivado" className="shrink-0 rounded border border-[#e6e8ee] px-2 py-1 text-[#b0b6c2]">Galería</button>
+                <span className="shrink-0 rounded bg-[#fff6e8] px-2 py-1 text-[#8a5a12]">{draftPrice == null ? "PPV" : `PPV $${(draftPrice / 100).toFixed(2)}`}</span>
+                <button type="button" className="shrink-0 rounded border border-[#e6e8ee] px-2 py-1" onClick={() => setDraft((value) => `${value}${mentionToken(selected?.fanHandle ?? null)}`)}>@</button>
+                <button type="button" aria-label="Formato" className="shrink-0 rounded border border-[#e6e8ee] px-2 py-1" onClick={() => {
+                  const node = draftBox.current;
+                  const next = wrapSelection(draft, node?.selectionStart ?? draft.length, node?.selectionEnd ?? draft.length, "*");
+                  setDraft(next.value);
+                }}>Aa</button>
+                <button type="button" disabled title="Sin datos" className="shrink-0 rounded border border-[#e6e8ee] px-2 py-1 text-[#b0b6c2]">Traducción</button>
                 <button
                   type="button"
                   disabled={!draft.trim()}
@@ -295,11 +309,11 @@ export function RealChatsPage() {
                       setError(sessionErrorText(err));
                     });
                   }}
-                  className="rounded-full border border-[#e6e8ee] px-4 py-2 text-sm disabled:opacity-50"
+                  className="shrink-0 rounded-full border border-[#e6e8ee] px-3 py-1 disabled:opacity-50"
                 >
                   Dejar pendiente
                 </button>
-                <button type="button" disabled title="Envío real desactivado" aria-label="Enviar" className="shrink-0 rounded-full bg-[#d7dbe3] px-4 py-2 text-sm text-white">
+                <button type="button" disabled title="Envío real desactivado" aria-label="Enviar" className="shrink-0 rounded-full bg-[#d7dbe3] px-3 py-1 text-white">
                   {sendEnabled ? "Enviar" : "Envío real desactivado"}
                 </button>
               </div>
