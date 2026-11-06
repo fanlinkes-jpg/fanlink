@@ -11,12 +11,29 @@ import { useCreatorSessions } from "@/lib/use-creator-sessions";
 import { useOfReads } from "@/lib/use-of-reads";
 import type { CreatorEarningView, CreatorReadView } from "@/lib/of-sessions";
 import { changeRatio, creatorReport, type MetricPeriod } from "@/lib/creator-metrics";
+import { fanProfiles, rankFans } from "@/lib/fan-metrics";
+import { listCreatorChats } from "@/lib/of-sessions";
 import { PLATFORMS } from "@/features/growth-pages";
 import { Badge, Button, Field, Panel, Select } from "@/components/ui";
 
 export function AnalyticsPage() {
   const [view, setView] = useState<"creadoras" | "equipo" | "fans">("creadoras");
   const [period, setPeriod] = useState<MetricPeriod>("month");
+  const [ppvSynced, setPpvSynced] = useState(false);
+  const [ppvRows, setPpvRows] = useState<Array<{ creatorId: string; fanKey: string | null; priceCents: number | null; purchased: boolean | null }>>([]);
+  useEffect(() => {
+    void listCreatorChats()
+      .then((data) => {
+        setPpvRows(data.messages.map((message) => ({
+          creatorId: message.creatorId,
+          fanKey: message.fanKey,
+          priceCents: message.priceCents,
+          purchased: message.purchased,
+        })));
+        setPpvSynced(true);
+      })
+      .catch(() => setPpvSynced(false));
+  }, []);
   const creators = useCrm((s) => s.creators);
   const employees = useCrm((s) => s.employees);
   const messages = useCrm((s) => s.messages);
@@ -28,11 +45,6 @@ export function AnalyticsPage() {
   const recent = messages.filter((m) => isLast24h(m.at) && m.from === "team" && m.status === "enviado" && !m.unsent);
   const report = owner ? scopedReport(scopedCreators.map((c) => c.id), reads.byCreator, period) : null;
   const chart = report?.series.map((point) => ({ day: point.label, amountCents: point.grossCents, currency: "USD" })) ?? [];
-  const fanRows = scopedCreators.flatMap((creator) => {
-    const read = reads.byCreator.get(creator.id);
-    if (!read?.fansSyncedAt) return [];
-    return read.fans.map((fan) => ({ ...fan, creatorName: creator.name, creatorId: creator.id }));
-  });
 
   return (
     <div className="space-y-4 p-4 md:p-6">
@@ -145,26 +157,27 @@ export function AnalyticsPage() {
       )}
 
       {view === "fans" && (
-        <div className="overflow-x-auto rounded-lg border border-line">
-          <table className="w-full min-w-[640px] text-left text-sm">
-            <thead className="bg-surface text-xs text-muted">
-              <tr>{["Fan", "Creadora", "Suscripción", "Estado", "Gastado"].map((h) => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr>
-            </thead>
-            <tbody>
-              {fanRows.length === 0 ? (
-                <tr><td colSpan={5} className="px-3 py-8 text-center text-muted">Sin sincronizar</td></tr>
-              ) : fanRows.map((fan) => (
-                <tr key={`${fan.creatorId}:${fan.fanKey}`} className="border-t border-line">
-                  <td className="px-3 py-3">{fan.displayName ?? fan.handle ?? fan.ofUserId}<div className="text-xs text-muted">{fan.handle ? `@${fan.handle}` : fan.ofUserId}</div></td>
-                  <td className="px-3 py-3">{fan.creatorName}</td>
-                  <td className="px-3 py-3 text-xs">{fan.subscribedAt?.slice(0, 10) ?? "—"}</td>
-                  <td className="px-3 py-3">{fan.status === "active" ? "Activo" : "Expirado"}</td>
-                  <td className="px-3 py-3 tabular-nums">{fan.spentCents == null ? "—" : centsLabel(fan.spentCents, "USD")}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <FanBoard
+          rows={scopedCreators.flatMap((creator) => {
+            const read = reads.byCreator.get(creator.id);
+            if (!read?.fansSyncedAt) return [];
+            return rankFans(fanProfiles({
+              now: new Date(),
+              ppvSynced,
+              fans: read.fans.map((fan) => ({
+                fanKey: fan.fanKey,
+                name: fan.displayName ?? fan.handle,
+                status: fan.status,
+                subscribedAt: fan.subscribedAt,
+                renewAuto: fan.renewAuto,
+                spentCents: fan.spentCents,
+                lastInteractionAt: null,
+              })),
+              purchases: (read.transactions ?? []).map((tx) => ({ fanKey: tx.fanKey, occurredAt: tx.occurredAt, grossCents: tx.grossCents })),
+              ppv: ppvRows.filter((row) => row.creatorId === creator.id),
+            })).map((profile) => ({ ...profile, creatorName: creator.name }));
+          })}
+        />
       )}
     </div>
   );
@@ -469,6 +482,33 @@ function Metric({ label, value, hint }: { label: string; value: string; hint: st
       <p className="text-xs text-muted">{label}</p>
       <p className="mt-1 text-sm font-medium">{value}</p>
       <p className="text-xs text-muted">{hint}</p>
+    </div>
+  );
+}
+
+function FanBoard({ rows }: { rows: Array<{ fanKey: string; name: string | null; creatorName: string; ltvCents: number | null; spend30Cents: number | null; lastPurchaseAt: string | null; purchases30: number | null; ppvReceived: number | null; ppvBought: number | null; segments: string[] }> }) {
+  if (rows.length === 0) return <p className="rounded-lg border border-line px-4 py-8 text-sm text-muted">Sin sincronizar</p>;
+  return (
+    <div className="overflow-x-auto rounded-lg border border-line">
+      <table className="w-full min-w-[880px] text-left text-sm">
+        <thead className="bg-surface text-xs text-muted">
+          <tr>{["Fan", "Creadora", "LTV", "30 días", "Última compra", "Frecuencia", "PPV", "Segmento"].map((h) => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr>
+        </thead>
+        <tbody>
+          {rows.map((fan) => (
+            <tr key={`${fan.creatorName}:${fan.fanKey}`} className="border-t border-line">
+              <td className="px-3 py-3">{fan.name ?? fan.fanKey}</td>
+              <td className="px-3 py-3">{fan.creatorName}</td>
+              <td className="px-3 py-3 tabular-nums">{fan.ltvCents == null ? "Sin datos" : centsLabel(fan.ltvCents, "USD")}</td>
+              <td className="px-3 py-3 tabular-nums">{fan.spend30Cents == null ? "Sin datos" : centsLabel(fan.spend30Cents, "USD")}</td>
+              <td className="px-3 py-3">{fan.lastPurchaseAt?.slice(0, 10) ?? "Sin datos"}</td>
+              <td className="px-3 py-3">{fan.purchases30 == null ? "Sin datos" : String(fan.purchases30)}</td>
+              <td className="px-3 py-3">{fan.ppvReceived == null ? "Sin datos" : `${fan.ppvBought ?? 0}/${fan.ppvReceived}`}</td>
+              <td className="px-3 py-3 text-xs">{fan.segments.length ? fan.segments.join(", ") : "Sin datos"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

@@ -9,6 +9,10 @@ const SEGMENTS = [
   { id: "expired", label: "Expirados" },
   { id: "spent", label: "Con gasto" },
   { id: "quiet", label: "Sin interacción reciente" },
+  { id: "whale", label: "Ballena" },
+  { id: "risk", label: "En riesgo" },
+  { id: "asleep", label: "Dormido" },
+  { id: "new", label: "Nuevo" },
 ] as const;
 
 export function CampaignDrafts() {

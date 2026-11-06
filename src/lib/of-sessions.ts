@@ -133,6 +133,7 @@ export type CreatorChatList = {
     creatorId: string;
     threadKey: string;
     messageKey: string;
+    fanKey: string | null;
     fromFan: boolean;
     body: string;
     sentAt: string;

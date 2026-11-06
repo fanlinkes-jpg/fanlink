@@ -19,7 +19,7 @@ export type CampaignDraftView = {
   status: "draft" | "scheduled";
 };
 
-const SEGMENTS: SegmentKind[] = ["active", "expired", "spent", "quiet"];
+const SEGMENTS: SegmentKind[] = ["active", "expired", "spent", "quiet", "whale", "risk", "asleep", "new"];
 
 export function sendEnabled(): boolean {
   return sendGate(process.env.FANLINK_ENABLE_SEND, onlyFansSite.hostname).allowed;
@@ -138,8 +138,15 @@ export function refuseRealSend(): { ok: false; reason: string } {
 
 async function loadFans(creatorId: string) {
   const sql = await getSql();
-  const fans = await sql.query<{ fan_key: string; display_name: string | null; status: string; spent_cents: number | null }>(
-    "select fan_key, display_name, status, spent_cents from of_fan_read where creator_id = $1",
+  const fans = await sql.query<{
+    fan_key: string;
+    display_name: string | null;
+    status: string;
+    spent_cents: number | null;
+    renew_auto: boolean | null;
+    subscribed_at: Date | string | null;
+  }>(
+    "select fan_key, display_name, status, spent_cents, renew_auto, subscribed_at from of_fan_read where creator_id = $1",
     [creatorId],
   );
   const touches = await sql.query<{ fan_key: string | null; sent_at: Date | string }>(
@@ -153,6 +160,8 @@ async function loadFans(creatorId: string) {
     status: fan.status === "expired" ? ("expired" as const) : ("active" as const),
     spentCents: fan.spent_cents == null ? null : Number(fan.spent_cents),
     lastInteractionAt: last.get(fan.fan_key) ?? null,
+    renewAuto: fan.renew_auto,
+    subscribedAt: fan.subscribed_at == null ? null : new Date(fan.subscribed_at).toISOString(),
   }));
 }
 

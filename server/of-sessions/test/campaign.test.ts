@@ -21,6 +21,9 @@ test("los segmentos salen de fans reales y el envío a OnlyFans queda cerrado", 
     fansInSegment(fans, "quiet", { minSpentCents: 0, quietDays: 30, now: NOW }).map((fan) => fan.fanKey),
     ["9"],
   );
+  assert.equal(fansInSegment([{ ...fans[0]!, spentCents: 20_000, renewAuto: false }], "whale", { minSpentCents: 0, quietDays: 30, now: NOW }).length, 1);
+  assert.equal(fansInSegment([{ ...fans[0]!, renewAuto: false }], "risk", { minSpentCents: 0, quietDays: 30, now: NOW }).length, 1);
+  assert.equal(fansInSegment([{ fanKey: "n", name: "Nuevo", status: "active", spentCents: null, lastInteractionAt: null, subscribedAt: "2026-11-04T00:00:00.000Z" }], "new", { minSpentCents: 0, quietDays: 30, now: NOW }).length, 1);
   assert.equal(previewBody("Hola {nombre}", "Fan Uno"), "Hola Fan Uno");
   assert.equal(sendGate(undefined, "onlyfans.com").reason, "Envío real desactivado");
   assert.equal(sendGate("false", "127.0.0.1").reason, "Envío real desactivado");

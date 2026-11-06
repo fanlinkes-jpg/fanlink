@@ -284,6 +284,7 @@ export async function listCreatorChatViews(userId: string): Promise<CreatorChatL
       creatorId: message.creatorId,
       threadKey: message.threadKey,
       messageKey: message.messageKey,
+      fanKey: message.fanKey,
       fromFan: message.fromFan,
       body: message.body,
       sentAt: message.sentAt,
