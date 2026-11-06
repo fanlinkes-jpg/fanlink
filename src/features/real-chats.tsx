@@ -11,6 +11,8 @@ import { MessagePriceDialog } from "@/features/message-price-dialog";
 import { FULL_EMOJIS, QUICK_EMOJIS, TEXT_COLORS, matchScripts, mentionToken, slashQuery, wrapSelection } from "@/lib/composer-tools";
 import { pendingForThread } from "@/lib/pending-thread";
 import { spendTone } from "@/lib/spend-tiers";
+import { VaultBrowser } from "@/features/vault-browser";
+import { rememberVaultQuery, vaultQueryFor, type VaultQuery } from "../../server/of-sessions/sync/vault-filter.ts";
 
 export function RealChatsPage() {
   const creators = useCrm((s) => s.creators);
@@ -50,6 +52,7 @@ export function RealChatsPage() {
   const [libraryQuery, setLibraryQuery] = useState("");
   const [tagQuery, setTagQuery] = useState("");
   const [ofVault, setOfVault] = useState<Array<{ id: string; title: string; kind: "foto" | "video" | "audio" | null }>>([]);
+  const [vaultBook, setVaultBook] = useState<Record<string, VaultQuery>>({});
 
   async function refresh() {
     try {
@@ -444,6 +447,11 @@ export function RealChatsPage() {
                     fanTranslation={fanTranslation}
                     textSize={textSize}
                     ofVault={ofVault}
+                    vaultQuery={vaultQueryFor(vaultBook, teamAccess?.userId ?? "local")}
+                    onVaultQuery={(query) => {
+                      const userId = teamAccess?.userId ?? "local";
+                      setVaultBook((book) => rememberVaultQuery(book, userId, query));
+                    }}
                     onReadVault={() => void loadOfVault()}
                     onVault={attachVault}
                     onTag={(handle) => { insertAtCursor(mentionToken(handle)); setPanel(null); }}
@@ -713,6 +721,8 @@ function ComposerPanelBody({
   panel,
   vaultItems,
   ofVault,
+  vaultQuery,
+  onVaultQuery,
   onReadVault,
   tagCreators,
   tagQuery,
@@ -729,6 +739,8 @@ function ComposerPanelBody({
   panel: Exclude<ComposerPanel, "guiones" | null>;
   vaultItems: VaultItem[];
   ofVault: Array<{ id: string; title: string; kind: "foto" | "video" | "audio" | null }>;
+  vaultQuery: VaultQuery;
+  onVaultQuery: (query: VaultQuery) => void;
   onReadVault: () => void;
   tagCreators: Array<{ id: string; name: string; handle: string }>;
   tagQuery: string;
@@ -743,27 +755,30 @@ function ComposerPanelBody({
   onEmoji: (emoji: string) => void;
 }) {
   switch (panel) {
-    case "vault": {
-      const picks = [
-        ...ofVault.map((item) => ({ id: item.id, title: item.title })),
-        ...vaultItems.map((item) => ({ id: item.id, title: item.title })),
-      ];
+    case "vault":
       return (
         <div className="space-y-2">
           <button type="button" className="rounded border border-[#e6e8ee] px-2 py-1 text-xs" onClick={onReadVault}>Leer vault de OnlyFans</button>
           <a href="/vault" className="block text-xs text-[#2456c7]">Abrir la bóveda</a>
-          {picks.length === 0 ? <p className="text-xs text-[#6d7585]">Sin datos</p> : (
-            <ul className="space-y-1">
-              {picks.map((item) => (
-                <li key={item.id}>
-                  <button type="button" className="w-full rounded px-2 py-1 text-left hover:bg-[#f4f7ff]" onClick={() => onVault(item)}>{item.title}</button>
-                </li>
-              ))}
-            </ul>
-          )}
+          <VaultBrowser
+            items={[
+              ...ofVault,
+              ...vaultItems.map((item) => ({
+                id: item.id,
+                title: item.title,
+                kind: item.kind === "set" ? "foto" as const : item.kind,
+                folder: item.folder,
+                priceCents: Math.round(item.price * 100),
+                salesCount: item.unlocks,
+                sentCount: item.sent,
+              })),
+            ]}
+            query={vaultQuery}
+            onQuery={onVaultQuery}
+            onPick={onVault}
+          />
         </div>
       );
-    }
     case "gif":
       return (
         <div className="space-y-2">
