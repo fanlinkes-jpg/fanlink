@@ -133,10 +133,7 @@ export async function saveChatRead(
         ],
       );
     }
-    const columns = await sql.query<{ column_name: string }>(
-      "select column_name from information_schema.columns where table_name = 'of_chat_outbound' and column_name = 'error_reason'",
-    );
-    await attachOutboundAuthors(sql, creatorId, read.messages, columns.length > 0);
+    await attachOutboundAuthors(sql, creatorId, read.messages, await outboundSendStateReady(sql));
     for (const event of events) {
       await sql.query(
         `insert into of_fan_message_event (id, creator_id, fan_key, fan_name, excerpt, sent_at)
@@ -329,18 +326,55 @@ function iso(value: Date | string | null | undefined): string | null {
   return parsed.toISOString();
 }
 
-/** Si la sincronización ya pasó por ese momento y el mensaje no está, no se envió. */
-export function outboundStillMissing(
-  draft: { createdAt: string; errorReason: string | null; scheduledAt: string | null },
-  messages: ReadonlyArray<{ sentAt: string }>,
-): boolean {
-  if (draft.errorReason !== "Pendiente de confirmar" || draft.scheduledAt) return false;
+/** No se declara fallido hasta que pasó este margen y el mismo hilo siguió. */
+export const OUTBOUND_MISS_MARGIN_MS = 120_000;
+
+export type OutboundSyncMessage = {
+  messageKey: string;
+  threadKey: string;
+  fromFan: boolean;
+  body: string;
+  sentAt: string;
+  priceCents: number | null;
+};
+
+/**
+ * Primero casa por texto y fecha en el mismo hilo y solo con mensajes propios.
+ * Un hilo distinto o un mensaje del fan no lo marcan. Si no casa y el hilo
+ * ya avanzó pasado el margen, no se envió.
+ */
+export function reconcilePendingOutbound(
+  draft: OutboundDraft & { errorReason?: string | null },
+  messages: readonly OutboundSyncMessage[],
+  now = Date.now(),
+): { action: "sent"; messageKey: string } | { action: "missing" } | { action: "keep" } {
+  const own = messages.filter((message) => !message.fromFan && message.threadKey === draft.threadKey);
+  const matched = own.find((message) => matchOutboundAuthor({
+    messageKey: message.messageKey,
+    threadKey: message.threadKey,
+    fanKey: null,
+    body: message.body,
+    sentAt: message.sentAt,
+    priceCents: message.priceCents,
+  }, [draft]));
+  if (matched) return { action: "sent", messageKey: matched.messageKey };
+  if (draft.errorReason !== "Pendiente de confirmar" || draft.scheduledAt) return { action: "keep" };
   const created = Date.parse(draft.createdAt);
-  if (!Number.isFinite(created)) return false;
-  return messages.some((message) => {
+  if (!Number.isFinite(created) || now < created + OUTBOUND_MISS_MARGIN_MS) return { action: "keep" };
+  const sawLater = own.some((message) => {
     const sent = Date.parse(message.sentAt);
-    return Number.isFinite(sent) && sent >= created - 15_000;
+    return Number.isFinite(sent) && sent >= created + OUTBOUND_MISS_MARGIN_MS;
   });
+  return sawLater ? { action: "missing" } : { action: "keep" };
+}
+
+/** Si la sincronización ya pasó por ese hilo y el mensaje propio no está, no se envió. */
+export function outboundStillMissing(
+  draft: OutboundDraft & { errorReason?: string | null },
+  messages: readonly OutboundSyncMessage[],
+  now = Date.now(),
+): boolean {
+  return reconcilePendingOutbound(draft, messages, now).action === "missing";
 }
 
 async function attachOutboundAuthors(sql: ReadSql, creatorId: string, messages: ChatMessage[], hasSendState: boolean): Promise<void> {
@@ -368,33 +402,59 @@ async function attachOutboundAuthors(sql: ReadSql, creatorId: string, messages: 
     fanKey: row.fan_key,
     ofMessageKey: row.of_message_key,
   }));
-  const used = new Set<string>();
-  for (const message of messages) {
-    const match = matchOutboundAuthor(message, pending.filter((draft) => !used.has(draft.id)));
-    if (!match) continue;
-    used.add(match.draftId);
-    await sql.query(
-      `update of_chat_message set author_id = $1
-       where creator_id = $2 and message_key = $3 and author_id is null`,
-      [match.authorId, creatorId, message.messageKey],
-    );
-    await sql.query("update of_chat_outbound set matched_message_key = $2 where id = $1", [match.draftId, message.messageKey]);
-    if (hasSendState) {
-      await sql.query("update of_chat_outbound set status = 'sent', error_reason = null where id = $1", [match.draftId]);
+  const flags = hasSendState
+    ? await sql.query<{ id: string; error_reason: string | null; scheduled_at: Date | string | null }>(
+      `select id, error_reason, scheduled_at from of_chat_outbound where creator_id = $1 and matched_message_key is null`,
+      [creatorId],
+    )
+    : [];
+  const flagOf = new Map(flags.map((row) => [row.id, row]));
+  const synced: OutboundSyncMessage[] = messages.map((message) => ({
+    messageKey: message.messageKey,
+    threadKey: message.threadKey,
+    fromFan: message.fromFan,
+    body: message.body,
+    sentAt: message.sentAt,
+    priceCents: message.priceCents,
+  }));
+  for (const draft of pending) {
+    const flag = flagOf.get(draft.id);
+    const scheduledAt = flag?.scheduled_at == null
+      ? null
+      : flag.scheduled_at instanceof Date ? flag.scheduled_at.toISOString() : String(flag.scheduled_at);
+    const decision = reconcilePendingOutbound({
+      ...draft,
+      scheduledAt,
+      errorReason: flag?.error_reason ?? null,
+    }, synced);
+    if (decision.action === "sent") {
+      await sql.query(
+        `update of_chat_message set author_id = $1
+         where creator_id = $2 and message_key = $3 and author_id is null`,
+        [draft.authorId, creatorId, decision.messageKey],
+      );
+      await sql.query("update of_chat_outbound set matched_message_key = $2 where id = $1", [draft.id, decision.messageKey]);
+      if (hasSendState) {
+        await sql.query("update of_chat_outbound set status = 'sent', error_reason = null where id = $1", [draft.id]);
+      }
+      continue;
     }
+    if (decision.action === "missing" && hasSendState) await markOutboundError(sql, draft.id, "no enviado");
   }
-  if (!hasSendState) return;
-  const flags = await sql.query<{ id: string; error_reason: string | null; scheduled_at: Date | string | null; created_at: Date | string }>(
-    `select id, error_reason, scheduled_at, created_at from of_chat_outbound where creator_id = $1 and matched_message_key is null`,
-    [creatorId],
+}
+
+const outboundSendState = new WeakMap<object, boolean>();
+
+/** La columna se mira una vez por conexión. */
+export async function outboundSendStateReady(sql: ReadSql): Promise<boolean> {
+  const cached = outboundSendState.get(sql);
+  if (cached != null) return cached;
+  const columns = await sql.query<{ column_name: string }>(
+    "select column_name from information_schema.columns where table_name = 'of_chat_outbound' and column_name = 'error_reason'",
   );
-  for (const row of flags) {
-    if (used.has(row.id)) continue;
-    const createdAt = row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at);
-    const scheduledAt = row.scheduled_at == null ? null : row.scheduled_at instanceof Date ? row.scheduled_at.toISOString() : String(row.scheduled_at);
-    if (!outboundStillMissing({ createdAt, errorReason: row.error_reason, scheduledAt }, messages)) continue;
-    await markOutboundError(sql, row.id, "no enviado");
-  }
+  const ready = columns.length > 0;
+  outboundSendState.set(sql, ready);
+  return ready;
 }
 
 export async function listPendingOutbounds(

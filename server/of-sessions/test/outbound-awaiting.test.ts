@@ -4,17 +4,60 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
-import { listPendingOutbounds, markOutboundAwaiting, markOutboundSent, outboundStillMissing, recordOutbound } from "../sync/chat-store.ts";
+import { listPendingOutbounds, markOutboundAwaiting, markOutboundSent, outboundSendStateReady, reconcilePendingOutbound, recordOutbound } from "../sync/chat-store.ts";
 import type { ReadSql } from "../sync/store.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
-test("sin el mensaje en la sincronización posterior queda como no enviado", () => {
+test("otro hilo o un mensaje del fan no marcan el envío, y el propio se reconcilia", () => {
   const created = "2026-11-06T12:00:00.000Z";
-  const draft = { createdAt: created, errorReason: "Pendiente de confirmar", scheduledAt: null };
-  assert.equal(outboundStillMissing(draft, [{ sentAt: "2026-11-06T11:00:00.000Z" }]), false);
-  assert.equal(outboundStillMissing(draft, [{ sentAt: "2026-11-06T12:00:05.000Z" }]), true);
-  assert.equal(outboundStillMissing({ ...draft, errorReason: null }, [{ sentAt: "2026-11-06T12:00:05.000Z" }]), false);
+  const later = "2026-11-06T12:03:00.000Z";
+  const now = Date.parse("2026-11-06T12:04:00.000Z");
+  const draft = {
+    id: "out-1",
+    authorId: "ana",
+    body: "hola",
+    priceCents: null,
+    createdAt: created,
+    threadKey: "7",
+    fanKey: "7",
+    ofMessageKey: null,
+    errorReason: "Pendiente de confirmar" as string | null,
+    scheduledAt: null as string | null,
+  };
+  const otherThread = { messageKey: "m-otro", threadKey: "8", fromFan: false, body: "otra cosa", sentAt: later, priceCents: null };
+  const fromFan = { messageKey: "m-fan", threadKey: "7", fromFan: true, body: "hola", sentAt: later, priceCents: null };
+  assert.equal(reconcilePendingOutbound(draft, [otherThread, fromFan], now).action, "keep");
+  const sent = reconcilePendingOutbound(draft, [
+    otherThread,
+    fromFan,
+    { messageKey: "m-propio", threadKey: "7", fromFan: false, body: "hola", sentAt: "2026-11-06T12:00:05.000Z", priceCents: null },
+  ], now);
+  assert.deepEqual(sent, { action: "sent", messageKey: "m-propio" });
+  const missed = reconcilePendingOutbound(draft, [
+    { messageKey: "m-sigue", threadKey: "7", fromFan: false, body: "seguimos", sentAt: later, priceCents: null },
+  ], now);
+  assert.equal(missed.action, "missing");
+  const early = reconcilePendingOutbound(draft, [
+    { messageKey: "m-sigue", threadKey: "7", fromFan: false, body: "seguimos", sentAt: later, priceCents: null },
+  ], Date.parse(created) + 30_000);
+  assert.equal(early.action, "keep");
+});
+
+test("la columna de envío se consulta una sola vez por conexión", async () => {
+  let calls = 0;
+  const sql = {
+    async query<T>(text: string): Promise<T[]> {
+      if (text.includes("information_schema")) {
+        calls += 1;
+        return [{ column_name: "error_reason" }] as T[];
+      }
+      return [];
+    },
+  };
+  assert.equal(await outboundSendStateReady(sql), true);
+  assert.equal(await outboundSendStateReady(sql), true);
+  assert.equal(calls, 1);
 });
 
 test("un envío visto sin id queda pendiente de confirmar", async () => {

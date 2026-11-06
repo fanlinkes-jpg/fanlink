@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { chromium } from "playwright";
-import { boxRemainder, composeChat, createPendingNet } from "../send/compose.ts";
+import { boxRemainder, composeChat, createPendingNet, isMessageWrite } from "../send/compose.ts";
 import { navigationNote, pruneSendFailures, publicChatUrl, readFooterNodes, threadIdKind, writeSendFailure } from "../send/targets.ts";
 import { startFixture } from "./fixture-site.ts";
 
@@ -105,6 +105,20 @@ test("un click que vacía la caja tarde no se reenvía con Enter", async () => {
   assert.equal(sent.enters, 0);
 });
 
+test("marcar como leído no es el POST que envía el mensaje", () => {
+  assert.equal(isMessageWrite("POST", "https://onlyfans.com/api2/v2/chats/412874293/messages"), true);
+  assert.equal(isMessageWrite("POST", "https://onlyfans.com/api2/v2/chats/412874293/messages/read"), false);
+  assert.equal(isMessageWrite("PUT", "https://onlyfans.com/api2/v2/chats/412874293/messages"), false);
+  assert.equal(isMessageWrite("GET", "https://onlyfans.com/api2/v2/chats/412874293/messages"), false);
+});
+
+test("un 400 al marcar leído no tira el envío", async () => {
+  const sent = await sendOnce("3", "muy tarde");
+  assert.equal(sent.messageId, "300");
+  assert.equal(sent.reason, null);
+  assert.equal(sent.lines.some((line) => line.includes("estado=no-enviado")), false);
+});
+
 test("un salto de línea no cuenta como texto que quedó en la caja", () => {
   assert.equal(boxRemainder(""), "vacio");
   assert.equal(boxRemainder("\n"), "10");
@@ -170,6 +184,24 @@ test("si el click no sale, Enter se prueba una sola vez", async () => {
   assert.equal(sent.composed, 1);
   assert.equal(sent.messageId, "300");
   assert.equal(sent.enters, 1);
+});
+
+test("la captura recorta el chat y no la pestaña entera", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const dir = await mkdtemp(path.join(tmpdir(), "fanlink-send-clip-"));
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    await page.setContent(`<style>body{margin:0}.b-chat{position:absolute;left:40px;top:80px;width:200px;height:120px;background:#123}</style><div style="height:2000px"></div><div class="b-chat"></div>`);
+    const files = await writeSendFailure(page, dir);
+    assert.ok(files.png);
+    const png = await readFile(files.png);
+    assert.equal(png.readUInt32BE(16), 200);
+    assert.equal(png.readUInt32BE(20), 120);
+    await page.close();
+  } finally {
+    await browser.close();
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("sin el chat no se guarda captura", async () => {

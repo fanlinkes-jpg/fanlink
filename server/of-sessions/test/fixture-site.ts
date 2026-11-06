@@ -107,7 +107,8 @@ function ofChatHtml(mode: "live" | "slow" | "late" | "verylate" | "hang" | "post
          document.querySelector(".b-chat").appendChild(item);
          const response = await fetch("/api2/v2/chats/${chatId}/messages", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
          if (response.ok) item.className = "b-chat__message";
-       };`;
+       };
+       void fetch("/api2/v2/chats/${chatId}/messages/read", { method: "POST" });`;
     return pageHtml(
       "Hilo",
       "",
@@ -147,7 +148,8 @@ function ofChatHtml(mode: "live" | "slow" | "late" | "verylate" | "hang" | "post
        box.addEventListener("keydown", (event) => {
          if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void post(false); }
        });
-       document.querySelector("[at-attr='vault_btn']").onclick = () => { void fetch("/fixture/vault"); };`;
+       document.querySelector("[at-attr='vault_btn']").onclick = () => { void fetch("/fixture/vault"); };
+       void fetch("/api2/v2/chats/${chatId}/messages/read", { method: "POST" });`;
   return pageHtml(
     "Hilo",
     "",
@@ -546,6 +548,11 @@ async function handle(
       return;
     }
     html(res, ofChatHtml("stuck"));
+    return;
+  }
+  if (req.method === "POST" && /^\/api2\/v2\/chats\/[^/]+\/messages\/read$/.test(url.pathname)) {
+    res.writeHead(400, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "read" }));
     return;
   }
   if (req.method === "POST" && /^\/api2\/v2\/chats\/(?:0|5)\/messages$/.test(url.pathname)) {

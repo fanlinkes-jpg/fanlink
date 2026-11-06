@@ -255,12 +255,13 @@ export async function composeChat(context: BrowserContext, request: ComposeReque
     }
     if (result.messageId) {
       console.info(`[fanlink:send] confirmado via=json post=${net.postLabel()}`);
+    } else if (result.awaitingId) {
+      console.info(`[fanlink:send] estado=pendiente post=${net.postLabel()}`);
     } else {
       const files = await writeSendFailure(page).catch(() => null);
       const where = files ? ` volcado=${files.json} captura=${files.png ?? "no"}` : "";
-      const estado = result.awaitingId ? "pendiente" : "no-enviado";
-      if (!result.awaitingId && !result.reason) result.reason = "no enviado";
-      console.info(`[fanlink:send] estado=${estado} post=${net.postLabel()}${where}`);
+      if (!result.reason) result.reason = "no enviado";
+      console.info(`[fanlink:send] estado=no-enviado post=${net.postLabel()}${where}`);
     }
     page.off("response", onResponse);
     await page.close().catch(() => undefined);
@@ -517,10 +518,10 @@ async function roleTextbox(page: Page): Promise<Locator | null> {
   return null;
 }
 
-function isMessageWrite(method: string, url: string): boolean {
-  const verb = method.toUpperCase();
-  if (verb !== "POST" && verb !== "PUT") return false;
-  return pathOf(url).includes("message");
+/** Solo el POST que crea el mensaje. Marcar leído y el resto no cuentan. */
+export function isMessageWrite(method: string, url: string): boolean {
+  if (method.toUpperCase() !== "POST") return false;
+  return /^\/api2\/v2\/chats\/[^/]+\/messages\/?$/.test(pathOf(url));
 }
 
 function delay(ms: number): Promise<void> {

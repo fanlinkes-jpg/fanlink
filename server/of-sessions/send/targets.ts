@@ -187,7 +187,11 @@ export async function writeSendFailure(page: Page, dir = "logs"): Promise<{ json
       await pruneSendFailures(dir);
       return { json, png: null };
     }
-    await page.screenshot({ path: png, type: "png", fullPage: false });
+    const x = Math.max(0, Math.min(box.x, viewport.width - 1));
+    const y = Math.max(0, Math.min(box.y, viewport.height - 1));
+    const width = Math.max(1, Math.min(box.width, viewport.width - x));
+    const height = Math.max(1, Math.min(box.height, viewport.height - y));
+    await page.screenshot({ path: png, type: "png", fullPage: false, clip: { x, y, width, height } });
     const info = await stat(png);
     await pruneSendFailures(dir);
     if (info.size < 32) return { json, png: null };
