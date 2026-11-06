@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { authMiddleware } from "@/lib/auth/middleware";
-import type { ChatFanCard } from "@/lib/chat-fan-cards";
+import { assertChatFanCardThreadLimit, type ChatFanCard } from "@/lib/chat-fan-cards";
 import type { SessionStatus } from "../../server/of-sessions/types.ts";
 
 export type { SessionStatus };
@@ -213,7 +213,11 @@ export const listCreatorReads = createServerFn({ method: "GET" })
 
 export const listChatFanCards = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { threads?: Array<{ creatorId: string; fanKey: string }> } | undefined) => input ?? {})
+  .validator((input: { threads?: Array<{ creatorId: string; fanKey: string }> } | undefined) => {
+    const threads = input?.threads ?? [];
+    assertChatFanCardThreadLimit(threads.length);
+    return { threads };
+  })
   .handler(async ({ context, data }): Promise<{ fans: ChatFanCard[] }> => {
     const { listChatFanCardViews } = await import("./of-sessions-runtime.server");
     return listChatFanCardViews(context.userId, data.threads);

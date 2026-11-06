@@ -34,12 +34,20 @@ export type ChatFanRead = {
 
 export type ChatFanThread = { creatorId: string; fanKey: string };
 
-/** Hilos de la bandeja que tienen fan. Sin repetir la misma cuenta y el mismo fan. */
+export const CHAT_FAN_CARD_THREAD_LIMIT = 500;
+
 /** Una respuesta vieja no pisa a la que salió después. */
 export function isLatestFanCardRequest(ticket: number, current: number): boolean {
   return ticket === current;
 }
 
+export function assertChatFanCardThreadLimit(count: number): void {
+  if (count > CHAT_FAN_CARD_THREAD_LIMIT) {
+    throw new Error("Demasiados hilos. El máximo es 500.");
+  }
+}
+
+/** Hilos de la bandeja que tienen fan. Sin repetir la misma cuenta y el mismo fan. */
 export function fanThreadsForCards(threads: ReadonlyArray<{ creatorId: string; fanKey: string | null }>): ChatFanThread[] {
   const seen = new Set<string>();
   const out: ChatFanThread[] = [];

@@ -23,7 +23,7 @@ import { dashboardViewFor } from "../../server/of-sessions/metrics/dashboard.ts"
 import { accountPause, blockKind, listAccountPauses, noteAccountBlock } from "../../server/of-sessions/sync/backoff.ts";
 import { presentTeamMetrics } from "../../server/of-sessions/metrics/present-team.ts";
 import { creatorIdsForReads } from "@/lib/dashboard-config";
-import { chatFanCardsFrom, type ChatFanCard } from "@/lib/chat-fan-cards";
+import { assertChatFanCardThreadLimit, chatFanCardsFrom, type ChatFanCard } from "@/lib/chat-fan-cards";
 import { deliverFanAlerts } from "../../server/of-sessions/notify/deliver.ts";
 import { chatIntervalMinFromEnv } from "../../server/of-sessions/sync/chats.ts";
 import { chatIntervalMinutes, inboxIsOpen, activeThreadWatches } from "../../server/of-sessions/sync/live.ts";
@@ -482,6 +482,7 @@ export async function listChatFanCardViews(
   userId: string,
   threads?: ReadonlyArray<{ creatorId: string; fanKey: string }>,
 ): Promise<{ fans: ChatFanCard[] }> {
+  assertChatFanCardThreadLimit(threads?.length ?? 0);
   const wanted = (threads ?? []).filter((thread) => thread.creatorId && thread.fanKey);
   if (wanted.length === 0) return { fans: [] };
   const access = await accessFor(userId);
