@@ -77,9 +77,9 @@ export function RealChatsPage() {
   const unread = threads.reduce((sum, thread) => sum + thread.unread, 0);
 
   return (
-    <div className="flex h-full min-h-0 bg-white text-[#1c2333]">
-      <section className="flex w-full min-w-0 flex-col border-r border-[#e6e8ee] md:w-[340px]">
-        <div className="space-y-3 border-b border-[#e6e8ee] px-3 py-3">
+    <div className="flex h-full min-h-0 overflow-hidden bg-white text-[#1c2333]">
+      <section className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden border-r border-[#e6e8ee] md:w-[340px] md:shrink-0">
+        <div className="shrink-0 space-y-3 border-b border-[#e6e8ee] px-3 py-3">
           <h1 className="truncate text-sm font-semibold uppercase tracking-wide">{creatorName}</h1>
           <div className="flex gap-2">
             {knowsOnline ? (
@@ -141,19 +141,17 @@ export function RealChatsPage() {
           </ul>
         )}
       </section>
-      <section className="hidden min-w-0 flex-1 flex-col md:flex">
-        {selected ? (
-          <>
-            <header className="flex items-center justify-between gap-3 border-b border-[#e6e8ee] px-4 py-3">
-              <p className="truncate font-medium">{selected.fanName ?? selected.fanHandle ?? "Fan"}</p>
+      <section className="hidden h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden md:flex">
+        <header className="flex shrink-0 items-center justify-between gap-3 border-b border-[#e6e8ee] px-4 py-3">
+              <p className="truncate font-medium">{selected ? (selected.fanName ?? selected.fanHandle ?? "Fan") : "Sin sincronizar"}</p>
               <div className="flex items-center gap-2">
                 <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => void refresh()}>Recargar</button>
                 <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs xl:hidden" onClick={() => setInsightsOpen(true)}>Ficha</button>
                 <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => setMenu((open) => !open)} aria-label="Menú">Menú</button>
               </div>
             </header>
-            {menu ? (
-              <div className="border-b border-[#e6e8ee] px-4 py-2 text-xs text-[#6d7585]">
+            {menu && selected ? (
+              <div className="shrink-0 border-b border-[#e6e8ee] px-4 py-2 text-xs text-[#6d7585]">
                 {running ? "En curso" : meta?.status === "error" ? `Error · ${shortReason(meta.reason)}` : meta?.status === "ok" ? "OK" : "Sin sincronizar"}
                 {meta?.syncedAt ? ` · ${syncAge(meta.syncedAt)}` : ""}
                 {canForce ? (
@@ -175,8 +173,8 @@ export function RealChatsPage() {
               </div>
             ) : null}
             <ol className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
-              {messages.length === 0 ? <li className="text-sm text-[#6d7585]">Sin datos</li> : null}
-              {pendingOut.filter((item) => item.creatorId === selected.creatorId && item.threadKey === selected.threadKey).map((item) => (
+              {!selected || messages.length === 0 ? <li className="text-sm text-[#6d7585]">{selected ? "Sin datos" : "Sin sincronizar"}</li> : null}
+              {pendingOut.filter((item) => item.creatorId === selected?.creatorId && item.threadKey === selected?.threadKey).map((item) => (
                 <li key={item.id} className="text-right">
                   <p className="inline-block max-w-[70%] rounded-2xl border border-dashed border-[#c5cad6] px-3 py-2 text-sm">{item.body}</p>
                   <p className="mt-1 text-[10px] text-[#8a5a12]">Pendiente · no enviado</p>
@@ -191,8 +189,8 @@ export function RealChatsPage() {
                 </li>
               ))}
             </ol>
-            <form className="border-t border-[#e6e8ee] p-3" onSubmit={(event) => event.preventDefault()}>
-              <div className="mb-2 flex gap-1">
+            <form className="shrink-0 border-t border-[#e6e8ee] p-3" onSubmit={(event) => event.preventDefault()}>
+              <div className="mb-2 flex flex-wrap gap-1">
                 {EMOJIS.map((emoji) => (
                   <button key={emoji} type="button" className="rounded px-1 text-base" onClick={() => setDraft((value) => `${value}${emoji}`)}>{emoji}</button>
                 ))}
@@ -200,8 +198,8 @@ export function RealChatsPage() {
                 <button type="button" disabled className="rounded px-2 text-xs text-[#b0b6c2]" title="Sin datos">Guiones</button>
                 <button type="button" disabled className="rounded px-2 text-xs text-[#b0b6c2]" title="Sin datos">Galería</button>
               </div>
-              <div className="flex items-end gap-2">
-                <textarea value={draft} onChange={(event) => setDraft(event.target.value)} rows={2} placeholder="Escribe un mensaje" className="min-h-12 flex-1 resize-none rounded-xl border border-[#e6e8ee] px-3 py-2 text-sm" />
+              <div className="flex flex-wrap items-end gap-2">
+                <textarea value={draft} onChange={(event) => setDraft(event.target.value)} rows={2} placeholder="Escribe un mensaje" className="min-h-12 min-w-48 flex-1 resize-none rounded-xl border border-[#e6e8ee] px-3 py-2 text-sm" />
                 <button
                   type="button"
                   disabled={!draft.trim()}
@@ -227,17 +225,13 @@ export function RealChatsPage() {
                 >
                   Dejar pendiente
                 </button>
-                <button type="button" disabled title="Envío real desactivado" className="rounded-full bg-[#d7dbe3] px-4 py-2 text-sm text-white">
+                <button type="button" disabled title="Envío real desactivado" aria-label="Enviar" className="shrink-0 rounded-full bg-[#d7dbe3] px-4 py-2 text-sm text-white">
                   {sendEnabled ? "Enviar" : "Envío real desactivado"}
                 </button>
               </div>
             </form>
-          </>
-        ) : (
-          <p className="p-6 text-sm text-[#6d7585]">Sin sincronizar</p>
-        )}
       </section>
-      <div className="hidden h-full w-[320px] shrink-0 border-l border-[#e6e8ee] xl:block">
+      <div className="hidden h-full min-h-0 w-[320px] shrink-0 overflow-hidden border-l border-[#e6e8ee] xl:block">
         {selected ? <InsightPane thread={selected} reads={reads.byCreator} crmFans={crmFans} messages={messages} onNotes={saveNote} /> : null}
       </div>
       {insightsOpen && selected ? (
