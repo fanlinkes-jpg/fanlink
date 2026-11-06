@@ -5,13 +5,14 @@ import { useCrm } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
 import { useOfReads } from "@/lib/use-of-reads";
 import { FanInsights } from "@/features/fan-insights";
-import { FULL_EMOJIS, QUICK_EMOJIS, emojiRows } from "@/lib/composer-tools";
+import { FULL_EMOJIS, QUICK_EMOJIS, emojiRows, matchScripts, slashQuery } from "@/lib/composer-tools";
 
 export function RealChatsPage() {
   const creators = useCrm((s) => s.creators);
   const creatorId = useCrm((s) => s.creatorId);
   const setCreator = useCrm((s) => s.setCreator);
   const crmFans = useCrm((s) => s.fans);
+  const scripts = useCrm((s) => s.scripts);
   const saveNote = useCrm((s) => s.saveNote);
   const teamAccess = useCrm((s) => s.teamAccess);
   const reads = useOfReads();
@@ -25,6 +26,7 @@ export function RealChatsPage() {
   const [draft, setDraft] = useState("");
   const [draftPrice, setDraftPrice] = useState<number | null>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [scriptOpen, setScriptOpen] = useState(false);
   const [sendEnabled, setSendEnabled] = useState(false);
   const [pendingOut, setPendingOut] = useState<Array<{ id: string; creatorId: string; threadKey: string; body: string }>>([]);
 
@@ -201,6 +203,15 @@ export function RealChatsPage() {
               ))}
             </ol>
             <form className="relative shrink-0 border-t border-[#e6e8ee] p-2" onSubmit={(event) => event.preventDefault()}>
+              {(scriptOpen || slashQuery(draft) != null) ? (
+                <div className="absolute inset-x-2 bottom-full z-20 mb-1 max-h-36 overflow-y-auto rounded-xl border border-[#e6e8ee] bg-white p-2 text-sm shadow-lg">
+                  {matchScripts(scripts, slashQuery(draft) ?? "").length === 0 ? <p className="text-xs text-[#6d7585]">Sin datos</p> : matchScripts(scripts, slashQuery(draft) ?? "").map((hit) => (
+                    <button key={hit.id} type="button" className="block w-full rounded px-2 py-1 text-left hover:bg-[#f4f7ff]" onClick={() => { setDraft(hit.text); if (hit.priceCents != null) setDraftPrice(hit.priceCents); setScriptOpen(false); }}>
+                      {hit.title} · /{hit.keyword}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
               {emojiOpen ? (
                 <div className="absolute inset-x-2 bottom-full z-20 mb-1 max-h-40 overflow-y-auto rounded-xl border border-[#e6e8ee] bg-white p-2 shadow-lg">
                   <div className="grid grid-cols-12 gap-0.5 text-base">
@@ -218,6 +229,7 @@ export function RealChatsPage() {
                 </div>
               </div>
               <div className="mb-1 flex justify-end">
+                <button type="button" className="rounded px-2 py-0.5 text-xs text-[#2456c7]" onClick={() => setScriptOpen((open) => !open)}>Guiones</button>
                 <button type="button" className="rounded px-2 py-0.5 text-xs text-[#2456c7]" onClick={() => setEmojiOpen((open) => !open)}>{emojiOpen ? "Cerrar emojis" : "Más emojis"}</button>
               </div>
               <div className="flex flex-wrap items-end gap-2">
