@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -105,6 +105,13 @@ test("un click que vacía la caja tarde no se reenvía con Enter", async () => {
   assert.equal(sent.enters, 0);
 });
 
+test("si la red confirma después de 12 s no se pulsa Enter", async () => {
+  const sent = await sendOnce("2", "tardisimo");
+  assert.equal(sent.composed, 1);
+  assert.equal(sent.messageId, "300");
+  assert.equal(sent.enters, 0);
+});
+
 test("la caja que se vacía después de 3 s no se reenvía", async () => {
   const sent = await sendOnce("3", "muy tarde");
   assert.equal(sent.composed, 1);
@@ -119,7 +126,7 @@ test("si el click no sale, Enter se prueba una sola vez", async () => {
   assert.equal(sent.enters, 1);
 });
 
-test("sin el chat la captura es el viewport de la pestaña", async () => {
+test("sin el chat no se guarda captura", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch({ headless: true });
   const dir = await mkdtemp(path.join(tmpdir(), "fanlink-send-shot-"));
@@ -127,10 +134,9 @@ test("sin el chat la captura es el viewport de la pestaña", async () => {
     const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
     await page.goto(`${fixture.origin}/tall`, { waitUntil: "domcontentloaded" });
     const files = await writeSendFailure(page, dir);
-    assert.ok(files.png);
-    const png = await readFile(files.png);
-    assert.equal(png.readUInt32BE(16), 800);
-    assert.equal(png.readUInt32BE(20), 600);
+    assert.equal(files.png, null);
+    const names = await readdir(dir);
+    assert.equal(names.some((name) => name.endsWith(".png")), false);
     await page.close();
   } finally {
     await browser.close();
