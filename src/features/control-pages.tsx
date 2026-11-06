@@ -152,7 +152,7 @@ export function AnalyticsPage() {
                 status: fan.status,
                 subscribedAt: fan.subscribedAt,
                 renewAuto: fan.renewAuto,
-                spentCents: owner ? fan.spentCents : null,
+                spentCents: fan.spentCents,
                 lastInteractionAt: ppvRows
                   .filter((row) => row.creatorId === creator.id && row.fanKey === fan.fanKey)
                   .map((row) => row.sentAt)

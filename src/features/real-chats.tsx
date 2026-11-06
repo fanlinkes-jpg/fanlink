@@ -1,12 +1,16 @@
 import { useEffect, useState } from "react";
-import { listCreatorChats, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
+import { listCreatorChats, syncCreatorChats, type CreatorChatList, type CreatorReadView } from "@/lib/of-sessions";
+import { fanProfiles } from "@/lib/fan-metrics";
 import { useCrm } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
+import { useOfReads } from "@/lib/use-of-reads";
 
 export function RealChatsPage() {
   const creators = useCrm((s) => s.creators);
   const creatorId = useCrm((s) => s.creatorId);
+  const crmFans = useCrm((s) => s.fans);
   const teamAccess = useCrm((s) => s.teamAccess);
+  const reads = useOfReads();
   const [data, setData] = useState<CreatorChatList | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -75,6 +79,15 @@ export function RealChatsPage() {
             <header className="flex items-center justify-between gap-3 border-b border-[#e6e8ee] px-4 py-3">
               <div>
                 <p className="font-medium">{selected.fanName ?? selected.fanHandle}</p>
+                <FanFacts
+                  creatorId={selected.creatorId}
+                  fanKey={selected.fanKey}
+                  fanHandle={selected.fanHandle}
+                  fanName={selected.fanName}
+                  reads={reads.byCreator}
+                  crmFans={crmFans}
+                  ppvSynced={meta?.status === "ok"}
+                />
                 <p className="text-xs text-[#6d7585]">
                   {running ? "En curso" : meta?.status === "error" ? `Error · ${shortReason(meta.reason)}` : meta?.status === "ok" ? "OK" : "Sin sincronizar"}
                   {meta?.syncedAt ? ` · ${syncAge(meta.syncedAt)}` : ""}
@@ -116,6 +129,66 @@ export function RealChatsPage() {
         )}
       </section>
     </div>
+  );
+}
+
+const SEGMENT_LABEL: Record<"whale" | "risk" | "asleep" | "new", string> = {
+  whale: "ballena",
+  risk: "riesgo",
+  asleep: "dormido",
+  new: "nuevo",
+};
+
+function FanFacts({
+  creatorId,
+  fanKey,
+  fanHandle,
+  fanName,
+  reads,
+  crmFans,
+  ppvSynced,
+}: {
+  creatorId: string;
+  fanKey: string | null;
+  fanHandle: string | null;
+  fanName: string | null;
+  reads: Map<string, CreatorReadView>;
+  crmFans: Array<{ creatorId: string; handle: string; name: string; notes: string }>;
+  ppvSynced: boolean;
+}) {
+  const ofFan = reads.get(creatorId)?.fans.find((fan) => fan.fanKey === fanKey) ?? null;
+  const note = crmFans.find((fan) => {
+    if (fan.creatorId !== creatorId) return false;
+    if (fanHandle && fan.handle.replace(/^@/, "") === fanHandle.replace(/^@/, "")) return true;
+    return fanName != null && fan.name === fanName;
+  })?.notes.trim() ?? "";
+  const profile = ofFan
+    ? fanProfiles({
+        now: new Date(),
+        ppvSynced,
+        fans: [{
+          fanKey: ofFan.fanKey,
+          name: ofFan.displayName ?? ofFan.handle,
+          status: ofFan.status,
+          subscribedAt: ofFan.subscribedAt,
+          renewAuto: ofFan.renewAuto,
+          spentCents: ofFan.spentCents,
+          lastInteractionAt: null,
+        }],
+        purchases: (reads.get(creatorId)?.transactions ?? []).filter((row) => row.fanKey === ofFan.fanKey),
+        ppv: [],
+      })[0]
+    : null;
+  const spend = profile?.ltvCents ?? ofFan?.spentCents ?? null;
+  const segments = profile?.segments.map((segment) => SEGMENT_LABEL[segment]) ?? [];
+  return (
+    <p className="text-xs text-[#6d7585]">
+      Gasto {spend == null ? "Sin datos" : `${(spend / 100).toFixed(2)} USD`}
+      {" · "}
+      Segmento {segments.length ? segments.join(", ") : "Sin datos"}
+      {" · "}
+      Notas {note || "Sin datos"}
+    </p>
   );
 }
 
