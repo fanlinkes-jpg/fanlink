@@ -146,6 +146,7 @@ Usa la clave que ya tienes. No generes otra. Misma terminal: Control+C, `git pul
 5. **Equipo.** Teléfono `+34…`, interruptor Avisos y minutos entre avisos. Sin claves de WhatsApp, el aviso sale como `simulado` en la terminal cuando un fan escribe.
 6. **Campañas.** Borrador con fans sincronizados: vista previa y guardar. El botón dice «Envío real desactivado» y no se pulsa.
 7. **Inicio, listas, vault y enlaces.** No son cifras de OnlyFans. Deben decir que están sin sincronizar o que son ejemplo local.
+8. **Pestaña OnlyFans.** En el mismo `npm run dev`, exporta `FANLINK_LIVE_VIEW_ENABLED=true` y `FANLINK_SEND_ALLOW_ACCOUNTS=9ikis52,@bigpoppa1111`. Abre un hilo de la cuenta de prueba y entra en la pestaña OnlyFans: se ve el chat real. Sin `FANLINK_ENABLE_SEND=true` no se puede teclear. Con el envío encendido, solo esa cuenta teclea. El socket no sale en `vite preview`.
 
 ## Datos
 

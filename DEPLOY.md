@@ -97,7 +97,7 @@ Teclear, pulsar Enter y subir un archivo exigen además `FANLINK_ENABLE_SEND=tru
 
 El espejo del hilo no incluye el reproductor ni la caché de medios. `0022_message_media.sql` y `0026_chat_history.sql` solo guardan metadatos (si hay archivo, duración, vista previa, me gusta, cita). No se descarga el archivo y en el hilo se pinta el marcador Medio.
 
-## 6. Masivos
+## 8. Masivos
 
 `FANLINK_ENABLE_MASS_SEND` no se define, o no vale `true`. Igual que `FANLINK_ENABLE_SEND`. Las dos tienen que ser `true` y la cuenta tiene que estar en `FANLINK_SEND_ALLOW_ACCOUNTS` para que la compuerta del masivo se abra. En este despliegue no se abren: no hay transporte a OnlyFans. La migración del borrador es `0027_mass_messages.sql`.
 
