@@ -16,9 +16,10 @@ create table if not exists of_notification (
   constraint of_notification_origin_chk check (origin = 'onlyfans')
 );
 
--- La 0032 se editó en el sitio para añadir first_seen_at. Crear la tabla no
--- rellena una base que ya la tenía. Este ALTER sí. El migrador no reejecuta un
--- nombre ya anotado: 0034_notification_first_seen.sql repite el arreglo.
+-- Si la tabla ya existía sin first_seen_at, el CREATE no añade la columna.
+-- El ALTER sí. 0035_notification_first_seen.sql repite el arreglo para una base
+-- que ya anotó este fichero con otro nombre. synced_at es la última vez que se
+-- vio el aviso, no la primera.
 alter table of_notification add column if not exists first_seen_at timestamptz;
 update of_notification set first_seen_at = coalesce(first_seen_at, synced_at, now()) where first_seen_at is null;
 alter table of_notification alter column first_seen_at set default now();

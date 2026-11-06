@@ -193,7 +193,24 @@ test("el chatter no recibe páginas vacías ni la cuenta de otra persona", async
   }
 });
 
-test("una 0032 anterior recibe first_seen_at", async () => {
+test("las migraciones de notificaciones se aplican dos veces", async () => {
+  const pg = new PGlite();
+  try {
+    for (const name of ["0034_notifications.sql", "0035_notification_first_seen.sql"]) {
+      const sql = await readFile(path.join(root, "migrations", name), "utf8");
+      await pg.exec(sql);
+      await pg.exec(sql);
+    }
+    const column = await pg.query<{ column_name: string }>(
+      "select column_name from information_schema.columns where table_name = 'of_notification' and column_name = 'first_seen_at'",
+    );
+    assert.equal(column.rows[0]?.column_name, "first_seen_at");
+  } finally {
+    await pg.close();
+  }
+});
+
+test("una tabla anterior recibe first_seen_at", async () => {
   const pg = new PGlite();
   try {
     await pg.exec(`
@@ -216,8 +233,8 @@ test("una 0032 anterior recibe first_seen_at", async () => {
     await pg.exec(
       "insert into of_notification (creator_id, notification_key, kind, synced_at) values ('c-alba', 'vieja', 'like', '2026-08-01T00:00:00Z')",
     );
-    await pg.exec(await readFile(path.join(root, "migrations/0032_notifications.sql"), "utf8"));
-    await pg.exec(await readFile(path.join(root, "migrations/0032_notifications.sql"), "utf8"));
+    await pg.exec(await readFile(path.join(root, "migrations/0034_notifications.sql"), "utf8"));
+    await pg.exec(await readFile(path.join(root, "migrations/0034_notifications.sql"), "utf8"));
     const row = await pg.query<{ first_seen_at: Date | string }>(
       "select first_seen_at from of_notification where notification_key = 'vieja'",
     );
@@ -227,7 +244,7 @@ test("una 0032 anterior recibe first_seen_at", async () => {
   }
 });
 
-test("0034 añade first_seen_at a una tabla que ya existía", async () => {
+test("0035 añade first_seen_at a una tabla que ya existía", async () => {
   const pg = new PGlite();
   try {
     await pg.exec(`
@@ -242,7 +259,9 @@ test("0034 añade first_seen_at a una tabla que ya existía", async () => {
     await pg.exec(
       "insert into of_notification (creator_id, notification_key, kind, synced_at) values ('c-alba', 'vieja', 'like', '2026-08-01T00:00:00Z')",
     );
-    await pg.exec(await readFile(path.join(root, "migrations/0034_notification_first_seen.sql"), "utf8"));
+    const repair = await readFile(path.join(root, "migrations/0035_notification_first_seen.sql"), "utf8");
+    await pg.exec(repair);
+    await pg.exec(repair);
     const row = await pg.query<{ first_seen_at: Date | string }>(
       "select first_seen_at from of_notification where notification_key = 'vieja'",
     );
@@ -316,7 +335,7 @@ function close(server: Server): Promise<void> {
 async function database() {
   const dir = await mkdtemp(path.join(tmpdir(), "fanlink-notifications-"));
   const pg = new PGlite(dir);
-  await pg.exec(await readFile(path.join(root, "migrations/0032_notifications.sql"), "utf8"));
+  await pg.exec(await readFile(path.join(root, "migrations/0034_notifications.sql"), "utf8"));
   const sql = {
     query: async <T>(text: string, params: unknown[] = []) => (await pg.query<T>(text, params)).rows,
   };

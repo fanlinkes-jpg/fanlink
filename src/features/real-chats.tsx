@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AtSign, Clock, DollarSign, FolderOpen, ImagePlus, Languages, ScrollText, Send, Type } from "lucide-react";
-import { chatSendAccess, listCreatorChats, loadMoreChats, loadOlderMessages, readChatVault, recordChatOutbound, saveFanNote, saveFanProfile, sendChatMessage, syncCreatorChats, type CreatorChatList, type CreatorReadView } from "@/lib/of-sessions";
+import { chatSendAccess, listCreatorChats, loadMoreChats, loadOlderMessages, readChatVault, recordChatOutbound, saveFanNote, saveFanProfile, sendChatMessage, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
 import { useCrm, type VaultItem } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
-import { useOfReads } from "@/lib/use-of-reads";
+import { useChatFanCards } from "@/lib/use-chat-fan-cards";
+import { chatFanCardFor } from "@/lib/chat-fan-cards";
 import { FanInsights } from "@/features/fan-insights";
 import { LiveOnlyFans } from "@/features/live-onlyfans";
 import { MessagePriceDialog } from "@/features/message-price-dialog";
@@ -45,7 +46,7 @@ export function RealChatsPage() {
   const vault = useCrm((s) => s.vault);
   const saveNote = useCrm((s) => s.saveNote);
   const teamAccess = useCrm((s) => s.teamAccess);
-  const reads = useOfReads("chat");
+  const fanCards = useChatFanCards();
   const [data, setData] = useState<CreatorChatList | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -589,7 +590,7 @@ export function RealChatsPage() {
             </div>
             <div className="min-h-0 flex-1 overflow-hidden">
               {selected ? (
-                <InsightPane thread={selected} reads={reads.byCreator} crmFans={crmFans} messages={messages} profiles={data?.profiles ?? []} notes={data?.notes ?? []} onNotes={saveNote} onProfile={(profile) => { void saveFanProfile({ data: profile }).then(() => refresh()); }} onCopyDraft={(body, price) => { replaceDraft(body); setDraftPrice(price); setPriceLabel(`$${(price / 100).toFixed(2)}`); setInsightsOpen(false); }} onCreatorNote={(body) => { if (!selected.fanKey) return; void saveFanNote({ data: { creatorId: selected.creatorId, fanKey: selected.fanKey, body } }).then(() => refresh()); }} />
+                <InsightPane thread={selected} cards={fanCards.fans} crmFans={crmFans} messages={messages} profiles={data?.profiles ?? []} notes={data?.notes ?? []} onNotes={saveNote} onProfile={(profile) => { void saveFanProfile({ data: profile }).then(() => refresh()); }} onCopyDraft={(body, price) => { replaceDraft(body); setDraftPrice(price); setPriceLabel(`$${(price / 100).toFixed(2)}`); setInsightsOpen(false); }} onCreatorNote={(body) => { if (!selected.fanKey) return; void saveFanNote({ data: { creatorId: selected.creatorId, fanKey: selected.fanKey, body } }).then(() => refresh()); }} />
               ) : (
                 <FanInsights
                   name={null}
@@ -642,7 +643,7 @@ export function RealChatsPage() {
 
 function InsightPane({
   thread,
-  reads,
+  cards,
   crmFans,
   messages,
   profiles,
@@ -664,7 +665,7 @@ function InsightPane({
     renewAuto: boolean | null;
     lists?: string[] | null;
   };
-  reads: Map<string, CreatorReadView>;
+  cards: Parameters<typeof chatFanCardFor>[0];
   crmFans: Array<{ id: string; creatorId: string; handle: string; name: string; notes: string }>;
   messages: Array<{ messageKey: string; body: string; sentAt: string; fromFan: boolean; priceCents: number | null; purchased: boolean | null; mediaCount?: number | null; mediaSeconds?: number | null; mediaPreview?: string | null }>;
   profiles: CreatorChatList["profiles"];
@@ -674,8 +675,8 @@ function InsightPane({
   onCopyDraft: (body: string, priceCents: number) => void;
   onCreatorNote: (body: string) => void;
 }) {
-  const read = reads.get(thread.creatorId);
-  const ofFan = read?.fans.find((fan) => fan.fanKey === thread.fanKey) ?? null;
+  const card = chatFanCardFor(cards, thread.creatorId, thread.fanKey);
+  const tipSum = card && card.tips.length > 0 ? card.tips.reduce((sum, tip) => sum + tip.amountCents, 0) : null;
   const crm = crmFans.find((fan) => {
     if (fan.creatorId !== thread.creatorId) return false;
     if (thread.fanHandle && fan.handle.replace(/^@/, "") === thread.fanHandle.replace(/^@/, "")) return true;
@@ -685,23 +686,22 @@ function InsightPane({
     <FanInsights
       name={thread.fanName}
       handle={thread.fanHandle}
-      spentCents={thread.spentCents ?? ofFan?.spentCents ?? null}
-      tipsCents={thread.tipsCents}
-      status={ofFan?.status ?? null}
-      expiresAt={thread.subExpiresAt ?? ofFan?.expiresAt ?? null}
-      subscribedAt={ofFan?.subscribedAt ?? null}
-      renewAuto={thread.renewAuto ?? ofFan?.renewAuto ?? null}
+      spentCents={thread.spentCents ?? card?.spentCents ?? null}
+      tipsCents={thread.tipsCents ?? tipSum}
+      status={card?.status ?? null}
+      expiresAt={thread.subExpiresAt ?? card?.expiresAt ?? null}
+      subscribedAt={card?.subscribedAt ?? null}
+      renewAuto={thread.renewAuto ?? card?.renewAuto ?? null}
       subPriceCents={thread.subPriceCents}
       notes={crm?.notes ?? ""}
       notesEditable={crm != null}
       onNotes={(value) => {
         if (crm) onNotes(crm.id, value);
       }}
-      transactions={(read?.transactions ?? []).filter((row) => row.fanKey === thread.fanKey).map((row) => ({
-        occurredAt: row.occurredAt,
-        grossCents: row.grossCents,
-        kind: row.kind,
-      }))}
+      transactions={[
+        ...(card?.tips ?? []).map((tip) => ({ occurredAt: tip.occurredAt, grossCents: tip.amountCents, kind: "tip" })),
+        ...(card?.purchases ?? []).map((purchase) => ({ occurredAt: purchase.occurredAt, grossCents: purchase.amountCents, kind: "message" })),
+      ]}
       ppvPrices={messages.flatMap((message) => (
         !message.fromFan && message.purchased === true && message.priceCents != null && message.priceCents > 0 ? [message.priceCents] : []
       ))}

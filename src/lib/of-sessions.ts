@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { authMiddleware } from "@/lib/auth/middleware";
+import type { ChatFanCard } from "@/lib/chat-fan-cards";
 import type { SessionStatus } from "../../server/of-sessions/types.ts";
 
 export type { SessionStatus };
@@ -208,6 +209,13 @@ export const listCreatorReads = createServerFn({ method: "GET" })
     const { listCreatorReadViews } = await import("./of-sessions-runtime.server");
     // El rol decide el alcance. Un chatter que pida "chat" no sale de sus cuentas.
     return listCreatorReadViews(context.userId, data.scope);
+  });
+
+export const listChatFanCards = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }): Promise<{ fans: ChatFanCard[] }> => {
+    const { listChatFanCardViews } = await import("./of-sessions-runtime.server");
+    return listChatFanCardViews(context.userId);
   });
 
 export const setSyncInterval = createServerFn({ method: "POST" })

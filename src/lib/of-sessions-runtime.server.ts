@@ -23,6 +23,7 @@ import { dashboardViewFor } from "../../server/of-sessions/metrics/dashboard.ts"
 import { accountPause, blockKind, listAccountPauses, noteAccountBlock } from "../../server/of-sessions/sync/backoff.ts";
 import { presentTeamMetrics } from "../../server/of-sessions/metrics/present-team.ts";
 import { creatorIdsForReads } from "@/lib/dashboard-config";
+import { chatFanCardsFrom, type ChatFanCard } from "@/lib/chat-fan-cards";
 import { deliverFanAlerts } from "../../server/of-sessions/notify/deliver.ts";
 import { chatIntervalMinFromEnv } from "../../server/of-sessions/sync/chats.ts";
 import { chatIntervalMinutes, inboxIsOpen, activeThreadWatches } from "../../server/of-sessions/sync/live.ts";
@@ -474,6 +475,16 @@ export async function listCreatorReadViews(
     runningCreatorIds: visibleRunning(accounts, new Set(creatorIds), running),
     creators: rows.map((row) => presentRead(access.role, row)),
   };
+}
+
+/** Fichas de la bandeja. Todas las cuentas del chat, solo estadísticas del fan. */
+export async function listChatFanCardViews(userId: string): Promise<{ fans: ChatFanCard[] }> {
+  const access = await accessFor(userId);
+  const accounts = await (await getOfSessionManager()).listAccounts();
+  const allIds = accounts.flatMap((account) => (account.creatorId ? [account.creatorId] : []));
+  const creatorIds = creatorIdsForChats(access, allIds);
+  const rows = await listCreatorReads(await getSql(), creatorIds);
+  return { fans: chatFanCardsFrom(rows, creatorIds) };
 }
 
 export async function setSyncIntervalView(

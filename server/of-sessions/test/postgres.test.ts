@@ -15,8 +15,9 @@ test("las migraciones aplican en Postgres cuando hay DATABASE_URL", async (t) =>
     assert.equal(names.includes("0012_extended_read.sql"), true);
     assert.equal(names.includes("0016_campaign_results.sql"), true);
     assert.equal(names.includes("0027_mass_messages.sql"), true);
-    assert.equal(names.includes("0032_notifications.sql"), true);
-    assert.equal(names.includes("0034_notification_first_seen.sql"), true);
+    assert.equal(names.includes("0033_outbound_match_unique.sql"), true);
+    assert.equal(names.includes("0034_notifications.sql"), true);
+    assert.equal(names.includes("0035_notification_first_seen.sql"), true);
     const table = await pool.query<{ to_regclass: string | null }>("select to_regclass('public.of_transaction') as to_regclass");
     assert.equal(table.rows[0]?.to_regclass, "of_transaction");
     const column = await pool.query<{ column_name: string }>(
