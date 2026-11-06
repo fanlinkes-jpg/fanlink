@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
+import { NotificationBell } from "@/features/notification-bell";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Button, Panel, Select } from "@/components/ui";
 import { useCrm } from "@/lib/crm";
@@ -44,6 +45,7 @@ export function DashboardPage() {
   const dashboardConfig = useCrm((s) => s.dashboardConfig);
   const setDashboardConfig = useCrm((s) => s.setDashboardConfig);
   const reads = useOfReads();
+  const navigate = useNavigate();
   const [period, setPeriod] = useState<MetricPeriod>("month");
   const [screen, setScreen] = useState<ScreenId>("resumen");
   const [alerts, setAlerts] = useState<SummaryAlert[] | null>(null);
@@ -143,6 +145,15 @@ export function DashboardPage() {
             ))}
           </Select>
           <span className="text-xs text-muted">{teamAccess.role === "owner" ? "Dueña" : "Chatter"}</span>
+          {selected !== "all" ? (
+            <NotificationBell
+              creatorId={selected}
+              onOpenThread={(target) => {
+                setCreator(target.creatorId);
+                void navigate({ to: "/mensajes" });
+              }}
+            />
+          ) : null}
         </header>
         <div className="space-y-4 p-4 md:p-6">
           {teamAccess.role !== "owner" && visible.length === 0 ? (

@@ -42,7 +42,9 @@ import { liveViewGate } from "../../server/of-sessions/live/desk.ts";
 import { issueLiveTicket } from "../../server/of-sessions/live/tickets.ts";
 import { listFanProfiles, saveFanProfile } from "../../server/of-sessions/sync/fan-profile.ts";
 import { listFanNotes, saveFanNote } from "../../server/of-sessions/sync/fan-note.ts";
+import { NOTIFICATION_INTERVAL_MIN } from "@/lib/notifications";
 import { intervalMinFromEnv, startSyncLoop, type ScheduleAccount } from "../../server/of-sessions/sync/schedule.ts";
+import { listNotificationMeta, saveNotificationRead } from "../../server/of-sessions/sync/notification-store.ts";
 import {
   listCreatorReads,
   listSyncMeta,
@@ -57,6 +59,7 @@ const globalRef = globalThis as typeof globalThis & {
   __ofSessionManager__?: Promise<SessionManager>;
   __ofSyncLoop__?: { stop: () => void };
   __ofChatLoop__?: { stop: () => void };
+  __ofNotificationLoop__?: { stop: () => void };
 };
 
 export function ensureSyncScheduler(): void {
@@ -93,6 +96,7 @@ async function createManager(): Promise<SessionManager> {
   bootSyncLoop(runtime.sessions);
   bootChatLoop(runtime.sessions);
   bootHistoryLoop(runtime.sessions);
+  bootNotificationLoop(runtime.sessions);
   return runtime.sessions;
 }
 
@@ -278,6 +282,50 @@ function bootChatLoop(sessions: SessionManager): void {
       const events = await saveChatRead(sql, account.creatorId, read);
       await deliverFanAlerts(sql, events);
     },
+  });
+}
+
+function bootNotificationLoop(sessions: SessionManager): void {
+  if (process.env.FANLINK_SYNC_ENABLED === "false") return;
+  if (process.execArgv.includes("--test")) return;
+  if (globalRef.__ofNotificationLoop__) return;
+  globalRef.__ofNotificationLoop__ = startSyncLoop({
+    intervalMin: async () => NOTIFICATION_INTERVAL_MIN,
+    inProgressIds: () => new Set(sessions.readingIds()),
+    accounts: () => notificationScheduleAccounts(sessions),
+    marginMinMs: 20_000,
+    marginMaxMs: 60_000,
+    firstDelayMs: 90_000,
+    sync: async (accountId) => {
+      const read = await sessions.readNotifications(accountId);
+      if (read.alreadyRunning) return;
+      if (read.loginRequired) await sessions.markLoginRequired(accountId);
+      const account = (await sessions.listAccounts()).find((item) => item.id === accountId);
+      if (!account?.creatorId) return;
+      await saveNotificationRead(await getSql(), account.creatorId, read);
+    },
+  });
+}
+
+async function notificationScheduleAccounts(sessions: SessionManager): Promise<ScheduleAccount[]> {
+  const [accounts, meta] = await Promise.all([sessions.listAccounts(), listNotificationMeta(await getSql())]);
+  const byCreator = new Map(meta.map((row) => [row.creatorId, row]));
+  const intervalMs = NOTIFICATION_INTERVAL_MIN * 60_000;
+  return accounts.flatMap((account) => {
+    if (!account.creatorId) return [];
+    const state = byCreator.get(account.creatorId);
+    const pause = accountPause(account.id);
+    return [
+      {
+        accountId: account.id,
+        creatorId: account.creatorId,
+        status: account.status,
+        identityState: account.identityState,
+        hasStorageState: account.hasStorageState,
+        consecutiveFailures: state?.consecutiveFailures ?? 0,
+        lastAttemptAt: pause ? new Date(pause.until - intervalMs).toISOString() : state?.lastAttemptAt ?? null,
+      },
+    ];
   });
 }
 

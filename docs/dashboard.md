@@ -101,3 +101,32 @@ En la fila compartida `workspace_state.state`, campo `dashboardConfig`, la misma
 Una fila anterior no trae el campo. Compararla con el defecto no cuenta como cambio, así un chatter puede seguir guardando su trabajo sin pisar una configuración que aún no existe. El rango de fechas y la creadora elegida no se guardan en esa fila: el rango es de la visita y la creadora sigue siendo el selector que ya usa el CRM.
 
 Abrir el dashboard no lanza una sincronización. Lee `listDashboard`, las lecturas ya guardadas y el estado de sesión.
+
+## Centro de notificaciones
+
+Cada creadora tiene una campana. El contador son las no leídas de esa cuenta. El panel lista lo que ya se escuchó de su página de notificaciones, de todos los tipos que esa página haya pedido: me gusta, comentarios, etiquetas (también pendientes o faltantes), suscripciones, renovaciones, propinas, compras de PPV, mensajes y avisos. Si un campo no viene, se queda en **Sin datos**. No se inventa un importe a cero.
+
+Las pestañas son las de OnlyFans: All, Interactions, Purchases, Subscriptions, Tags y Other. Hay búsqueda, rango de fechas (día de Madrid) y marcar como leída. Eso último es del CRM: no se escribe en OnlyFans. Si la fila trae fan o hilo, Abrir lleva a la consola de mensajes de esa cuenta. Si no trae ninguno, el destino es **Sin datos**.
+
+Un chatter ve las notificaciones de las cuentas que tiene asignadas. Las de ingresos (suscripción, renovación, propina y compra de PPV) solo las ve la dueña: ni el texto ni el importe salen para un miembro.
+
+### Escucha
+
+No se firma ni se llama a `api2`. El planificador, aparte del de ingresos y del de chats, abre `https://onlyfans.com/my/notifications` como mucho cada 30 minutos, una cuenta cada vez, y solo si no hay otra lectura usando el perfil. El listener se registra antes de navegar. Se guarda el JSON que esa página pide cuando la ruta contiene `notification`. Luego espera 8 segundos y hace un solo desplazamiento, por si la página pide la tanda siguiente. No hay una segunda pasada en la misma visita. Si la página cambia de ruta o no pide ese JSON, la razón queda en `sin respuesta de notificaciones` o `redirigido a login` y la pantalla sigue en **Sin datos**.
+
+Abrir la campana no lanza esa visita. Lee `of_notification`.
+
+### Montaje en el chat
+
+Esta rama no edita la consola. El componente es `NotificationBell` en `src/features/notification-bell.tsx`. En la cabecera de la creadora, dentro de `src/features/real-chats.tsx`, el punto de montaje es:
+
+```tsx
+<NotificationBell
+  creatorId={creatorId}
+  onOpenThread={({ creatorId: id, fanKey, threadKey }) => {
+    // Abrir el hilo de esa cuenta. fanKey o threadKey pueden ser null.
+  }}
+/>
+```
+
+En el dashboard la campana sale al elegir una sola creadora, no en Todas.
