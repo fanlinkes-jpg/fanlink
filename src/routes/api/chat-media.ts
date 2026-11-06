@@ -88,7 +88,13 @@ async function streamMedia(
       });
       return `/api/chat-media?${params.toString()}`;
     });
-    return new Response(body, { headers: { "content-type": "application/vnd.apple.mpegurl", "cache-control": "private, no-store" } });
+    return new Response(body, {
+      headers: {
+        "content-type": "application/vnd.apple.mpegurl",
+        "cache-control": "private, no-store",
+        "x-content-type-options": "nosniff",
+      },
+    });
   }
   let target = decision.url;
   if (variant === "segment") {
@@ -109,7 +115,10 @@ async function streamMedia(
     const notice = opened.reason === "host" || opened.reason === "rango" ? "Sin datos" : "Enlace caducado, recarga el chat";
     return new Response(notice, { status: opened.status });
   }
-  return new Response(opened.body, { status: opened.status, headers: opened.headers });
+  return new Response(opened.body, {
+    status: opened.status,
+    headers: { ...opened.headers, "x-content-type-options": "nosniff" },
+  });
 }
 
 async function readPlaylist(url: string, session: SessionRun | null): Promise<string | null> {

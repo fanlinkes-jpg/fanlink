@@ -132,7 +132,7 @@ export function sendBlock(...parts: Array<string | null>): VaultBlock | null {
   return null;
 }
 
-/** Una subcarpeta hereda el bloqueo de cualquiera de sus padres. */
+/** Una subcarpeta hereda el bloqueo de cualquiera de sus padres. Si falta un padre, la cadena queda bloqueada. */
 export function inheritedBlock(folders: VaultFolder[], folderId: string | null): VaultBlock | null {
   const byId = new Map(folders.map((folder) => [folder.id, folder]));
   const seen = new Set<string>();
@@ -140,7 +140,7 @@ export function inheritedBlock(folders: VaultFolder[], folderId: string | null):
   while (current && !seen.has(current)) {
     seen.add(current);
     const folder = byId.get(current);
-    if (!folder) return null;
+    if (!folder) return "NO VENDER";
     const block = sendBlock(folder.name);
     if (block) return block;
     current = folder.parentId;

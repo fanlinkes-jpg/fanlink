@@ -1,6 +1,6 @@
 import { decodeMedia } from "./history.ts";
 import type { ReadSql } from "./store.ts";
-import { inheritedBlock, sendBlock, type VaultBlock, type VaultFolder, type VaultItem, type VaultRead, type VaultSend } from "./vault.ts";
+import { inheritedBlock, sendBlock, type VaultFolder, type VaultItem, type VaultRead, type VaultSend } from "./vault.ts";
 
 export async function saveVaultRead(sql: ReadSql, creatorId: string, read: VaultRead, now = new Date()): Promise<void> {
   const syncedAt = now.toISOString();
@@ -84,20 +84,66 @@ export async function listVault(sql: ReadSql, creatorId: string): Promise<{ item
   };
 }
 
-export function blockForStored(item: VaultItem, folders: VaultFolder[]): VaultBlock | null {
-  return sendBlock(item.title, item.act) ?? item.blocked ?? inheritedBlock(folders, item.folderId);
+export type VaultAttachItem = { id: string; title: string | null; couple: string | null; act: string | null };
+
+export type VaultAttachDecision =
+  | { ok: true; items: VaultAttachItem[] }
+  | { ok: false; notice: string };
+
+type ItemLookup = {
+  media_id: string;
+  title: string | null;
+  couple: string | null;
+  act: string | null;
+  blocked: string | null;
+  folder_id: string | null;
+};
+
+/** Solo las filas pedidas. Un id de otra creadora, o que no existe, no se guarda. */
+export async function decideMediaAttach(sql: ReadSql, creatorId: string, mediaIds: string[]): Promise<VaultAttachDecision> {
+  const unique = [...new Set(mediaIds.filter(Boolean))];
+  if (!unique.length) return { ok: true, items: [] };
+  const filter = unique.map((_, index) => `$${index + 2}`).join(", ");
+  const rows = await sql.query<ItemLookup>(
+    `select media_id, title, couple, act, blocked, folder_id
+     from of_vault_item where creator_id = $1 and media_id in (${filter})`,
+    [creatorId, ...unique],
+  );
+  if (rows.length !== unique.length) return { ok: false, notice: "Sin datos" };
+  const folders = await folderChain(sql, creatorId, rows.map((row) => row.folder_id).filter((id): id is string => Boolean(id)));
+  const byId = new Map(rows.map((row) => [row.media_id, row]));
+  const items: VaultAttachItem[] = [];
+  for (const id of mediaIds) {
+    const row = byId.get(id);
+    if (!row) return { ok: false, notice: "Sin datos" };
+    const stored = row.blocked === "NO VENDER" || row.blocked === "SIN EDITAR" ? row.blocked : null;
+    const block = sendBlock(row.title, row.act) ?? stored ?? inheritedBlock(folders, row.folder_id);
+    if (block) return { ok: false, notice: block };
+    items.push({ id, title: row.title, couple: row.couple, act: row.act });
+  }
+  return { ok: true, items };
 }
 
-export async function blockForMediaIds(sql: ReadSql, creatorId: string, mediaIds: string[]): Promise<VaultBlock | null> {
-  if (!mediaIds.length) return null;
-  const stored = await listVault(sql, creatorId);
-  for (const id of mediaIds) {
-    const item = stored.items.find((row) => row.id === id);
-    if (!item) continue;
-    const block = blockForStored(item, stored.folders);
-    if (block) return block;
+async function folderChain(sql: ReadSql, creatorId: string, startIds: string[]): Promise<VaultFolder[]> {
+  const found: VaultFolder[] = [];
+  const seen = new Set<string>();
+  let pending = startIds;
+  while (pending.length) {
+    const next = pending.filter((id) => !seen.has(id));
+    if (!next.length) break;
+    for (const id of next) seen.add(id);
+    const filter = next.map((_, index) => `$${index + 2}`).join(", ");
+    const rows = await sql.query<{ folder_id: string; name: string; parent_id: string | null }>(
+      `select folder_id, name, parent_id from of_vault_folder where creator_id = $1 and folder_id in (${filter})`,
+      [creatorId, ...next],
+    );
+    pending = [];
+    for (const row of rows) {
+      found.push({ id: row.folder_id, name: row.name, parentId: row.parent_id });
+      if (row.parent_id) pending.push(row.parent_id);
+    }
   }
-  return null;
+  return found;
 }
 
 /** Historial por fan en la base. El id del medio del chat es el de la bóveda. */
@@ -138,12 +184,12 @@ export async function sendsForFan(sql: ReadSql, creatorId: string, fanKey: strin
   return sends;
 }
 
-export async function recordOutboundMedia(sql: ReadSql, outboundId: string, mediaIds: string[]): Promise<void> {
+export async function recordOutboundMedia(sql: ReadSql, outboundId: string, creatorId: string, mediaIds: string[]): Promise<void> {
   for (const [position, mediaId] of mediaIds.entries()) {
     await sql.query(
-      `insert into of_outbound_media (outbound_id, media_id, position) values ($1, $2, $3)
+      `insert into of_outbound_media (outbound_id, creator_id, media_id, position) values ($1, $2, $3, $4)
        on conflict (outbound_id, media_id) do nothing`,
-      [outboundId, mediaId, position],
+      [outboundId, creatorId, mediaId, position],
     );
   }
 }

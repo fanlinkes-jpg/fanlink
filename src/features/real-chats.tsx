@@ -7,6 +7,7 @@ import { useOfReads } from "@/lib/use-of-reads";
 import { ChatBubble } from "@/features/chat-bubble";
 import { FanInsights } from "@/features/fan-insights";
 import { VaultBrowser } from "@/features/vault-browser";
+import { messagePriceCents } from "@/lib/composer-tools";
 import { composerDraft } from "../../server/of-sessions/sync/composer-draft.ts";
 
 const EMOJIS = ["😊", "🔥", "❤️", "😘", "🎁"];
@@ -30,6 +31,7 @@ export function RealChatsPage() {
   const [sendEnabled, setSendEnabled] = useState(false);
   const [vaultOpen, setVaultOpen] = useState(false);
   const [attachments, setAttachments] = useState<Array<{ id: string; title: string; warning: string | null }>>([]);
+  const [priceText, setPriceText] = useState("");
   const [pendingOut, setPendingOut] = useState<Array<{ id: string; threadKey: string; body: string }>>([]);
 
   async function refresh() {
@@ -212,15 +214,27 @@ export function RealChatsPage() {
                 <button type="button" className="rounded px-2 text-xs" onClick={() => setVaultOpen(true)}>Add from media vault</button>
               </div>
               {attachments.length > 0 ? (
-                <ul className="mb-2 flex flex-wrap gap-1">
-                  {attachments.map((item) => (
-                    <li key={item.id} className="rounded-full border border-[#e6e8ee] px-2 py-1 text-[10px]">
-                      {item.title}
-                      {item.warning ? <span className="ml-1 text-[#8a5a12]">{item.warning}</span> : null}
-                      <button type="button" className="ml-1" aria-label="Quitar adjunto" onClick={() => setAttachments((current) => current.filter((row) => row.id !== item.id))}>×</button>
-                    </li>
-                  ))}
-                </ul>
+                <div className="mb-2">
+                  <ul className="flex flex-wrap gap-1">
+                    {attachments.map((item) => (
+                      <li key={item.id} className="rounded-full border border-[#e6e8ee] px-2 py-1 text-[10px]">
+                        {item.title}
+                        {item.warning ? <span className="ml-1 text-[#8a5a12]">{item.warning}</span> : null}
+                        <button type="button" className="ml-1" aria-label="Quitar adjunto" onClick={() => setAttachments((current) => current.filter((row) => row.id !== item.id))}>×</button>
+                      </li>
+                    ))}
+                  </ul>
+                  <label className="mt-2 flex items-center gap-2 text-xs text-[#6d7585]">
+                    Precio PPV
+                    <input
+                      value={priceText}
+                      onChange={(event) => setPriceText(event.target.value)}
+                      placeholder="Gratis"
+                      inputMode="decimal"
+                      className="w-24 rounded-lg border border-[#e6e8ee] px-2 py-1 text-sm text-[#1c1f26]"
+                    />
+                  </label>
+                </div>
               ) : null}
               <div className="flex items-end gap-2">
                 <textarea value={draft} onChange={(event) => setDraft(event.target.value)} rows={2} placeholder="Escribe un mensaje" className="min-h-12 flex-1 resize-none rounded-xl border border-[#e6e8ee] px-3 py-2 text-sm" />
@@ -229,9 +243,17 @@ export function RealChatsPage() {
                   disabled={!draft.trim() && attachments.length === 0}
                   onClick={() => {
                     if (!selected || (!draft.trim() && attachments.length === 0)) return;
+                    const priced = messagePriceCents(attachments.length > 0 ? priceText : "");
+                    if (!priced.ok) {
+                      setError("Precio no válido");
+                      return;
+                    }
                     const prepared = composerDraft(draft, attachments);
+                    const keptAttachments = attachments;
+                    const keptPrice = priceText;
                     setDraft("");
                     setAttachments([]);
+                    setPriceText("");
                     void recordChatOutbound({
                       data: {
                         creatorId: selected.creatorId,
@@ -239,11 +261,13 @@ export function RealChatsPage() {
                         threadKey: selected.threadKey,
                         body: prepared.body,
                         mediaIds: prepared.mediaIds,
-                        priceCents: null,
+                        priceCents: priced.cents,
                         ofMessageKey: null,
                       },
                     }).then(() => refresh()).catch((err: unknown) => {
                       setDraft(prepared.body);
+                      setAttachments(keptAttachments);
+                      setPriceText(keptPrice);
                       setError(sessionErrorText(err));
                     });
                   }}
