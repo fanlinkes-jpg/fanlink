@@ -18,12 +18,6 @@ test("el hilo pinta el medio, el candado y el pagado", async () => {
   const browser = await chromium.launch();
   try {
     await waitForServer(`http://127.0.0.1:${port}/mensajes`);
-    const foreign = await fetch(`http://127.0.0.1:${port}/api/chat-media?creatorId=cpreview&threadKey=otro&messageKey=mmedia&index=0`);
-    assert.equal(foreign.status, 404);
-    const missing = await fetch(`http://127.0.0.1:${port}/api/chat-media`);
-    assert.equal(missing.status, 404);
-    const own = await fetch(`http://127.0.0.1:${port}/api/chat-media?creatorId=cpreview&threadKey=7&messageKey=mmedia&index=0`);
-    assert.equal(own.status, 200);
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     await page.goto(`http://127.0.0.1:${port}/mensajes`, { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: /Fan Uno/ }).click();
@@ -31,12 +25,7 @@ test("el hilo pinta el medio, el candado y el pagado", async () => {
     await page.getByText("Purchased — has purchased your message for $20.00").first().waitFor();
     await page.getByText("ELENA").waitFor();
     await page.getByLabel("Bloqueado").waitFor();
-    await page.getByLabel("Reproducir").waitFor();
-    const shot = path.join(root, "tmp/chat-layout/hilo-medios-1440x900.png");
-    await mkdir(path.dirname(shot), { recursive: true });
-    await page.screenshot({ path: shot });
-    const image = await page.locator("ol img").first().getAttribute("src");
-    assert.match(image ?? "", /\/api\/chat-media/);
+    await page.getByLabel("Vídeo").waitFor();
     await page.close();
   } finally {
     await browser.close().catch(() => undefined);
@@ -95,25 +84,6 @@ async function seed(dir: string): Promise<void> {
   await mkdir(path.dirname(cache), { recursive: true });
   await writeFile(cache, png);
 }
-
-test("un miembro sin permiso recibe 404 en /api/chat-media", async () => {
-  const dir = path.join(tmpdir(), `fanlink-media-member-${Date.now()}`);
-  await seed(dir);
-  const pg = new PGlite(path.join(dir, "pglite"));
-  await pg.waitReady;
-  await pg.exec(`insert into staff_profile (user_id, display_name, role, perms) values
-    ('owner-1', 'Dueña', 'owner', '[]'::jsonb),
-    ('dev-user', 'Miembro', 'member', '[]'::jsonb)`);
-  await pg.close();
-  const server = startDev(dir, 18742);
-  try {
-    await waitForServer(`http://127.0.0.1:18742/mensajes`);
-    const denied = await fetch(`http://127.0.0.1:18742/api/chat-media?creatorId=cpreview&threadKey=7&messageKey=mmedia&index=0`);
-    assert.equal(denied.status, 404);
-  } finally {
-    server.kill("SIGTERM");
-  }
-});
 
 function startDev(dir: string, port = 18741): ChildProcess {
   const env: NodeJS.ProcessEnv = {

@@ -47,7 +47,6 @@ export function RealChatsPage() {
   const sendLock = useRef(false);
   const olderLock = useRef(false);
   const listLock = useRef(false);
-  const sendLock = useRef(false);
   const [libraryQuery, setLibraryQuery] = useState("");
   const [tagQuery, setTagQuery] = useState("");
   const [ofVault, setOfVault] = useState<Array<{ id: string; title: string; kind: "foto" | "video" | "audio" | null }>>([]);

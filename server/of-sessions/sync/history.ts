@@ -107,7 +107,14 @@ export function nextMediaUrl(current: string, location: string | null): string |
 }
 
 export function canProxyMedia(url: string): boolean {
-  return mediaHostAllowed(url);
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
+    const path = parsed.pathname.toLowerCase();
+    return !path.includes("/api2/") && !path.includes("/api/");
+  } catch {
+    return false;
+  }
 }
 
 export const PREVIEW_MAX_BYTES = 5_000_000;

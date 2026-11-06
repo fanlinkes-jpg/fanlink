@@ -1,9 +1,6 @@
-import { useEffect, useRef, useState } from "react";
-import Hls from "hls.js";
-import { ChevronLeft, ChevronRight, Film, Languages, Lock, Play } from "lucide-react";
+import { useState } from "react";
+import { ChevronLeft, ChevronRight, Film, Languages, Lock } from "lucide-react";
 import { authorLabel, paymentLabel } from "@/lib/composer-tools";
-import { nextMediaIndex } from "@/lib/media-carousel";
-import { mediaPlay } from "../../server/of-sessions/sync/media-play.ts";
 
 export type BubbleMedia = {
   kind: "foto" | "video" | "audio" | null;
@@ -37,10 +34,7 @@ export type BubbleMessage = {
 export function ChatBubble({ message, avatarUrl = null }: { message: BubbleMessage; avatarUrl?: string | null }) {
   const media = message.media ?? [];
   const [index, setIndex] = useState(0);
-  const [open, setOpen] = useState(false);
   const slide = media[index] ?? null;
-  const decision = slide ? mediaPlay({ ...slide, full: slide.full ?? null }, message.fromFan) : null;
-  const blocked = Boolean(decision && !decision.play && decision.notice.includes("bloquead"));
   const text = message.body.trim();
   const initial = (message.fromFan ? "F" : message.authorName ?? "A").slice(0, 1).toLocaleUpperCase("es-ES");
   return (
@@ -53,28 +47,14 @@ export function ChatBubble({ message, avatarUrl = null }: { message: BubbleMessa
           {message.replyBody ? <blockquote className="mb-1 border-l-2 border-[#c5cad6] pl-2 text-xs text-[#6d7585]">{message.replyBody}</blockquote> : null}
           {slide ? (
             <figure className="relative mb-1 h-52 overflow-hidden rounded-lg bg-[#d7dbe3]">
-              {slide.preview ? (
-                <img src={`/api/chat-media?creatorId=${encodeURIComponent(message.creatorId)}&threadKey=${encodeURIComponent(message.threadKey ?? "")}&messageKey=${encodeURIComponent(message.messageKey)}&index=${index}`} alt="" className={`h-full w-full object-cover ${blocked ? "scale-110 blur-md" : ""}`} />
-              ) : (
-                <span className="grid h-full place-items-center text-[10px] text-[#6d7585]">Sin datos</span>
-              )}
+              <span className="grid h-full place-items-center text-[10px] text-[#6d7585]">Sin datos</span>
               {media.length > 1 ? (
                 <>
-                  <button type="button" aria-label="Anterior" className="absolute left-1 top-1/2 grid h-7 w-7 -translate-y-1/2 place-items-center rounded-full bg-black/45 text-white" onClick={() => setIndex((current) => nextMediaIndex(current, media.length, -1))}><ChevronLeft className="h-4 w-4" /></button>
-                  <button type="button" aria-label="Siguiente" className="absolute right-1 top-1/2 grid h-7 w-7 -translate-y-1/2 place-items-center rounded-full bg-black/45 text-white" onClick={() => setIndex((current) => nextMediaIndex(current, media.length, 1))}><ChevronRight className="h-4 w-4" /></button>
+                  <button type="button" aria-label="Anterior" className="absolute left-1 top-1/2 grid h-7 w-7 -translate-y-1/2 place-items-center rounded-full bg-black/45 text-white" onClick={() => setIndex((current) => (current - 1 + media.length) % media.length)}><ChevronLeft className="h-4 w-4" /></button>
+                  <button type="button" aria-label="Siguiente" className="absolute right-1 top-1/2 grid h-7 w-7 -translate-y-1/2 place-items-center rounded-full bg-black/45 text-white" onClick={() => setIndex((current) => (current + 1) % media.length)}><ChevronRight className="h-4 w-4" /></button>
                 </>
               ) : null}
               {slide.kind === "video" || slide.kind === "audio" ? <Film className="absolute right-2 top-2 h-4 w-4 text-white" aria-label="Vídeo" /> : null}
-              {!blocked ? (
-                <button
-                  type="button"
-                  aria-label={slide.kind === "foto" ? "Ver foto" : "Reproducir"}
-                  className="absolute inset-y-0 left-10 right-10 grid place-items-center"
-                  onClick={() => setOpen(true)}
-                >
-                  {slide.kind === "video" || slide.kind === "audio" ? <Play className="h-8 w-8 text-white" /> : null}
-                </button>
-              ) : null}
               {slide.locked ? <Lock className="absolute left-2 top-2 h-4 w-4 text-white" aria-label="Bloqueado" /> : null}
               <span className="absolute bottom-1 left-1/2 -translate-x-1/2 rounded bg-black/55 px-1.5 text-[10px] text-white">{index + 1}/{media.length}</span>
               {paidLabel(slide.priceCents, slide.paid) ? (
@@ -86,15 +66,6 @@ export function ChatBubble({ message, avatarUrl = null }: { message: BubbleMessa
           ) : null}
           {text && !message.eventKind ? <p>{text}</p> : null}
         </div>
-        {open && slide && decision ? (
-          <MediaViewer
-            kind={slide.kind}
-            hls={decision.play ? decision.hls : false}
-            src={decision.play ? mediaSrc(message, index, "full") : null}
-            notice={decision.play ? null : decision.notice}
-            onClose={() => setOpen(false)}
-          />
-        ) : null}
         <p className="mt-1 flex items-center gap-1 text-[10px] text-[#6d7585]">
           <button type="button" aria-label="Traducir" title="Sin datos" className="text-[#6d7585]"><Languages className="h-3.5 w-3.5" /></button>
           <span>{clockLabel(message.sentAt)}</span>
@@ -107,35 +78,6 @@ export function ChatBubble({ message, avatarUrl = null }: { message: BubbleMessa
       </div>
       {message.fromFan ? null : <Avatar url={avatarUrl} initial={initial} />}
     </li>
-  );
-}
-
-function mediaSrc(message: BubbleMessage, index: number, variant: "full"): string {
-  return `/api/chat-media?creatorId=${encodeURIComponent(message.creatorId)}&threadKey=${encodeURIComponent(message.threadKey ?? "")}&messageKey=${encodeURIComponent(message.messageKey)}&index=${index}&variant=${variant}`;
-}
-
-function MediaViewer({ kind, hls, src, notice, onClose }: { kind: BubbleMedia["kind"]; hls: boolean; src: string | null; notice: string | null; onClose: () => void }) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!hls || !src || !video) return;
-    if (!Hls.isSupported()) {
-      video.src = src;
-      return;
-    }
-    const player = new Hls({ autoStartLoad: true });
-    player.loadSource(src);
-    player.attachMedia(video);
-    return () => player.destroy();
-  }, [hls, src]);
-  return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/80 p-4" role="dialog" aria-label="Reproducir">
-      <button type="button" className="absolute right-4 top-4 rounded bg-white/90 px-3 py-1 text-sm" onClick={onClose}>Cerrar</button>
-      {notice || !src ? <p className="text-sm font-medium text-white">{notice ?? "Enlace caducado, recarga el chat"}</p> : null}
-      {!notice && src && kind === "audio" ? <audio controls preload="none" src={src} className="w-full max-w-md" /> : null}
-      {!notice && src && kind === "foto" ? <img src={src} alt="" className="max-h-[80vh] max-w-full object-contain" /> : null}
-      {!notice && src && kind !== "audio" && kind !== "foto" ? <video ref={videoRef} controls preload="none" src={hls ? undefined : src} className="max-h-[80vh] max-w-full" /> : null}
-    </div>
   );
 }
 
