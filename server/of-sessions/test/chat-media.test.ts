@@ -3,9 +3,9 @@ import { test } from "node:test";
 import { mkdtemp, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { followMedia } from "../sync/history.ts";
+import { followMedia, readCappedBytes } from "../sync/history.ts";
 import { canReadChatMedia, chatMediaRouteStatus } from "../sync/media-access.ts";
-import { pruneMediaCache } from "../sync/media-cache.ts";
+import { pruneMediaCache, resetMediaPruneClock, shouldPruneMediaCache } from "../sync/media-cache.ts";
 
 const row = { creatorId: "c-1", threadKey: "28022478" };
 
@@ -50,6 +50,14 @@ test("la miniatura exige el hilo de esa creadora y una sesión con mensajes", ()
     threadKey: "28022478",
     row,
   }), true);
+  assert.equal(canReadChatMedia({
+    localOpen: true,
+    role: "member",
+    perms: [],
+    creatorId: "c-1",
+    threadKey: "28022478",
+    row,
+  }), false);
   assert.equal(canReadChatMedia({
     localOpen: true,
     role: "owner",
@@ -129,6 +137,31 @@ test("la caché de miniaturas borra lo viejo y no pasa del tope", async () => {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("la miniatura se corta al pasar el tope y followMedia no espera sin límite", async () => {
+  let cancelled = false;
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new Uint8Array([1, 2, 3, 4, 5]));
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  assert.equal(await readCappedBytes(stream, 3, 1_000), null);
+  assert.equal(cancelled, true);
+  const timed = await followMedia("https://cdn2.onlyfans.com/a.jpg", () => new Promise(() => undefined), 30);
+  assert.equal(timed, null);
+});
+
+test("la poda de miniaturas no se repite en cada escritura", () => {
+  resetMediaPruneClock();
+  const dir = "cache-prueba";
+  assert.equal(shouldPruneMediaCache(dir, 1_000, 60_000), true);
+  assert.equal(shouldPruneMediaCache(dir, 2_000, 60_000), false);
+  assert.equal(shouldPruneMediaCache(dir, 70_000, 60_000), true);
+  resetMediaPruneClock();
 });
 
 test("el fetch de la preview no sigue un redirect fuera de OnlyFans", async () => {

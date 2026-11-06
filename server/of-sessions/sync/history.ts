@@ -110,14 +110,71 @@ export function canProxyMedia(url: string): boolean {
   return mediaHostAllowed(url);
 }
 
+export const PREVIEW_MAX_BYTES = 5_000_000;
+export const PREVIEW_TIMEOUT_MS = 8_000;
+
+/** Lee como mucho el tope y deja de pedir en cuanto se pasa. El silencio también corta. */
+export async function readCappedBytes(
+  body: ReadableStream<Uint8Array> | null,
+  maxBytes = PREVIEW_MAX_BYTES,
+  idleMs = PREVIEW_TIMEOUT_MS,
+): Promise<Uint8Array | null> {
+  if (!body) return null;
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let seen = 0;
+  try {
+    for (;;) {
+      const next = await new Promise<ReadableStreamReadResult<Uint8Array>>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("inactivo")), idleMs);
+        reader.read().then((value) => {
+          clearTimeout(timer);
+          resolve(value);
+        }, (error: unknown) => {
+          clearTimeout(timer);
+          reject(error);
+        });
+      });
+      if (next.done) break;
+      seen += next.value.byteLength;
+      if (seen > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        return null;
+      }
+      chunks.push(next.value);
+    }
+  } catch {
+    await reader.cancel().catch(() => undefined);
+    return null;
+  }
+  const out = new Uint8Array(seen);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
+}
+
 export async function followMedia(
   start: string,
   load: (url: string) => Promise<{ status: number; location: string | null; body: Uint8Array | null }>,
+  timeoutMs = PREVIEW_TIMEOUT_MS,
 ): Promise<Uint8Array | null> {
   let current = start;
   for (let hop = 0; hop < 3; hop += 1) {
     if (!mediaHostAllowed(current)) return null;
-    const response = await load(current);
+    const response = await new Promise<{ status: number; location: string | null; body: Uint8Array | null } | null>((resolve) => {
+      const timer = setTimeout(() => resolve(null), timeoutMs);
+      load(current).then((value) => {
+        clearTimeout(timer);
+        resolve(value);
+      }, () => {
+        clearTimeout(timer);
+        resolve(null);
+      });
+    });
+    if (!response) return null;
     if (response.status >= 300 && response.status < 400) {
       const next = nextMediaUrl(current, response.location);
       if (!next) return null;
@@ -125,7 +182,7 @@ export async function followMedia(
       continue;
     }
     if (response.status < 200 || response.status >= 300 || !response.body) return null;
-    if (response.body.byteLength === 0 || response.body.byteLength > 5_000_000) return null;
+    if (response.body.byteLength === 0 || response.body.byteLength > PREVIEW_MAX_BYTES) return null;
     return response.body;
   }
   return null;

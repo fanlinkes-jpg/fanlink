@@ -5,6 +5,20 @@ export const MEDIA_CACHE_MAX_FILES = 200;
 export const MEDIA_CACHE_MAX_BYTES = 50 * 1024 * 1024;
 export const MEDIA_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
+const prunedAt = new Map<string, number>();
+
+/** No recorre la carpeta en cada miniatura. */
+export function shouldPruneMediaCache(dir: string, now = Date.now(), minIntervalMs = 60_000): boolean {
+  const last = prunedAt.get(dir);
+  if (last != null && now - last < minIntervalMs) return false;
+  prunedAt.set(dir, now);
+  return true;
+}
+
+export function resetMediaPruneClock(): void {
+  prunedAt.clear();
+}
+
 /** Borra miniaturas viejas y recorta la carpeta si pasa de ficheros o de bytes. */
 export async function pruneMediaCache(
   dir: string,

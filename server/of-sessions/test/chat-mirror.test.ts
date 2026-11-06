@@ -96,7 +96,26 @@ async function seed(dir: string): Promise<void> {
   await writeFile(cache, png);
 }
 
-function startDev(dir: string): ChildProcess {
+test("un miembro sin permiso recibe 404 en /api/chat-media", async () => {
+  const dir = path.join(tmpdir(), `fanlink-media-member-${Date.now()}`);
+  await seed(dir);
+  const pg = new PGlite(path.join(dir, "pglite"));
+  await pg.waitReady;
+  await pg.exec(`insert into staff_profile (user_id, display_name, role, perms) values
+    ('owner-1', 'Dueña', 'owner', '[]'::jsonb),
+    ('dev-user', 'Miembro', 'member', '[]'::jsonb)`);
+  await pg.close();
+  const server = startDev(dir, 18742);
+  try {
+    await waitForServer(`http://127.0.0.1:18742/mensajes`);
+    const denied = await fetch(`http://127.0.0.1:18742/api/chat-media?creatorId=cpreview&threadKey=7&messageKey=mmedia&index=0`);
+    assert.equal(denied.status, 404);
+  } finally {
+    server.kill("SIGTERM");
+  }
+});
+
+function startDev(dir: string, port = 18741): ChildProcess {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     VITE_AUTH_ENABLED: "false",
