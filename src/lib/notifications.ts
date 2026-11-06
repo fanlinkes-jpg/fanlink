@@ -190,7 +190,7 @@ export function redactedNotificationUrl(url: string): string | null {
   }
 }
 
-/** Recorta y junta espacios. No cambia mayúsculas: un retoque del texto es otro aviso. */
+/** Recorta y junta espacios. La clave sin id no usa el texto: un retoque no lo duplica. */
 export function normalizeNotificationText(body: string | null | undefined): string {
   return (body ?? "").trim().replace(/\s+/g, " ");
 }
@@ -217,14 +217,7 @@ export function notificationKey(input: {
   const full = input.id
     ? input.id
     : input.occurredAt
-      ? [
-          input.kind,
-          input.rawType,
-          input.occurredAt,
-          input.fanKey ?? "",
-          input.threadKey ?? "",
-          notificationSha256(normalizeNotificationText(input.body)).slice(0, 32),
-        ].join("\u001f")
+      ? [input.kind, input.rawType, input.occurredAt, input.fanKey ?? "", input.threadKey ?? ""].join("\u001f")
       : null;
   if (!full) return null;
   if (full.length <= 120) return full;

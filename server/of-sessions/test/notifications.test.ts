@@ -196,7 +196,7 @@ test("el chatter no recibe páginas vacías ni la cuenta de otra persona", async
 test("las migraciones de notificaciones se aplican dos veces", async () => {
   const pg = new PGlite();
   try {
-    for (const name of ["0034_notifications.sql", "0035_notification_first_seen.sql"]) {
+    for (const name of ["0034_notifications.sql", "0035_notification_first_seen.sql", "0036_notification_key_text.sql"]) {
       const sql = await readFile(path.join(root, "migrations", name), "utf8");
       await pg.exec(sql);
       await pg.exec(sql);
@@ -252,12 +252,13 @@ test("0035 añade first_seen_at a una tabla que ya existía", async () => {
         creator_id text not null,
         notification_key text not null,
         kind text not null,
+        occurred_at timestamptz,
         synced_at timestamptz not null,
         primary key (creator_id, notification_key)
       );
     `);
     await pg.exec(
-      "insert into of_notification (creator_id, notification_key, kind, synced_at) values ('c-alba', 'vieja', 'like', '2026-08-01T00:00:00Z')",
+      "insert into of_notification (creator_id, notification_key, kind, occurred_at, synced_at) values ('c-alba', 'vieja', 'like', '2026-07-01T00:00:00Z', '2026-08-01T00:00:00Z')",
     );
     const repair = await readFile(path.join(root, "migrations/0035_notification_first_seen.sql"), "utf8");
     await pg.exec(repair);
@@ -265,7 +266,36 @@ test("0035 añade first_seen_at a una tabla que ya existía", async () => {
     const row = await pg.query<{ first_seen_at: Date | string }>(
       "select first_seen_at from of_notification where notification_key = 'vieja'",
     );
-    assert.equal(new Date(row.rows[0]?.first_seen_at ?? "").toISOString(), "2026-08-01T00:00:00.000Z");
+    assert.equal(new Date(row.rows[0]?.first_seen_at ?? "").toISOString(), "2026-07-01T00:00:00.000Z");
+  } finally {
+    await pg.close();
+  }
+});
+
+test("0036 quita el hash del texto y deja una sola clave", async () => {
+  const pg = new PGlite();
+  try {
+    await pg.exec(await readFile(path.join(root, "migrations/0034_notifications.sql"), "utf8"));
+    const bare = `like\u001flike\u001f2026-11-05T10:00:00.000Z\u001f7\u001f`;
+    const older = `${bare}\u001f${"a".repeat(32)}`;
+    const newer = `${bare}\u001f${"b".repeat(32)}`;
+    await pg.query(
+      `insert into of_notification (creator_id, notification_key, kind, body, synced_at) values
+       ('c-alba', $1, 'like', 'uno', now()),
+       ('c-alba', $2, 'like', 'uno retocado', now())`,
+      [older, newer],
+    );
+    await pg.query(
+      "insert into of_notification_seen (creator_id, notification_key, user_id, seen_at) values ('c-alba', $1, 'dueña', now())",
+      [older],
+    );
+    const repair = await readFile(path.join(root, "migrations/0036_notification_key_text.sql"), "utf8");
+    await pg.exec(repair);
+    await pg.exec(repair);
+    const rows = await pg.query<{ notification_key: string }>("select notification_key from of_notification");
+    assert.deepEqual(rows.rows.map((row) => row.notification_key), [bare]);
+    const seen = await pg.query<{ notification_key: string }>("select notification_key from of_notification_seen");
+    assert.deepEqual(seen.rows.map((row) => row.notification_key), [bare]);
   } finally {
     await pg.close();
   }

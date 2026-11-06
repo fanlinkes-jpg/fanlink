@@ -477,14 +477,21 @@ export async function listCreatorReadViews(
   };
 }
 
-/** Fichas de la bandeja. Todas las cuentas del chat, solo estadísticas del fan. */
-export async function listChatFanCardViews(userId: string): Promise<{ fans: ChatFanCard[] }> {
+/** Fichas de los hilos pedidos. Sin lista, no carga todos los fans. */
+export async function listChatFanCardViews(
+  userId: string,
+  threads?: ReadonlyArray<{ creatorId: string; fanKey: string }>,
+): Promise<{ fans: ChatFanCard[] }> {
+  const wanted = (threads ?? []).filter((thread) => thread.creatorId && thread.fanKey);
+  if (wanted.length === 0) return { fans: [] };
   const access = await accessFor(userId);
   const accounts = await (await getOfSessionManager()).listAccounts();
   const allIds = accounts.flatMap((account) => (account.creatorId ? [account.creatorId] : []));
-  const creatorIds = creatorIdsForChats(access, allIds);
+  const allowed = creatorIdsForChats(access, allIds);
+  const creatorIds = allowed.filter((id) => wanted.some((thread) => thread.creatorId === id));
+  if (creatorIds.length === 0) return { fans: [] };
   const rows = await listCreatorReads(await getSql(), creatorIds);
-  return { fans: chatFanCardsFrom(rows, creatorIds) };
+  return { fans: chatFanCardsFrom(rows, creatorIds, wanted) };
 }
 
 export async function setSyncIntervalView(

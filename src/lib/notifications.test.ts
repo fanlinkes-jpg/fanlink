@@ -119,8 +119,9 @@ test("filtra por pestaña, texto y fechas, y cuenta no leídas", () => {
       { type: "like", text: "  uno  ", createdAt: "2026-11-05T10:00:00.000Z", user: { id: 7 } },
     ],
   });
-  assert.equal(sameTime.length, 2);
-  assert.equal(sameTime.some((row) => row.key.includes("uno") || row.key.includes("dos")), false);
+  assert.equal(sameTime.length, 1);
+  assert.equal(sameTime[0]?.key.includes("uno"), false);
+  assert.equal(sameTime[0]?.key.includes("dos"), false);
   const spaced = notificationKey({
     id: null,
     kind: "like",
@@ -144,7 +145,26 @@ test("filtra por pestaña, texto y fechas, y cuenta no leídas", () => {
   const edited = parseNotificationPayload({
     list: [{ type: "like", text: "uno retocado", createdAt: "2026-11-05T10:00:00.000Z", user: { id: 7 } }],
   });
-  assert.notEqual(edited[0]?.key, sameTime.find((row) => row.body === "uno")?.key);
+  assert.equal(edited[0]?.key, sameTime[0]?.key);
+  const retouched = notificationKey({
+    id: null,
+    kind: "like",
+    rawType: "like",
+    occurredAt: "2026-11-05T10:00:00.000Z",
+    fanKey: "7",
+    threadKey: null,
+    body: "texto retocado",
+  });
+  const original = notificationKey({
+    id: null,
+    kind: "like",
+    rawType: "like",
+    occurredAt: "2026-11-05T10:00:00.000Z",
+    fanKey: "7",
+    threadKey: null,
+    body: "texto original",
+  });
+  assert.equal(retouched, original);
   const longId = `${"a".repeat(130)}x`;
   const longA = notificationKey({ id: longId, kind: "like", rawType: "like", occurredAt: null, fanKey: null, threadKey: null });
   const longB = notificationKey({ id: `${"a".repeat(130)}y`, kind: "like", rawType: "like", occurredAt: null, fanKey: null, threadKey: null });

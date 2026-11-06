@@ -213,9 +213,10 @@ export const listCreatorReads = createServerFn({ method: "GET" })
 
 export const listChatFanCards = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
-  .handler(async ({ context }): Promise<{ fans: ChatFanCard[] }> => {
+  .validator((input: { threads?: Array<{ creatorId: string; fanKey: string }> } | undefined) => input ?? {})
+  .handler(async ({ context, data }): Promise<{ fans: ChatFanCard[] }> => {
     const { listChatFanCardViews } = await import("./of-sessions-runtime.server");
-    return listChatFanCardViews(context.userId);
+    return listChatFanCardViews(context.userId, data.threads);
   });
 
 export const setSyncInterval = createServerFn({ method: "POST" })

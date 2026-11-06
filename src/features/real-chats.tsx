@@ -5,7 +5,7 @@ import { chatSendAccess, listCreatorChats, loadMoreChats, loadOlderMessages, rea
 import { useCrm, type VaultItem } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
 import { useChatFanCards } from "@/lib/use-chat-fan-cards";
-import { chatFanCardFor } from "@/lib/chat-fan-cards";
+import { chatFanCardFor, fanCardTransactions } from "@/lib/chat-fan-cards";
 import { FanInsights } from "@/features/fan-insights";
 import { LiveOnlyFans } from "@/features/live-onlyfans";
 import { MessagePriceDialog } from "@/features/message-price-dialog";
@@ -46,7 +46,6 @@ export function RealChatsPage() {
   const vault = useCrm((s) => s.vault);
   const saveNote = useCrm((s) => s.saveNote);
   const teamAccess = useCrm((s) => s.teamAccess);
-  const fanCards = useChatFanCards();
   const [data, setData] = useState<CreatorChatList | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -103,6 +102,7 @@ export function RealChatsPage() {
     .filter((thread) => filter !== "propinas" || (thread.tipsCents != null && thread.tipsCents > 0))
     .filter((thread) => filter !== "online" || thread.online === true)
     .sort((left, right) => (right.lastMessageAt ?? "").localeCompare(left.lastMessageAt ?? ""));
+  const fanCards = useChatFanCards(visible);
   const selected =
     visible.find((thread) => `${thread.creatorId}:${thread.threadKey}` === selectedKey) ?? visible[0] ?? null;
   const messages = (data?.messages ?? [])
@@ -698,10 +698,7 @@ function InsightPane({
       onNotes={(value) => {
         if (crm) onNotes(crm.id, value);
       }}
-      transactions={[
-        ...(card?.tips ?? []).map((tip) => ({ occurredAt: tip.occurredAt, grossCents: tip.amountCents, kind: "tip" })),
-        ...(card?.purchases ?? []).map((purchase) => ({ occurredAt: purchase.occurredAt, grossCents: purchase.amountCents, kind: "message" })),
-      ]}
+      transactions={fanCardTransactions(card)}
       ppvPrices={messages.flatMap((message) => (
         !message.fromFan && message.purchased === true && message.priceCents != null && message.priceCents > 0 ? [message.priceCents] : []
       ))}

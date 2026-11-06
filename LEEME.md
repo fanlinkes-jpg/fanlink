@@ -11,6 +11,8 @@ Son dos cosas distintas.
 
 ## Cómo ejecutarlo
 
+Hace falta Node `>=22.3`. `.nvmrc` fija `22.3.0`. La huella de una clave larga usa `process.getBuiltinModule`.
+
 ```bash
 npm install
 npx playwright install chromium
@@ -92,7 +94,7 @@ Fragilidad: si OnlyFans cambia la ruta del chat, la caja, el botón Send o los c
 
 ## Notificaciones de cada cuenta
 
-Un bucle aparte abre `https://onlyfans.com/my/notifications` cada 30 minutos, una cuenta cada vez, y escucha el JSON que esa página pide. No llama a un endpoint por su cuenta. Hace un solo desplazamiento, con 8 segundos de pausa. Si otra lectura usa el perfil, espera el turno. La migración `0034_notifications.sql` guarda el aviso y quién lo marcó leído. `0035_notification_first_seen.sql` añade `first_seen_at` si la tabla ya existía sin esa columna y, en ese caso, la rellena con `synced_at` (la última vez que se vio, no la primera). Un chatter ve compras, propinas y suscripciones de los fans de sus cuentas, con el importe del fan. Las ganancias, el payout y el saldo de la agencia, y los tipos desconocidos, solo los ve la dueña. Lo que tiene fecha y supera 90 días se borra en la siguiente pasada. Un aviso sin fecha cuenta esos 90 días desde `first_seen_at`. En una fila nueva esa marca es el primer guardado y no se mueve si el aviso vuelve. Abrir la campana no lanza la visita.
+Un bucle aparte abre `https://onlyfans.com/my/notifications` cada 30 minutos, una cuenta cada vez, y escucha el JSON que esa página pide. No llama a un endpoint por su cuenta. Hace un solo desplazamiento, con 8 segundos de pausa. Si otra lectura usa el perfil, espera el turno. La migración `0034_notifications.sql` guarda el aviso y quién lo marcó leído. `0035_notification_first_seen.sql` añade `first_seen_at` si la tabla ya existía sin esa columna y, en ese caso, la rellena con `coalesce(first_seen_at, occurred_at, synced_at, now())`: la fecha del aviso va antes que `synced_at`, que es la última vez que se vio. `0036_notification_key_text.sql` quita el hash del texto de las claves antiguas sin id y borra el duplicado. Un retoque del texto no crea otro aviso. Un chatter ve compras, propinas y suscripciones de los fans de sus cuentas, con el importe del fan. Las ganancias, el payout y el saldo de la agencia, y los tipos desconocidos, solo los ve la dueña. Lo que tiene fecha y supera 90 días se borra en la siguiente pasada. Un aviso sin fecha cuenta esos 90 días desde `first_seen_at`. En una fila nueva esa marca es el primer guardado y no se mueve si el aviso vuelve. Abrir la campana no lanza la visita.
 
 La bandeja es de todas las cuentas. `listChatFanCards` usa `creatorIdsForChats` y devuelve la ficha de cada fan: gasto, compras, propinas, suscripción, renovación y estado, también de una cuenta que el chatter no tiene asignada. No devuelve ingresos totales, beneficios, pagos ni cifras agregadas del dashboard. Si un campo no viene, la ficha dice Sin datos.
 
