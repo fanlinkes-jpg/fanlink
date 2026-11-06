@@ -156,6 +156,9 @@ export type CreatorChatList = {
     authorName: string | null;
     seen: boolean | null;
     automatic: boolean | null;
+    mediaCount: number | null;
+    mediaSeconds: number | null;
+    mediaPreview: string | null;
   }>;
   meta: Array<{
     creatorId: string;
