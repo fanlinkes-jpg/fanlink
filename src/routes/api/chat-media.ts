@@ -7,9 +7,10 @@ import { getSql } from "@/lib/db";
 import { ensureStaff } from "@/lib/workspace-store";
 import { loadCrmSessionConfig } from "../../../server/of-sessions/config.ts";
 import { canProxyMedia, decodeMedia, followMedia, mediaHostAllowed } from "../../../server/of-sessions/sync/history.ts";
-import { canReadChatMedia } from "../../../server/of-sessions/sync/media-access.ts";
+import { chatMediaRouteStatus } from "../../../server/of-sessions/sync/media-access.ts";
+import { pruneMediaCache } from "../../../server/of-sessions/sync/media-cache.ts";
 import { mediaPlay } from "../../../server/of-sessions/sync/media-play.ts";
-import { isHlsUrl, openMediaStream, playlistUrls, rewritePlaylist, type UpstreamResponse } from "../../../server/of-sessions/sync/media-stream.ts";
+import { fetchUpstream, isHlsUrl, loadPlaylistCached, openMediaStream, playlistUrls, rewritePlaylist, type UpstreamResponse } from "../../../server/of-sessions/sync/media-stream.ts";
 
 export const Route = createFileRoute("/api/chat-media")({
   server: {
@@ -20,10 +21,8 @@ export const Route = createFileRoute("/api/chat-media")({
         const creatorId = url.searchParams.get("creatorId") ?? "";
         const messageKey = url.searchParams.get("messageKey") ?? "";
         const threadKey = url.searchParams.get("threadKey") ?? "";
-        const index = Number(url.searchParams.get("index") ?? "0");
-        if (!creatorId || !messageKey || !threadKey || !Number.isInteger(index) || index < 0) {
-          return new Response("Sin datos", { status: 404 });
-        }
+        const indexRaw = url.searchParams.get("index");
+        const index = Number(indexRaw ?? "");
         const sql = await getSql();
         const localOpen = !authConfigured && userId === DEV_USER_ID;
         const access = await ensureStaff(sql, userId, localOpen);
@@ -31,15 +30,23 @@ export const Route = createFileRoute("/api/chat-media")({
           "select thread_key from of_chat_message where creator_id = $1 and message_key = $2",
           [creatorId, messageKey],
         );
-        const allowed = creatorIdsForChats(access, [creatorId]).includes(creatorId) && canReadChatMedia({
+        const reader = {
           localOpen,
           role: access.role,
           perms: access.perms,
           creatorId,
           threadKey,
           row: rows[0] ? { creatorId, threadKey: rows[0].thread_key } : null,
+        };
+        const status = chatMediaRouteStatus({
+          creatorId,
+          messageKey,
+          threadKey,
+          indexRaw,
+          creatorAllowed: creatorIdsForChats(access, [creatorId]).includes(creatorId),
+          reader,
         });
-        if (!allowed) return new Response("Sin datos", { status: 404 });
+        if (status === 404) return new Response("Sin datos", { status: 404 });
         const variant = url.searchParams.get("variant") ?? "thumb";
         if (variant === "full" || variant === "segment") {
           return streamMedia(request, creatorId, messageKey, threadKey, index, variant, url.searchParams.get("u"));
@@ -63,7 +70,7 @@ async function streamMedia(request: Request, creatorId: string, messageKey: stri
   const decision = mediaPlay({ ...item, full: item.full ?? null }, rows[0].from_fan);
   if (!decision.play) return new Response(decision.notice, { status: decision.notice.includes("bloqueado") ? 403 : 410 });
   if (decision.hls && variant === "full") {
-    const playlist = await readPlaylist(decision.url, creatorId);
+    const playlist = await loadPlaylistCached(`${creatorId}\n${decision.url}`, Date.now(), () => readPlaylist(decision.url, creatorId));
     if (!playlist) return new Response("Enlace caducado, recarga el chat", { status: 410 });
     const body = rewritePlaylist(playlist, decision.url, (absolute) => {
       if (!mediaHostAllowed(absolute)) return null;
@@ -74,7 +81,8 @@ async function streamMedia(request: Request, creatorId: string, messageKey: stri
   }
   let target = decision.url;
   if (variant === "segment") {
-    if (!segmentUrl || !decision.hls || !playlistUrls(await readPlaylist(decision.url, creatorId) ?? "", decision.url).includes(segmentUrl)) {
+    const playlist = await loadPlaylistCached(`${creatorId}\n${decision.url}`, Date.now(), () => readPlaylist(decision.url, creatorId));
+    if (!segmentUrl || !decision.hls || !playlistUrls(playlist ?? "", decision.url).includes(segmentUrl)) {
       return new Response("Enlace caducado, recarga el chat", { status: 403 });
     }
     target = segmentUrl;
@@ -83,7 +91,7 @@ async function streamMedia(request: Request, creatorId: string, messageKey: stri
   }
   const opened = await openWithFallback(creatorId, target, request.headers.get("range"));
   if (!opened.ok) {
-    const notice = opened.reason === "host" ? "Sin datos" : "Enlace caducado, recarga el chat";
+    const notice = opened.reason === "host" || opened.reason === "rango" ? "Sin datos" : "Enlace caducado, recarga el chat";
     return new Response(notice, { status: opened.status });
   }
   return new Response(opened.body, { status: opened.status, headers: opened.headers });
@@ -107,14 +115,7 @@ async function openWithFallback(creatorId: string, target: string, range: string
 }
 
 async function fetchLoad(url: string, headers: Headers): Promise<UpstreamResponse> {
-  const response = await fetch(url, { headers, redirect: "manual" }).catch(() => null);
-  if (!response) return { status: 0, location: null, headers: new Headers(), body: null };
-  return {
-    status: response.status,
-    location: response.headers.get("location"),
-    headers: response.headers,
-    body: response.body,
-  };
+  return fetchUpstream(url, headers);
 }
 
 async function accountCookie(creatorId: string, target: string): Promise<string | null> {
@@ -149,6 +150,7 @@ async function loadPreview(creatorId: string, messageKey: string, threadKey: str
   if (!bytes) return null;
   await mkdir(path.dirname(cache), { recursive: true });
   await writeFile(cache, bytes);
+  await pruneMediaCache(path.join(loadCrmSessionConfig().dataDir, "media-cache")).catch(() => undefined);
   return bytes;
 }
 
