@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -55,6 +55,40 @@ test("la caja y el Send del DOM real envían y el volcado no copia el mensaje", 
     assert.equal(nodes.some((node) => node.atAttr === "send_btn"), true);
     assert.equal(nodes.some((node) => node.atAttr === "price_btn"), true);
     await page.close();
+
+    const lines: string[] = [];
+    const previous = console.info;
+    console.info = (...args: unknown[]) => {
+      lines.push(args.map((item) => String(item)).join(" "));
+      previous(...args);
+    };
+    try {
+      const stuck = await composeChat(context, {
+        chatsUrl: `${fixture.origin}/my/chats`,
+        siteId: "onlyfans",
+        threadKey: "8",
+        fanKey: "8",
+        accountUserId: "42",
+        body: "no sale",
+        priceCents: null,
+        typeDelayMs: 0,
+        confirmMs: 600,
+      });
+      assert.equal(stuck.messageId, null);
+      assert.equal(lines.filter((line) => line.includes("[fanlink:send] inicio")).length, 1);
+      const dumpLine = lines.find((line) => line.includes("volcado="));
+      assert.ok(dumpLine);
+      const jsonPath = dumpLine.split("volcado=")[1]?.split(" ")[0] ?? "";
+      const pngPath = dumpLine.split("captura=")[1]?.trim() ?? "";
+      const dump = await readFile(jsonPath, "utf8");
+      assert.equal(dump.includes("mensaje secreto del fan"), false);
+      assert.equal(dump.includes("chat_input"), true);
+      assert.equal(dump.includes("\"[]\""), false);
+      const png = await stat(pngPath);
+      assert.ok(png.size > 32);
+    } finally {
+      console.info = previous;
+    }
   } finally {
     await browser.close();
     await fixture.close();

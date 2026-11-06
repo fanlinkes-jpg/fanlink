@@ -70,16 +70,14 @@ export function authorLabel(name: string | null, automatic: boolean | null): str
   return name.toLocaleUpperCase("es-ES");
 }
 
-/** Colores del formato, en el orden de la paleta de OnlyFans. */
+/**
+ * Los tres colores de texto que documenta OnlyFans para el editor
+ * (clases m-editor-fc__gray, m-editor-fc__blue-1 y m-editor-fc__blue-2).
+ */
 export const TEXT_COLORS = [
-  { name: "Negro", hex: "#1c2333" },
-  { name: "Rojo", hex: "#e11d48" },
-  { name: "Naranja", hex: "#f97316" },
-  { name: "Amarillo", hex: "#ca8a04" },
-  { name: "Verde", hex: "#16a34a" },
-  { name: "Azul", hex: "#2563eb" },
-  { name: "Morado", hex: "#7c3aed" },
-  { name: "Rosa", hex: "#db2777" },
+  { name: "Gris", hex: "#8a96a3", ofClass: "m-editor-fc__gray" },
+  { name: "Azul", hex: "#00aff0", ofClass: "m-editor-fc__blue-1" },
+  { name: "Azul 2", hex: "#1b98e0", ofClass: "m-editor-fc__blue-2" },
 ] as const;
 
 export type MessagePrice = { ok: true; cents: number | null } | { ok: false };

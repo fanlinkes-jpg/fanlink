@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 
@@ -116,18 +116,48 @@ export function readFooterNodes(): FooterNode[] {
   });
 }
 
-export async function writeSendFailure(page: Page, dir = "logs"): Promise<{ json: string; png: string }> {
+/** HTML del chat sin el texto de los mensajes. Corre dentro de la página. */
+export function readChatHtml(): string {
+  const root = document.querySelector(".b-chat") ?? document.body;
+  const clone = root.cloneNode(true);
+  if (!(clone instanceof HTMLElement)) return "";
+  clone.querySelectorAll("script, style, noscript, iframe").forEach((node) => node.remove());
+  const messageRoots = [...clone.querySelectorAll(".b-chat__messages, .b-chat__messages-list, .b-chat__item, .b-chat__message")];
+  const walker = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT);
+  const texts: Text[] = [];
+  while (walker.nextNode()) texts.push(walker.currentNode as Text);
+  for (const text of texts) {
+    const parent = text.parentElement;
+    const inMessage = parent ? messageRoots.some((node) => node.contains(parent)) : false;
+    if (inMessage || (text.textContent ?? "").trim().length > 40) text.textContent = "";
+  }
+  for (const el of [clone, ...clone.querySelectorAll("*")]) {
+    if (!(el instanceof Element)) continue;
+    for (const attr of [...el.attributes]) {
+      const name = attr.name.toLowerCase();
+      const keep = name === "class" || name === "id" || name === "at-attr" || name === "placeholder" || name === "name" || name === "type" || name === "role" || name === "disabled" || name.startsWith("aria-") || name.startsWith("data-");
+      if (!keep) el.removeAttribute(attr.name);
+      else if (attr.value.length > 120) el.setAttribute(attr.name, attr.value.slice(0, 120));
+    }
+  }
+  return clone.outerHTML.slice(0, 180_000);
+}
+
+export async function writeSendFailure(page: Page, dir = "logs"): Promise<{ json: string; png: string | null }> {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   await mkdir(dir, { recursive: true });
-  const nodes = await page.evaluate(readFooterNodes).catch(() => []);
+  const html = await page.evaluate(readChatHtml).catch((error: unknown) => (
+    `<!-- ${error instanceof Error ? error.message.slice(0, 160) : "sin html"} -->`
+  ));
   const json = path.join(dir, `send-fail-${stamp}.json`);
   const png = path.join(dir, `send-fail-${stamp}.png`);
-  await writeFile(json, JSON.stringify(nodes, null, 2));
-  const size = page.viewportSize() ?? { width: 1280, height: 800 };
-  const top = Math.floor(size.height * 0.55);
-  await page.screenshot({
-    path: png,
-    clip: { x: 0, y: top, width: size.width, height: Math.max(1, size.height - top) },
-  }).catch(() => undefined);
+  await writeFile(json, JSON.stringify({ html }, null, 2));
+  try {
+    await page.screenshot({ path: png, type: "png" });
+    const info = await stat(png);
+    if (info.size < 32) return { json, png: null };
+  } catch {
+    return { json, png: null };
+  }
   return { json, png };
 }

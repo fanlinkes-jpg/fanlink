@@ -90,7 +90,27 @@ function dashboardHtml(mode: FixtureMode): string {
   }
 }
 
-function ofChatHtml(): string {
+function ofChatHtml(live = true): string {
+  const sendScript = live
+    ? `const box = document.querySelector("[at-attr='chat_input']");
+       const send = document.querySelector("[at-attr='send_btn']");
+       const post = async () => {
+         if (send.disabled) return;
+         const body = box.value;
+         const price = document.querySelector("[at-attr='price_input']").dataset.saved || "";
+         await fetch("/fixture/compose", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ body, price, file: "" }) });
+         await fetch("/api2/v2/chats/9/messages?order=desc");
+         box.value = "";
+         send.disabled = true;
+       };
+       send.disabled = true;
+       box.addEventListener("input", () => { send.disabled = box.value.trim() === ""; });
+       send.onclick = () => { void post(); };
+       box.addEventListener("keydown", (event) => {
+         if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void post(); }
+       });
+       document.querySelector("[at-attr='vault_btn']").onclick = () => { void fetch("/fixture/vault"); };`
+    : `document.querySelector("[at-attr='send_btn']").disabled = true;`;
   return pageHtml(
     "Hilo",
     "",
@@ -102,6 +122,7 @@ function ofChatHtml(): string {
            <textarea placeholder="Type a message..." at-attr="chat_input"></textarea>
          </div>
          <button type="button" at-attr="price_btn" aria-label="Price">Price</button>
+         <button type="button" at-attr="vault_btn" aria-label="Add from media vault">Vault</button>
          <button type="button" at-attr="send_btn">Send</button>
        </form>
        <div id="price-box" role="dialog" aria-label="Message price" hidden>
@@ -115,12 +136,7 @@ function ofChatHtml(): string {
          document.querySelector("[at-attr='price_input']").dataset.saved = document.querySelector("[at-attr='price_input']").value;
          document.getElementById("price-box").hidden = true;
        };
-       document.querySelector("[at-attr='send_btn']").onclick = async () => {
-         const body = document.querySelector("[at-attr='chat_input']").value;
-         const price = document.querySelector("[at-attr='price_input']").dataset.saved || "";
-         await fetch("/fixture/compose", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ body, price, file: "" }) });
-         await fetch("/api2/v2/chats/9/messages?order=desc");
-       };
+       ${sendScript}
      </script>`,
   );
 }
@@ -468,6 +484,19 @@ async function handle(
         isMine: true,
       })) : [],
     }));
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/fixture/vault") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ list: [{ id: "v1", type: "photo", title: "playa" }] }));
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/my/chats/chat/8") {
+    if (!accepted(req, epoch())) {
+      redirect(res, "/login");
+      return;
+    }
+    html(res, ofChatHtml(false));
     return;
   }
   if (req.method === "GET" && url.pathname === "/my/chats/chat/9") {

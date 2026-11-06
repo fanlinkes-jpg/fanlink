@@ -32,11 +32,11 @@ import { pickAccountWatch } from "../../server/of-sessions/sync/watch-plan.ts";
 import { listChatMeta, listChats, listOpenHistory, listPendingOutbounds, markChatList, markHistory, markOutboundError, markOutboundSent, recordOutbound, saveChatRead } from "../../server/of-sessions/sync/chat-store.ts";
 import { historyPerMinute, listPageDone, nextHistoryThread, oldestCursor, pageFinished } from "../../server/of-sessions/sync/history.ts";
 import { captureChatListPage, captureOlderMessages } from "../../server/of-sessions/sync/history-scroll.ts";
+import { captureVaultList, type VaultFile } from "../../server/of-sessions/sync/vault-listen.ts";
 import { chatPageUrl } from "../../server/of-sessions/sync/chats.ts";
 import { chatSendGate, publicSendReason, sendPace, type SendAccount } from "../../server/of-sessions/send/gate.ts";
 import { deliverChatSend, sendLimitFromEnv } from "../../server/of-sessions/send/deliver.ts";
 import { composeChat } from "../../server/of-sessions/send/compose.ts";
-import { threadIdKind } from "../../server/of-sessions/send/targets.ts";
 import { listFanProfiles, saveFanProfile } from "../../server/of-sessions/sync/fan-profile.ts";
 import { listFanNotes, saveFanNote } from "../../server/of-sessions/sync/fan-note.ts";
 import { intervalMinFromEnv, startSyncLoop, type ScheduleAccount } from "../../server/of-sessions/sync/schedule.ts";
@@ -820,7 +820,7 @@ export async function chatSendAccessView(userId: string): Promise<{ creatorIds: 
 
 export async function sendChatMessageView(
   userId: string,
-  input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null },
+  input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; vaultTitle?: string | null },
 ): Promise<{ sent: boolean; reason: string | null; messageId: string | null }> {
   const access = await accessFor(userId);
   if (access.role !== "owner" && !access.perms.includes("mensajes")) {
@@ -863,9 +863,7 @@ export async function sendChatMessageView(
       account: fields,
       now: () => Date.now(),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-      open: () => {
-        console.info(`[fanlink:send] inicio hilo=${input.threadKey ?? ""} origen=${threadIdKind(input.threadKey ?? "", input.fanKey)}`);
-        return sessions.withSession(account.id, (context) => composeChat(context, {
+      open: () => sessions.withSession(account.id, (context) => composeChat(context, {
         chatsUrl: onlyFansSite.chatsUrl ?? "https://onlyfans.com/my/chats",
         siteId: onlyFansSite.id,
         threadKey: input.threadKey ?? "",
@@ -873,9 +871,9 @@ export async function sendChatMessageView(
         accountUserId: account.identityUserId,
         body,
         priceCents: input.priceCents,
+        vaultTitle: input.vaultTitle ?? null,
         typeDelayMs: null,
-      }));
-      },
+      })),
     });
     if (result.sent && result.messageId) {
       await markOutboundSent(sql, id, result.messageId);
@@ -890,6 +888,30 @@ export async function sendChatMessageView(
     await markOutboundError(sql, id, reason);
     return { sent: false, reason, messageId: null };
   }
+}
+
+export async function readChatVaultView(userId: string, input: { creatorId: string; threadKey: string }): Promise<{ items: VaultFile[]; reason: string | null }> {
+  const access = await accessFor(userId);
+  if (access.role !== "owner" && !access.perms.includes("mensajes")) {
+    throw new WorkspaceAccessError("No tienes permiso para escribir.");
+  }
+  const sessions = await getOfSessionManager();
+  const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
+  if (!account) return { items: [], reason: "Sin datos" };
+  const ran = await sessions.runQueued(account.id, async (context) => {
+    const page = await openWorkPage(context);
+    try {
+      await page.goto(chatPageUrl(onlyFansSite.chatsUrl ?? "https://onlyfans.com/my/chats", input.threadKey, onlyFansSite.id), {
+        waitUntil: "domcontentloaded",
+        timeout: 30_000,
+      }).catch(() => undefined);
+      return await captureVaultList(page);
+    } finally {
+      await page.close().catch(() => undefined);
+    }
+  });
+  if (!ran.ok || ran.value.length === 0) return { items: [], reason: "Sin datos" };
+  return { items: ran.value, reason: null };
 }
 
 export async function loadOlderMessagesView(userId: string, input: { creatorId: string; threadKey: string }): Promise<{ ok: boolean }> {
