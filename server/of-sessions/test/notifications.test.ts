@@ -80,22 +80,51 @@ test("guardar no borra lo ya leído y no inventa un cuerpo", async () => {
         { key: "n2", kind: "ppv", body: null, fanKey: null, fanName: null, threadKey: "77", amountCents: null, occurredAt: "2026-11-05T10:00:00.000Z", pending: false },
       ],
     });
-    assert.equal(await markNotificationsSeen(sql, "c-alba", ["n1"]), 1);
+    assert.equal(await markNotificationsSeen(sql, "c-alba", "dueña", ["n1"]), 1);
     await saveNotificationRead(sql, "c-alba", {
       captured: true,
       reason: null,
       items: [
         { key: "n1", kind: "like", body: null, fanKey: null, fanName: null, threadKey: null, amountCents: null, occurredAt: null, pending: false },
+        { key: "n2", kind: "other", body: null, fanKey: null, fanName: null, threadKey: null, amountCents: null, occurredAt: "2026-11-05T10:00:00.000Z", pending: false },
       ],
     });
-    const rows = await listNotificationRows(sql, "c-alba");
+    const rows = (await listNotificationRows(sql, "c-alba", "dueña")).rows;
     const first = rows.find((row) => row.key === "n1");
     assert.equal(first?.body, "hola");
     assert.equal(first?.fanName, "Ana");
     assert.ok(first?.seenAt);
     const second = rows.find((row) => row.key === "n2");
+    assert.equal(second?.kind, "ppv");
     assert.equal(second?.body, null);
     assert.equal(second?.seenAt, null);
+    const otherPerson = (await listNotificationRows(sql, "c-alba", "chatter")).rows.find((row) => row.key === "n1");
+    assert.equal(otherPerson?.seenAt, null);
+  } finally {
+    await pg.close();
+  }
+});
+
+test("la lista pagina y olvida lo que pasa de 90 días", async () => {
+  const { pg, sql } = await database();
+  try {
+    const old = new Date(Date.now() - 100 * 86_400_000).toISOString();
+    await saveNotificationRead(sql, "c-alba", {
+      captured: true,
+      reason: null,
+      items: [
+        { key: "vieja", kind: "like", body: "antigua", fanKey: null, fanName: null, threadKey: null, amountCents: null, occurredAt: old, pending: false },
+        { key: "a", kind: "like", body: "a", fanKey: null, fanName: null, threadKey: null, amountCents: null, occurredAt: "2026-11-03T10:00:00.000Z", pending: false },
+        { key: "b", kind: "like", body: "b", fanKey: null, fanName: null, threadKey: null, amountCents: null, occurredAt: "2026-11-04T10:00:00.000Z", pending: false },
+        { key: "c", kind: "like", body: "c", fanKey: null, fanName: null, threadKey: null, amountCents: null, occurredAt: "2026-11-05T10:00:00.000Z", pending: false },
+      ],
+    });
+    const first = await listNotificationRows(sql, "c-alba", "dueña", { limit: 2 });
+    assert.deepEqual(first.rows.map((row) => row.key), ["c", "b"]);
+    assert.ok(first.nextCursor);
+    const second = await listNotificationRows(sql, "c-alba", "dueña", { limit: 2, cursor: first.nextCursor });
+    assert.deepEqual(second.rows.map((row) => row.key), ["a"]);
+    assert.equal(second.rows.some((row) => row.key === "vieja"), false);
   } finally {
     await pg.close();
   }
@@ -129,7 +158,7 @@ function close(server: Server): Promise<void> {
 async function database() {
   const dir = await mkdtemp(path.join(tmpdir(), "fanlink-notifications-"));
   const pg = new PGlite(dir);
-  await pg.exec(await readFile(path.join(root, "migrations/0030_notifications.sql"), "utf8"));
+  await pg.exec(await readFile(path.join(root, "migrations/0032_notifications.sql"), "utf8"));
   const sql = {
     query: async <T>(text: string, params: unknown[] = []) => (await pg.query<T>(text, params)).rows,
   };

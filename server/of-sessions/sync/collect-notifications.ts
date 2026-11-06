@@ -1,10 +1,9 @@
 import type { BrowserContext, Page } from "playwright";
-import { jsonUrlWithoutSecrets } from "../identity.ts";
 import {
-  isNotificationResponseUrl,
   mergeNotifications,
   notificationScrolls,
   parseNotificationPayload,
+  redactedNotificationUrl,
   type ParsedNotification,
 } from "../../../src/lib/notifications.ts";
 import { logApiResponse } from "./wait-for-data.ts";
@@ -55,13 +54,6 @@ export async function collectNotifications(
   let page: Page | null = null;
   try {
     page = await context.newPage();
-    if (site.id === "onlyfans") {
-      await openAndWait(page, site.probeUrl, options.waitMs, pending, () => false);
-      if (pageLooksLoggedOut(page.url(), site)) {
-        notes.loginRequired = true;
-        return { items: [], reason: "redirigido a login", jsonPaths: notes.paths, captured: false, loginRequired: true };
-      }
-    }
     await openAndWait(page, site.notificationsUrl, options.waitMs, pending, () => notes.captured);
     if (pageLooksLoggedOut(page.url(), site)) {
       return { items: [], reason: "redirigido a login", jsonPaths: notes.paths, captured: false, loginRequired: true };
@@ -97,9 +89,9 @@ async function observe(
   response: { url(): string; status(): number; text(): Promise<string> },
   notes: Notes,
 ): Promise<void> {
-  const safe = jsonUrlWithoutSecrets(response.url());
-  if (!safe || !isNotificationResponseUrl(safe)) return;
-  logApiResponse("lectura", response.url(), response.status());
+  const safe = redactedNotificationUrl(response.url());
+  if (!safe) return;
+  logApiResponse("lectura", safe, response.status());
   if (!notes.paths.includes(safe)) notes.paths.push(safe);
   if (response.status() < 200 || response.status() >= 300) return;
   let payload: unknown;

@@ -46,7 +46,7 @@ import { collectCreatorRead, type CollectedRead } from "../sync/collect.ts";
 import type { TxCursor } from "../sync/parse.ts";
 import { collectChats, type CollectedChats } from "../sync/collect-chats.ts";
 import { collectNotifications, type CollectedNotifications } from "../sync/collect-notifications.ts";
-import { NOTIFICATION_PACE_MS } from "../../../src/lib/notifications.ts";
+import { NOTIFICATION_PACE_MS, notificationReadBusy } from "../../../src/lib/notifications.ts";
 import {
   judgeStorageState,
   parseStorageState,
@@ -421,7 +421,7 @@ export class SessionManager {
       captured: false,
       alreadyRunning: true,
     };
-    if (this.reading.size > 0) return Promise.resolve(busy);
+    if (notificationReadBusy([...this.reading], accountId)) return Promise.resolve(busy);
     this.reading.add(accountId);
     const job = this.readTail.then(() => this.readNotificationsNow(accountId)).finally(() => {
       this.reading.delete(accountId);

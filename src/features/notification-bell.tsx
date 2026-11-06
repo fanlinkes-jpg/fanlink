@@ -37,6 +37,7 @@ export function NotificationBell({
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<NotificationListItem[] | null>(null);
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [role, setRole] = useState<"owner" | "member" | null>(null);
 
   useEffect(() => {
@@ -47,6 +48,7 @@ export function NotificationBell({
         if (stop) return;
         setItems(data.items);
         setSyncedAt(data.syncedAt);
+        setNextCursor(data.nextCursor);
         setRole(data.role);
       } catch {
         if (!stop) setItems(null);
@@ -59,6 +61,13 @@ export function NotificationBell({
       clearInterval(timer);
     };
   }, [creatorId]);
+
+  async function loadMore() {
+    if (!nextCursor) return;
+    const data = await listCreatorNotifications({ data: { creatorId, cursor: nextCursor } });
+    setItems((current) => [...(current ?? []), ...data.items]);
+    setNextCursor(data.nextCursor);
+  }
 
   const records = (items ?? []).map((item) => asRecord(creatorId, item));
   const unread = items == null ? null : unreadCount(records);
@@ -85,6 +94,8 @@ export function NotificationBell({
           onClose={() => setOpen(false)}
           onChanged={setItems}
           onOpenThread={onOpenThread}
+          nextCursor={nextCursor}
+          onMore={() => void loadMore()}
         />
       ) : null}
     </>
@@ -99,6 +110,8 @@ function NotificationPanel({
   onClose,
   onChanged,
   onOpenThread,
+  nextCursor,
+  onMore,
 }: {
   creatorId: string;
   role: "owner" | "member" | null;
@@ -107,14 +120,18 @@ function NotificationPanel({
   onClose: () => void;
   onChanged: (items: NotificationListItem[]) => void;
   onOpenThread?: (target: NotificationTarget) => void;
+  nextCursor: string | null;
+  onMore: () => void;
 }) {
   const [tab, setTab] = useState<NotificationTab>("all");
   const [text, setText] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const records = (items ?? []).map((item) => asRecord(creatorId, item));
-  const shown = filterNotifications(records, { tab, text, from, to });
-  const shownUnread = shown.filter((row) => !row.seenAt).map((row) => row.key);
+  const filtered = filterNotifications(records, { tab, text, from, to });
+  const shown = filtered.rows;
+  const undated = filtered.undated;
+  const shownUnread = [...shown, ...undated].filter((row) => !row.seenAt).map((row) => row.key);
 
   async function mark(keys: string[]) {
     if (keys.length === 0) return;
@@ -160,7 +177,7 @@ function NotificationPanel({
         <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
           {items == null || syncedAt == null ? (
             <p className="text-sm text-muted">{SIN_DATOS}</p>
-          ) : shown.length === 0 ? (
+          ) : shown.length === 0 && undated.length === 0 ? (
             <p className="text-sm text-muted">{items.length === 0 ? "Sin notificaciones" : "Ninguna con este filtro"}</p>
           ) : (
             <ul className="space-y-2">
@@ -193,6 +210,27 @@ function NotificationPanel({
               })}
             </ul>
           )}
+          {undated.length > 0 ? (
+            <div className="mt-4">
+              <p className="text-xs text-muted">Sin fecha. No entran en el rango, pero siguen aquí.</p>
+              <ul className="mt-2 space-y-2">
+                {undated.map((row) => {
+                  const item = items?.find((entry) => entry.key === row.key);
+                  if (!item) return null;
+                  return (
+                    <li key={item.key} className="rounded-lg border border-line px-3 py-2 text-sm">
+                      <p className="font-medium">{item.labels.title}</p>
+                      <p className="mt-1 text-muted">{item.labels.body}</p>
+                      <p className="mt-1 text-xs text-muted">{SIN_DATOS}</p>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ) : null}
+          {nextCursor ? (
+            <Button type="button" variant="soft" className="mt-3" onClick={onMore}>Más</Button>
+          ) : null}
         </div>
       </aside>
     </div>

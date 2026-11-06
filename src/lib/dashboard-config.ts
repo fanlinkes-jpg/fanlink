@@ -274,6 +274,18 @@ export function alertLabelsFor(
   return [...labels];
 }
 
+/** El dashboard recorta por cuenta asignada. El chat no: eso sigue en creatorIdsForChats. */
+export function dashboardCreatorIds(
+  access: { role: "owner" | "member"; creatorIds: string[] } | null,
+  accounts: Array<{ creatorId: string | null }>,
+): string[] {
+  if (!access) return [];
+  const ids = accounts.flatMap((account) => (account.creatorId ? [account.creatorId] : []));
+  if (access.role === "owner") return [...new Set(ids)];
+  const allowed = new Set(access.creatorIds);
+  return [...new Set(ids.filter((id) => allowed.has(id)))];
+}
+
 export function alertsInScope<T extends { text: string }>(alerts: T[] | null, labels: string[]): T[] | null {
   if (alerts == null) return null;
   const prefixes = labels.filter((label) => label.trim()).map((label) => `${label}:`);

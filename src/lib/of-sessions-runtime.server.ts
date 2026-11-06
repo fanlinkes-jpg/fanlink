@@ -23,6 +23,7 @@ import { dashboardAlerts } from "../../server/of-sessions/metrics/dashboard.ts";
 import { accountPause, blockKind, listAccountPauses, noteAccountBlock } from "../../server/of-sessions/sync/backoff.ts";
 import { presentTeamMetrics } from "../../server/of-sessions/metrics/present-team.ts";
 import { changeRatio, creatorReport } from "@/lib/creator-metrics";
+import { dashboardCreatorIds } from "@/lib/dashboard-config";
 import { deliverFanAlerts } from "../../server/of-sessions/notify/deliver.ts";
 import { chatIntervalMinFromEnv } from "../../server/of-sessions/sync/chats.ts";
 import { chatIntervalMinutes, inboxIsOpen, activeThreadWatches } from "../../server/of-sessions/sync/live.ts";
@@ -678,8 +679,8 @@ export async function listDashboardView(userId: string): Promise<{
 }> {
   const access = await accessFor(userId);
   const accounts = await (await getOfSessionManager()).listAccounts();
-  const visible = accounts.filter((account) => account.creatorId && (canSeeAgencyEarnings(access) || creatorIdsForChats(access, [account.creatorId]).length > 0));
-  const ids = visible.flatMap((account) => (account.creatorId ? [account.creatorId] : []));
+  const ids = dashboardCreatorIds(access, accounts);
+  const visible = accounts.filter((account) => account.creatorId && ids.includes(account.creatorId));
   const reads = await listCreatorReads(await getSql(), ids);
   const byCreator = new Map(reads.map((row) => [row.creatorId, row]));
   const owner = access.role === "owner";

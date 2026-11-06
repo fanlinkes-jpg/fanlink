@@ -4,6 +4,7 @@ import { assertWorkspaceChange, emptyWorkspace, WorkspaceAccessError, type TeamA
 import { pct } from "./format.ts";
 import {
   alertsInScope,
+  dashboardCreatorIds,
   buildSummary,
   defaultDashboardConfig,
   moveWidget,
@@ -85,6 +86,13 @@ test("el chatter solo entra en sus cuentas", () => {
   assert.deepEqual(scopedCreators(owner, creators, "c-nora").map((creator) => creator.id), ["c-nora"]);
   assert.equal(selectionValue(["c-alba"], "c-nora"), "all");
   assert.deepEqual(visibleCreators(null, creators), []);
+});
+
+test("el servidor del dashboard recorta las cuentas del chatter", () => {
+  const accounts = [{ creatorId: "c-alba" }, { creatorId: "c-nora" }, { creatorId: null }];
+  assert.deepEqual(dashboardCreatorIds(chatter, accounts), ["c-alba"]);
+  assert.deepEqual(dashboardCreatorIds(owner, accounts), ["c-alba", "c-nora"]);
+  assert.deepEqual(dashboardCreatorIds(null, accounts), []);
 });
 
 test("las alertas se quedan en las cuentas visibles", () => {

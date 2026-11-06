@@ -1,4 +1,11 @@
-import type { ParsedNotification, NotificationRecord } from "../../../src/lib/notifications.ts";
+import {
+  decodeNotificationCursor,
+  encodeNotificationCursor,
+  NOTIFICATION_PAGE_SIZE,
+  NOTIFICATION_RETENTION_DAYS,
+  type ParsedNotification,
+  type NotificationRecord,
+} from "../../../src/lib/notifications.ts";
 
 export type NotificationSql = {
   query<T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<T[]>;
@@ -37,7 +44,12 @@ export async function saveNotificationRead(
          amount_cents, occurred_at, pending, synced_at, origin
        ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        on conflict (creator_id, notification_key) do update set
-         kind = excluded.kind,
+         kind = case
+           when of_notification.kind in ('tip', 'ppv', 'subscription', 'renewal', 'agency')
+            and excluded.kind not in ('tip', 'ppv', 'subscription', 'renewal', 'agency')
+           then of_notification.kind
+           else excluded.kind
+         end,
          body = coalesce(excluded.body, of_notification.body),
          fan_key = coalesce(excluded.fan_key, of_notification.fan_key),
          fan_name = coalesce(excluded.fan_name, of_notification.fan_name),
@@ -62,9 +74,49 @@ export async function saveNotificationRead(
       ],
     );
   }
+  const cutoff = new Date(now.getTime() - NOTIFICATION_RETENTION_DAYS * 86_400_000).toISOString();
+  await sql.query(
+    `delete from of_notification_seen
+     where creator_id = $1
+       and notification_key in (
+         select notification_key from of_notification
+         where creator_id = $1 and occurred_at is not null and occurred_at < $2::timestamptz
+       )`,
+    [creatorId, cutoff],
+  );
+  await sql.query(
+    "delete from of_notification where creator_id = $1 and occurred_at is not null and occurred_at < $2::timestamptz",
+    [creatorId, cutoff],
+  );
 }
 
-export async function listNotificationRows(sql: NotificationSql, creatorId: string): Promise<NotificationRecord[]> {
+export type NotificationPage = {
+  rows: NotificationRecord[];
+  nextCursor: string | null;
+};
+
+export async function listNotificationRows(
+  sql: NotificationSql,
+  creatorId: string,
+  userId: string,
+  options: { limit?: number; cursor?: string | null } = {},
+): Promise<NotificationPage> {
+  const limit = Math.min(100, Math.max(1, options.limit ?? NOTIFICATION_PAGE_SIZE));
+  const cursor = decodeNotificationCursor(options.cursor);
+  const params: unknown[] = [creatorId, userId];
+  let cursorSql = "";
+  if (cursor?.at) {
+    params.push(cursor.at, cursor.key);
+    cursorSql = `and (
+      n.occurred_at < $3::timestamptz
+      or (n.occurred_at = $3::timestamptz and n.notification_key < $4)
+      or n.occurred_at is null
+    )`;
+  } else if (cursor) {
+    params.push(cursor.key);
+    cursorSql = "and n.occurred_at is null and n.notification_key < $3";
+  }
+  params.push(limit + 1);
   const rows = await sql.query<{
     notification_key: string;
     kind: string;
@@ -77,11 +129,20 @@ export async function listNotificationRows(sql: NotificationSql, creatorId: stri
     pending: boolean | string;
     seen_at: Date | string | null;
   }>(
-    `select notification_key, kind, body, fan_key, fan_name, thread_key, amount_cents, occurred_at, pending, seen_at
-     from of_notification where creator_id = $1`,
-    [creatorId],
+    `select n.notification_key, n.kind, n.body, n.fan_key, n.fan_name, n.thread_key,
+            n.amount_cents, n.occurred_at, n.pending, s.seen_at
+     from of_notification n
+     left join of_notification_seen s
+       on s.creator_id = n.creator_id
+      and s.notification_key = n.notification_key
+      and s.user_id = $2
+     where n.creator_id = $1
+     ${cursorSql}
+     order by n.occurred_at desc nulls last, n.notification_key desc
+     limit $${params.length}`,
+    params,
   );
-  return rows.flatMap((row) => {
+  const mapped = rows.flatMap((row) => {
     const kind = asKind(row.kind);
     if (!kind) return [];
     return [
@@ -100,6 +161,10 @@ export async function listNotificationRows(sql: NotificationSql, creatorId: stri
       },
     ];
   });
+  const page = mapped.slice(0, limit);
+  const last = page.at(-1);
+  const nextCursor = mapped.length > limit && last ? encodeNotificationCursor({ at: last.occurredAt, key: last.key }) : null;
+  return { rows: page, nextCursor };
 }
 
 export async function notificationSyncedAt(sql: NotificationSql, creatorId: string): Promise<string | null> {
@@ -123,25 +188,40 @@ export async function listNotificationMeta(sql: NotificationSql): Promise<Notifi
   }));
 }
 
+export async function notificationKinds(
+  sql: NotificationSql,
+  creatorId: string,
+  keys: string[],
+): Promise<Array<{ key: string; kind: NotificationRecord["kind"] }>> {
+  const clean = [...new Set(keys.map((key) => key.trim()).filter(Boolean))].slice(0, 200);
+  if (clean.length === 0) return [];
+  const rows = await sql.query<{ notification_key: string; kind: string }>(
+    "select notification_key, kind from of_notification where creator_id = $1 and notification_key = any($2::text[])",
+    [creatorId, clean],
+  );
+  return rows.flatMap((row) => {
+    const kind = asKind(row.kind);
+    return kind ? [{ key: row.notification_key, kind }] : [];
+  });
+}
+
 export async function markNotificationsSeen(
   sql: NotificationSql,
   creatorId: string,
-  keys: string[] | null,
+  userId: string,
+  keys: string[],
   now = new Date(),
 ): Promise<number> {
-  const seenAt = now.toISOString();
-  if (keys == null) {
-    const rows = await sql.query<{ notification_key: string }>(
-      "update of_notification set seen_at = $2 where creator_id = $1 and seen_at is null returning notification_key",
-      [creatorId, seenAt],
-    );
-    return rows.length;
-  }
   const clean = [...new Set(keys.map((key) => key.trim()).filter(Boolean))].slice(0, 200);
-  if (clean.length === 0) return 0;
+  if (!userId || clean.length === 0) return 0;
   const rows = await sql.query<{ notification_key: string }>(
-    "update of_notification set seen_at = $3 where creator_id = $1 and notification_key = any($2::text[]) and seen_at is null returning notification_key",
-    [creatorId, clean, seenAt],
+    `insert into of_notification_seen (creator_id, notification_key, user_id, seen_at)
+     select n.creator_id, n.notification_key, $3, $4
+     from of_notification n
+     where n.creator_id = $1 and n.notification_key = any($2::text[])
+     on conflict (creator_id, notification_key, user_id) do nothing
+     returning notification_key`,
+    [creatorId, clean, userId, now.toISOString()],
   );
   return rows.length;
 }
@@ -164,6 +244,7 @@ function asKind(value: string): NotificationRecord["kind"] | null {
     case "ppv":
     case "message":
     case "system":
+    case "agency":
     case "other":
       return value;
     default:

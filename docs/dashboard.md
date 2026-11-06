@@ -108,11 +108,15 @@ Cada creadora tiene una campana. El contador son las no leídas de esa cuenta. E
 
 Las pestañas son las de OnlyFans: All, Interactions, Purchases, Subscriptions, Tags y Other. Hay búsqueda, rango de fechas (día de Madrid) y marcar como leída. Eso último es del CRM: no se escribe en OnlyFans. Si la fila trae fan o hilo, Abrir lleva a la consola de mensajes de esa cuenta. Si no trae ninguno, el destino es **Sin datos**.
 
-Un chatter ve las notificaciones de las cuentas que tiene asignadas. Las de ingresos (suscripción, renovación, propina y compra de PPV) solo las ve la dueña: ni el texto ni el importe salen para un miembro.
+Un chatter ve las notificaciones de las cuentas que tiene asignadas, y en el servidor, no solo en el navegador. Ve la compra, la propina y la suscripción de cada fan de esas cuentas, con el importe que ese fan gastó. No ve cifras de la agencia (ingresos totales, ganancias, payout, saldo) ni un tipo desconocido, sobre todo si trae importe: eso queda en la dueña. Las alertas del Resumen también se recortan en el servidor a las cuentas asignadas.
+
+Marcar como leída es de cada persona, no de la cuenta: si un chatter la marca, la dueña sigue viéndola nueva. El listado va de 50 en 50. Lo que tiene fecha y pasa de 90 días se borra en la siguiente escucha. Si el filtro de fechas deja fuera avisos sin fecha, salen aparte con el aviso «Sin fecha».
+
+La clave de un aviso sin id incluye el texto, el hilo y el tipo. Si pasa de 120 caracteres no se corta por el principio: se guarda un resumen con una huella, para no juntar dos eventos.
 
 ### Escucha
 
-No se firma ni se llama a `api2`. El planificador, aparte del de ingresos y del de chats, abre `https://onlyfans.com/my/notifications` como mucho cada 30 minutos, una cuenta cada vez, y solo si no hay otra lectura usando el perfil. El listener se registra antes de navegar. Se guarda el JSON que esa página pide cuando la ruta contiene `notification`. Luego espera 8 segundos y hace un solo desplazamiento, por si la página pide la tanda siguiente. No hay una segunda pasada en la misma visita. Si la página cambia de ruta o no pide ese JSON, la razón queda en `sin respuesta de notificaciones` o `redirigido a login` y la pantalla sigue en **Sin datos**.
+No se firma ni se llama a la API. El planificador, aparte del de ingresos y del de chats, abre solo `https://onlyfans.com/my/notifications` como mucho cada 30 minutos y una cuenta cada vez. Si otra cuenta está en una lectura, esta espera su turno en la cola: no se da por hecha ni se pierde hasta el siguiente ciclo. El listener se registra antes de navegar. Se guarda el JSON que esa página pide cuando la ruta contiene `notification`. El log se queda con origen y ruta, sin query ni token. Luego espera 8 segundos y hace un solo desplazamiento, por si la página pide la tanda siguiente. No hay una segunda página en la misma visita. Si la página cambia de ruta o no pide ese JSON, la razón queda en `sin respuesta de notificaciones` o `redirigido a login` y la pantalla sigue en **Sin datos**. La migración es `0032_notifications.sql`.
 
 Abrir la campana no lanza esa visita. Lee `of_notification`.
 

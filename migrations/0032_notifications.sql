@@ -9,11 +9,18 @@ create table if not exists of_notification (
   amount_cents integer,
   occurred_at timestamptz,
   pending boolean not null default false,
-  seen_at timestamptz,
   synced_at timestamptz not null,
   origin text not null default 'onlyfans',
   primary key (creator_id, notification_key),
   constraint of_notification_origin_chk check (origin = 'onlyfans')
+);
+
+create table if not exists of_notification_seen (
+  creator_id text not null,
+  notification_key text not null,
+  user_id text not null,
+  seen_at timestamptz not null,
+  primary key (creator_id, notification_key, user_id)
 );
 
 create table if not exists of_notification_sync (

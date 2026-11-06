@@ -93,7 +93,7 @@ Teclear, pulsar Enter y subir un archivo exigen además `FANLINK_ENABLE_SEND=tru
 
 `GET /api/chat-live` es un stream SSE. El proxy no puede acumular la respuesta: nginx necesita `proxy_buffering off;` y la app ya manda `X-Accel-Buffering: no`. El timeout de lectura tiene que aguantar la conexión abierta (minutos, no el timeout corto de una API). Sin eso el navegador se entera del mensaje tarde o la conexión se corta.
 
-`npm run db:migrate` aplica también `0019_chat_author.sql` (autor del mensaje y borradores salientes), `0020_chat_card.sql` (ficha del fan), `0025_outbound_send.sql` (enviado o error del borrador), `0026_chat_history.sql` (cursor del histórico, me gusta, cita y aviso) y `0033_outbound_match_unique.sql` (un borrador por mensaje y el índice único). Sin ese comando la 0033 no entra y un despliegue con duplicados antiguos no arranca.
+`npm run db:migrate` aplica también `0019_chat_author.sql` (autor del mensaje y borradores salientes), `0020_chat_card.sql` (ficha del fan), `0025_outbound_send.sql` (enviado o error del borrador), `0026_chat_history.sql` (cursor del histórico, me gusta, cita y aviso), `0027_mass_messages.sql` (borrador de masivos), `0032_notifications.sql` (avisos de cada cuenta y la marca de leído por persona) y `0033_outbound_match_unique.sql` (un borrador por mensaje y el índice único). Sin ese comando la 0033 no entra y un despliegue con duplicados antiguos no arranca.
 
 El espejo del hilo no incluye el reproductor ni la caché de medios. `0022_message_media.sql` y `0026_chat_history.sql` solo guardan metadatos (si hay archivo, duración, vista previa, me gusta, cita). No se descarga el archivo y en el hilo se pinta el marcador Medio.
 
@@ -102,3 +102,7 @@ El espejo del hilo no incluye el reproductor ni la caché de medios. `0022_messa
 `FANLINK_ENABLE_MASS_SEND` no se define, o no vale `true`. Igual que `FANLINK_ENABLE_SEND`. Las dos tienen que ser `true` y la cuenta tiene que estar en `FANLINK_SEND_ALLOW_ACCOUNTS` para que la compuerta del masivo se abra. En este despliegue no se abren: no hay transporte a OnlyFans. La migración del borrador es `0027_mass_messages.sql`.
 
 Aunque esa compuerta se abriera, el paso a enviado no es un flag. Un admin pide un token. La base guarda solo su hash, el id de ese admin y una caducidad de 2 minutos (`now()` del servidor más el intervalo). El mismo admin lo presenta en una segunda petición. La sentencia que marca `sent` exige el hash, que no haya caducado y que sea ese admin, y anula el token a la vez. Otro admin, un chatter o un token viejo no lo consumen. Si el token sigue vivo, no se pide otro encima.
+
+## 9. Notificaciones
+
+El proceso abre la página de notificaciones de cada cuenta activa cada 30 minutos, en cola con el resto de lecturas. `FANLINK_SYNC_ENABLED=false` apaga también ese bucle. No hace falta otra variable.

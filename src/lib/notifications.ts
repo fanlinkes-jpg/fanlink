@@ -7,6 +7,8 @@ export const NOTIFICATION_MAX_SCROLLS = 1;
 /** Pausa antes de ese desplazamiento. No es el ritmo del chat. */
 export const NOTIFICATION_PACE_MS = 8_000;
 export const NOTIFICATION_INTERVAL_MIN = 30;
+export const NOTIFICATION_PAGE_SIZE = 50;
+export const NOTIFICATION_RETENTION_DAYS = 90;
 
 export const NOTIFICATION_KINDS = [
   "like",
@@ -18,6 +20,7 @@ export const NOTIFICATION_KINDS = [
   "ppv",
   "message",
   "system",
+  "agency",
   "other",
 ] as const;
 
@@ -45,10 +48,13 @@ const KIND_LABEL: Record<NotificationKind, string> = {
   ppv: "Compra PPV",
   message: "Mensaje",
   system: "Aviso",
+  agency: "Aviso de la agencia",
   other: "Otro",
 };
 
-const REVENUE_KINDS = new Set<NotificationKind>(["subscription", "renewal", "tip", "ppv"]);
+const FAN_SPEND_KINDS = new Set<NotificationKind>(["subscription", "renewal", "tip", "ppv"]);
+const OWNER_ONLY_KINDS = new Set<NotificationKind>(["agency", "other"]);
+const PROTECTED_KINDS = new Set<NotificationKind>(["subscription", "renewal", "tip", "ppv", "agency"]);
 
 export type ParsedNotification = {
   key: string;
@@ -78,8 +84,20 @@ export type NotificationLabels = {
 
 const LIST_KEYS = new Set(["notifications", "notification", "list", "items", "rows", "data"]);
 
-export function isRevenueKind(kind: NotificationKind): boolean {
-  return REVENUE_KINDS.has(kind);
+/** Compra, propina o suscripción de un fan. El chatter de esa cuenta ve el importe. */
+export function isFanSpendKind(kind: NotificationKind): boolean {
+  return FAN_SPEND_KINDS.has(kind);
+}
+
+/** Ganancias de la agencia y tipos desconocidos. Solo la dueña. */
+export function isOwnerOnlyKind(kind: NotificationKind): boolean {
+  return OWNER_ONLY_KINDS.has(kind);
+}
+
+/** Una clase de ingreso no pasa a un tipo que el chatter pueda ver. */
+export function mergeKind(previous: NotificationKind, incoming: NotificationKind): NotificationKind {
+  if (PROTECTED_KINDS.has(previous) && !PROTECTED_KINDS.has(incoming)) return previous;
+  return incoming;
 }
 
 export function tabOf(kind: NotificationKind): NotificationTab {
@@ -97,6 +115,7 @@ export function tabOf(kind: NotificationKind): NotificationTab {
       return "tags";
     case "message":
     case "system":
+    case "agency":
     case "other":
       return "other";
     default: {
@@ -121,6 +140,7 @@ export function kindLabel(kind: NotificationKind): string {
     case "ppv":
     case "message":
     case "system":
+    case "agency":
     case "other":
       return KIND_LABEL[kind];
     default: {
@@ -128,6 +148,59 @@ export function kindLabel(kind: NotificationKind): string {
       return exhaustive;
     }
   }
+}
+
+/** Otra cuenta leyendo no bloquea. Solo bloquea la misma cuenta. */
+export function notificationReadBusy(readingIds: readonly string[], accountId: string): boolean {
+  return readingIds.includes(accountId);
+}
+
+export function encodeNotificationCursor(cursor: { at: string | null; key: string }): string {
+  return JSON.stringify({ at: cursor.at, key: cursor.key });
+}
+
+export function decodeNotificationCursor(value: string | null | undefined): { at: string | null; key: string } | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as { at?: unknown; key?: unknown };
+    if (!parsed || typeof parsed.key !== "string" || !parsed.key) return null;
+    return { at: typeof parsed.at === "string" && parsed.at ? parsed.at : null, key: parsed.key };
+  } catch {
+    return null;
+  }
+}
+
+/** Origen y ruta, sin query, usuario ni token. */
+export function redactedNotificationUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    if (parsed.username || parsed.password) return null;
+    const safe = `${parsed.origin}${parsed.pathname}`.slice(0, 200);
+    if (!isNotificationResponseUrl(safe)) return null;
+    if (/[?#]|token|sess|auth/i.test(safe)) return null;
+    return safe;
+  } catch {
+    return null;
+  }
+}
+
+export function notificationKey(input: {
+  id: string | null;
+  kind: NotificationKind;
+  rawType: string;
+  occurredAt: string | null;
+  fanKey: string | null;
+  threadKey: string | null;
+  body: string | null;
+}): string | null {
+  const full = input.id
+    ? input.id
+    : input.occurredAt
+      ? [input.kind, input.rawType, input.occurredAt, input.fanKey ?? "", input.threadKey ?? "", input.body ?? ""].join("\u001f")
+      : null;
+  if (!full) return null;
+  if (full.length <= 120) return full;
+  return `${full.slice(0, 80)}\u001f${fold(full)}`;
 }
 
 /** La ruta que la propia página pide. No construye una llamada. */
@@ -179,23 +252,40 @@ export function visibleNotifications(
   if (!canReadCreatorNotifications(access, creatorId) || !access) return [];
   return rows.filter((row) => {
     if (row.creatorId !== creatorId) return false;
-    if (access.role !== "owner" && isRevenueKind(row.kind)) return false;
+    if (access.role !== "owner" && isOwnerOnlyKind(row.kind)) return false;
     return true;
   });
 }
 
+export type NotificationFilter = {
+  rows: NotificationRecord[];
+  undated: NotificationRecord[];
+};
+
 export function filterNotifications(
   rows: NotificationRecord[],
   query: { tab: NotificationTab; text: string; from: string; to: string },
-): NotificationRecord[] {
+): NotificationFilter {
   const needle = query.text.trim().toLowerCase();
   const from = dayOrNull(query.from);
   const to = dayOrNull(query.to);
-  return rows
+  const ranged = Boolean(from || to);
+  const matched = rows
     .filter((row) => query.tab === "all" || tabOf(row.kind) === query.tab)
-    .filter((row) => !needle || haystack(row).includes(needle))
-    .filter((row) => inDates(row.occurredAt, from, to))
-    .sort((left, right) => compareWhen(left.occurredAt, right.occurredAt));
+    .filter((row) => !needle || haystack(row).includes(needle));
+  const dated: NotificationRecord[] = [];
+  const undated: NotificationRecord[] = [];
+  for (const row of matched) {
+    if (!row.occurredAt) {
+      if (ranged) undated.push(row);
+      else dated.push(row);
+      continue;
+    }
+    if (!ranged || inDates(row.occurredAt, from, to)) dated.push(row);
+  }
+  dated.sort((left, right) => compareWhen(left.occurredAt, right.occurredAt));
+  undated.sort((left, right) => compareWhen(left.occurredAt, right.occurredAt));
+  return { rows: dated, undated };
 }
 
 export function unreadCount(rows: NotificationRecord[]): number {
@@ -203,8 +293,9 @@ export function unreadCount(rows: NotificationRecord[]): number {
 }
 
 export function notificationLabels(row: NotificationRecord, role: "owner" | "member"): NotificationLabels | null {
-  if (role !== "owner" && isRevenueKind(row.kind)) return null;
-  const amount = !isRevenueKind(row.kind) ? null : role === "owner" ? (row.amountCents == null ? SIN_DATOS : formatCents(row.amountCents)) : null;
+  if (role !== "owner" && isOwnerOnlyKind(row.kind)) return null;
+  const money = isFanSpendKind(row.kind) || row.kind === "agency";
+  const amount = !money ? null : row.amountCents == null ? SIN_DATOS : formatCents(row.amountCents);
   return {
     title: row.pending ? `${kindLabel(row.kind)} · pendiente` : kindLabel(row.kind),
     body: row.body?.trim() ? row.body.trim() : SIN_DATOS,
@@ -253,17 +344,26 @@ function notificationFrom(record: Record<string, unknown>): ParsedNotification |
   const kind = kindOf(rawType);
   const fan = fanOf(record);
   const occurredAt = firstTime(record, ["createdAt", "created_at", "date", "publishedAt", "postedAt"]);
-  const key = firstString(record, ["id", "notificationId", "guid"]) ?? (occurredAt ? `${kind}:${occurredAt}:${fan.fanKey ?? ""}` : null);
-  if (!key) return null;
   const body = firstString(record, ["text", "message", "body", "content", "excerpt"]);
+  const threadKey = firstString(record, ["chatId", "threadId", "threadKey", "relatedChatId"]);
+  const key = notificationKey({
+    id: firstString(record, ["id", "notificationId", "guid"]),
+    kind,
+    rawType,
+    occurredAt,
+    fanKey: fan.fanKey,
+    threadKey,
+    body,
+  });
+  if (!key) return null;
   const pending = kind === "tag" && isPending(record, body);
   return {
-    key: key.slice(0, 120),
+    key,
     kind,
     body,
     fanKey: fan.fanKey,
     fanName: fan.fanName,
-    threadKey: firstString(record, ["chatId", "threadId", "threadKey", "relatedChatId"]),
+    threadKey,
     amountCents: amountOf(record),
     occurredAt,
     pending,
@@ -281,6 +381,7 @@ function kindOf(raw: string): NotificationKind {
   if (["ppv", "purchase", "paided_message", "paid_message", "unlock", "message_purchase"].includes(value)) return "ppv";
   if (["message", "chat", "new_message"].includes(value)) return "message";
   if (["system", "announcement", "warning", "notice"].includes(value)) return "system";
+  if (["payout", "payouts", "earning", "earnings", "balance", "balances", "gross", "revenue", "statement", "withdrawal"].includes(value)) return "agency";
   return "other";
 }
 
@@ -309,7 +410,7 @@ function amountOf(record: Record<string, unknown>): number | null {
 function fillGaps(previous: ParsedNotification, incoming: ParsedNotification): ParsedNotification {
   return {
     key: previous.key,
-    kind: incoming.kind === "other" ? previous.kind : incoming.kind,
+    kind: mergeKind(previous.kind, incoming.kind),
     body: incoming.body ?? previous.body,
     fanKey: incoming.fanKey ?? previous.fanKey,
     fanName: incoming.fanName ?? previous.fanName,
@@ -402,4 +503,13 @@ function firstTime(record: Record<string, unknown>, keys: string[]): string | nu
     }
   }
   return null;
+}
+
+function fold(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
 }

@@ -90,6 +90,10 @@ Los hilos y los mensajes se guardan por creadora y por fan, y los ve todo el equ
 
 Fragilidad: si OnlyFans cambia la ruta del chat, la caja, el botón Send o los campos `withUser`, `lastMessage`, `text` y `createdAt`, la lista puede quedar vacía o el envío queda en error con el motivo, sin reintento.
 
+## Notificaciones de cada cuenta
+
+Un bucle aparte abre `https://onlyfans.com/my/notifications` cada 30 minutos, una cuenta cada vez, y escucha el JSON que esa página pide. No llama a un endpoint por su cuenta. Hace un solo desplazamiento, con 8 segundos de pausa. Si otra lectura usa el perfil, espera el turno. La migración `0032_notifications.sql` guarda el aviso y quién lo marcó leído. Un chatter ve compras, propinas y suscripciones de los fans de sus cuentas, con el importe del fan. Las ganancias, el payout y el saldo de la agencia, y los tipos desconocidos, solo los ve la dueña. Lo que tiene fecha y supera 90 días se borra en la siguiente pasada. Abrir la campana no lanza la visita.
+
 ## Avisos de WhatsApp
 
 Cuando entra un `new_fan_message`, Fanlink avisa a los miembros asignados a esa creadora que tengan el interruptor de avisos encendido y un teléfono en formato internacional. El texto lleva el nombre de la cuenta, el fan y el extracto. Varios fans del mismo momento salen en un solo mensaje. El mismo fan no se repite hasta que pasan los minutos guardados en su ficha (por defecto 15, `FANLINK_ALERT_QUIET_MIN`).
