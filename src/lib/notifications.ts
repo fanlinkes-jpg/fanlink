@@ -256,6 +256,7 @@ export function mergeNotifications(current: ParsedNotification[], incoming: Pars
   return [...map.values()];
 }
 
+/** Un chatter solo entra en las cuentas asignadas. La dueña, que es quien administra, entra en todas. */
 export function canReadCreatorNotifications(
   access: { role: "owner" | "member"; creatorIds: string[] } | null,
   creatorId: string,

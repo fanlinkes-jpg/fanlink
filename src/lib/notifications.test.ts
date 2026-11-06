@@ -16,6 +16,7 @@ import {
   redactedNotificationUrl,
   tabOf,
   unreadCount,
+  canReadCreatorNotifications,
   visibleNotifications,
   SIN_DATOS,
   type NotificationRecord,
@@ -80,6 +81,21 @@ test("el chatter ve el gasto del fan y no las ganancias de la agencia", () => {
   assert.equal(notificationLabels(rows[5]!, "member"), null);
   assert.equal(visibleNotifications(rows, chatter, "c-nora").length, 0);
   assert.equal(visibleNotifications(rows, owner, "c-alba").some((row) => row.kind === "agency"), true);
+});
+
+test("el chatter solo ve las notificaciones de sus cuentas y la dueña ve todas", () => {
+  const rows = [
+    record("propia", { kind: "like", creatorId: "c-alba" }),
+    record("ajena", { kind: "like", creatorId: "c-nora" }),
+  ];
+  assert.equal(canReadCreatorNotifications(chatter, "c-alba"), true);
+  assert.equal(canReadCreatorNotifications(chatter, "c-nora"), false);
+  assert.deepEqual(visibleNotifications(rows, chatter, "c-alba").map((row) => row.key), ["propia"]);
+  assert.deepEqual(visibleNotifications(rows, chatter, "c-nora"), []);
+  assert.equal(canReadCreatorNotifications(owner, "c-nora"), true);
+  assert.equal(canReadCreatorNotifications(owner, "c-alba"), true);
+  assert.deepEqual(visibleNotifications(rows, owner, "c-nora").map((row) => row.key), ["ajena"]);
+  assert.deepEqual(visibleNotifications(rows, owner, "c-alba").map((row) => row.key), ["propia"]);
 });
 
 test("filtra por pestaña, texto y fechas, y cuenta no leídas", () => {

@@ -77,6 +77,7 @@ export function dashboardViewFor(input: {
     role: input.access.role,
     dayGrossCents: owner ? day.grossCents : null,
     monthGrossCents: owner ? month.grossCents : null,
+    // El chatter ve el recuento. Los euros y el resto de agregados quedan en la dueña.
     activeFans: month.activeFans,
     alerts: dashboardAlerts({
       sessions: visible.map((account) => ({ name: account.label, status: account.status, connection: account.connection })),

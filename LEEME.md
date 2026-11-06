@@ -98,6 +98,8 @@ Un bucle aparte abre `https://onlyfans.com/my/notifications` cada 30 minutos, un
 
 La bandeja es de todas las cuentas. `listChatFanCards` usa `creatorIdsForChats` y devuelve la ficha de cada fan: gasto, compras, propinas, suscripción, renovación y estado, también de una cuenta que el chatter no tiene asignada. No devuelve ingresos totales, beneficios, pagos ni cifras agregadas del dashboard. Si un campo no viene, la ficha dice Sin datos.
 
+En el Resumen, un chatter ve el número de fans activos de sus cuentas. No ve euros ni otros agregados: ni el bruto del día o del mes, ni ballenas, ni caídas. Las notificaciones no siguen el alcance de la ficha: un chatter solo ve las de las cuentas que tiene asignadas. La dueña, que es quien administra, las ve todas.
+
 ## Avisos de WhatsApp
 
 Cuando entra un `new_fan_message`, Fanlink avisa a los miembros asignados a esa creadora que tengan el interruptor de avisos encendido y un teléfono en formato internacional. El texto lleva el nombre de la cuenta, el fan y el extracto. Varios fans del mismo momento salen en un solo mensaje. El mismo fan no se repite hasta que pasan los minutos guardados en su ficha (por defecto 15, `FANLINK_ALERT_QUIET_MIN`).
