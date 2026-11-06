@@ -90,6 +90,41 @@ function dashboardHtml(mode: FixtureMode): string {
   }
 }
 
+function ofChatHtml(): string {
+  return pageHtml(
+    "Hilo",
+    "",
+    `<div style="height:70vh"></div>
+     <div class="b-chat">
+       <ul class="b-chat__messages"><li class="b-chat__item">mensaje secreto del fan</li></ul>
+       <form class="b-chat__form">
+         <div class="b-chat__message-input">
+           <textarea placeholder="Type a message..." at-attr="chat_input"></textarea>
+         </div>
+         <button type="button" at-attr="price_btn" aria-label="Price">Price</button>
+         <button type="button" at-attr="send_btn">Send</button>
+       </form>
+       <div id="price-box" role="dialog" aria-label="Message price" hidden>
+         <input at-attr="price_input" placeholder="Free" />
+         <button type="button" at-attr="submit_post">Save</button>
+       </div>
+     </div>
+     <script>
+       document.querySelector("[at-attr='price_btn']").onclick = () => { document.getElementById("price-box").hidden = false; };
+       document.querySelector("[at-attr='submit_post']").onclick = () => {
+         document.querySelector("[at-attr='price_input']").dataset.saved = document.querySelector("[at-attr='price_input']").value;
+         document.getElementById("price-box").hidden = true;
+       };
+       document.querySelector("[at-attr='send_btn']").onclick = async () => {
+         const body = document.querySelector("[at-attr='chat_input']").value;
+         const price = document.querySelector("[at-attr='price_input']").dataset.saved || "";
+         await fetch("/fixture/compose", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ body, price, file: "" }) });
+         await fetch("/api2/v2/chats/9/messages?order=desc");
+       };
+     </script>`,
+  );
+}
+
 function chatComposerHtml(): string {
   return pageHtml(
     "Hilo",
@@ -380,6 +415,33 @@ async function handle(
         ],
       }),
     );
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/api2/v2/chats/9/messages") {
+    if (!accepted(req, epoch())) {
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "no" }));
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      list: confirmSends.on ? composed.map((item, index) => ({
+        id: 300 + index,
+        text: item.body,
+        createdAt: "2026-11-06T12:00:00.000Z",
+        fromUser: { id: 42 },
+        price: item.price ? Number(item.price) : undefined,
+        isMine: true,
+      })) : [],
+    }));
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/my/chats/chat/9") {
+    if (!accepted(req, epoch())) {
+      redirect(res, "/login");
+      return;
+    }
+    html(res, ofChatHtml());
     return;
   }
   if (req.method === "GET" && url.pathname === "/my/chats/chat/7") {
