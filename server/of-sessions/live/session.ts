@@ -1,0 +1,125 @@
+import type { BrowserContext, CDPSession, FileChooser, Page } from "playwright";
+import { chatPageUrl } from "../sync/chats.ts";
+import { parseChatMessages } from "../sync/chats.ts";
+import { openWorkPage } from "../sessions/work-page.ts";
+import { deskCommand, liveLog, liveQuality, liveRequestAllowed, type DeskInput } from "./desk.ts";
+
+export type LiveFrame = { jpeg: Buffer; width: number; height: number };
+
+export type LiveCast = {
+  send(input: DeskInput): Promise<void>;
+  acceptFile(file: { name: string; mimeType: string; buffer: Buffer } | null): void;
+  stop(): Promise<void>;
+};
+
+export async function startLiveCast(input: {
+  context: BrowserContext;
+  accountId: string;
+  threadKey: string;
+  fanKey: string | null;
+  accountUserId: string | null;
+  onFrame: (frame: LiveFrame) => void;
+  onFile: () => void;
+  onOwnMessage: (message: { messageId: string; body: string; priceCents: number | null }) => void;
+}): Promise<LiveCast> {
+  const fps = liveFpsFromEnv();
+  const quality = liveQuality(process.env.FANLINK_LIVE_QUALITY);
+  const page = await openWorkPage(input.context);
+  const chatUrl = chatPageUrl("https://onlyfans.com/my/chats", input.threadKey, "onlyfans");
+  let viewport = { width: 1100, height: 720 };
+  let cdp: CDPSession | null = null;
+  let stopped = false;
+  let fileWait: ((file: { name: string; mimeType: string; buffer: Buffer } | null) => void) | null = null;
+  console.info(liveLog("inicio", { accountId: input.accountId, fps }));
+  await page.route("**/*", (route) => {
+    if (liveRequestAllowed(route.request().url())) return route.continue();
+    return route.abort();
+  });
+  page.on("framenavigated", (frame) => {
+    if (frame !== page.mainFrame()) return;
+    if (liveRequestAllowed(frame.url())) return;
+    void page.goto(chatUrl, { waitUntil: "domcontentloaded" }).catch(() => undefined);
+  });
+  page.on("filechooser", (chooser: FileChooser) => {
+    input.onFile();
+    const wait = new Promise<{ name: string; mimeType: string; buffer: Buffer } | null>((resolve) => {
+      fileWait = resolve;
+    });
+    void Promise.race([
+      wait,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 20_000)),
+    ]).then((file) => {
+      fileWait = null;
+      if (file) return chooser.setFiles(file);
+      return chooser.setFiles([]);
+    }).catch(() => undefined);
+  });
+  page.on("response", (response) => {
+    if (response.status() < 200 || response.status() >= 300) return;
+    const path = pathOf(response.url());
+    if (!path.includes("message") && !path.includes("chat")) return;
+    void response.text().then((text) => {
+      const messages = parseChatMessages(JSON.parse(text) as unknown, input.threadKey, input.fanKey, input.accountUserId);
+      for (const message of messages) {
+        if (message.fromFan) continue;
+        input.onOwnMessage({ messageId: message.messageKey, body: message.body, priceCents: message.priceCents });
+      }
+    }).catch(() => undefined);
+  });
+  await page.setViewportSize(viewport);
+  await page.goto(chatUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
+  cdp = await input.context.newCDPSession(page);
+  let lastFrame = 0;
+  cdp.on("Page.screencastFrame", (event: { data: string; sessionId: number; metadata?: { deviceWidth?: number; deviceHeight?: number } }) => {
+    void cdp?.send("Page.screencastFrameAck", { sessionId: event.sessionId }).catch(() => undefined);
+    const now = Date.now();
+    if (now - lastFrame < Math.round(1000 / fps)) return;
+    lastFrame = now;
+    if (event.metadata?.deviceWidth && event.metadata.deviceHeight) {
+      viewport = { width: event.metadata.deviceWidth, height: event.metadata.deviceHeight };
+    }
+    input.onFrame({ jpeg: Buffer.from(event.data, "base64"), width: viewport.width, height: viewport.height });
+  });
+  await cdp.send("Page.startScreencast", { format: "jpeg", quality, everyNthFrame: 1 });
+
+  return {
+    async send(command) {
+      if (stopped || !cdp) return;
+      const next = deskCommand(command, viewport);
+      if (!next) return;
+      if (next.method === "resize") {
+        viewport = next.params;
+        await page.setViewportSize(viewport).catch(() => undefined);
+        return;
+      }
+      await cdp.send(next.method, next.params as never).catch((error: unknown) => {
+        console.info(liveLog("error", { accountId: input.accountId, detail: error instanceof Error ? error.message : "input" }));
+      });
+    },
+    acceptFile(file) {
+      fileWait?.(file);
+      fileWait = null;
+    },
+    async stop() {
+      if (stopped) return;
+      stopped = true;
+      console.info(liveLog("fin", { accountId: input.accountId }));
+      await cdp?.send("Page.stopScreencast").catch(() => undefined);
+      await page.close().catch(() => undefined);
+    },
+  };
+}
+
+function liveFpsFromEnv(): number {
+  const value = Number(process.env.FANLINK_LIVE_FPS);
+  if (!Number.isInteger(value) || value < 1 || value > 8) return 4;
+  return value;
+}
+
+function pathOf(raw: string): string {
+  try {
+    return new URL(raw).pathname.toLowerCase();
+  } catch {
+    return "";
+  }
+}

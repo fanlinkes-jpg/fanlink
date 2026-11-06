@@ -298,13 +298,27 @@ export class SessionManager {
     accountId: string,
     run: (context: BrowserContext) => Promise<T>,
   ): Promise<T> {
+    const borrowed = await this.borrowProfile(accountId);
+    try {
+      return await run(borrowed.context);
+    } finally {
+      await borrowed.release();
+    }
+  }
+
+  /** El mismo perfil persistente, sin abrir otro Chromium. Quien llama suelta el perfil. */
+  async borrowProfile(accountId: string): Promise<{ context: BrowserContext; release: () => Promise<void> }> {
     await this.assertUsable(accountId);
     const context = await this.acquireProfile(accountId);
-    try {
-      return await run(context);
-    } finally {
-      await this.releaseProfile(accountId);
-    }
+    let released = false;
+    return {
+      context,
+      release: async () => {
+        if (released) return;
+        released = true;
+        await this.releaseProfile(accountId);
+      },
+    };
   }
 
   /**

@@ -30,6 +30,23 @@ function hasGlobbedMigrations(root: string): boolean {
  * migrations — no schema to apply — skips it entirely rather than paying for a
  * PGLite instance it never queries.
  */
+function liveViewPlugin(): Plugin {
+  return {
+    name: "fanlink-live-view",
+    apply: "serve",
+    configureServer(server) {
+      const httpServer = server.httpServer;
+      if (!httpServer) return;
+      void server.ssrLoadModule("/server/of-sessions/live/attach.ts").then((mod) => {
+        const attach = (mod as { attachLiveView?: (http: typeof httpServer) => void }).attachLiveView;
+        attach?.(httpServer);
+      }).catch((error: unknown) => {
+        console.error("[fanlink:live] error", error instanceof Error ? error.message : "socket");
+      });
+    },
+  };
+}
+
 function pgliteBootstrapPlugin(): Plugin {
   return {
     name: "app-builder:pglite-bootstrap",
@@ -163,6 +180,7 @@ export default defineConfig(({ command, isPreview }) => ({
   resolve: { tsconfigPaths: true },
   plugins: [
     pgliteBootstrapPlugin(),
+    liveViewPlugin(),
     // Before tanstackStart so /auth/popup never falls through to the SPA.
     authPopupPlugin(),
     // Dev-only /__app-env, read by scripts/check-auth-invariant.mjs.

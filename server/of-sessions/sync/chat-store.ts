@@ -716,6 +716,45 @@ export async function markChatList(sql: ReadSql, creatorId: string, cursor: stri
   );
 }
 
+/** Atribuye un envío visto en la pestaña en directo al chatter que tenía el control. */
+export async function attributeLiveSend(sql: ReadSql, input: {
+  id: string;
+  creatorId: string;
+  threadKey: string;
+  fanKey: string | null;
+  authorId: string;
+  body: string;
+  priceCents: number | null;
+  messageId: string;
+  createdAt: string;
+}): Promise<void> {
+  const existing = await sql.query<{ id: string }>(
+    "select id from of_chat_outbound where creator_id = $1 and of_message_key = $2",
+    [input.creatorId, input.messageId],
+  );
+  if (existing.length === 0) {
+    await recordOutbound(sql, {
+      id: input.id,
+      creatorId: input.creatorId,
+      threadKey: input.threadKey,
+      fanKey: input.fanKey,
+      authorId: input.authorId,
+      body: input.body,
+      priceCents: input.priceCents,
+      createdAt: input.createdAt,
+      ofMessageKey: input.messageId,
+    });
+    await sql.query(
+      `update of_chat_outbound set status = 'sent', sent_at = now(), matched_message_key = $2 where id = $1`,
+      [input.id, input.messageId],
+    );
+  }
+  await sql.query(
+    `update of_chat_message set author_id = $1 where creator_id = $2 and message_key = $3 and author_id is null`,
+    [input.authorId, input.creatorId, input.messageId],
+  );
+}
+
 export async function recordOutbound(sql: ReadSql, draft: OutboundDraft & { creatorId: string }): Promise<void> {
   await sql.query(
     `insert into of_chat_outbound (id, creator_id, thread_key, fan_key, author_id, body, price_cents, created_at, of_message_key, scheduled_at)

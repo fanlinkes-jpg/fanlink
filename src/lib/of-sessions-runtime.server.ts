@@ -38,6 +38,8 @@ import { sendPace } from "../../server/of-sessions/send/gate.ts";
 import { chatSendGate, publicSendReason, type SendAccount } from "../../server/of-sessions/send/gate.ts";
 import { deliverChatSend, sendLimitFromEnv } from "../../server/of-sessions/send/deliver.ts";
 import { composeChat } from "../../server/of-sessions/send/compose.ts";
+import { liveViewGate } from "../../server/of-sessions/live/desk.ts";
+import { issueLiveTicket } from "../../server/of-sessions/live/tickets.ts";
 import { listFanProfiles, saveFanProfile } from "../../server/of-sessions/sync/fan-profile.ts";
 import { listFanNotes, saveFanNote } from "../../server/of-sessions/sync/fan-note.ts";
 import { intervalMinFromEnv, startSyncLoop, type ScheduleAccount } from "../../server/of-sessions/sync/schedule.ts";
@@ -957,6 +959,31 @@ export async function loadMoreChatsView(userId: string, input: { creatorId: stri
   }
   await markChatList(sql, input.creatorId, ran.value.at(-1)?.threadKey ?? null, done);
   return { ok: true };
+}
+
+export async function openLiveViewTicket(
+  userId: string,
+  input: { creatorId: string; threadKey: string; fanKey: string | null },
+): Promise<{ ok: boolean; ticket: string | null; reason: string | null }> {
+  const access = await accessFor(userId);
+  if (access.role !== "owner" && !access.perms.includes("mensajes")) {
+    throw new WorkspaceAccessError("No tienes permiso para escribir.");
+  }
+  if (!input.threadKey) return { ok: false, ticket: null, reason: "Sin hilo" };
+  const sessions = await getOfSessionManager();
+  const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
+  if (!account) return { ok: false, ticket: null, reason: "Vista en directo desactivada" };
+  const gate = liveViewGate(process.env.FANLINK_LIVE_VIEW_ENABLED, process.env.FANLINK_SEND_ALLOW_ACCOUNTS, sendAccount(account));
+  if (!gate.allowed) return { ok: false, ticket: null, reason: gate.reason };
+  const ticket = issueLiveTicket({
+    userId,
+    accountId: account.id,
+    creatorId: input.creatorId,
+    threadKey: input.threadKey,
+    fanKey: input.fanKey,
+    accountUserId: account.identityUserId,
+  });
+  return { ok: true, ticket, reason: null };
 }
 
 function sendAccount(account: Account): SendAccount {
