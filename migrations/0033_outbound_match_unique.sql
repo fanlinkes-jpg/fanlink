@@ -1,6 +1,6 @@
 -- Un mismo mensaje pudo casarse con varios borradores. Se queda el de menor
--- diferencia con sent_at; si el mensaje no está, el más antiguo. El autor que
--- solo citaba un borrador ya suelto se quita. Luego el índice.
+-- diferencia con sent_at; si el mensaje no está, el más antiguo. El mensaje
+-- se queda con el autor de ese borrador. Luego el índice.
 with ranked as (
   select o.id,
          o.creator_id,
@@ -31,19 +31,14 @@ dropped as (
   returning ranked.creator_id, ranked.matched_message_key, ranked.author_id
 )
 update of_chat_message as message
-set author_id = null
+set author_id = kept.author_id
 from dropped
+join ranked as kept
+  on kept.n = 1
+ and kept.creator_id = dropped.creator_id
+ and kept.matched_message_key = dropped.matched_message_key
 where message.creator_id = dropped.creator_id
-  and message.message_key = dropped.matched_message_key
-  and message.author_id = dropped.author_id
-  and not exists (
-    select 1
-    from ranked as kept
-    where kept.n = 1
-      and kept.creator_id = message.creator_id
-      and kept.matched_message_key = message.message_key
-      and kept.author_id = message.author_id
-  );
+  and message.message_key = dropped.matched_message_key;
 
 create unique index if not exists of_chat_outbound_matched_key
   on of_chat_outbound (creator_id, matched_message_key)

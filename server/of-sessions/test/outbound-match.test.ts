@@ -57,7 +57,7 @@ test("la 0033 deja un borrador por mensaje aunque ya hubiera duplicados", async 
     "select message_key, author_id from of_chat_message where creator_id = 'c1' order by message_key",
   );
   const authorOf = new Map(authors.rows.map((row) => [row.message_key, row.author_id]));
-  assert.equal(authorOf.get("m-1"), null);
+  assert.equal(authorOf.get("m-1"), "luis");
   assert.equal(authorOf.get("m-keep"), "luis");
   await assert.rejects(
     db.exec("insert into of_chat_outbound (id, creator_id, author_id, body, matched_message_key) values ('dup', 'c1', 'ana', 'hola', 'm-1')"),
