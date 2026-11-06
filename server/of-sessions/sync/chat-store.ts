@@ -1,4 +1,4 @@
-import { matchOutboundAuthor, type OutboundDraft } from "./author-match.ts";
+import { outboundTextDelta, OUTBOUND_TIE_MS, type OutboundDraft } from "./author-match.ts";
 import { newFanEvents, type ChatMessage, type ChatThread, type FanMessageEvent } from "./chats.ts";
 import type { ReadSql } from "./store.ts";
 
@@ -355,32 +355,53 @@ export function reconcileOutboundBatch(
 ): OutboundReconcile[] {
   const assignments = new Map<string, string>();
   const used = new Set<string>();
+  const usedMessages = new Set<string>();
   const own = messages.filter((message) => !message.fromFan && !claimedMessageKeys.has(message.messageKey));
   for (const message of own) {
     const exact = drafts.find((draft) => (
       !used.has(draft.id)
+      && !confirmedOutboundFailure(draft.errorReason)
       && draft.ofMessageKey != null
       && draft.ofMessageKey === message.messageKey
       && draft.threadKey === message.threadKey
     ));
     if (!exact) continue;
     used.add(exact.id);
+    usedMessages.add(message.messageKey);
     assignments.set(exact.id, message.messageKey);
   }
+  const pairs: Array<{ draftId: string; messageKey: string; delta: number; authorId: string }> = [];
   for (const message of own) {
-    if ([...assignments.values()].includes(message.messageKey)) continue;
-    const pool = drafts.filter((draft) => !used.has(draft.id) && draft.threadKey === message.threadKey);
-    const match = matchOutboundAuthor({
-      messageKey: message.messageKey,
-      threadKey: message.threadKey,
-      fanKey: null,
-      body: message.body,
-      sentAt: message.sentAt,
-      priceCents: message.priceCents,
-    }, pool);
-    if (!match) continue;
-    used.add(match.draftId);
-    assignments.set(match.draftId, message.messageKey);
+    if (usedMessages.has(message.messageKey)) continue;
+    for (const draft of drafts) {
+      if (used.has(draft.id) || confirmedOutboundFailure(draft.errorReason) || draft.threadKey !== message.threadKey) continue;
+      const delta = outboundTextDelta({
+        messageKey: message.messageKey,
+        threadKey: message.threadKey,
+        fanKey: null,
+        body: message.body,
+        sentAt: message.sentAt,
+        priceCents: message.priceCents,
+      }, draft);
+      if (delta == null) continue;
+      pairs.push({ draftId: draft.id, messageKey: message.messageKey, delta, authorId: draft.authorId });
+    }
+  }
+  const blocked = new Set<string>();
+  for (const messageKey of new Set(pairs.map((pair) => pair.messageKey))) {
+    const ranked = pairs.filter((pair) => pair.messageKey === messageKey).sort((left, right) => left.delta - right.delta);
+    const best = ranked[0];
+    const next = ranked[1];
+    if (best && next && next.authorId !== best.authorId && next.delta - best.delta < OUTBOUND_TIE_MS) blocked.add(messageKey);
+  }
+  const ordered = pairs
+    .filter((pair) => !blocked.has(pair.messageKey))
+    .sort((left, right) => left.delta - right.delta || left.messageKey.localeCompare(right.messageKey));
+  for (const pair of ordered) {
+    if (used.has(pair.draftId) || usedMessages.has(pair.messageKey)) continue;
+    used.add(pair.draftId);
+    usedMessages.add(pair.messageKey);
+    assignments.set(pair.draftId, pair.messageKey);
   }
   return drafts.map((draft) => {
     const messageKey = assignments.get(draft.id);
@@ -402,6 +423,13 @@ export function reconcilePendingOutbound(
   const [decision] = reconcileOutboundBatch([draft], messages, now);
   if (!decision || decision.action !== "sent") return { action: decision?.action ?? "keep" };
   return { action: "sent", messageKey: decision.messageKey };
+}
+
+/** Un 4xx o un «no enviado» ya confirmado no vuelve a competir por el texto. */
+export function confirmedOutboundFailure(reason: string | null | undefined): boolean {
+  if (!reason) return false;
+  if (reason === "no enviado") return true;
+  return /\b4\d\d\b/.test(reason);
 }
 
 function outboundMiss(
@@ -481,12 +509,18 @@ async function attachOutboundAuthors(sql: ReadSql, creatorId: string, messages: 
     const draft = pending.find((item) => item.id === decision.id);
     if (!draft) continue;
     if (decision.action === "sent") {
+      const claimedRow = await sql.query<{ id: string }>(
+        `update of_chat_outbound set matched_message_key = $2
+         where id = $1 and matched_message_key is null
+         returning id`,
+        [draft.id, decision.messageKey],
+      );
+      if (claimedRow.length === 0) continue;
       await sql.query(
         `update of_chat_message set author_id = $1
          where creator_id = $2 and message_key = $3 and author_id is null`,
         [draft.authorId, creatorId, decision.messageKey],
       );
-      await sql.query("update of_chat_outbound set matched_message_key = $2 where id = $1", [draft.id, decision.messageKey]);
       if (hasSendState) {
         await sql.query("update of_chat_outbound set status = 'sent', error_reason = null where id = $1", [draft.id]);
       }

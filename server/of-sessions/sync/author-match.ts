@@ -20,7 +20,7 @@ export type MatchableMessage = {
 };
 
 const WINDOW_MS = 2 * 60 * 60 * 1000;
-const TIE_MS = 60_000;
+export const OUTBOUND_TIE_MS = 60_000;
 
 /**
  * Casa un mensaje leído de OnlyFans con el borrador del chatter.
@@ -30,20 +30,25 @@ const TIE_MS = 60_000;
 export function matchOutboundAuthor(message: MatchableMessage, drafts: OutboundDraft[]): { draftId: string; authorId: string } | null {
   const byId = drafts.find((draft) => draft.ofMessageKey != null && draft.ofMessageKey === message.messageKey);
   if (byId) return { draftId: byId.id, authorId: byId.authorId };
-  const text = normalize(message.body);
-  if (!text) return null;
   const ranked = drafts.flatMap((draft) => {
-    if (normalize(draft.body) !== text) return [];
-    if (draft.priceCents != null && message.priceCents != null && draft.priceCents !== message.priceCents) return [];
-    const delta = Math.abs(Date.parse(message.sentAt) - Date.parse(draft.createdAt));
-    if (!Number.isFinite(delta) || delta > WINDOW_MS) return [];
-    return [{ draft, delta }];
+    const delta = outboundTextDelta(message, draft);
+    return delta == null ? [] : [{ draft, delta }];
   }).sort((left, right) => left.delta - right.delta);
   const best = ranked[0];
   if (!best) return null;
   const next = ranked[1];
-  if (next && next.draft.authorId !== best.draft.authorId && next.delta - best.delta < TIE_MS) return null;
+  if (next && next.draft.authorId !== best.draft.authorId && next.delta - best.delta < OUTBOUND_TIE_MS) return null;
   return { draftId: best.draft.id, authorId: best.draft.authorId };
+}
+
+/** Distancia en ms si el texto, el precio y la ventana de 2 h casan. */
+export function outboundTextDelta(message: MatchableMessage, draft: OutboundDraft): number | null {
+  const text = normalize(message.body);
+  if (!text || normalize(draft.body) !== text) return null;
+  if (draft.priceCents != null && message.priceCents != null && draft.priceCents !== message.priceCents) return null;
+  const delta = Math.abs(Date.parse(message.sentAt) - Date.parse(draft.createdAt));
+  if (!Number.isFinite(delta) || delta > WINDOW_MS) return null;
+  return delta;
 }
 
 const NAMED_ENTITIES: Record<string, string> = {

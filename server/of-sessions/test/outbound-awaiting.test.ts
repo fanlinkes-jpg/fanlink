@@ -95,6 +95,56 @@ test("dos borradores con el mismo texto no comparten un mensaje", () => {
   assert.deepEqual(same[0], { id: "fail", action: "sent", messageKey: "m-1" });
 });
 
+test("un hola ya fallado no deja sin mensaje al que sí salió", () => {
+  const now = Date.parse("2026-11-06T12:05:00.000Z");
+  const message = { messageKey: "m-1", threadKey: "7", fromFan: false, body: "hola", sentAt: "2026-11-06T12:03:00.000Z", priceCents: null };
+  const ana = {
+    id: "ana",
+    authorId: "ana",
+    body: "hola",
+    priceCents: null,
+    createdAt: "2026-11-06T12:00:00.000Z",
+    threadKey: "7",
+    fanKey: "7",
+    ofMessageKey: null,
+    errorReason: "no enviado",
+    scheduledAt: null,
+  };
+  const luis = {
+    ...ana,
+    id: "luis",
+    authorId: "luis",
+    createdAt: "2026-11-06T12:00:30.000Z",
+    errorReason: "Pendiente de confirmar",
+  };
+  const rows = reconcileOutboundBatch([ana, luis], [message], now);
+  assert.equal(rows.find((row) => row.id === "ana")?.action, "keep");
+  assert.deepEqual(rows.find((row) => row.id === "luis"), { id: "luis", action: "sent", messageKey: "m-1" });
+  const http = reconcileOutboundBatch([{ ...ana, errorReason: "400" }, luis], [message], now);
+  assert.deepEqual(http.find((row) => row.id === "luis"), { id: "luis", action: "sent", messageKey: "m-1" });
+});
+
+test("el mensaje más cercano se queda el borrador aunque llegue después en la lista", () => {
+  const now = Date.parse("2026-11-06T14:00:00.000Z");
+  const draft = {
+    authorId: "ana",
+    body: "hola",
+    priceCents: null,
+    threadKey: "7",
+    fanKey: "7",
+    ofMessageKey: null,
+    errorReason: "Pendiente de confirmar",
+    scheduledAt: null,
+  };
+  const first = { ...draft, id: "a", createdAt: "2026-11-06T12:00:00.000Z" };
+  const second = { ...draft, id: "b", createdAt: "2026-11-06T12:00:30.000Z" };
+  const far = { messageKey: "m-lejos", threadKey: "7", fromFan: false, body: "hola", sentAt: "2026-11-06T12:00:20.000Z", priceCents: null };
+  const near = { messageKey: "m-cerca", threadKey: "7", fromFan: false, body: "hola", sentAt: "2026-11-06T12:00:31.000Z", priceCents: null };
+  const rows = reconcileOutboundBatch([first, second], [far, near], now);
+  assert.deepEqual(rows.find((row) => row.id === "b"), { id: "b", action: "sent", messageKey: "m-cerca" });
+  assert.deepEqual(rows.find((row) => row.id === "a"), { id: "a", action: "sent", messageKey: "m-lejos" });
+});
+
 test("la columna de envío se consulta una sola vez por conexión", async () => {
   let calls = 0;
   const sql = {
