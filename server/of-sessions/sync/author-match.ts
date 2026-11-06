@@ -7,6 +7,7 @@ export type OutboundDraft = {
   threadKey: string | null;
   fanKey: string | null;
   ofMessageKey: string | null;
+  scheduledAt?: string | null;
 };
 
 export type MatchableMessage = {
