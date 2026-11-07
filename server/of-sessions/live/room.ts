@@ -18,6 +18,7 @@ import {
   type LiveRole,
 } from "./desk.ts";
 import { startLiveCast, type LiveCast } from "./session.ts";
+import { noteLiveHold, releaseLiveHold } from "./hold.ts";
 import { takeLiveTicket, type LiveTicket } from "./tickets.ts";
 
 type Viewer = { socket: WebSocket; userId: string; role: LiveRole; stamps: number[] };
@@ -154,63 +155,68 @@ async function ensureRoom(ticket: LiveTicket): Promise<Room> {
     idle: null,
   };
   rooms.set(key, room);
-  const borrowed = liveOpener
-    ? await liveOpener.borrow(ticket.accountId)
-    : await borrowAccount(ticket.accountId);
-  room.release = borrowed.release;
-  const openCast = liveOpener?.open ?? startLiveCast;
-  room.cast = await openCast({
-    context: borrowed.context,
-    accountId: ticket.accountId,
-    threadKey: ticket.threadKey,
-    fanKey: ticket.fanKey,
-    accountUserId: ticket.accountUserId,
-    onFrame: (frame) => {
-      for (const viewer of room.viewers) {
-        if (viewer.socket.readyState === viewer.socket.OPEN) viewer.socket.send(frame.jpeg);
-      }
-    },
-    onFile: () => {
-      const controller = room.viewers.find((viewer) => viewer.role === "control" && liveTypingEnabled());
-      if (controller) sendJson(controller.socket, { type: "file" });
-    },
-    onOwnMessage: (message) => {
-      const holder = room.holder;
-      const since = room.heldSince;
-      if (!holder || !since) return;
-      const observedAt = new Date().toISOString();
-      if (!liveSendMatchesGesture({
-        messageId: message.messageId,
-        sentAt: message.sentAt,
-        controlSince: since,
-        existingAuthorId: null,
-        gestureAt: room.lastGestureAt,
-        now: observedAt,
-        body: message.body,
-        draftBody: room.draftBody,
-      })) return;
-      void import("../../../src/lib/db.ts").then(async ({ getSql }) => attributeLiveSend(await getSql(), {
-        id: crypto.randomUUID(),
-        creatorId: room.ticket.creatorId,
-        threadKey: room.ticket.threadKey,
-        fanKey: room.ticket.fanKey,
-        authorId: holder,
-        body: message.body,
-        priceCents: message.priceCents,
-        messageId: message.messageId,
-        createdAt: new Date().toISOString(),
-        sentAt: message.sentAt,
-        controlSince: since,
-        gestureAt: room.lastGestureAt,
-        observedAt,
-        draftBody: room.draftBody,
-      })).catch(() => undefined);
-    },
-  }).catch(async (error: unknown) => {
-    await borrowed.release().catch(() => undefined);
+  noteLiveHold(ticket.accountId);
+  try {
+    const borrowed = liveOpener
+      ? await liveOpener.borrow(ticket.accountId)
+      : await borrowAccount(ticket.accountId);
+    room.release = borrowed.release;
+    const openCast = liveOpener?.open ?? startLiveCast;
+    room.cast = await openCast({
+      context: borrowed.context,
+      accountId: ticket.accountId,
+      threadKey: ticket.threadKey,
+      fanKey: ticket.fanKey,
+      accountUserId: ticket.accountUserId,
+      onFrame: (frame) => {
+        for (const viewer of room.viewers) {
+          if (viewer.socket.readyState === viewer.socket.OPEN) viewer.socket.send(frame.jpeg);
+        }
+      },
+      onFile: () => {
+        const controller = room.viewers.find((viewer) => viewer.role === "control" && liveTypingEnabled());
+        if (controller) sendJson(controller.socket, { type: "file" });
+      },
+      onOwnMessage: (message) => {
+        const holder = room.holder;
+        const since = room.heldSince;
+        if (!holder || !since) return;
+        const observedAt = new Date().toISOString();
+        if (!liveSendMatchesGesture({
+          messageId: message.messageId,
+          sentAt: message.sentAt,
+          controlSince: since,
+          existingAuthorId: null,
+          gestureAt: room.lastGestureAt,
+          now: observedAt,
+          body: message.body,
+          draftBody: room.draftBody,
+        })) return;
+        void import("../../../src/lib/db.ts").then(async ({ getSql }) => attributeLiveSend(await getSql(), {
+          id: crypto.randomUUID(),
+          creatorId: room.ticket.creatorId,
+          threadKey: room.ticket.threadKey,
+          fanKey: room.ticket.fanKey,
+          authorId: holder,
+          body: message.body,
+          priceCents: message.priceCents,
+          messageId: message.messageId,
+          createdAt: new Date().toISOString(),
+          sentAt: message.sentAt,
+          controlSince: since,
+          gestureAt: room.lastGestureAt,
+          observedAt,
+          draftBody: room.draftBody,
+        })).catch(() => undefined);
+      },
+    });
+  } catch (error) {
+    releaseLiveHold(ticket.accountId);
+    await room.release?.().catch(() => undefined);
+    room.release = null;
     rooms.delete(key);
     throw error;
-  });
+  }
   return room;
 }
 
@@ -301,6 +307,7 @@ function scheduleStop(room: Room): void {
 async function stopRoom(room: Room): Promise<void> {
   if (rooms.get(room.key) !== room) return;
   rooms.delete(room.key);
+  releaseLiveHold(room.accountId);
   if (room.idle) clearTimeout(room.idle);
   if (room.controlTimer) clearTimeout(room.controlTimer);
   await room.cast?.stop().catch(() => undefined);

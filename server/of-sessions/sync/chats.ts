@@ -123,9 +123,10 @@ export function threadsToOpen(
     .slice(0, limit);
 }
 
-/** OnlyFans pide los mensajes al abrir /my/chats/chat/{id}, no /my/chats/{id}. */
+/** OnlyFans pide los mensajes al abrir /my/chats/chat/{id}, no /my/chats/{id}. `inbox` es la bandeja real. */
 export function chatPageUrl(chatsUrl: string, threadKey: string, siteId: string): string {
   const base = chatsUrl.replace(/\/+$/, "");
+  if (!threadKey || threadKey === "inbox") return base;
   const id = encodeURIComponent(threadKey);
   if (siteId === "onlyfans") return `${base}/chat/${id}`;
   return `${base}/${id}`;

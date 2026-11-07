@@ -23,6 +23,7 @@ import {
   type ReadIdentity,
 } from "../identity.ts";
 import { messages, publicErrorMessage } from "../messages.ts";
+import { liveHoldsAccount } from "../live/hold.ts";
 import type { AccountRepository } from "../store/repository.ts";
 import type { Account } from "../types.ts";
 import {
@@ -351,7 +352,7 @@ export class SessionManager {
   }
 
   readCreatorData(accountId: string, includeEarnings: boolean, sinceTx?: TxCursor | null): Promise<CollectedRead> {
-    if (this.reading.size > 0) {
+    if (liveHoldsAccount(accountId) || this.reading.size > 0) {
       return Promise.resolve({
         earnings: [],
         fans: [],
@@ -378,7 +379,7 @@ export class SessionManager {
 
   /** Una lectura a la vez, el mismo perfil que la sincronización. */
   runQueued<T>(accountId: string, run: (context: BrowserContext) => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; busy: true }> {
-    if (this.reading.size > 0) return Promise.resolve({ ok: false, busy: true });
+    if (liveHoldsAccount(accountId) || this.reading.size > 0) return Promise.resolve({ ok: false, busy: true });
     this.reading.add(accountId);
     const job = this.readTail.then(async () => {
       const value = await this.withSession(accountId, run);
@@ -401,7 +402,7 @@ export class SessionManager {
       jsonPaths: [],
       alreadyRunning: true,
     };
-    if (this.reading.size > 0) return Promise.resolve(busy);
+    if (liveHoldsAccount(accountId) || this.reading.size > 0) return Promise.resolve(busy);
     this.reading.add(accountId);
     const job = this.readTail.then(() => this.readChatsNow(accountId)).finally(() => {
       this.reading.delete(accountId);
@@ -421,7 +422,7 @@ export class SessionManager {
       captured: false,
       alreadyRunning: true,
     };
-    if (notificationReadBusy([...this.reading], accountId)) return Promise.resolve(busy);
+    if (liveHoldsAccount(accountId) || notificationReadBusy([...this.reading], accountId)) return Promise.resolve(busy);
     this.reading.add(accountId);
     const job = this.readTail.then(() => this.readNotificationsNow(accountId)).finally(() => {
       this.reading.delete(accountId);
@@ -435,6 +436,7 @@ export class SessionManager {
 
   /** Mantiene el perfil abierto para escuchar. Cede si otra lectura ya lo usa. */
   holdWatch(accountId: string, run: (context: BrowserContext) => Promise<void>): Promise<boolean> {
+    if (liveHoldsAccount(accountId)) return Promise.resolve(false);
     const job = this.readTail.then(async () => {
       if (this.reading.size > 0) return false;
       this.reading.add(accountId);

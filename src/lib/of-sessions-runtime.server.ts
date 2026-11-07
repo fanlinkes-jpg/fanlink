@@ -972,7 +972,7 @@ export async function openLiveViewTicket(
   if (access.role !== "owner" && !access.perms.includes("mensajes")) {
     throw new WorkspaceAccessError("No tienes permiso para escribir.");
   }
-  if (!input.threadKey) return { ok: false, ticket: null, reason: "Sin hilo" };
+  const threadKey = input.threadKey.trim() || "inbox";
   const sessions = await getOfSessionManager();
   const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
   if (!account) return { ok: false, ticket: null, reason: "Vista en directo desactivada" };
@@ -982,7 +982,7 @@ export async function openLiveViewTicket(
     userId,
     accountId: account.id,
     creatorId: input.creatorId,
-    threadKey: input.threadKey,
+    threadKey,
     fanKey: input.fanKey,
     accountUserId: account.identityUserId,
   });

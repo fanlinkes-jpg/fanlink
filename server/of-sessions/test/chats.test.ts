@@ -184,6 +184,7 @@ test("el último mensaje abre el hilo y el gasto sale de la ficha, sin inventarl
   assert.equal(threadMessages.length, 2);
   assert.equal(threadMessages.find((row) => row.messageKey === "503")?.fromFan, false);
   assert.equal(chatPageUrl("https://onlyfans.com/my/chats", "9", "onlyfans"), "https://onlyfans.com/my/chats/chat/9");
+  assert.equal(chatPageUrl("https://onlyfans.com/my/chats", "inbox", "onlyfans"), "https://onlyfans.com/my/chats");
   const opened = threadsToOpen([
     { ...named[0]!, unread: 0, lastMessageAt: "2026-11-05T18:00:00.000Z" },
     { ...named[1]!, unread: 2, lastMessageAt: "2026-11-05T10:00:00.000Z" },
