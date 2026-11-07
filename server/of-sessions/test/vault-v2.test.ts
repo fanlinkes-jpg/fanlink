@@ -6,15 +6,18 @@ import { test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { deliverChatSend } from "../send/deliver.ts";
 import { handleChatMedia, handleVaultMedia, handleVaultQuery, handleVaultSend, mediaLogLine } from "../http/vault-http.ts";
-import { presentGap, vaultCardHasMoney } from "../sync/vault-query.ts";
+import { creatorAllowed, presentGap, vaultCardHasMoney } from "../sync/vault-query.ts";
 import { itemSaleBlocked } from "../sync/vault-block.ts";
-import { suggestVaultPrice } from "../sync/vault-model.ts";
-import { saveVaultMirror } from "../sync/vault-store.ts";
+import { priceToCents, suggestVaultPrice, trailerPackages } from "../sync/vault-model.ts";
+import { persistVaultRead, saveVaultMirror } from "../sync/vault-store.ts";
+import { mediaRangeHeader } from "../sync/media-bytes.ts";
+import { VAULT_FILTER_DEBOUNCE_MS, restoredVaultQuery, emptyVaultQuery } from "../sync/vault-filter.ts";
+import { sendChatMessageView } from "../send/chat-message.ts";
 import type { ReadSql } from "../sync/store.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
-const NEW_FILES = ["0037_vault_mirror.sql", "0038_vault_fan_filter.sql", "0039_outbound_media.sql"];
+const NEW_FILES = ["0037_vault_mirror.sql", "0038_vault_fan_filter.sql", "0039_outbound_media.sql", "0040_vault_full_tags.sql"];
 
 const OLD_0028 = `
 alter table of_chat_message add column if not exists media_count integer;
@@ -135,6 +138,10 @@ test("la 0037+ funciona encima de las 0028–0031 antiguas y no borra esas filas
     assert.deepEqual(lists.rows.map((row) => row.list_key), ["hijo", "padre"]);
     assert.equal(lists.rows.find((row) => row.list_key === "hijo")?.parent_key, "padre");
     assert.equal(await count(db, "of_outbound_media"), 1);
+    const tags = await db.query<{ udt_name: string }>(
+      "select udt_name from information_schema.columns where table_name = 'of_vault_item' and column_name = 'tags'",
+    );
+    assert.equal(tags.rows[0]?.udt_name, "jsonb");
     const sql = asSql(db);
     await saveVaultMirror(sql, "c-1", [{
       id: "m-nuevo",
@@ -173,6 +180,7 @@ test("el JSON del chatter trae ventas y no importes, y el filtro de chatter no s
       ('c-1', 'v3', 'audio corto', 'audio', 5, 'SOLA', '[]'::jsonb, 'solas', 'SOLA', '2026-10-01', 0, 1, 4)`);
     await db.exec(`insert into of_vault_fan_send (id, creator_id, fan_key, item_key, sent_at, price_cents, purchased, author_id) values
       ('a', 'c-1', '7', 'v1', '2026-11-02', 1900, true, 'chatter-a'),
+      ('c', 'c-1', '7', 'v1', '2026-11-04', 2100, false, 'chatter-c'),
       ('b', 'c-1', '7', 'v3', '2026-11-03', 500, false, 'chatter-b')`);
     const seen: string[] = [];
     const sql = asSql(db, seen);
@@ -191,13 +199,25 @@ test("el JSON del chatter trae ventas y no importes, y el filtro de chatter no s
     assert.equal(body.items[0]?.ventasLabel, "Ventas");
     assert.equal(body.items[0]?.bestSellerLabel, "Más vendido");
     const history = body.items[0]?.history as Array<{ priceLabel: string; purchasedLabel: string; authorLabel: string }>;
-    assert.equal(history[0]?.priceLabel, "$19.00");
-    assert.equal(history[0]?.purchasedLabel, "comprado");
-    assert.equal(history[0]?.authorLabel, "chatter-a");
+    assert.deepEqual(history.map((row) => row.authorLabel).sort(), ["chatter-a", "chatter-c"]);
+    assert.equal(history.find((row) => row.authorLabel === "chatter-a")?.priceLabel, "$19.00");
+    assert.equal(history.find((row) => row.authorLabel === "chatter-a")?.purchasedLabel, "comprado");
     assert.equal(vaultCardHasMoney(body), false);
+    assert.equal(vaultCardHasMoney({ suggestedLabel: "$19", history: [{ priceLabel: "$19.00" }] }), false);
+    assert.equal(vaultCardHasMoney({ revenue: 10, ingresos: 4 }), true);
     assert.equal(JSON.stringify(body).includes("priceCents"), false);
     assert.equal(JSON.stringify(body).includes("€"), false);
-    assert.equal(seen.some((query) => query.includes("author_id") && query.includes("seconds") && query.includes("price_cents")), true);
+    assert.equal(seen.some((query) => query.includes("seconds") && query.includes("price_cents")), true);
+    assert.equal(seen.some((query) => query.includes("s.author_id")), false);
+    const other = await handleVaultQuery(jsonRequest({
+      creatorId: "c-1",
+      fanKey: "7",
+      chatterId: "chatter-b",
+      query: { sent: "si", kinds: ["audio"] },
+    }), { session: async () => chatter("chatter-a"), sql });
+    const otherBody = await other.json() as { items: Array<{ id: string; history: Array<{ authorLabel: string }> }> };
+    assert.equal(otherBody.items[0]?.id, "v3");
+    assert.equal(otherBody.items[0]?.history[0]?.authorLabel, "chatter-b");
     const omitted = await handleVaultQuery(jsonRequest({
       creatorId: "c-1",
       fanKey: "7",
@@ -341,8 +361,8 @@ test("NO VENDER bloquea el envío individual y el masivo en la API", async () =>
     assert.equal(massBody.reason, "NO VENDER");
     assert.equal(massOpened, false);
     assert.equal(itemSaleBlocked({
-      folderId: "hijo",
-      folderName: "playa",
+      folderId: "a",
+      folderName: "uno",
       title: "clip",
       folders: [
         { id: "a", name: "uno", parentId: "b" },
@@ -354,25 +374,31 @@ test("NO VENDER bloquea el envío individual y el masivo en la API", async () =>
       folderName: "playa",
       title: "clip",
       folders: [{ id: "otra", name: "playa", parentId: null }],
-    }), true);
+    }), false);
     assert.equal(itemSaleBlocked({
       folderId: null,
       folderName: "SIN EDITAR",
       title: "clip",
       folders: [],
     }), true);
+    assert.equal(itemSaleBlocked({
+      folderId: null,
+      folderName: "Playa",
+      title: "clip",
+      folders: [],
+    }), false);
   } finally {
     await db.close();
   }
 });
 
-test("deliverIfNoMedia y deliverChatSend no abren el navegador si hay medios", async () => {
+test("con los flags encendidos la pieza de la bóveda abre el navegador", async () => {
   const db = new PGlite();
   try {
     await applyNew(db);
     await db.exec(`insert into of_outbound_media (outbound_id, creator_id, media_id, position) values ('out-1', '9ikis52', 'v1', 0)`);
     let opened = false;
-    const blocked = await deliverChatSend({
+    const sent = await deliverChatSend({
       flag: "true",
       allowlist: "9ikis52,@bigpoppa1111",
       perMinute: 4,
@@ -385,26 +411,26 @@ test("deliverIfNoMedia y deliverChatSend no abren el navegador si hay medios", a
         return { messageId: "1", reason: null };
       },
     });
-    assert.equal(blocked.sent, false);
-    assert.equal(blocked.opened, false);
-    assert.equal(blocked.reason, "El envío de medios no existe");
-    assert.equal(opened, false);
-    const clear = await deliverChatSend({
-      flag: "true",
-      allowlist: "@bigpoppa1111",
+    assert.equal(sent.sent, true);
+    assert.equal(sent.opened, true);
+    assert.equal(opened, true);
+    opened = false;
+    const off = await deliverChatSend({
+      flag: undefined,
+      allowlist: "9ikis52",
       perMinute: 4,
       account: { creatorId: "9ikis52", accountId: "acc-9", handle: "bigpoppa1111", userId: "42", label: "Prueba" },
       now: () => Date.now(),
       sleep: async () => undefined,
-      outboundMedia: { sql: asSql(db), outboundId: "sin-medios" },
+      outboundMedia: { sql: asSql(db), outboundId: "out-1" },
       open: async () => {
         opened = true;
         return { messageId: "2", reason: null };
       },
     });
-    assert.equal(clear.sent, true);
-    assert.equal(clear.opened, true);
-    assert.equal(opened, true);
+    assert.equal(off.opened, false);
+    assert.match(off.reason ?? "", /desactivado/i);
+    assert.equal(opened, false);
   } finally {
     await db.close();
   }
@@ -451,6 +477,199 @@ test("el envío individual y el masivo siguen apagados si los flags no están", 
     else process.env.FANLINK_ENABLE_SEND = previousSend;
     if (previousMass === undefined) delete process.env.FANLINK_ENABLE_MASS_SEND;
     else process.env.FANLINK_ENABLE_MASS_SEND = previousMass;
+  } finally {
+    await db.close();
+  }
+});
+
+test("la búsqueda pliega tildes, la temática y el precio en dólares", async () => {
+  const db = new PGlite();
+  try {
+    await applyNew(db);
+    await db.exec(`insert into of_vault_item (creator_id, item_key, title, kind, folder, tags, description, price_cents)
+      values ('c-1', 'cam', 'Cámara nueva', 'foto', 'Baño', '["playa"]'::jsonb, 'atardecer', null)`);
+    const sql = asSql(db);
+    for (const text of ["cámara", "camara", "CÁMARA", "baño", "bano"]) {
+      const response = await handleVaultQuery(jsonRequest({ creatorId: "c-1", query: { text } }), {
+        session: async () => chatter("chatter-a"),
+        sql,
+      });
+      const body = await response.json() as { items: Array<{ id: string }> };
+      assert.deepEqual(body.items.map((item) => item.id), ["cam"], text);
+    }
+    const theme = await handleVaultQuery(jsonRequest({ creatorId: "c-1", query: { themes: ["playa"] } }), {
+      session: async () => chatter("chatter-a"),
+      sql,
+    });
+    const themed = await theme.json() as { items: Array<{ id: string }> };
+    assert.deepEqual(themed.items.map((item) => item.id), ["cam"]);
+    assert.equal(priceToCents({ price: 9.99 }), 999);
+    assert.equal(priceToCents({ priceCents: 1900, price: 9.99 }), 1900);
+    assert.equal(priceToCents({ price: "19" }), 1900);
+  } finally {
+    await db.close();
+  }
+});
+
+test("un id que no está en el espejo no se envía", async () => {
+  const db = new PGlite();
+  try {
+    await applyNew(db);
+    let opened = false;
+    const response = await handleVaultSend(jsonRequest({
+      mode: "chat",
+      creatorId: "c-1",
+      itemIds: ["no-existe"],
+      accountId: "c-1",
+      handle: "bigpoppa1111",
+    }), {
+      session: async () => chatter("chatter-a"),
+      sql: asSql(db),
+      env: { FANLINK_ENABLE_SEND: "true", FANLINK_ENABLE_MASS_SEND: "true", FANLINK_SEND_ALLOW_ACCOUNTS: "c-1" },
+      openChat: async () => {
+        opened = true;
+        return { messageId: "1", reason: null };
+      },
+    });
+    assert.equal(response.status, 403);
+    const body = await response.json() as { opened: boolean; reason: string };
+    assert.equal(body.reason, "NO VENDER");
+    assert.equal(body.opened, false);
+    assert.equal(opened, false);
+  } finally {
+    await db.close();
+  }
+});
+
+test("leer el vault guarda el espejo y el vídeo pide Range", async () => {
+  const db = new PGlite();
+  try {
+    await applyNew(db);
+    const saved = await persistVaultRead(asSql(db), "c-1", [{
+      list: [{
+        id: "v9",
+        type: "video",
+        name: "Cámara",
+        price: 9.99,
+        files: { source: { url: "https://cdn2.onlyfans.com/full.mp4" }, thumb: { url: "https://cdn2.onlyfans.com/thumb.jpg" } },
+      }],
+      lists: [{ id: "bano", name: "Baño" }],
+    }]);
+    assert.equal(saved[0]?.priceCents, 999);
+    assert.equal(saved[0]?.fullUrl, "https://cdn2.onlyfans.com/full.mp4");
+    const rows = await db.query<{ title: string; price_cents: number; full_url: string }>(
+      "select title, price_cents, full_url from of_vault_item where item_key = 'v9'",
+    );
+    assert.equal(rows.rows[0]?.title, "Cámara");
+    assert.equal(rows.rows[0]?.price_cents, 999);
+    assert.equal(rows.rows[0]?.full_url, "https://cdn2.onlyfans.com/full.mp4");
+    let seenRange: string | null | undefined;
+    const media = await handleChatMedia(new Request("http://127.0.0.1/api/chat-media?creatorId=c-1&threadKey=7&messageKey=m1&index=0", {
+      headers: { range: "bytes=0-1" },
+    }), {
+      session: async () => chatter("chatter-a"),
+      findMedia: async () => ({ url: "https://cdn2.onlyfans.com/clip.mp4" }),
+      fetchBytes: async (_url, range) => {
+        seenRange = range;
+        return { status: 206, body: Uint8Array.from([1, 2]), contentType: "video/mp4", contentRange: "bytes 0-1/9" };
+      },
+    });
+    assert.equal(media.status, 206);
+    assert.equal(seenRange, "bytes=0-1");
+    assert.equal(media.headers.get("content-range"), "bytes 0-1/9");
+    assert.equal(media.headers.get("accept-ranges"), "bytes");
+    assert.equal(mediaRangeHeader("bytes=4-"), "bytes=4-");
+    assert.equal(mediaRangeHeader("bytes=no"), null);
+    const full = await handleVaultMedia(new Request("http://127.0.0.1/api/vault-media?creatorId=c-1&mediaId=v9&variant=full"), {
+      session: async () => chatter("chatter-a"),
+      findPreview: async (_creator, _id, variant) => variant === "full" ? "https://cdn2.onlyfans.com/full.mp4" : "https://cdn2.onlyfans.com/thumb.jpg",
+      fetchBytes: async (url) => ({ status: 200, body: Uint8Array.from(Buffer.from(url.includes("full") ? "full" : "thumb")), contentType: "video/mp4" }),
+    });
+    assert.equal(new TextDecoder().decode(await full.arrayBuffer()), "full");
+  } finally {
+    await db.close();
+  }
+});
+
+test("sendChatMessageView no abre con los flags apagados ni con NO VENDER", async () => {
+  const db = new PGlite();
+  try {
+    await applyNew(db);
+    await db.exec(`insert into of_vault_list (creator_id, list_key, name) values ('9ikis52', 'nv', 'NO VENDER')`);
+    await db.exec(`insert into of_vault_item (creator_id, item_key, title, folder, list_key, list_name) values ('9ikis52', 'v1', 'clip', 'NO VENDER', 'nv', 'NO VENDER'), ('9ikis52', 'libre', 'playa', 'Playa', null, 'Playa')`);
+    const sql = asSql(db);
+    const account = { id: "acc-9", creatorId: "9ikis52", identityHandle: "bigpoppa1111", identityUserId: "42", identityState: "ok", label: "Prueba" };
+    const access = { userId: "chatter-a", role: "member" as const, perms: ["mensajes"], creatorIds: ["9ikis52"] };
+    let opened = false;
+    const off = await sendChatMessageView("chatter-a", {
+      creatorId: "9ikis52",
+      fanKey: "7",
+      threadKey: "7",
+      body: "hola",
+      priceCents: null,
+      vaultItemIds: ["libre"],
+    }, {
+      sql,
+      access,
+      account,
+      env: {},
+      open: async () => {
+        opened = true;
+        return { messageId: "1", reason: null };
+      },
+    });
+    assert.equal(off.sent, false);
+    assert.match(off.reason ?? "", /desactivado/i);
+    assert.equal(opened, false);
+    const blocked = await sendChatMessageView("chatter-a", {
+      creatorId: "9ikis52",
+      fanKey: "7",
+      threadKey: "7",
+      body: "hola",
+      priceCents: null,
+      vaultItemIds: ["v1"],
+    }, {
+      sql,
+      access,
+      account,
+      env: { FANLINK_ENABLE_SEND: "true", FANLINK_SEND_ALLOW_ACCOUNTS: "9ikis52,@bigpoppa1111" },
+      open: async () => {
+        opened = true;
+        return { messageId: "2", reason: null };
+      },
+    });
+    assert.equal(blocked.reason, "NO VENDER");
+    assert.equal(opened, false);
+    const missing = await sendChatMessageView("chatter-a", {
+      creatorId: "9ikis52",
+      fanKey: "7",
+      threadKey: "7",
+      body: "hola",
+      priceCents: null,
+      vaultItemIds: ["fantasma"],
+    }, {
+      sql,
+      access,
+      account,
+      env: { FANLINK_ENABLE_SEND: "true", FANLINK_SEND_ALLOW_ACCOUNTS: "@bigpoppa1111" },
+      open: async () => {
+        opened = true;
+        return { messageId: "3", reason: null };
+      },
+    });
+    assert.equal(missing.reason, "NO VENDER");
+    assert.equal(opened, false);
+    assert.equal(creatorAllowed({ userId: "a", role: "member", perms: ["vault"], creatorIds: ["9ikis52"] }, "otra"), false);
+    assert.equal(creatorAllowed({ userId: "a", role: "member", perms: ["vault"], creatorIds: ["9ikis52"] }, "9ikis52"), true);
+    const packs = trailerPackages([
+      { id: "t", title: "Tráiler", kind: "video", seconds: 10, preview: null, folder: "set", tags: ["Tráiler"], listId: "set", listName: "set", description: null, uploadedAt: null, priceCents: 0, salesCount: null, sentCount: null },
+      { id: "p", title: "Completo", kind: "video", seconds: 80, preview: null, folder: "set", tags: [], listId: "set", listName: "set", description: null, uploadedAt: null, priceCents: 1900, salesCount: null, sentCount: null },
+    ]);
+    assert.equal(packs[0]?.label, "Tráiler gratis + vídeo de pago");
+    assert.equal(packs[0]?.paidId, "p");
+    assert.equal(VAULT_FILTER_DEBOUNCE_MS >= 250, true);
+    assert.equal(restoredVaultQuery({ ...emptyVaultQuery(), text: "sola" }).text, "sola");
+    assert.equal(restoredVaultQuery(null).sort, "fecha");
   } finally {
     await db.close();
   }
