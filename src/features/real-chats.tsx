@@ -248,7 +248,9 @@ export function RealChatsPage() {
   }, [threadTail, openThread]);
   const accountChoices = [...new Set(threads.map((thread) => thread.creatorId))];
   const [pickedCreator, setPickedCreator] = useState<string | null>(null);
-  const liveCreatorId = creatorId !== "all" ? creatorId : (pickedCreator ?? accountChoices[0] ?? null);
+  const firstChoice = accountChoices[0] ?? null;
+  if (creatorId === "all" && pickedCreator == null && firstChoice) setPickedCreator(firstChoice);
+  const liveCreatorId = creatorId !== "all" ? creatorId : pickedCreator;
   const creatorName = creatorId === "all"
     ? "Todas las cuentas"
     : creators.find((creator) => creator.id === creatorId)?.name ?? "Cuenta";

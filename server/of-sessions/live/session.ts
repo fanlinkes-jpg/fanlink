@@ -58,10 +58,16 @@ export async function startLiveCast(input: {
   page.on("download", (download) => {
     void download.cancel().catch(() => undefined);
   });
+  let goingHome = false;
   page.on("framenavigated", (frame) => {
-    if (frame !== page.mainFrame()) return;
-    if (liveRequestAllowed(frame.url())) return;
-    void page.goto(chatUrl, { waitUntil: "domcontentloaded" }).catch(() => undefined);
+    if (frame !== page.mainFrame() || goingHome) return;
+    const url = frame.url();
+    if (!url || url === "about:blank" || url.startsWith("chrome-error:")) return;
+    if (liveRequestAllowed(url)) return;
+    goingHome = true;
+    void page.goto(chatUrl, { waitUntil: "domcontentloaded" }).catch(() => undefined).finally(() => {
+      goingHome = false;
+    });
   });
   page.on("filechooser", (chooser: FileChooser) => {
     if (!typing) {

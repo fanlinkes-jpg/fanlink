@@ -109,7 +109,7 @@ export function LiveOnlyFans({
       socket?.close();
       socketRef.current = null;
     };
-  }, [creatorId, threadKey, fanKey, deskRef]);
+  }, [creatorId, threadKey, fanKey]);
 
   function send(message: DeskMessage) {
     const socket = socketRef.current;
