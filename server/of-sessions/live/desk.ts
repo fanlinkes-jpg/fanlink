@@ -52,6 +52,7 @@ export function liveRequestAllowed(raw: string, method = "GET", typing = false):
   }
   if (url.protocol !== "https:" && url.protocol !== "http:" && url.protocol !== "wss:" && url.protocol !== "ws:") return false;
   const host = url.hostname.toLowerCase();
+  if (liveChallengeHost(host)) return method.toUpperCase() === "GET" || method.toUpperCase() === "HEAD";
   if (host !== "onlyfans.com" && !host.endsWith(".onlyfans.com")) return false;
   let path = url.pathname.toLowerCase();
   try {
@@ -63,6 +64,10 @@ export function liveRequestAllowed(raw: string, method = "GET", typing = false):
   if (liveBootPath(path)) return method.toUpperCase() === "GET" || method.toUpperCase() === "HEAD";
   if (!liveHostPathAllowed(host, path)) return false;
   return !liveWriteBlocked(method, path, typing);
+}
+
+function liveChallengeHost(host: string): boolean {
+  return host === "challenges.cloudflare.com" || host.endsWith(".challenges.cloudflare.com") || host === "cloudflare.com" || host.endsWith(".cloudflare.com");
 }
 
 function liveBootPath(path: string): boolean {
