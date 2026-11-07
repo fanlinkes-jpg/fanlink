@@ -66,6 +66,7 @@ export type ComposeRequest = {
   priceCents: number | null;
   files?: string[];
   vaultTitle?: string | null;
+  vaultTitles?: string[];
   scheduleAt?: string | null;
   tagHandle?: string | null;
   bold?: boolean;
@@ -196,10 +197,15 @@ export async function composeChat(context: BrowserContext, request: ComposeReque
       const input = page.locator("input[type='file']").first();
       await input.setInputFiles(request.files);
     }
-    if (request.vaultTitle) {
+    const titles = [...(request.vaultTitles ?? []), ...(request.vaultTitle ? [request.vaultTitle] : [])]
+      .map((title) => title.trim())
+      .filter((title, index, all) => title && all.indexOf(title) === index);
+    if (titles.length > 0) {
       const vault = page.locator("[data-fanlink-vault], button[aria-label='Add from media vault'], button[aria-label='Añadir del vault']").first();
       await vault.click();
-      await page.getByRole("button", { name: request.vaultTitle, exact: true }).click();
+      for (const title of titles) {
+        await page.getByRole("button", { name: title, exact: true }).click();
+      }
     }
     if (request.scheduleAt) {
       const schedule = page.locator("[data-fanlink-schedule], button[aria-label='Schedule your message'], button[aria-label='Programar tu mensaje']").first();

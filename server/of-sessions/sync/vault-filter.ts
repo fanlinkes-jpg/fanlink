@@ -1,4 +1,5 @@
 import type { VaultFile, VaultKind } from "./vault-model.ts";
+export { VAULT_FILTER_DEBOUNCE_MS } from "../../../src/lib/vault-debounce.ts";
 
 export type CoupleTag = "B/G" | "G/G" | "SOLA" | "INDIVIDUAL" | "PELICULA";
 export type VaultSort = "fecha" | "duracion" | "ventas" | "precio";
@@ -32,6 +33,7 @@ export type VaultQuery = {
   bestSeller: boolean;
   minBuyRate: number | null;
   sort: VaultSort;
+  themes: string[];
 };
 
 export type FanVaultMarks = {
@@ -63,6 +65,7 @@ export function emptyVaultQuery(): VaultQuery {
     bestSeller: false,
     minBuyRate: null,
     sort: "fecha",
+    themes: [],
   };
 }
 
@@ -179,6 +182,7 @@ export function filterVault(items: readonly VaultFile[], query: VaultQuery, fan?
     if (!dateHit(item.uploadedAt, query.uploadedFrom, query.uploadedTo)) return false;
     if (listNeedle && !listHit(item, listNeedle)) return false;
     if (query.couples.length > 0 && !coupleTags(item).some((tag) => query.couples.includes(tag))) return false;
+    if (query.themes.length > 0 && !query.themes.every((theme) => textHit(item, fold(theme)))) return false;
     if (!offerHit(item.priceCents, query.offer)) return false;
     if (!priceHit(item.priceCents, query.minPriceCents, query.maxPriceCents)) return false;
     if (!fanHit(fan?.sentIds, item.id, query.sent)) return false;
@@ -226,6 +230,7 @@ export function vaultQueryFromUnknown(value: unknown): VaultQuery {
     bestSeller: record.bestSeller === true,
     minBuyRate: rateOf(record.minBuyRate),
     sort: SORTS.includes(record.sort as VaultSort) ? record.sort as VaultSort : "fecha",
+    themes: themeList(record.themes),
   };
 }
 
@@ -360,4 +365,14 @@ function markOf(value: unknown): FanMark {
 function rateOf(value: unknown): number | null {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) return null;
   return value;
+}
+
+function themeList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.slice(0, 40)).slice(0, 8);
+}
+
+/** Al abrir, el filtro guardado manda. Si no hay, el vacío. */
+export function restoredVaultQuery(saved: VaultQuery | null | undefined): VaultQuery {
+  return saved ?? emptyVaultQuery();
 }

@@ -1,11 +1,11 @@
 import type { ReadSql } from "../sync/store.ts";
 
 /**
- * Un borrador con medios no se envía: el envío real de medios no existe.
- * El texto solo saldría, y el fan no recibiría la pieza.
+ * Sin medios, el texto puede salir. Con piezas de la bóveda, solo si el
+ * llamador ya pasó FANLINK_ENABLE_SEND y la allowlist (apagado por defecto).
  */
-export function mediaSendGate(mediaCount: number): { allowed: boolean; reason: string } {
-  if (mediaCount === 0) return { allowed: true, reason: "" };
+export function mediaSendGate(mediaCount: number, allowVaultMedia = false): { allowed: boolean; reason: string } {
+  if (mediaCount === 0 || allowVaultMedia) return { allowed: true, reason: "" };
   return { allowed: false, reason: "El envío de medios no existe" };
 }
 
@@ -21,13 +21,14 @@ export async function gateOutboundSend(sql: ReadSql, outboundId: string): Promis
   return mediaSendGate(await outboundMediaCount(sql, outboundId));
 }
 
-/** compose y deliverChatSend pasan por aquí antes de abrir el navegador. Si hay medios, no se abre. */
+/** Si allowVaultMedia es false, una pieza no abre el navegador. */
 export async function deliverIfNoMedia(
   sql: ReadSql,
   outboundId: string,
   send: () => Promise<void>,
+  allowVaultMedia = false,
 ): Promise<{ sent: boolean; reason: string | null }> {
-  const gate = await gateOutboundSend(sql, outboundId);
+  const gate = mediaSendGate(await outboundMediaCount(sql, outboundId), allowVaultMedia);
   if (!gate.allowed) return { sent: false, reason: gate.reason };
   await send();
   return { sent: true, reason: null };

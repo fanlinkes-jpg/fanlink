@@ -46,7 +46,8 @@ export function itemSaleBlocked(input: {
   const named = input.folderName
     ? input.folders.find((folder) => foldSale(folder.name) === foldSale(input.folderName ?? ""))
     : undefined;
-  const start = input.folderId ?? named?.id ?? null;
-  if ((input.folderId || input.folderName) && start == null) return true;
+  const known = input.folderId && input.folders.some((folder) => folder.id === input.folderId) ? input.folderId : null;
+  const start = known ?? named?.id ?? null;
+  if (!start) return false;
   return chainSaleBlocked(input.folders, start);
 }

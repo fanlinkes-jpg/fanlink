@@ -3,8 +3,9 @@ import { deliverMassVault } from "../send/mass-vault.ts";
 import { mediaHostAllowed } from "../sync/history.ts";
 import { loadSaleContext } from "../sync/vault-store.ts";
 import type { ReadSql } from "../sync/store.ts";
-import { queryVaultForActor, type VaultActor } from "../sync/vault-query.ts";
+import { creatorAllowed, queryVaultForActor, type VaultActor } from "../sync/vault-query.ts";
 import type { MassEnv } from "../../../src/lib/mass/gates.ts";
+import type { MediaBytes } from "../sync/media-bytes.ts";
 
 export type SessionActor = VaultActor | null;
 
@@ -27,7 +28,7 @@ export async function handleVaultQuery(request: Request, deps: {
 export async function handleChatMedia(request: Request, deps: {
   session: () => Promise<SessionActor>;
   findMedia: (creatorId: string, threadKey: string, messageKey: string, index: number) => Promise<{ url: string | null } | null>;
-  fetchBytes: (url: string) => Promise<{ status: number; body: Uint8Array; contentType: string } | null>;
+  fetchBytes: (url: string, range?: string | null) => Promise<MediaBytes | null>;
   log?: (line: string) => void;
 }): Promise<Response> {
   const actor = await deps.session();
@@ -40,14 +41,15 @@ export async function handleChatMedia(request: Request, deps: {
   const index = Number(url.searchParams.get("index") ?? "0");
   deps.log?.(mediaLogLine(creatorId, messageKey));
   if (!creatorId || !messageKey || !Number.isInteger(index) || index < 0) return new Response("Sin datos", { status: 404 });
+  if (!creatorAllowed(actor, creatorId)) return new Response("Sin datos", { status: 403 });
   const row = await deps.findMedia(creatorId, threadKey, messageKey, index);
-  return streamMedia(row?.url ?? null, deps.fetchBytes);
+  return streamMedia(row?.url ?? null, request, deps.fetchBytes);
 }
 
 export async function handleVaultMedia(request: Request, deps: {
   session: () => Promise<SessionActor>;
-  findPreview: (creatorId: string, mediaId: string) => Promise<string | null>;
-  fetchBytes: (url: string) => Promise<{ status: number; body: Uint8Array; contentType: string } | null>;
+  findPreview: (creatorId: string, mediaId: string, variant?: "full" | "preview") => Promise<string | null>;
+  fetchBytes: (url: string, range?: string | null) => Promise<MediaBytes | null>;
   log?: (line: string) => void;
 }): Promise<Response> {
   const actor = await deps.session();
@@ -56,10 +58,12 @@ export async function handleVaultMedia(request: Request, deps: {
   const url = new URL(request.url);
   const creatorId = url.searchParams.get("creatorId") ?? "";
   const mediaId = url.searchParams.get("mediaId") ?? "";
+  const variant = url.searchParams.get("variant") === "full" ? "full" : "preview";
   deps.log?.(mediaLogLine(creatorId, mediaId));
   if (!creatorId || !mediaId) return new Response("Sin datos", { status: 404 });
-  const preview = await deps.findPreview(creatorId, mediaId);
-  return streamMedia(preview, deps.fetchBytes);
+  if (!creatorAllowed(actor, creatorId)) return new Response("Sin datos", { status: 403 });
+  const preview = await deps.findPreview(creatorId, mediaId, variant);
+  return streamMedia(preview, request, deps.fetchBytes);
 }
 
 export async function handleVaultSend(request: Request, deps: {
@@ -78,14 +82,18 @@ export async function handleVaultSend(request: Request, deps: {
   const record = body && typeof body === "object" ? body as Record<string, unknown> : {};
   const mode = record.mode === "mass" ? "mass" : "chat";
   const creatorId = typeof record.creatorId === "string" ? record.creatorId : "";
+  if (creatorId && !creatorAllowed(actor, creatorId)) {
+    return Response.json({ sent: false, opened: false, reason: "Sin datos" }, { status: 403 });
+  }
   const itemIds = Array.isArray(record.itemIds) ? record.itemIds.filter((item): item is string => typeof item === "string") : [];
   const accountId = typeof record.accountId === "string" ? record.accountId : "";
   let sales: DeliverSale[] = [];
   if (creatorId && itemIds.length > 0) {
-    sales = await loadSaleContext(deps.sql, creatorId, itemIds);
-    if (sales.length === 0) {
-      return Response.json({ sent: false, opened: false, reason: "Sin datos" }, { status: 404 });
+    const loaded = await loadSaleContext(deps.sql, creatorId, itemIds);
+    if (loaded.missing.length > 0) {
+      return Response.json({ sent: false, opened: false, reason: "NO VENDER" }, { status: 403 });
     }
+    sales = loaded.sales;
   }
   if (mode === "mass") {
     const result = await deliverMassVault({
@@ -124,20 +132,23 @@ function canReadMedia(actor: VaultActor): boolean {
 
 async function streamMedia(
   target: string | null,
-  fetchBytes: (url: string) => Promise<{ status: number; body: Uint8Array; contentType: string } | null>,
+  request: Request,
+  fetchBytes: (url: string, range?: string | null) => Promise<MediaBytes | null>,
 ): Promise<Response> {
   if (!target || !mediaHostAllowed(target)) return new Response("Sin datos", { status: 404 });
-  const bytes = await fetchBytes(target);
+  const range = request.headers.get("range");
+  const bytes = await fetchBytes(target, range);
   if (!bytes) return new Response("Sin datos", { status: 404 });
   const copy = Uint8Array.from(bytes.body);
-  return new Response(copy.buffer, {
-    status: bytes.status,
-    headers: {
-      "content-type": bytes.contentType || "application/octet-stream",
-      "cache-control": "private, no-store",
-      "x-content-type-options": "nosniff",
-    },
+  const headers = new Headers({
+    "content-type": bytes.contentType || "application/octet-stream",
+    "cache-control": "private, no-store",
+    "x-content-type-options": "nosniff",
+    "accept-ranges": "bytes",
+    "content-length": String(copy.byteLength),
   });
+  if (bytes.contentRange) headers.set("content-range", bytes.contentRange);
+  return new Response(copy.buffer, { status: bytes.status, headers });
 }
 
 async function readJson(request: Request): Promise<unknown> {

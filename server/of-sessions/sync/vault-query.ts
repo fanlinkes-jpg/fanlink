@@ -1,6 +1,7 @@
-import { searchVaultLists, vaultQueryFromUnknown, type VaultQuery } from "./vault-filter.ts";
+import { creatorIdsForChats } from "../../../src/lib/access-policy.ts";
+import { emptyVaultQuery, folderAndChildren, searchVaultLists, vaultQueryFromUnknown, type VaultQuery } from "./vault-filter.ts";
 import { itemSaleBlocked } from "./vault-block.ts";
-import { suggestVaultPrice, type VaultFile, type VaultKind } from "./vault-model.ts";
+import { suggestVaultPrice, trailerPackages, type VaultFile, type VaultKind } from "./vault-model.ts";
 import type { ReadSql } from "./store.ts";
 import { fanVaultUses, loadVaultMirror, loadVaultQuery, saveVaultQuery } from "./vault-store.ts";
 
@@ -8,6 +9,8 @@ export type VaultActor = {
   userId: string;
   role: "owner" | "member";
   perms: string[];
+  /** Cuentas del usuario. Si viene, el creatorId tiene que estar en la lista. */
+  creatorIds?: readonly string[];
 };
 
 export type VaultHistoryView = {
@@ -28,6 +31,8 @@ export type VaultCard = {
   ventasLabel: "Ventas" | "Sin datos";
   bestSellerLabel: "Más vendido" | null;
   suggestedLabel: string;
+  packageLabel: "Tráiler gratis + vídeo de pago" | "Sin datos";
+  packageWithId: string | null;
   sentToFan: boolean | null;
   boughtByFan: boolean | null;
   blocked: boolean;
@@ -40,6 +45,7 @@ export type VaultMirrorResult = {
   notice: string | null;
   lists: Array<{ id: string; name: string; parentId: string | null }>;
   items: VaultCard[];
+  query: VaultQuery;
   error?: string;
 };
 
@@ -50,6 +56,17 @@ export function lockedChatterId(actor: { role: string; userId: string }, request
   return trimmed ? trimmed.slice(0, 80) : actor.userId;
 }
 
+export function creatorAllowed(actor: VaultActor, creatorId: string): boolean {
+  if (!actor.creatorIds) return true;
+  const access = {
+    userId: actor.userId,
+    role: actor.role,
+    perms: actor.perms,
+    creatorIds: [...actor.creatorIds],
+  };
+  return creatorIdsForChats(access, [...actor.creatorIds]).includes(creatorId);
+}
+
 export function presentGap(value: unknown): string {
   if (value == null) return "Sin datos";
   if (typeof value === "string" && !value.trim()) return "Sin datos";
@@ -57,29 +74,40 @@ export function presentGap(value: unknown): string {
 }
 
 export function vaultCardHasMoney(value: unknown): boolean {
-  return walk(value);
+  return walkAgency(value);
 }
 
-function walk(value: unknown): boolean {
-  if (Array.isArray(value)) return value.some((item) => walk(item));
-  if (!value || typeof value !== "object") {
-    return typeof value === "string" && value.includes("€");
-  }
-  return Object.entries(value as Record<string, unknown>).some(([key, item]) => MONEY_KEY.test(key) || walk(item));
+function walkAgency(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some((item) => walkAgency(item));
+  if (!value || typeof value !== "object") return false;
+  return Object.entries(value as Record<string, unknown>).some(([key, item]) => AGENCY_KEY.test(key) || walkAgency(item));
 }
 
-const MONEY_KEY = /euro|revenue|earning|profit|ingreso|totalrevenue|agency/i;
+const AGENCY_KEY = /^(revenue|revenues|earning|earnings|profit|profits|ingreso|ingresos|totalrevenue|agency|agencyrevenue|gross|net)$/i;
+
+function emptyPayload(actor: VaultActor, error: string): VaultMirrorResult {
+  return {
+    error,
+    chatterId: actor.userId,
+    restored: false,
+    notice: "Sin datos",
+    lists: [],
+    items: [],
+    query: emptyVaultQuery(),
+  };
+}
 
 export async function queryVaultForActor(sql: ReadSql, actor: VaultActor, body: unknown): Promise<{
   status: number;
   payload: VaultMirrorResult;
 }> {
   if (actor.role !== "owner" && !actor.perms.includes("vault") && !actor.perms.includes("mensajes")) {
-    return { status: 403, payload: { error: "Forbidden", chatterId: actor.userId, restored: false, notice: "Sin datos", lists: [], items: [] } };
+    return { status: 403, payload: emptyPayload(actor, "Forbidden") };
   }
   const record = body && typeof body === "object" ? body as Record<string, unknown> : {};
   const creatorId = typeof record.creatorId === "string" ? record.creatorId : "";
-  if (!creatorId) return { status: 400, payload: { error: "Sin datos", chatterId: actor.userId, restored: false, notice: "Sin datos", lists: [], items: [] } };
+  if (!creatorId) return { status: 400, payload: emptyPayload(actor, "Sin datos") };
+  if (!creatorAllowed(actor, creatorId)) return { status: 403, payload: emptyPayload(actor, "Sin datos") };
   const fanKey = typeof record.fanKey === "string" && record.fanKey.trim() ? record.fanKey : null;
   const chatterId = lockedChatterId(actor, typeof record.chatterId === "string" ? record.chatterId : null);
   const restored = record.query == null;
@@ -88,15 +116,18 @@ export async function queryVaultForActor(sql: ReadSql, actor: VaultActor, body: 
   const listText = typeof record.listText === "string" ? record.listText : "";
   const mirror = await loadVaultMirror(sql, creatorId);
   const uses = fanKey ? await fanVaultUses(sql, creatorId, fanKey) : [];
-  const ownUses = uses.filter((use) => use.authorId === chatterId);
-  const sentIds = new Set(ownUses.map((use) => use.itemKey));
-  const boughtIds = new Set(ownUses.filter((use) => use.purchased === true).map((use) => use.itemKey));
-  const rows = await selectVaultItems(sql, creatorId, query, fanKey, chatterId);
+  const sentIds = new Set(uses.map((use) => use.itemKey));
+  const boughtIds = new Set(uses.filter((use) => use.purchased === true).map((use) => use.itemKey));
+  const rows = await selectVaultItems(sql, creatorId, query, fanKey, mirror.folders);
   const ranked = query.bestSeller ? bestOf(rows) : rows;
   const bestIds = new Set(bestOf(rows).map((item) => item.id));
   const sorted = [...ranked].sort((left, right) => compare(left, right, query.sort));
   const purchases = purchaseCents(uses);
-  const cards = sorted.map((item) => presentCard(item, mirror.folders, sentIds, boughtIds, bestIds, ownUses, purchases.get(item.id) ?? []));
+  const packs = new Map(trailerPackages(mirror.items).flatMap((pack) => [
+    [pack.trailerId, { withId: pack.paidId, label: pack.label }] as const,
+    [pack.paidId, { withId: pack.trailerId, label: pack.label }] as const,
+  ]));
+  const cards = sorted.map((item) => presentCard(item, mirror.folders, sentIds, boughtIds, bestIds, uses, purchases.get(item.id) ?? [], packs.get(item.id) ?? null));
   const lists = searchVaultLists(mirror.folders, listText).map((folder) => ({
     id: folder.id,
     name: folder.name,
@@ -110,6 +141,7 @@ export async function queryVaultForActor(sql: ReadSql, actor: VaultActor, body: 
       notice: cards.length === 0 ? "Sin datos" : null,
       lists,
       items: cards,
+      query,
     },
   };
 }
@@ -122,6 +154,7 @@ export function presentCard(
   bestIds: ReadonlySet<string>,
   uses: ReadonlyArray<{ itemKey: string; sentAt: string | null; priceCents: number | null; purchased: boolean | null; authorId: string | null }>,
   purchases: readonly number[],
+  pack: { withId: string; label: "Tráiler gratis + vídeo de pago" } | null,
 ): VaultCard {
   const salesCount = item.salesCount == null ? null : item.salesCount;
   const suggested = suggestVaultPrice({
@@ -141,6 +174,8 @@ export function presentCard(
     ventasLabel: salesCount == null ? "Sin datos" : "Ventas",
     bestSellerLabel: bestIds.has(item.id) ? "Más vendido" : null,
     suggestedLabel: suggested.label,
+    packageLabel: pack?.label ?? "Sin datos",
+    packageWithId: pack?.withId ?? null,
     sentToFan: sentIds.has(item.id) ? true : uses.length === 0 && sentIds.size === 0 ? null : false,
     boughtByFan: boughtIds.has(item.id) ? true : null,
     blocked: itemSaleBlocked({
@@ -169,13 +204,20 @@ function purchaseCents(uses: ReadonlyArray<{ itemKey: string; priceCents: number
   return map;
 }
 
-async function selectVaultItems(sql: ReadSql, creatorId: string, query: VaultQuery, fanKey: string | null, chatterId: string): Promise<VaultFile[]> {
+async function selectVaultItems(
+  sql: ReadSql,
+  creatorId: string,
+  query: VaultQuery,
+  fanKey: string | null,
+  folders: ReadonlyArray<{ id: string; name: string; parentId: string | null }>,
+): Promise<VaultFile[]> {
   const where = ["creator_id = $1", "item_key is not null"];
   const params: unknown[] = [creatorId];
   const add = (value: unknown) => {
     params.push(value);
     return `$${params.length}`;
   };
+  const blob = sqlFold("coalesce(title, '') || ' ' || coalesce(folder, '') || ' ' || coalesce(list_name, '') || ' ' || coalesce(description, '') || ' ' || coalesce(tags::text, '')");
   if (query.kinds.length > 0) {
     const slot = add(query.kinds);
     where.push(`kind = any(${slot}::text[])`);
@@ -185,18 +227,17 @@ async function selectVaultItems(sql: ReadSql, creatorId: string, query: VaultQue
   if (query.uploadedFrom) where.push(`uploaded_at is not null and uploaded_at::date >= ${add(query.uploadedFrom)}::date`);
   if (query.uploadedTo) where.push(`uploaded_at is not null and uploaded_at::date <= ${add(query.uploadedTo)}::date`);
   const needle = fold(query.text.trim());
-  if (needle) {
-    where.push(`lower(coalesce(title, '') || ' ' || coalesce(folder, '') || ' ' || coalesce(list_name, '') || ' ' || coalesce(description, '') || ' ' || coalesce(tags::text, '')) like ${add(`%${escapeLike(needle)}%`)}`);
-  }
+  if (needle) where.push(`${blob} like ${add(`%${escapeLike(needle)}%`)}`);
   const listNeedle = query.list ? fold(query.list.trim()) : "";
   if (listNeedle) {
-    where.push(`lower(coalesce(list_name, '') || ' ' || coalesce(folder, '')) like ${add(`%${escapeLike(listNeedle)}%`)}`);
+    where.push(`${sqlFold("coalesce(list_name, '') || ' ' || coalesce(folder, '')")} like ${add(`%${escapeLike(listNeedle)}%`)}`);
+  }
+  for (const theme of query.themes) {
+    const themeNeedle = fold(theme.trim());
+    if (themeNeedle) where.push(`${blob} like ${add(`%${escapeLike(themeNeedle)}%`)}`);
   }
   if (query.couples.length > 0) {
-    const parts = query.couples.map((couple) => {
-      const slot = add(`%${couple.toLowerCase()}%`);
-      return `lower(coalesce(title, '') || ' ' || coalesce(folder, '') || ' ' || coalesce(list_name, '') || ' ' || coalesce(description, '') || ' ' || coalesce(tags::text, '')) like ${slot}`;
-    });
+    const parts = query.couples.map((couple) => `${blob} like ${add(`%${escapeLike(fold(couple))}%`)}`);
     where.push(`(${parts.join(" or ")})`);
   }
   if (query.offer === "gratis") where.push("price_cents = 0");
@@ -207,8 +248,7 @@ async function selectVaultItems(sql: ReadSql, creatorId: string, query: VaultQue
     where.push(`sent_count is not null and sent_count > 0 and sales_count is not null and sales_count::float / sent_count >= ${add(query.minBuyRate)}`);
   }
   if (query.scope === "carpeta" && query.folderId) {
-    const folders = await loadVaultMirror(sql, creatorId);
-    const ids = [...folderIds(folders.folders, query.folderId)];
+    const ids = [...folderAndChildren(folders, query.folderId)];
     if (ids.length > 0) {
       const slot = add(ids);
       where.push(`(list_key = any(${slot}::text[]) or folder = any(${slot}::text[]) or list_name = any(${slot}::text[]))`);
@@ -216,13 +256,11 @@ async function selectVaultItems(sql: ReadSql, creatorId: string, query: VaultQue
   }
   if (query.sent !== "cualquiera" || query.bought !== "cualquiera") {
     const fan = add(fanKey ?? "");
-    const author = add(chatterId);
     const fanExists = (purchasedOnly: boolean) => `exists (
       select 1 from of_vault_fan_send s
       where s.creator_id = of_vault_item.creator_id
         and s.item_key = of_vault_item.item_key
         and s.fan_key = ${fan}
-        and s.author_id = ${author}
         ${purchasedOnly ? "and s.purchased is true" : ""}
     )`;
     if (query.sent === "si") where.push(fanExists(false));
@@ -256,27 +294,6 @@ async function selectVaultItems(sql: ReadSql, creatorId: string, query: VaultQue
   }));
 }
 
-function folderIds(folders: ReadonlyArray<{ id: string; parentId: string | null }>, folderId: string): Set<string> {
-  const children = new Map<string | null, string[]>();
-  for (const folder of folders) {
-    const list = children.get(folder.parentId) ?? [];
-    list.push(folder.id);
-    children.set(folder.parentId, list);
-  }
-  const out = new Set<string>([folderId]);
-  const pending = [folderId];
-  while (pending.length > 0) {
-    const current = pending.pop();
-    if (!current) break;
-    for (const child of children.get(current) ?? []) {
-      if (out.has(child)) continue;
-      out.add(child);
-      pending.push(child);
-    }
-  }
-  return out;
-}
-
 function bestOf(items: readonly VaultFile[]): VaultFile[] {
   const sold = items.filter((item) => (item.salesCount ?? 0) > 0);
   if (sold.length === 0) return [];
@@ -302,6 +319,13 @@ function rank(item: VaultFile, sort: VaultQuery["sort"]): number {
 
 function fold(value: string): string {
   return value.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+}
+
+const FOLD_FROM = "áàäâéèëêíìïîóòöôúùüûñç";
+const FOLD_TO = "aaaaeeeeiiiioooouuuunc";
+
+function sqlFold(expr: string): string {
+  return `translate(lower(${expr}), '${FOLD_FROM}', '${FOLD_TO}')`;
 }
 
 function escapeLike(value: string): string {

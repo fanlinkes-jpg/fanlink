@@ -49,7 +49,7 @@ export async function deliverChatSend(input: DeliverInput): Promise<{ sent: bool
     const media = await deliverIfNoMedia(input.outboundMedia.sql, input.outboundMedia.outboundId, async () => {
       opened = true;
       attempt = await runOpen();
-    });
+    }, true);
     if (!media.sent || !attempt) {
       return { sent: false, opened: false, messageId: null, reason: media.reason ?? "El envío de medios no existe" };
     }

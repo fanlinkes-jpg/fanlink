@@ -29,14 +29,39 @@ export function parseVaultPayload(payload: unknown): VaultFile[] {
   return out;
 }
 
+export async function captureVaultPayloads(page: Page, waitMs = 2_500): Promise<unknown[]> {
+  const found: unknown[] = [];
+  await listenVault(page, waitMs, (payload) => {
+    found.push(payload);
+  });
+  return found;
+}
+
 export async function captureVaultList(page: Page, waitMs = 2_500): Promise<VaultFile[]> {
   const found: VaultFile[] = [];
+  await listenVault(page, waitMs, (payload) => {
+    found.push(...parseVaultPayload(payload));
+  }, () => found.length > 0);
+  const seen = new Set<string>();
+  return found.filter((item) => {
+    if (seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  });
+}
+
+async function listenVault(
+  page: Page,
+  waitMs: number,
+  onPayload: (payload: unknown) => void,
+  done?: () => boolean,
+): Promise<void> {
   const onResponse = (response: { url(): string; status(): number; text(): Promise<string> }) => {
     if (response.status() < 200 || response.status() >= 300) return;
     if (!/vault/i.test(response.url())) return;
     void response.text().then((raw) => {
       try {
-        found.push(...parseVaultPayload(JSON.parse(raw) as unknown));
+        onPayload(JSON.parse(raw) as unknown);
       } catch {
         // La página puede pedir un HTML, no un listado.
       }
@@ -47,18 +72,12 @@ export async function captureVaultList(page: Page, waitMs = 2_500): Promise<Vaul
     const button = page.locator("[at-attr='vault_btn'], [data-fanlink-vault], button[aria-label='Add from media vault' i]").first();
     if (await button.count()) await button.click();
     const deadline = Date.now() + waitMs;
-    while (Date.now() < deadline && found.length === 0) {
+    while (Date.now() < deadline && !done?.()) {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   } finally {
     page.off("response", onResponse);
   }
-  const seen = new Set<string>();
-  return found.filter((item) => {
-    if (seen.has(item.id)) return false;
-    seen.add(item.id);
-    return true;
-  });
 }
 
 function vaultList(payload: unknown): unknown[] {

@@ -1,6 +1,6 @@
 import type { ReadSql } from "./store.ts";
 import { emptyVaultQuery, vaultQueryFromUnknown, type VaultQuery } from "./vault-filter.ts";
-import { historyFromMedia, historyFromSends, mergeFanUses, type FanVaultUse, type VaultFile, type VaultList } from "./vault-model.ts";
+import { historyFromMedia, historyFromSends, mergeFanUses, parseVaultBundle, type FanVaultUse, type VaultFile, type VaultList } from "./vault-model.ts";
 import type { SaleFolder } from "./vault-block.ts";
 
 export async function saveVaultMirror(sql: ReadSql, creatorId: string, items: readonly VaultFile[], lists: readonly VaultList[], now = new Date()): Promise<void> {
@@ -60,6 +60,30 @@ export async function saveVaultMirror(sql: ReadSql, creatorId: string, items: re
      on conflict (creator_id) do update set synced_at = excluded.synced_at`,
     [creatorId, syncedAt],
   );
+  if (await hasColumn(sql, "of_vault_item", "full_url")) {
+    for (const item of items) {
+      if (!item.fullUrl) continue;
+      await sql.query(
+        "update of_vault_item set full_url = $3 where creator_id = $1 and item_key = $2",
+        [creatorId, item.id, item.fullUrl],
+      );
+    }
+  }
+}
+
+/** Lo que la página de OnlyFans ya pidió al abrir la bóveda entra en el espejo. */
+export async function persistVaultRead(sql: ReadSql, creatorId: string, payloads: readonly unknown[]): Promise<VaultFile[]> {
+  const items = new Map<string, VaultFile>();
+  const lists = new Map<string, VaultList>();
+  for (const payload of payloads) {
+    const bundle = parseVaultBundle(payload);
+    for (const list of bundle.lists) lists.set(list.id, list);
+    for (const item of bundle.items) items.set(item.id, item);
+  }
+  const saved = [...items.values()];
+  if (saved.length === 0 && lists.size === 0) return [];
+  await saveVaultMirror(sql, creatorId, saved, [...lists.values()]);
+  return saved;
 }
 
 export async function loadVaultMirror(sql: ReadSql, creatorId: string): Promise<{ items: VaultFile[]; lists: VaultList[]; folders: SaleFolder[]; syncedAt: string | null }> {
@@ -105,21 +129,29 @@ export async function loadVaultMirror(sql: ReadSql, creatorId: string): Promise<
   };
 }
 
-export async function loadSaleContext(sql: ReadSql, creatorId: string, itemIds: readonly string[]): Promise<Array<{
-  folderId: string | null;
-  folderName: string | null;
-  title: string | null;
-  folders: SaleFolder[];
-}>> {
-  if (itemIds.length === 0) return [];
+export async function loadSaleContext(sql: ReadSql, creatorId: string, itemIds: readonly string[]): Promise<{
+  sales: Array<{
+    folderId: string | null;
+    folderName: string | null;
+    title: string | null;
+    folders: SaleFolder[];
+  }>;
+  missing: string[];
+}> {
+  if (itemIds.length === 0) return { sales: [], missing: [] };
   const mirror = await loadVaultMirror(sql, creatorId);
-  const wanted = new Set(itemIds);
-  return mirror.items.filter((item) => wanted.has(item.id)).map((item) => ({
-    folderId: item.listId,
-    folderName: item.folder ?? item.listName,
-    title: item.title,
-    folders: mirror.folders,
-  }));
+  const byId = new Map(mirror.items.map((item) => [item.id, item]));
+  const missing = itemIds.filter((id) => !byId.has(id));
+  const sales = itemIds.filter((id) => byId.has(id)).map((id) => {
+    const item = byId.get(id);
+    return {
+      folderId: item?.listId ?? null,
+      folderName: item?.folder ?? item?.listName ?? null,
+      title: item?.title ?? null,
+      folders: mirror.folders,
+    };
+  });
+  return { sales, missing };
 }
 
 export async function recordOutboundMedia(sql: ReadSql, outboundId: string, creatorId: string, mediaIds: readonly string[]): Promise<void> {

@@ -17,6 +17,8 @@ export type VaultFile = {
   priceCents: number | null;
   salesCount: number | null;
   sentCount: number | null;
+  /** URL del archivo, no de la miniatura. No sale en el JSON del chatter. */
+  fullUrl?: string | null;
 };
 
 export type VaultList = { id: string; name: string };
@@ -71,6 +73,54 @@ export function parseVaultPayload(payload: unknown): VaultFile[] {
   return parseVaultBundle(payload).items;
 }
 
+/** Dólares de OnlyFans (`price: 9.99`) pasan a céntimos. `priceCents` ya viene en céntimos. */
+export function priceToCents(row: { priceCents?: unknown; price?: unknown }): number | null {
+  if (typeof row.priceCents === "number" && Number.isFinite(row.priceCents) && row.priceCents >= 0) {
+    return Math.round(row.priceCents);
+  }
+  const raw = row.price;
+  const dollars = typeof raw === "number"
+    ? raw
+    : typeof raw === "string" && raw.trim()
+      ? Number(raw.replace(/[^0-9.]/g, ""))
+      : Number.NaN;
+  if (!Number.isFinite(dollars) || dollars < 0) return null;
+  return Math.round(dollars * 100);
+}
+
+export type TrailerPackage = {
+  trailerId: string;
+  paidId: string;
+  label: "Tráiler gratis + vídeo de pago";
+};
+
+function isFreeTrailer(item: VaultFile): boolean {
+  const text = `${item.title} ${item.tags.join(" ")}`.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+  const marked = text.includes("trailer");
+  const free = item.priceCents === 0 || item.priceCents == null;
+  return marked && free && item.kind !== "audio";
+}
+
+/** En la misma carpeta, un tráiler gratis y el vídeo de pago que lo acompaña. */
+export function trailerPackages(items: readonly VaultFile[]): TrailerPackage[] {
+  const groups = new Map<string, VaultFile[]>();
+  for (const item of items) {
+    const key = item.listId ?? item.folder ?? item.listName;
+    if (!key) continue;
+    const list = groups.get(key) ?? [];
+    list.push(item);
+    groups.set(key, list);
+  }
+  const packs: TrailerPackage[] = [];
+  for (const group of groups.values()) {
+    const trailer = group.find((item) => isFreeTrailer(item));
+    const paid = group.find((item) => item.kind === "video" && item.priceCents != null && item.priceCents > 0 && !isFreeTrailer(item));
+    if (!trailer || !paid || trailer.id === paid.id) continue;
+    packs.push({ trailerId: trailer.id, paidId: paid.id, label: "Tráiler gratis + vídeo de pago" });
+  }
+  return packs;
+}
+
 export function historyFromMedia(rows: ReadonlyArray<{
   fanKey: string | null;
   fromFan: boolean;
@@ -118,26 +168,42 @@ export function historyFromSends(rows: ReadonlyArray<{
   });
 }
 
-/** Si el hilo y el CRM hablan de la misma pieza, se queda el dato más completo. */
+/** Si el hilo y el CRM hablan de la misma pieza y el mismo chatter, se queda el dato más completo. Otro chatter no se pisa. */
 export function mergeFanUses(uses: readonly FanVaultUse[]): FanVaultUse[] {
   const byKey = new Map<string, FanVaultUse>();
+  const loose: FanVaultUse[] = [];
   for (const use of uses) {
-    const key = `${use.fanKey}\n${use.itemKey}`;
-    const previous = byKey.get(key);
-    if (!previous) {
-      byKey.set(key, use);
+    if (!use.authorId) {
+      loose.push(use);
       continue;
     }
-    byKey.set(key, {
-      itemKey: use.itemKey,
-      fanKey: use.fanKey,
-      sentAt: later(previous.sentAt, use.sentAt),
-      priceCents: use.priceCents ?? previous.priceCents,
-      purchased: use.purchased ?? previous.purchased,
-      authorId: use.authorId ?? previous.authorId,
-    });
+    const key = `${use.fanKey}\n${use.itemKey}\n${use.authorId}`;
+    const previous = byKey.get(key);
+    byKey.set(key, previous ? richerUse(previous, use) : use);
+  }
+  for (const use of loose) {
+    const matches = [...byKey.values()].filter((row) => row.fanKey === use.fanKey && row.itemKey === use.itemKey && row.authorId);
+    if (matches.length === 1 && matches[0]) {
+      const only = matches[0];
+      byKey.set(`${only.fanKey}\n${only.itemKey}\n${only.authorId}`, richerUse(only, { ...use, authorId: only.authorId }));
+      continue;
+    }
+    const key = `${use.fanKey}\n${use.itemKey}\n`;
+    const previous = byKey.get(key);
+    byKey.set(key, previous ? richerUse(previous, use) : use);
   }
   return [...byKey.values()];
+}
+
+function richerUse(previous: FanVaultUse, use: FanVaultUse): FanVaultUse {
+  return {
+    itemKey: use.itemKey,
+    fanKey: use.fanKey,
+    sentAt: later(previous.sentAt, use.sentAt),
+    priceCents: use.priceCents ?? previous.priceCents,
+    purchased: use.purchased ?? previous.purchased,
+    authorId: use.authorId ?? previous.authorId,
+  };
 }
 
 function later(left: string | null, right: string | null): string | null {
@@ -196,9 +262,10 @@ function parseVaultItem(item: unknown, lists: readonly VaultList[]): VaultFile[]
     listName,
     description: textOf(row.description ?? row.caption ?? row.text),
     uploadedAt: textOf(row.uploadedAt ?? row.createdAt),
-    priceCents: centsOf(row.priceCents ?? row.price),
+    priceCents: priceToCents(row),
     salesCount: countOrNull(row.salesCount ?? row.purchases),
     sentCount: countOrNull(row.sentCount ?? row.sent),
+    fullUrl: fullOf(row),
   }];
 }
 
@@ -255,9 +322,10 @@ function nested(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
-function centsOf(value: unknown): number | null {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
-  return Math.round(value);
+function fullOf(row: Record<string, unknown>): string | null {
+  const files = nested(row.files);
+  const source = nested(files?.source) ?? nested(files?.full) ?? nested(row.source);
+  return textOf(source?.url ?? row.fullUrl ?? row.src);
 }
 
 function countOrNull(value: unknown): number | null {
