@@ -1,5 +1,5 @@
 import { normalizeOutboundText, outboundTextDelta, OUTBOUND_TIE_MS, type OutboundDraft } from "./author-match.ts";
-import { newFanEvents, type ChatMessage, type ChatThread, type FanMessageEvent } from "./chats.ts";
+import { newFanEvents, collapseFans, type ChatMessage, type ChatThread, type FanMessageEvent } from "./chats.ts";
 import { decodeMedia, encodeMedia, oldestCursor } from "./history.ts";
 import type { ReadSql } from "./store.ts";
 
@@ -209,7 +209,7 @@ export async function listChats(
     creatorIds,
   );
   return {
-    threads: threads.map((row) => ({
+    threads: collapseFans(threads.map((row) => ({
       creatorId: row.creator_id,
       threadKey: row.thread_key,
       fanKey: row.fan_key,
@@ -232,7 +232,7 @@ export async function listChats(
       renewAuto: flagOrNull(row.renew_auto),
       lists: row.fan_lists ? row.fan_lists.split("\n").filter(Boolean) : null,
       syncedAt: iso(row.synced_at) ?? "",
-    })),
+    }))),
     messages: messages.map((row) => ({
       creatorId: row.creator_id,
       messageKey: row.message_key,

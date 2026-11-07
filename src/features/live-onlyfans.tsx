@@ -12,7 +12,21 @@ type DeskMessage =
   | { type: "release" }
   | { type: "claim" };
 
-export function LiveOnlyFans({ creatorId, threadKey, fanKey }: { creatorId: string; threadKey: string; fanKey: string | null }) {
+export type LiveDesk = { paste: (text: string) => boolean };
+
+export function LiveOnlyFans({
+  creatorId,
+  threadKey,
+  fanKey,
+  deskRef,
+  onCanType,
+}: {
+  creatorId: string;
+  threadKey: string;
+  fanKey: string | null;
+  deskRef?: { current: LiveDesk | null };
+  onCanType?: (value: boolean) => void;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const socketRef = useRef<WebSocket | null>(null);
@@ -21,6 +35,8 @@ export function LiveOnlyFans({ creatorId, threadKey, fanKey }: { creatorId: stri
   const [canType, setCanType] = useState(false);
   const [holderFree, setHolderFree] = useState(false);
   const canTypeRef = useRef(false);
+  const onCanTypeRef = useRef(onCanType);
+  onCanTypeRef.current = onCanType;
 
   useEffect(() => {
     let closed = false;
@@ -29,6 +45,7 @@ export function LiveOnlyFans({ creatorId, threadKey, fanKey }: { creatorId: stri
       if (closed) return;
       if (!result.ok || !result.ticket) {
         setNote(result.reason ?? "Vista en directo desactivada");
+        onCanTypeRef.current?.(false);
         return;
       }
       const protocol = window.location.protocol === "https:" ? "wss" : "ws";
@@ -45,6 +62,7 @@ export function LiveOnlyFans({ creatorId, threadKey, fanKey }: { creatorId: stri
           if (status.role) {
             setControl(status.role === "control");
             setCanType(typing);
+            onCanTypeRef.current?.(typing);
             setHolderFree(status.holder === false);
             setNote(typing ? "Tienes el control" : "Solo lectura");
             if (!sized) {
@@ -80,15 +98,27 @@ export function LiveOnlyFans({ creatorId, threadKey, fanKey }: { creatorId: stri
     });
     return () => {
       closed = true;
+      onCanTypeRef.current?.(false);
+      if (deskRef) deskRef.current = null;
       socket?.close();
       socketRef.current = null;
     };
-  }, [creatorId, threadKey, fanKey]);
+  }, [creatorId, threadKey, fanKey, deskRef]);
 
   function send(message: DeskMessage) {
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
     socket.send(JSON.stringify(message));
+  }
+
+  if (deskRef) {
+    deskRef.current = {
+      paste(text: string) {
+        if (!canTypeRef.current || !text.trim()) return false;
+        send({ type: "text", text });
+        return true;
+      },
+    };
   }
 
   function point(event: { clientX: number; clientY: number }) {

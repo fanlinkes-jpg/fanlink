@@ -256,6 +256,17 @@ export function mergeThreads(current: ChatThread[], incoming: ChatThread[]): Cha
   return [...map.values()].slice(0, 200);
 }
 
+/** Una fila por fan. OnlyFans a veces manda la misma conversación con dos claves. */
+export function collapseFans<T extends FanRow>(threads: T[]): T[] {
+  const map = new Map<string, T>();
+  for (const thread of threads) {
+    const key = fanGroup(thread);
+    const prev = map.get(key);
+    map.set(key, prev ? preferFanRow(prev, thread) : thread);
+  }
+  return [...map.values()];
+}
+
 export function mergeMessages(current: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
   const map = new Map(current.map((row) => [row.messageKey, row]));
   for (const row of incoming) map.set(row.messageKey, row);
@@ -425,6 +436,38 @@ export function readFanLists(user: Record<string, unknown> | null): string[] | n
   });
   return [...new Set(names)];
 }
+
+function fanGroup(thread: FanRow): string {
+  const creator = thread.creatorId ?? "";
+  const handle = thread.fanHandle?.replace(/^@/, "").trim().toLowerCase();
+  if (handle) return `${creator}:h:${handle}`;
+  if (thread.fanKey) return `${creator}:k:${thread.fanKey}`;
+  return `${creator}:t:${thread.threadKey}`;
+}
+
+function preferFanRow<T extends FanRow>(left: T, right: T): T {
+  const rank = (row: FanRow) => (row.threadKey === row.fanKey ? 4 : 0) + (row.unread > 0 ? 2 : 0) + (row.excerpt ? 1 : 0);
+  const primary = rank(right) > rank(left) ? right : left;
+  const other = primary === left ? right : left;
+  const lastMessageAt = (right.lastMessageAt ?? "") > (left.lastMessageAt ?? "") ? right.lastMessageAt : left.lastMessageAt;
+  return {
+    ...primary,
+    unread: Math.max(left.unread, right.unread),
+    excerpt: primary.excerpt ?? other.excerpt,
+    lastMessageAt,
+  };
+}
+
+type FanRow = {
+  creatorId?: string;
+  threadKey: string;
+  fanKey: string | null;
+  fanHandle: string | null;
+  fanName: string | null;
+  unread: number;
+  excerpt: string | null;
+  lastMessageAt: string | null;
+};
 
 function previewMessage(record: Record<string, unknown>, accountId: string | null): ChatMessage | null {
   const user = nested(record.withUser) ?? nested(record.user) ?? nested(record.fan);

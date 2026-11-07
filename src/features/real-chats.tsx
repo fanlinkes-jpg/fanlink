@@ -7,7 +7,8 @@ import { sessionErrorText } from "@/lib/use-creator-sessions";
 import { useChatFanCards } from "@/lib/use-chat-fan-cards";
 import { chatFanCardFor, fanCardTransactions } from "@/lib/chat-fan-cards";
 import { FanInsights } from "@/features/fan-insights";
-import { LiveOnlyFans } from "@/features/live-onlyfans";
+import { LiveOnlyFans, type LiveDesk } from "@/features/live-onlyfans";
+import { DeskRail } from "@/features/desk-rail";
 import { MessagePriceDialog } from "@/features/message-price-dialog";
 import { FULL_EMOJIS, QUICK_EMOJIS, TEXT_COLORS, authorLabel, matchScripts, mentionToken, paymentLabel, slashQuery, wrapSelection } from "@/lib/composer-tools";
 import { pendingForThread } from "@/lib/pending-thread";
@@ -132,7 +133,10 @@ export function RealChatsPage() {
   const [tagQuery, setTagQuery] = useState("");
   const [ofVault, setOfVault] = useState<Array<{ id: string; title: string; kind: "foto" | "video" | "audio" | null }>>([]);
   const [vaultReload, setVaultReload] = useState(0);
-  const [surface, setSurface] = useState<"equipo" | "onlyfans">("equipo");
+  const [surface, setSurface] = useState<"equipo" | "onlyfans">("onlyfans");
+  const deskRef = useRef<LiveDesk | null>(null);
+  const [deskCanType, setDeskCanType] = useState(false);
+  const [pasteNote, setPasteNote] = useState<string | null>(null);
 
   async function refresh() {
     try {
@@ -180,6 +184,10 @@ export function RealChatsPage() {
   const messages = (data?.messages ?? [])
     .filter((message) => message.creatorId === selected?.creatorId && message.threadKey === selected?.threadKey)
     .sort((left, right) => left.sentAt.localeCompare(right.sentAt));
+  const paidPrices = messages.flatMap((message) => (
+    !message.fromFan && message.purchased === true && message.priceCents != null && message.priceCents > 0 ? [message.priceCents] : []
+  ));
+  const ppvAvgCents = paidPrices.length > 0 ? Math.round(paidPrices.reduce((sum, price) => sum + price, 0) / paidPrices.length) : null;
   const meta = data?.meta.find((item) => item.creatorId === selected?.creatorId);
   const running = selected ? data?.runningCreatorIds.includes(selected.creatorId) : false;
   const canForce = teamAccess?.role === "owner" && selected != null;
@@ -579,8 +587,8 @@ export function RealChatsPage() {
               <div className="flex min-w-0 items-center gap-2">
                 <p className="truncate font-medium">{selected ? (selected.fanName ?? selected.fanHandle ?? "Fan") : "Sin sincronizar"}</p>
                 <div className="flex shrink-0 rounded-lg bg-[#f3f4f6] p-0.5 text-xs">
-                  <button type="button" className={`rounded-md px-2 py-1 ${surface === "equipo" ? "bg-white font-medium" : "text-[#6d7585]"}`} onClick={() => setSurface("equipo")}>Equipo</button>
                   <button type="button" className={`rounded-md px-2 py-1 ${surface === "onlyfans" ? "bg-white font-medium" : "text-[#6d7585]"}`} onClick={() => setSurface("onlyfans")}>OnlyFans</button>
+                  <button type="button" className={`rounded-md px-2 py-1 ${surface === "equipo" ? "bg-white font-medium" : "text-[#6d7585]"}`} onClick={() => setSurface("equipo")}>Historial</button>
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -611,8 +619,31 @@ export function RealChatsPage() {
                 ) : null}
               </div>
             ) : null}
-            {surface === "onlyfans" && selected ? (
-              <LiveOnlyFans creatorId={selected.creatorId} threadKey={selected.threadKey} fanKey={selected.fanKey} />
+            {surface === "onlyfans" ? (
+              <div className="flex min-h-0 flex-1">
+                {selected ? (
+                  <LiveOnlyFans creatorId={selected.creatorId} threadKey={selected.threadKey} fanKey={selected.fanKey} deskRef={deskRef} onCanType={setDeskCanType} />
+                ) : (
+                  <div className="grid min-w-0 flex-1 place-items-center bg-[#111318] px-6 text-center text-sm text-white/70">Elige un fan. La página de OnlyFans se abre aquí.</div>
+                )}
+                <DeskRail
+                  name={selected?.fanName ?? null}
+                  handle={selected?.fanHandle ?? null}
+                  spentCents={selected?.spentCents ?? null}
+                  ppvAvgCents={ppvAvgCents}
+                  canType={deskCanType}
+                  pasteNote={pasteNote}
+                  scripts={scripts}
+                  onPaste={(text) => {
+                    const pasted = deskRef.current?.paste(text) ?? false;
+                    setPasteNote(pasted ? "Pegado en OnlyFans. Revisa el precio en la página antes de Send." : "Toma el control para pegar el guion.");
+                  }}
+                  onOpenFicha={() => setInsightsOpen(true)}
+                />
+              </div>
+            ) : null}
+            {surface === "equipo" ? (
+              <p className="shrink-0 border-b border-[#e6e8ee] bg-[#fff8e8] px-4 py-2 text-xs text-[#8a5a12]">Se escribe en OnlyFans. Esto es solo el historial de la copia.</p>
             ) : null}
             <ol ref={threadBox} className={`min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4 ${surface === "onlyfans" ? "hidden" : ""}`} onScroll={(event) => {
               const node = event.currentTarget;
