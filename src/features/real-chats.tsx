@@ -7,8 +7,7 @@ import { sessionErrorText } from "@/lib/use-creator-sessions";
 import { useChatFanCards } from "@/lib/use-chat-fan-cards";
 import { chatFanCardFor, fanCardTransactions } from "@/lib/chat-fan-cards";
 import { FanInsights } from "@/features/fan-insights";
-import { LiveOnlyFans, type LiveDesk } from "@/features/live-onlyfans";
-import { DeskRail } from "@/features/desk-rail";
+import { LiveOnlyFans } from "@/features/live-onlyfans";
 import { MessagePriceDialog } from "@/features/message-price-dialog";
 import { FULL_EMOJIS, QUICK_EMOJIS, TEXT_COLORS, authorLabel, matchScripts, mentionToken, paymentLabel, slashQuery, wrapSelection } from "@/lib/composer-tools";
 import { pendingForThread } from "@/lib/pending-thread";
@@ -133,9 +132,7 @@ export function RealChatsPage() {
   const [tagQuery, setTagQuery] = useState("");
   const [ofVault, setOfVault] = useState<Array<{ id: string; title: string; kind: "foto" | "video" | "audio" | null }>>([]);
   const [vaultReload, setVaultReload] = useState(0);
-  const deskRef = useRef<LiveDesk | null>(null);
-  const [deskCanType, setDeskCanType] = useState(false);
-  const [pasteNote, setPasteNote] = useState<string | null>(null);
+  const [surface, setSurface] = useState<"equipo" | "onlyfans">("equipo");
 
   async function refresh() {
     try {
@@ -183,10 +180,6 @@ export function RealChatsPage() {
   const messages = (data?.messages ?? [])
     .filter((message) => message.creatorId === selected?.creatorId && message.threadKey === selected?.threadKey)
     .sort((left, right) => left.sentAt.localeCompare(right.sentAt));
-  const paidPrices = messages.flatMap((message) => (
-    !message.fromFan && message.purchased === true && message.priceCents != null && message.priceCents > 0 ? [message.priceCents] : []
-  ));
-  const ppvAvgCents = paidPrices.length > 0 ? Math.round(paidPrices.reduce((sum, price) => sum + price, 0) / paidPrices.length) : null;
   const meta = data?.meta.find((item) => item.creatorId === selected?.creatorId);
   const running = selected ? data?.runningCreatorIds.includes(selected.creatorId) : false;
   const canForce = teamAccess?.role === "owner" && selected != null;
@@ -246,11 +239,6 @@ export function RealChatsPage() {
     if (!stickToBottom.current) return;
     node.scrollTop = node.scrollHeight;
   }, [threadTail, openThread]);
-  const accountChoices = [...new Set(threads.map((thread) => thread.creatorId))];
-  const [pickedCreator, setPickedCreator] = useState<string | null>(null);
-  const firstChoice = accountChoices[0] ?? null;
-  if (creatorId === "all" && pickedCreator == null && firstChoice) setPickedCreator(firstChoice);
-  const liveCreatorId = creatorId !== "all" ? creatorId : pickedCreator;
   const creatorName = creatorId === "all"
     ? "Todas las cuentas"
     : creators.find((creator) => creator.id === creatorId)?.name ?? "Cuenta";
@@ -512,7 +500,7 @@ export function RealChatsPage() {
 
   return (
     <div className="absolute inset-0 flex min-h-0 overflow-hidden bg-white text-[#1c2333]">
-      <section className="hidden">
+      <section className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden border-r border-[#e6e8ee] md:w-[340px] md:shrink-0">
         <div className="shrink-0 space-y-3 border-b border-[#e6e8ee] px-3 py-3">
           <h1 className="truncate text-sm font-semibold uppercase tracking-wide">{creatorName}</h1>
           <div className="flex gap-2">
@@ -586,19 +574,14 @@ export function RealChatsPage() {
         )}
         </div>
       </section>
-      <section className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      <section className="hidden h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden md:flex">
         <header className="flex shrink-0 items-center justify-between gap-3 border-b border-[#e6e8ee] px-4 py-3">
               <div className="flex min-w-0 items-center gap-2">
-                <p className="truncate font-medium">{creators.find((creator) => creator.id === liveCreatorId)?.name ?? "OnlyFans"}</p>
-                {creatorId === "all" && accountChoices.length > 1 ? (
-                  <div className="flex shrink-0 gap-1">
-                    {accountChoices.map((id) => (
-                      <button key={id} type="button" className={`rounded-md px-2 py-1 text-xs ${liveCreatorId === id ? "bg-[#eef2ff] font-medium text-[#2456c7]" : "text-[#6d7585]"}`} onClick={() => setPickedCreator(id)}>
-                        {creators.find((creator) => creator.id === id)?.name ?? "Cuenta"}
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
+                <p className="truncate font-medium">{selected ? (selected.fanName ?? selected.fanHandle ?? "Fan") : "Sin sincronizar"}</p>
+                <div className="flex shrink-0 rounded-lg bg-[#f3f4f6] p-0.5 text-xs">
+                  <button type="button" className={`rounded-md px-2 py-1 ${surface === "equipo" ? "bg-white font-medium" : "text-[#6d7585]"}`} onClick={() => setSurface("equipo")}>Equipo</button>
+                  <button type="button" className={`rounded-md px-2 py-1 ${surface === "onlyfans" ? "bg-white font-medium" : "text-[#6d7585]"}`} onClick={() => setSurface("onlyfans")}>OnlyFans</button>
+                </div>
               </div>
               <div className="flex items-center gap-2">
                 <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => void refresh()}>Recargar</button>
@@ -628,28 +611,10 @@ export function RealChatsPage() {
                 ) : null}
               </div>
             ) : null}
-            <div className="flex min-h-0 flex-1">
-              {liveCreatorId ? (
-                <LiveOnlyFans creatorId={liveCreatorId} threadKey="inbox" fanKey={null} deskRef={deskRef} onCanType={setDeskCanType} />
-              ) : (
-                <div className="grid min-w-0 flex-1 place-items-center bg-[#111318] px-6 text-center text-sm text-white/70">No hay una cuenta de OnlyFans conectada.</div>
-              )}
-              <DeskRail
-                name={selected?.creatorId === liveCreatorId ? (selected?.fanName ?? null) : null}
-                handle={selected?.creatorId === liveCreatorId ? (selected?.fanHandle ?? null) : null}
-                spentCents={selected?.creatorId === liveCreatorId ? (selected?.spentCents ?? null) : null}
-                ppvAvgCents={selected?.creatorId === liveCreatorId ? ppvAvgCents : null}
-                canType={deskCanType}
-                pasteNote={pasteNote}
-                scripts={scripts}
-                onPaste={(text) => {
-                  const pasted = deskRef.current?.paste(text) ?? false;
-                  setPasteNote(pasted ? "Pegado en OnlyFans. Revisa el precio en la página antes de Send." : "Toma el control para pegar el guion.");
-                }}
-                onOpenFicha={() => setInsightsOpen(true)}
-              />
-            </div>
-            <ol ref={threadBox} className="hidden" onScroll={(event) => {
+            {surface === "onlyfans" && selected ? (
+              <LiveOnlyFans creatorId={selected.creatorId} threadKey={selected.threadKey} fanKey={selected.fanKey} />
+            ) : null}
+            <ol ref={threadBox} className={`min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4 ${surface === "onlyfans" ? "hidden" : ""}`} onScroll={(event) => {
               const node = event.currentTarget;
               stickToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80;
               if (node.scrollTop > 24 || !selected || olderLock.current) return;
@@ -686,7 +651,7 @@ export function RealChatsPage() {
               ))}
               {messages.some((message) => message.fromFan) && fanTranslation ? <li className="text-[10px] text-[#6d7585]">Traducción: Sin datos</li> : null}
             </ol>
-            <form className="hidden" onSubmit={(event) => event.preventDefault()}>
+            <form className={`relative shrink-0 border-t border-[#e6e8ee] p-2 ${surface === "onlyfans" ? "hidden" : ""}`} onSubmit={(event) => event.preventDefault()}>
               {panel && panel !== "guiones" ? (
                 <div role="region" aria-label={panelLabel(panel)} className={`absolute inset-x-2 bottom-full z-20 mb-1 overflow-y-auto rounded-xl border border-[#e6e8ee] bg-white p-3 text-sm shadow-lg ${panel === "vault" ? "max-h-[28rem]" : "max-h-52"}`}>
                   <ComposerPanelBody
