@@ -1,4 +1,5 @@
 import type { BrowserContext, Page } from "playwright";
+import { closeIfIdle } from "../live/pages.ts";
 import {
   mergeNotifications,
   notificationScrolls,
@@ -80,7 +81,7 @@ export async function collectNotifications(
     };
   } finally {
     context.off("response", onResponse);
-    await page?.close().catch(() => undefined);
+    if (page) await closeIfIdle(page);
     await Promise.allSettled(pending);
   }
 }

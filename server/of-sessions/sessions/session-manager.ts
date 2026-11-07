@@ -39,6 +39,7 @@ import {
 } from "./browser-factory.ts";
 import { assertLoginDisplay } from "./display.ts";
 import { openWorkPage } from "./work-page.ts";
+import { closeIfIdle, contextShowsInbox } from "../live/pages.ts";
 import { readAccountProxy } from "../proxy.ts";
 import { preparePrivateDir } from "./private-dir.ts";
 import type { SiteAdapter } from "./site.ts";
@@ -292,6 +293,10 @@ export class SessionManager {
     if (!held) return;
     held.users -= 1;
     if (held.users > 0) return;
+    if (contextShowsInbox(held.context)) {
+      held.users = 1;
+      return;
+    }
     this.profileUsers.delete(accountId);
     this.openContexts.delete(held.context);
     await held.context.close().catch(() => undefined);
@@ -554,7 +559,7 @@ export class SessionManager {
         const body = (await page.content()).slice(0, 200_000);
         return { status, finalUrl, body };
         } finally {
-          await page.close().catch(() => undefined);
+          await closeIfIdle(page);
         }
       });
       await this.options.store.update(accountId, {
@@ -936,7 +941,7 @@ export class SessionManager {
       };
     } finally {
       context.off("response", onResponse);
-      await page?.close().catch(() => undefined);
+      if (page) await closeIfIdle(page);
       await this.releaseProfile(accountId);
     }
   }

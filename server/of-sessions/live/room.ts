@@ -227,10 +227,7 @@ async function ensureRoom(ticket: LiveTicket): Promise<Room> {
       },
     });
   } catch (error) {
-    releaseLiveHold(ticket.accountId);
-    await room.release?.().catch(() => undefined);
-    room.release = null;
-    rooms.delete(key);
+    console.info(liveLog("error", { accountId: ticket.accountId, detail: error instanceof Error ? error.message.split("\n")[0] : "no se pudo abrir" }));
     throw error;
   }
   return room;

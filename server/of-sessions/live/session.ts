@@ -2,6 +2,7 @@ import type { BrowserContext, CDPSession, FileChooser, Page } from "playwright";
 import { chatPageUrl } from "../sync/chats.ts";
 import { parseChatMessages } from "../sync/chats.ts";
 import { openWorkPage } from "../sessions/work-page.ts";
+import { markLivePage } from "./pages.ts";
 import { deskCommand, liveControlAllowed, liveHistoryGuardSource, liveLog, liveQuality, liveRequestAllowed, liveSocketGuardSource, liveThreadClick, liveTypingEnabled, mapPointer, type DeskInput } from "./desk.ts";
 
 export type LiveFrame = { jpeg: Buffer; width: number; height: number };
@@ -24,7 +25,15 @@ export async function startLiveCast(input: {
 }): Promise<LiveCast> {
   const fps = liveFpsFromEnv();
   const quality = liveQuality(process.env.FANLINK_LIVE_QUALITY);
-  const page = await openWorkPage(input.context);
+  const open = input.context.pages().find((page) => {
+    try {
+      return page.url().includes("/my/chats");
+    } catch {
+      return false;
+    }
+  });
+  const page = open ?? await openWorkPage(input.context);
+  markLivePage(page);
   const typing = liveTypingEnabled();
   const chatUrl = chatPageUrl("https://onlyfans.com/my/chats", input.threadKey, "onlyfans");
   let viewport = { width: 1100, height: 720 };
@@ -87,6 +96,7 @@ export async function startLiveCast(input: {
   await page.setViewportSize(viewport);
   await page.goto(chatUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
   let lastFrame = 0;
+  let sawFrame = false;
   cdp.on("Page.screencastFrame", (event: { data: string; sessionId: number; metadata?: { deviceWidth?: number; deviceHeight?: number } }) => {
     void cdp?.send("Page.screencastFrameAck", { sessionId: event.sessionId }).catch(() => undefined);
     const now = Date.now();
@@ -96,6 +106,10 @@ export async function startLiveCast(input: {
       viewport = { width: event.metadata.deviceWidth, height: event.metadata.deviceHeight };
     }
     input.onFrame({ jpeg: Buffer.from(event.data, "base64"), width: viewport.width, height: viewport.height });
+    if (!sawFrame) {
+      sawFrame = true;
+      console.info(liveLog("inicio", { accountId: input.accountId, detail: "imagen" }));
+    }
   });
   await cdp.send("Page.startScreencast", { format: "jpeg", quality, everyNthFrame: 1 });
 
@@ -134,7 +148,6 @@ export async function startLiveCast(input: {
       stopped = true;
       console.info(liveLog("fin", { accountId: input.accountId }));
       await cdp?.send("Page.stopScreencast").catch(() => undefined);
-      await page.close().catch(() => undefined);
     },
   };
 }
