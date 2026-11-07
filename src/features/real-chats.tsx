@@ -12,24 +12,35 @@ import { MessagePriceDialog } from "@/features/message-price-dialog";
 import { FULL_EMOJIS, QUICK_EMOJIS, TEXT_COLORS, authorLabel, matchScripts, mentionToken, paymentLabel, slashQuery, wrapSelection } from "@/lib/composer-tools";
 import { pendingForThread } from "@/lib/pending-thread";
 import { spendTone } from "@/lib/spend-tiers";
+import { ChatMediaPlayer } from "@/features/chat-media-player";
+import { VaultBrowser } from "@/features/vault-browser";
 
 function ThreadMessage({ message }: { message: {
+  creatorId: string;
+  threadKey: string;
+  messageKey: string;
   fromFan: boolean;
   body: string;
   authorName: string | null;
   automatic: boolean | null;
   mediaCount: number | null;
-  media: Array<unknown> | null;
+  media: Array<{ kind: "foto" | "video" | "audio" | null }> | null;
   priceCents: number | null;
   purchased: boolean | null;
 } }) {
-  const hasMedia = (message.mediaCount ?? 0) > 0 || (message.media?.length ?? 0) > 0;
+  const slides = message.media ?? [];
+  const hasMedia = (message.mediaCount ?? 0) > 0 || slides.length > 0;
   const who = message.fromFan ? "" : message.authorName ? authorLabel(message.authorName, false) : authorLabel(null, message.automatic);
   const pay = paymentLabel(message);
   return (
     <li className={message.fromFan ? "" : "text-right"}>
       <div className={`inline-block max-w-[70%] rounded-2xl px-3 py-2 text-left text-sm ${message.fromFan ? "bg-[#f4f6fb]" : "bg-[#e7f0ff]"}`}>
-        {hasMedia ? <p className="mb-1 rounded bg-[#eceef2] px-2 py-3 text-center text-xs text-[#6d7585]">Medio</p> : null}
+        {hasMedia && slides.length === 0 ? (
+          <ChatMediaPlayer creatorId={message.creatorId} threadKey={message.threadKey} messageKey={message.messageKey} index={0} kind="video" />
+        ) : null}
+        {slides.map((slide, index) => (
+          <ChatMediaPlayer key={`${message.messageKey}-${index}`} creatorId={message.creatorId} threadKey={message.threadKey} messageKey={message.messageKey} index={index} kind={slide.kind} />
+        ))}
         {message.body ? <p>{message.body}</p> : null}
       </div>
       {who || pay ? <p className="mt-1 text-[10px] text-[#6d7585]">{[who, pay].filter(Boolean).join(" · ")}</p> : null}
@@ -74,6 +85,7 @@ export function RealChatsPage() {
   const [libraryQuery, setLibraryQuery] = useState("");
   const [tagQuery, setTagQuery] = useState("");
   const [ofVault, setOfVault] = useState<Array<{ id: string; title: string; kind: "foto" | "video" | "audio" | null }>>([]);
+  const [vaultReload, setVaultReload] = useState(0);
   const [surface, setSurface] = useState<"equipo" | "onlyfans">("equipo");
 
   async function refresh() {
@@ -197,7 +209,7 @@ export function RealChatsPage() {
       setError("Los archivos locales siguen pendientes. El vault de OnlyFans sí se adjunta.");
       return;
     }
-    const vaultTitle = attachments.find((file) => file.kind === "vault")?.name ?? null;
+    const vaultItemIds = attachments.filter((file) => file.kind === "vault").map((file) => file.id.replace(/^vault-/, ""));
     const body = draft.trim();
     const price = draftPrice;
     sendLock.current = true;
@@ -210,7 +222,7 @@ export function RealChatsPage() {
           threadKey: selected.threadKey,
           body,
           priceCents: price,
-          vaultTitle,
+          vaultItemIds,
         },
       });
       if (result.sent) {
@@ -236,6 +248,7 @@ export function RealChatsPage() {
     try {
       const result = await readChatVault({ data: { creatorId: selected.creatorId, threadKey: selected.threadKey } });
       setOfVault(result.items);
+      setVaultReload((value) => value + 1);
     } catch (err) {
       setOfVault([]);
       setError(sessionErrorText(err));
@@ -316,11 +329,17 @@ export function RealChatsPage() {
     setPanel(null);
   }
 
-  function attachVault(item: { id: string; title: string }) {
-    setAttachments((current) => current.some((file) => file.id === `vault-${item.id}`) ? current : [
-      ...current,
-      { id: `vault-${item.id}`, url: null, name: item.title, kind: "vault" as const },
-    ]);
+  function attachVault(item: { id: string; title: string; withId?: string | null; withTitle?: string | null }) {
+    const pieces = [{ id: item.id, title: item.title }];
+    if (item.withId && item.withId !== item.id) pieces.push({ id: item.withId, title: item.withTitle || "Vídeo de pago" });
+    setAttachments((current) => {
+      const next = [...current];
+      for (const piece of pieces) {
+        if (next.some((file) => file.id === `vault-${piece.id}`)) continue;
+        next.push({ id: `vault-${piece.id}`, url: null, name: piece.title, kind: "vault" as const });
+      }
+      return next;
+    });
     setPanel(null);
   }
 
@@ -469,7 +488,7 @@ export function RealChatsPage() {
             </ol>
             <form className={`relative shrink-0 border-t border-[#e6e8ee] p-2 ${surface === "onlyfans" ? "hidden" : ""}`} onSubmit={(event) => event.preventDefault()}>
               {panel && panel !== "guiones" ? (
-                <div role="region" aria-label={panelLabel(panel)} className="absolute inset-x-2 bottom-full z-20 mb-1 max-h-52 overflow-y-auto rounded-xl border border-[#e6e8ee] bg-white p-3 text-sm shadow-lg">
+                <div role="region" aria-label={panelLabel(panel)} className={`absolute inset-x-2 bottom-full z-20 mb-1 overflow-y-auto rounded-xl border border-[#e6e8ee] bg-white p-3 text-sm shadow-lg ${panel === "vault" ? "max-h-[28rem]" : "max-h-52"}`}>
                   <ComposerPanelBody
                     panel={panel}
                     vaultItems={vaultItems}
@@ -479,6 +498,9 @@ export function RealChatsPage() {
                     fanTranslation={fanTranslation}
                     textSize={textSize}
                     ofVault={ofVault}
+                    vaultReload={vaultReload}
+                    creatorId={selected?.creatorId ?? creatorId}
+                    fanKey={selected?.fanKey ?? null}
                     onReadVault={() => void loadOfVault()}
                     onVault={attachVault}
                     onTag={(handle) => { insertAtCursor(mentionToken(handle)); setPanel(null); }}
@@ -744,6 +766,9 @@ function ComposerPanelBody({
   panel,
   vaultItems,
   ofVault,
+  vaultReload,
+  creatorId,
+  fanKey,
   onReadVault,
   tagCreators,
   tagQuery,
@@ -760,13 +785,16 @@ function ComposerPanelBody({
   panel: Exclude<ComposerPanel, "guiones" | null>;
   vaultItems: VaultItem[];
   ofVault: Array<{ id: string; title: string; kind: "foto" | "video" | "audio" | null }>;
+  vaultReload: number;
+  creatorId: string;
+  fanKey: string | null;
   onReadVault: () => void;
   tagCreators: Array<{ id: string; name: string; handle: string }>;
   tagQuery: string;
   onTagQuery: (value: string) => void;
   fanTranslation: boolean;
   textSize: "sm" | "base" | "lg";
-  onVault: (item: { id: string; title: string }) => void;
+  onVault: (item: { id: string; title: string; withId?: string | null; withTitle?: string | null }) => void;
   onTag: (handle: string) => void;
   onFormat: (command: "bold" | "italic" | "foreColor", value?: string) => void;
   onSize: (size: "sm" | "base" | "lg") => void;
@@ -775,23 +803,22 @@ function ComposerPanelBody({
 }) {
   switch (panel) {
     case "vault": {
-      const picks = [
-        ...ofVault.map((item) => ({ id: item.id, title: item.title })),
-        ...vaultItems.map((item) => ({ id: item.id, title: item.title })),
-      ];
       return (
         <div className="space-y-2">
+          <p className="text-xs font-medium">Add from media vault</p>
           <button type="button" className="rounded border border-[#e6e8ee] px-2 py-1 text-xs" onClick={onReadVault}>Leer vault de OnlyFans</button>
-          <a href="/vault" className="block text-xs text-[#2456c7]">Abrir la bóveda</a>
-          {picks.length === 0 ? <p className="text-xs text-[#6d7585]">Sin datos</p> : (
+          {creatorId && creatorId !== "all" ? (
+            <VaultBrowser creatorId={creatorId} fanKey={fanKey} reloadToken={vaultReload} onAttach={onVault} />
+          ) : <p className="text-xs text-[#6d7585]">Sin datos</p>}
+          {ofVault.length > 0 ? (
             <ul className="space-y-1">
-              {picks.map((item) => (
+              {ofVault.map((item) => (
                 <li key={item.id}>
-                  <button type="button" className="w-full rounded px-2 py-1 text-left hover:bg-[#f4f7ff]" onClick={() => onVault(item)}>{item.title}</button>
+                  <button type="button" className="w-full rounded px-2 py-1 text-left text-xs hover:bg-[#f4f7ff]" onClick={() => onVault(item)}>{item.title || "Sin datos"}</button>
                 </li>
               ))}
             </ul>
-          )}
+          ) : null}
         </div>
       );
     }

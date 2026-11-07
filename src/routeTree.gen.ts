@@ -25,6 +25,10 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as MensajesRouteImport } from './routes/mensajes'
 import { Route as VaultRouteImport } from './routes/vault'
 import { Route as ApiChatLiveRouteImport } from './routes/api/chat-live'
+import { Route as ApiChatMediaRouteImport } from './routes/api/chat-media'
+import { Route as ApiVaultMediaRouteImport } from './routes/api/vault-media'
+import { Route as ApiVaultQueryRouteImport } from './routes/api/vault-query'
+import { Route as ApiVaultSendRouteImport } from './routes/api/vault-send'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 
 const IndexRoute = IndexRouteImport.update({
@@ -107,6 +111,26 @@ const ApiChatLiveRoute = ApiChatLiveRouteImport.update({
   path: '/api/chat-live',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiChatMediaRoute = ApiChatMediaRouteImport.update({
+  id: '/api/chat-media',
+  path: '/api/chat-media',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiVaultMediaRoute = ApiVaultMediaRouteImport.update({
+  id: '/api/vault-media',
+  path: '/api/vault-media',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiVaultQueryRoute = ApiVaultQueryRouteImport.update({
+  id: '/api/vault-query',
+  path: '/api/vault-query',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiVaultSendRoute = ApiVaultSendRouteImport.update({
+  id: '/api/vault-send',
+  path: '/api/vault-send',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
   path: '/api/auth/$',
@@ -130,6 +154,10 @@ export interface FileRoutesByFullPath {
   '/mensajes': typeof MensajesRoute
   '/vault': typeof VaultRoute
   '/api/chat-live': typeof ApiChatLiveRoute
+  '/api/chat-media': typeof ApiChatMediaRoute
+  '/api/vault-media': typeof ApiVaultMediaRoute
+  '/api/vault-query': typeof ApiVaultQueryRoute
+  '/api/vault-send': typeof ApiVaultSendRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRoutesByTo {
@@ -149,6 +177,10 @@ export interface FileRoutesByTo {
   '/mensajes': typeof MensajesRoute
   '/vault': typeof VaultRoute
   '/api/chat-live': typeof ApiChatLiveRoute
+  '/api/chat-media': typeof ApiChatMediaRoute
+  '/api/vault-media': typeof ApiVaultMediaRoute
+  '/api/vault-query': typeof ApiVaultQueryRoute
+  '/api/vault-send': typeof ApiVaultSendRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRoutesById {
@@ -169,6 +201,10 @@ export interface FileRoutesById {
   '/mensajes': typeof MensajesRoute
   '/vault': typeof VaultRoute
   '/api/chat-live': typeof ApiChatLiveRoute
+  '/api/chat-media': typeof ApiChatMediaRoute
+  '/api/vault-media': typeof ApiVaultMediaRoute
+  '/api/vault-query': typeof ApiVaultQueryRoute
+  '/api/vault-send': typeof ApiVaultSendRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRouteTypes {
@@ -190,6 +226,10 @@ export interface FileRouteTypes {
     | '/mensajes'
     | '/vault'
     | '/api/chat-live'
+    | '/api/chat-media'
+    | '/api/vault-media'
+    | '/api/vault-query'
+    | '/api/vault-send'
     | '/api/auth/$'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -209,6 +249,10 @@ export interface FileRouteTypes {
     | '/mensajes'
     | '/vault'
     | '/api/chat-live'
+    | '/api/chat-media'
+    | '/api/vault-media'
+    | '/api/vault-query'
+    | '/api/vault-send'
     | '/api/auth/$'
   id:
     | '__root__'
@@ -228,6 +272,10 @@ export interface FileRouteTypes {
     | '/mensajes'
     | '/vault'
     | '/api/chat-live'
+    | '/api/chat-media'
+    | '/api/vault-media'
+    | '/api/vault-query'
+    | '/api/vault-send'
     | '/api/auth/$'
   fileRoutesById: FileRoutesById
 }
@@ -248,6 +296,10 @@ export interface RootRouteChildren {
   MensajesRoute: typeof MensajesRoute
   VaultRoute: typeof VaultRoute
   ApiChatLiveRoute: typeof ApiChatLiveRoute
+  ApiChatMediaRoute: typeof ApiChatMediaRoute
+  ApiVaultMediaRoute: typeof ApiVaultMediaRoute
+  ApiVaultQueryRoute: typeof ApiVaultQueryRoute
+  ApiVaultSendRoute: typeof ApiVaultSendRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
 }
 
@@ -365,6 +417,34 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiChatLiveRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/chat-media': {
+      id: '/api/chat-media'
+      path: '/api/chat-media'
+      fullPath: '/api/chat-media'
+      preLoaderRoute: typeof ApiChatMediaRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/vault-media': {
+      id: '/api/vault-media'
+      path: '/api/vault-media'
+      fullPath: '/api/vault-media'
+      preLoaderRoute: typeof ApiVaultMediaRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/vault-query': {
+      id: '/api/vault-query'
+      path: '/api/vault-query'
+      fullPath: '/api/vault-query'
+      preLoaderRoute: typeof ApiVaultQueryRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/vault-send': {
+      id: '/api/vault-send'
+      path: '/api/vault-send'
+      fullPath: '/api/vault-send'
+      preLoaderRoute: typeof ApiVaultSendRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/auth/$': {
       id: '/api/auth/$'
       path: '/api/auth/$'
@@ -392,6 +472,10 @@ const rootRouteChildren: RootRouteChildren = {
   MensajesRoute: MensajesRoute,
   VaultRoute: VaultRoute,
   ApiChatLiveRoute: ApiChatLiveRoute,
+  ApiChatMediaRoute: ApiChatMediaRoute,
+  ApiVaultMediaRoute: ApiVaultMediaRoute,
+  ApiVaultQueryRoute: ApiVaultQueryRoute,
+  ApiVaultSendRoute: ApiVaultSendRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
 }
 export const routeTree = rootRouteImport

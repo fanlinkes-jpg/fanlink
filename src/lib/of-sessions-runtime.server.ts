@@ -33,11 +33,11 @@ import { listChatMeta, listChats, listOpenHistory, listPendingOutbounds, markCha
 import { historyPerMinute, listPageDone, nextHistoryThread, oldestCursor, pageFinished } from "../../server/of-sessions/sync/history.ts";
 import { captureChatListPage, captureOlderMessages } from "../../server/of-sessions/sync/history-scroll.ts";
 import { openWorkPage } from "../../server/of-sessions/sessions/work-page.ts";
-import { captureVaultList, type VaultFile } from "../../server/of-sessions/sync/vault-listen.ts";
+import { captureVaultPayloads, type VaultFile } from "../../server/of-sessions/sync/vault-listen.ts";
 import { chatPageUrl } from "../../server/of-sessions/sync/chats.ts";
 import { sendPace } from "../../server/of-sessions/send/gate.ts";
 import { chatSendGate, publicSendReason, type SendAccount } from "../../server/of-sessions/send/gate.ts";
-import { deliverChatSend, sendLimitFromEnv } from "../../server/of-sessions/send/deliver.ts";
+import type { SendChatHooks } from "../../server/of-sessions/send/chat-message.ts";
 import { composeChat } from "../../server/of-sessions/send/compose.ts";
 import { liveViewGate } from "../../server/of-sessions/live/desk.ts";
 import { issueLiveTicket } from "../../server/of-sessions/live/tickets.ts";
@@ -55,6 +55,8 @@ import {
   writeChatIntervalMin,
   writeSyncIntervalMin,
 } from "../../server/of-sessions/sync/store.ts";
+
+export { sendChatMessageView } from "../../server/of-sessions/send/chat-message.ts";
 
 const globalRef = globalThis as typeof globalThis & {
   __ofSessionManager__?: Promise<SessionManager>;
@@ -838,80 +840,44 @@ export async function chatSendAccessView(userId: string): Promise<{ creatorIds: 
   };
 }
 
-export async function sendChatMessageView(
+export async function resolveChatSendHooks(
   userId: string,
-  input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; vaultTitle?: string | null },
-): Promise<{ sent: boolean; reason: string | null; messageId: string | null }> {
+  input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; vaultItemIds?: string[] },
+): Promise<SendChatHooks> {
   const access = await accessFor(userId);
-  if (access.role !== "owner" && !access.perms.includes("mensajes")) {
-    throw new WorkspaceAccessError("No tienes permiso para escribir.");
-  }
-  const body = input.body.replace(/\s+/g, " ").trim();
-  if (!body) throw new WorkspaceAccessError("Escribe un mensaje.");
-  if (!input.threadKey) return { sent: false, reason: "Sin hilo", messageId: null };
-  if (input.priceCents != null && input.priceCents > 0 && input.priceCents < 300) {
-    return { sent: false, reason: "Mínimo $3 USD o gratis", messageId: null };
-  }
   const sessions = await getOfSessionManager();
-  const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
-  if (!account) return { sent: false, reason: "Envío real desactivado", messageId: null };
-  const fields = sendAccount(account);
-  const gate = chatSendGate(process.env.FANLINK_ENABLE_SEND, process.env.FANLINK_SEND_ALLOW_ACCOUNTS, fields);
-  if (!gate.allowed) return { sent: false, reason: gate.reason, messageId: null };
-  if (account.identityState === "mismatch") {
-    return { sent: false, reason: "Lecturas bloqueadas: la sesión guardada es de otra cuenta.", messageId: null };
-  }
-  const sql = await getSql();
-  const id = crypto.randomUUID();
-  await recordOutbound(sql, {
-    id,
-    creatorId: input.creatorId,
-    threadKey: input.threadKey,
-    fanKey: input.fanKey,
-    authorId: access.userId,
-    body,
-    priceCents: input.priceCents,
-    createdAt: new Date().toISOString(),
-    ofMessageKey: null,
-    scheduledAt: null,
-  });
-  try {
-    const result = await deliverChatSend({
-      flag: process.env.FANLINK_ENABLE_SEND,
-      allowlist: process.env.FANLINK_SEND_ALLOW_ACCOUNTS,
-      perMinute: sendLimitFromEnv(),
-      account: fields,
-      now: () => Date.now(),
-      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-      open: () => sessions.withSession(account.id, (context) => composeChat(context, {
+  const accounts = await sessions.listAccounts();
+  const known = accounts.flatMap((item) => item.creatorId ? [item.creatorId] : []);
+  const account = accounts.find((item) => item.creatorId === input.creatorId) ?? null;
+  const vaultPieces: SendChatHooks["vaultPieces"] = [];
+  return {
+    sql: await getSql(),
+    access: { userId: access.userId, role: access.role, perms: access.perms, creatorIds: known },
+    account: account ? {
+      id: account.id,
+      creatorId: account.creatorId,
+      identityHandle: account.identityHandle,
+      identityUserId: account.identityUserId,
+      identityState: account.identityState,
+      label: account.label,
+    } : null,
+    env: process.env,
+    vaultPieces,
+    open: () => {
+      if (!account) return Promise.resolve({ messageId: null, reason: "Envío real desactivado" });
+      return sessions.withSession(account.id, (context) => composeChat(context, {
         chatsUrl: onlyFansSite.chatsUrl ?? "https://onlyfans.com/my/chats",
         siteId: onlyFansSite.id,
         threadKey: input.threadKey ?? "",
         fanKey: input.fanKey,
         accountUserId: account.identityUserId,
-        body,
+        body: input.body,
         priceCents: input.priceCents,
-        vaultTitle: input.vaultTitle ?? null,
+        vaultPieces,
         typeDelayMs: null,
-      })),
-    });
-    if (result.sent && result.messageId) {
-      await markOutboundSent(sql, id, result.messageId);
-      return { sent: true, reason: null, messageId: result.messageId };
-    }
-    if (result.awaitingId) {
-      await markOutboundAwaiting(sql, id);
-      return { sent: false, reason: "Pendiente de confirmar", messageId: null };
-    }
-    const reason = result.reason ?? "No se envió";
-    await markOutboundError(sql, id, reason);
-    return { sent: false, reason, messageId: null };
-  } catch (error) {
-    const reason = publicSendReason(error instanceof Error ? error.message : "No se envió");
-    console.info(`[fanlink:send] error motivo=${reason}`);
-    await markOutboundError(sql, id, reason);
-    return { sent: false, reason, messageId: null };
-  }
+      }));
+    },
+  };
 }
 
 export async function readChatVaultView(userId: string, input: { creatorId: string; threadKey: string }): Promise<{ items: VaultFile[]; reason: string | null }> {
@@ -929,13 +895,19 @@ export async function readChatVaultView(userId: string, input: { creatorId: stri
         waitUntil: "domcontentloaded",
         timeout: 30_000,
       }).catch(() => undefined);
-      return await captureVaultList(page);
+      return await captureVaultPayloads(page);
     } finally {
       await page.close().catch(() => undefined);
     }
   });
   if (!ran.ok || ran.value.length === 0) return { items: [], reason: "Sin datos" };
-  return { items: ran.value, reason: null };
+  const { persistVaultRead } = await import("../../server/of-sessions/sync/vault-store.ts");
+  const saved = await persistVaultRead(await getSql(), input.creatorId, ran.value);
+  if (saved.length === 0) return { items: [], reason: "Sin datos" };
+  return {
+    items: saved.map((item) => ({ id: item.id, title: item.title, kind: item.kind })),
+    reason: null,
+  };
 }
 
 export async function loadOlderMessagesView(userId: string, input: { creatorId: string; threadKey: string }): Promise<{ ok: boolean }> {

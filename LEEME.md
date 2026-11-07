@@ -84,7 +84,7 @@ El envío real de un chat solo sale si `FANLINK_ENABLE_SEND=true` y la creadora 
 
 El histórico no se corta en 8 hilos. Al subir del todo en el hilo, la pestaña de la cuenta hace scroll en el chat nativo y se guarda el JSON de mensajes que esa página pide. En segundo plano se recorre el resto de chats, de uno en uno, con tope por minuto (`FANLINK_HISTORY_PER_MINUTE`, por defecto 6) y un cursor por chat (`history_cursor`, `history_done`) para poder seguir más tarde. La lista de chats también pide la página siguiente al llegar abajo. `FANLINK_HISTORY_ENABLED=false` apaga ese barrido.
 
-Cada mensaje guarda los metadatos del medio que venga (tipo, duración y si hay vista previa), el me gusta, la cita y el aviso de compra o propina. El espejo ya no descarga el archivo, no lo guarda en `media-cache` y no lo reproduce: donde iría el medio se ve el marcador Medio. El reproductor no está en este PR; entra con el del vídeo.
+Cada mensaje guarda los metadatos del medio que venga (tipo, duración y si hay vista previa), el me gusta, la cita y el aviso de compra o propina. En el hilo, foto, vídeo y audio se reproducen con el botón **Reproducir** (o **Ver foto** / **Reproducir audio**). El archivo sale de `GET /api/chat-media`, que exige sesión. No se pinta la URL del CDN.
 
 Por defecto el barrido de hilos es cada 2 minutos (`FANLINK_CHAT_SYNC_MIN`, entre 1 y 30). Tener la bandeja abierta no lo acorta. Mientras alguien mira una cuenta, el perfil deja abierta una sola pestaña de esa cuenta y escucha el WebSocket, que trae los mensajes de todos los chats, no solo del hilo que está en pantalla. No se envía ningún frame ni se llama a un endpoint. Ese mensaje llega a la base al recibirlo y la pantalla lo pinta en menos de 2 segundos. Si el socket no trae mensajes, se recargan los hilos que alguien tiene abiertos, primero el que más gente mira, nunca antes de 15 segundos por hilo y nunca más de un hilo cada 15 segundos, con un tope de 8. La pestaña se cierra a los 5 minutos sin nadie mirando. El perfil solo admite una cuenta a la vez: si hay dos, se queda la que más bandejas tiene abiertas y la otra espera.
 
@@ -117,7 +117,7 @@ En Campañas, el bloque «Borrador con fans sincronizados» arma un masivo con f
 
 Los masivos siguen sin enviarse a OnlyFans aunque `FANLINK_ENABLE_SEND=true`. Ese flag, junto con `FANLINK_SEND_ALLOW_ACCOUNTS`, solo abre el envío de un chat de las cuentas de la lista. El botón de Campañas dice **Envío real desactivado**.
 
-El masivo nuevo (`of_mass_message`, migración `0027`) tampoco sale de aquí. Además de `FANLINK_ENABLE_SEND=true` hace falta `FANLINK_ENABLE_MASS_SEND=true` y la cuenta en `FANLINK_SEND_ALLOW_ACCOUNTS`. Las dos siguen apagadas. Crear el borrador lo hace la dueña o quien tenga el permiso `masivos`. Un chatter no ve los ingresos ni el buy rate de ese masivo.
+El masivo nuevo (`of_mass_message`, migración `0027`) tampoco sale de aquí. Además de `FANLINK_ENABLE_SEND=true` hace falta `FANLINK_ENABLE_MASS_SEND=true` y la cuenta en `FANLINK_SEND_ALLOW_ACCOUNTS`. Las dos siguen apagadas si no se definen. Crear el borrador lo hace la dueña o quien tenga el permiso `masivos`. Un chatter no ve los ingresos ni el buy rate de ese masivo. Una pieza en una carpeta `NO VENDER` o `SIN EDITAR` (también `No-vender`, y lo mismo en una carpeta padre, o si la cadena de carpetas está rota o en ciclo) no sale ni en el envío de un chat ni en el masivo: lo corta el servidor, no solo el botón.
 
 Lanzarlo son dos pasos y solo de un admin. El primero guarda el hash de un token y quién lo pidió. El token caduca a los 2 minutos según el reloj de la base, no según la hora que mande el cliente. El segundo paso lo presenta el mismo admin: la base lo consume en la misma sentencia que pasa el masivo a enviado, y solo si el hash coincide y aún no ha caducado. Un token vivo no se sustituye en silencio. Pasar a enviado no es un booleano que pueda marcar un chatter.
 
@@ -155,8 +155,9 @@ Usa la clave que ya tienes. No generes otra. Misma terminal: Control+C, `git pul
 4. **Chat.** Conversaciones leídas, no el demo antiguo. Solo la dueña ve Forzar sincronización. Hay caja de texto y solo el botón Enviar. Sin la allowlist, Enviar se ve deshabilitado y el tooltip dice «Envío real desactivado en esta cuenta». Con `FANLINK_ENABLE_SEND=true` y la cuenta en `FANLINK_SEND_ALLOW_ACCOUNTS`, el hilo muestra **Envío real** y Enviar escribe en la caja nativa. Programar sigue guardando el envío en `of_chat_outbound` con autor y hora, sin mandarlo todavía. Un fallo queda como «Error · motivo · sin reintento».
 5. **Equipo.** Teléfono `+34…`, interruptor Avisos y minutos entre avisos. Sin claves de WhatsApp, el aviso sale como `simulado` en la terminal cuando un fan escribe.
 6. **Campañas.** Borrador con fans sincronizados: vista previa y guardar. El botón dice «Envío real desactivado» y no se pulsa.
-7. **Inicio, listas, vault y enlaces.** No son cifras de OnlyFans. Deben decir que están sin sincronizar o que son ejemplo local.
-8. **Pestaña OnlyFans.** En el mismo `npm run dev`, exporta `FANLINK_LIVE_VIEW_ENABLED=true` y `FANLINK_SEND_ALLOW_ACCOUNTS=9ikis52,@bigpoppa1111`. Abre un hilo de la cuenta de prueba y entra en la pestaña OnlyFans: se ve el chat real. Sin `FANLINK_ENABLE_SEND=true` no se puede teclear. Con el envío encendido, solo esa cuenta teclea. El socket no sale en `vite preview`.
+7. **Inicio, listas, vault y enlaces.** El ejemplo local de Inicio, listas y enlaces no son cifras de OnlyFans. La bóveda (`/vault` y «Add from media vault» en el chat) lee el espejo `of_vault_item`: listas a la izquierda, grid a la derecha, filtros en el servidor. Si no hay filas, dice **Sin datos**. Un chatter ve `salesCount`, «Ventas» y «Más vendido». No ve euros ni el total de la agencia. El precio sugerido sale de las compras de esa pieza a cualquier fan; si no hay ventas, **Sin datos**. El historial de precios sigue siendo el de ese fan.
+8. **Reproducir un medio.** En el hilo, foto, vídeo o audio se piden a `GET /api/chat-media` (y la miniatura o el vídeo de la bóveda a `GET /api/vault-media`). Hace falta sesión. Sin sesión la respuesta es 401. La página no usa la URL del CDN. El servidor reenvía el `Range` como stream y no carga el archivo entero en memoria. El log `[fanlink:media]` lleva la cuenta y el id, no la URL.
+9. **Pestaña OnlyFans.** En el mismo `npm run dev`, exporta `FANLINK_LIVE_VIEW_ENABLED=true` y `FANLINK_SEND_ALLOW_ACCOUNTS=9ikis52,@bigpoppa1111`. Abre un hilo de la cuenta de prueba y entra en la pestaña OnlyFans: se ve el chat real. Sin `FANLINK_ENABLE_SEND=true` no se puede teclear. Con el envío encendido, solo esa cuenta teclea. El socket no sale en `vite preview`.
 
 ## Datos
 
@@ -196,5 +197,13 @@ El proxy de cada cuenta, Postgres y WhatsApp en un VPS están en `DEPLOY.md`.
 npm test
 npm run typecheck
 ```
+
+Bóveda y reproducción, en local, sin envío real (los flags no se exportan):
+
+```bash
+npm run dev
+```
+
+Abre `http://127.0.0.1:8080/vault` y, en un chat, `http://127.0.0.1:8080/mensajes`. Pulsa **Add from media vault** y **Leer vault de OnlyFans**: lo leído se guarda en el espejo y el grid lo enseña. Sin filas sale **Sin datos**. Un vídeo de la bóveda usa `GET /api/vault-media?...&variant=full` y el del hilo `GET /api/chat-media`, los dos con `Range`. Sin sesión responden 401. El envío de una pieza solo sale si `FANLINK_ENABLE_SEND=true` y la cuenta está en la allowlist; si no se exportan, sigue apagado. El navegador no manda el título: solo salen ids que ya están en el espejo y no son NO VENDER. Antes de pulsar Send se comprueba que cada pieza quedó en el compositor. Si el título está vacío, se repite o no se puede distinguir por id o carpeta, no se envía.
 
 El login, la restauración, la caducidad y el cifrado se prueban contra un sitio local con el mismo contrato, no contra OnlyFans.
