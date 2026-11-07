@@ -6,6 +6,8 @@ import { test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { WorkspaceAccessError } from "../../../src/lib/access-policy.ts";
 import { discardOutboundView, OutboundClaimError, sendChatMessageView, type SendChatHooks } from "../send/chat-message.ts";
+import { sendClaimKey } from "../send/claim.ts";
+import { listPendingOutbounds, markOutboundAwaiting, recordOutbound } from "../sync/chat-store.ts";
 import type { ReadSql } from "../sync/store.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -299,6 +301,170 @@ test("NO VENDER y el precio mínimo devuelven el motivo y no abren el navegador"
     assert.equal(opened, false);
     assert.equal(await count(db, "of_chat_outbound"), 0);
     assert.equal(await count(db, "of_vault_fan_send"), 0);
+  } finally {
+    await db.close();
+  }
+});
+
+test("dos autores con el mismo texto no comparten la clave y salen los dos", async () => {
+  const keyA = sendClaimKey({ authorId: "chatter-a", creatorId: "9ikis52", threadKey: "7", fanKey: "7", body: "hola", priceCents: null, vaultItemIds: [] });
+  const keyB = sendClaimKey({ authorId: "chatter-b", creatorId: "9ikis52", threadKey: "7", fanKey: "7", body: "hola", priceCents: null, vaultItemIds: [] });
+  assert.notEqual(keyA, keyB);
+  const db = new PGlite();
+  try {
+    await apply(db);
+    await db.exec(`insert into staff_profile (user_id, display_name, role) values
+      ('chatter-a', 'Ana', 'member'),
+      ('chatter-b', 'Bea', 'member')`);
+    const sql = asSql(db);
+    let opened = 0;
+    const open: SendChatHooks["open"] = async () => {
+      opened += 1;
+      return { messageId: `m-${opened}`, reason: null };
+    };
+    const first = await sendChatMessageView("chatter-a", {
+      creatorId: "9ikis52", fanKey: "7", threadKey: "7", body: "hola", priceCents: null, clientId: crypto.randomUUID(),
+    }, hooks(sql, open));
+    const other = hooks(sql, open);
+    other.access = { ...access, userId: "chatter-b" };
+    const second = await sendChatMessageView("chatter-b", {
+      creatorId: "9ikis52", fanKey: "7", threadKey: "7", body: "hola", priceCents: null, clientId: crypto.randomUUID(),
+    }, other);
+    assert.equal(first.sent, true);
+    assert.equal(second.sent, true);
+    assert.equal(opened, 2);
+    assert.equal(await count(db, "of_chat_outbound"), 2);
+  } finally {
+    await db.close();
+  }
+});
+
+test("si el navegador ya se abrió y falla, queda pendiente de confirmar y no se reintenta", async () => {
+  const db = new PGlite();
+  try {
+    await apply(db);
+    await db.exec("insert into staff_profile (user_id, display_name, role) values ('chatter-a', 'Ana', 'member')");
+    const sql = asSql(db);
+    const clientId = crypto.randomUUID();
+    let opened = 0;
+    const result = await sendChatMessageView("chatter-a", {
+      creatorId: "9ikis52", fanKey: "7", threadKey: "7", body: "a medias", priceCents: null, clientId,
+    }, hooks(sql, async () => {
+      opened += 1;
+      throw new Error("se cayó la pestaña");
+    }));
+    assert.equal(result.sent, false);
+    assert.equal(result.reason, "Pendiente de confirmar");
+    await db.exec("update of_chat_send_claim set created_at = now() - interval '31 seconds'");
+    await assert.rejects(
+      () => sendChatMessageView("chatter-a", {
+        creatorId: "9ikis52", fanKey: "7", threadKey: "7", body: "a medias", priceCents: null, clientId,
+      }, hooks(sql, async () => {
+        opened += 1;
+        return { messageId: "otra", reason: null };
+      })),
+      (error: unknown) => error instanceof OutboundClaimError && error.status === 409,
+    );
+    assert.equal(opened, 1);
+    const row = await db.query<{ status: string; error_reason: string | null }>(
+      "select status, error_reason from of_chat_outbound where id = $1",
+      [clientId],
+    );
+    assert.equal(row.rows[0]?.status, "pending");
+    assert.equal(row.rows[0]?.error_reason, "Pendiente de confirmar");
+  } finally {
+    await db.close();
+  }
+});
+
+test("un pending atascado caduca, conserva precio y piezas, y su autor lo descarta", async () => {
+  const db = new PGlite();
+  try {
+    await apply(db);
+    await db.exec(`insert into staff_profile (user_id, display_name, role) values
+      ('chatter-a', 'Ana', 'member'),
+      ('chatter-b', 'Bea', 'member')`);
+    const sql = asSql(db);
+    const stuckId = crypto.randomUUID();
+    const freshId = crypto.randomUUID();
+    const waitingId = crypto.randomUUID();
+    const scheduledId = crypto.randomUUID();
+    await recordOutbound(sql, {
+      id: stuckId,
+      createdAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+      creatorId: "9ikis52",
+      fanKey: "7",
+      threadKey: "7",
+      authorId: "chatter-a",
+      body: "colgado",
+      priceCents: 500,
+      ofMessageKey: null,
+    });
+    await db.exec(`insert into of_vault_item (creator_id, item_key, title) values ('9ikis52', 'v1', 'playa')`);
+    await db.query("insert into of_outbound_media (outbound_id, creator_id, media_id, position) values ($1, '9ikis52', 'v1', 0)", [stuckId]);
+    await recordOutbound(sql, {
+      id: freshId,
+      createdAt: new Date().toISOString(),
+      creatorId: "9ikis52",
+      fanKey: "7",
+      threadKey: "7",
+      authorId: "chatter-a",
+      body: "recién",
+      priceCents: null,
+      ofMessageKey: null,
+    });
+    await recordOutbound(sql, {
+      id: waitingId,
+      createdAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+      creatorId: "9ikis52",
+      fanKey: "7",
+      threadKey: "7",
+      authorId: "chatter-a",
+      body: "esperando",
+      priceCents: null,
+      ofMessageKey: null,
+    });
+    await markOutboundAwaiting(sql, waitingId);
+    await recordOutbound(sql, {
+      id: scheduledId,
+      createdAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+      scheduledAt: "2026-12-01T18:00:00.000Z",
+      creatorId: "9ikis52",
+      fanKey: "7",
+      threadKey: "7",
+      authorId: "chatter-a",
+      body: "luego",
+      priceCents: null,
+      ofMessageKey: null,
+    });
+    const pending = await listPendingOutbounds(sql, ["9ikis52"]);
+    const stuck = pending.find((item) => item.id === stuckId);
+    assert.equal(stuck?.status, "error");
+    assert.equal(stuck?.errorReason, "se interrumpió");
+    assert.equal(stuck?.priceCents, 500);
+    assert.equal(stuck?.authorId, "chatter-a");
+    assert.deepEqual(stuck?.vault, [{ id: "v1", name: "playa" }]);
+    assert.equal(pending.find((item) => item.id === freshId)?.status, "pending");
+    assert.equal(pending.find((item) => item.id === waitingId)?.errorReason, "Pendiente de confirmar");
+    assert.equal(pending.find((item) => item.id === scheduledId)?.status, "pending");
+    await assert.rejects(
+      () => discardOutboundView({ clientId: freshId }, { sql, access }),
+      (error: unknown) => error instanceof OutboundClaimError && error.status === 409,
+    );
+    await assert.rejects(
+      () => discardOutboundView({ clientId: waitingId }, { sql, access }),
+      (error: unknown) => error instanceof OutboundClaimError && error.status === 409,
+    );
+    const intruder = { ...access, userId: "chatter-b" };
+    await assert.rejects(
+      () => discardOutboundView({ clientId: stuckId }, { sql, access: intruder }),
+      (error: unknown) => error instanceof OutboundClaimError && error.status === 403 && error.message === "No es tuyo",
+    );
+    const still = await db.query<{ status: string }>("select status from of_chat_outbound where id = $1", [stuckId]);
+    assert.equal(still.rows[0]?.status, "error");
+    assert.deepEqual(await discardOutboundView({ clientId: stuckId }, { sql, access }), { ok: true });
+    const gone = (await listPendingOutbounds(sql, ["9ikis52"])).find((item) => item.id === stuckId);
+    assert.equal(gone, undefined);
   } finally {
     await db.close();
   }

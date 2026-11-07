@@ -3,9 +3,12 @@ import { test } from "node:test";
 import { pendingForThread } from "./pending-thread.ts";
 import {
   acceptSend,
+  applyDiscardResult,
   bubbleCaption,
+  draftFromPending,
   draftFromRejected,
   enterSendsMessage,
+  holdsForUser,
   pendingBesideLocal,
   reconcileBubbles,
   runnableJobIds,
@@ -150,4 +153,40 @@ test("un rechazo recupera el borrador con texto, precio y piezas", () => {
     vault: [{ id: "v1", name: "playa" }],
   });
   assert.equal(again.vault.length, 1);
+});
+
+test("solo el error del propio usuario frena el hilo", () => {
+  const items = [
+    { id: "ajeno", creatorId: "c-1", threadKey: "hilo", status: "error", authorId: "otro" },
+    { id: "mio", creatorId: "c-1", threadKey: "hilo", status: "error", authorId: "yo" },
+    { id: "espera", creatorId: "c-1", threadKey: "hilo", status: "pending", authorId: "yo" },
+  ];
+  assert.deepEqual(holdsForUser(items, "yo").map((hold) => hold.clientId), ["mio"]);
+  assert.deepEqual(holdsForUser(items, "otro").map((hold) => hold.clientId), ["ajeno"]);
+  assert.deepEqual(holdsForUser(items, null), []);
+  const waiting = [job({ clientId: "siguiente", threadKey: "hilo", at: 2 })];
+  assert.deepEqual(runnableJobIds(waiting, holdsForUser(items, "otro")), []);
+  assert.deepEqual(runnableJobIds(waiting, holdsForUser(items, "yo")), []);
+  assert.deepEqual(runnableJobIds(waiting, holdsForUser(items, "nadie")), ["siguiente"]);
+});
+
+test("descartar sin ok no saca el envío de la cola", () => {
+  const jobs = [job({ clientId: "a", threadKey: "hilo", state: "error" })];
+  const denied = applyDiscardResult(jobs, "a", { ok: false });
+  assert.equal(denied.length, 1);
+  assert.equal(denied[0]?.clientId, "a");
+  assert.equal(applyDiscardResult(jobs, "a", { ok: true }).length, 0);
+});
+
+test("recuperar un pendiente del servidor conserva precio y piezas", () => {
+  const draft = draftFromPending({
+    body: "mira",
+    priceCents: 500,
+    vault: [{ id: "v1", name: "playa" }],
+  });
+  assert.equal(draft.body, "mira");
+  assert.equal(draft.priceCents, 500);
+  assert.equal(draft.priceLabel, "$5.00");
+  assert.deepEqual(draft.vault, [{ id: "v1", name: "playa" }]);
+  assert.equal(draftFromPending({ body: "gratis", priceCents: null, vault: [] }).priceLabel, null);
 });

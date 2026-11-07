@@ -153,7 +153,47 @@ export function pendingBesideLocal<P extends { id: string; creatorId: string; th
   return pending.filter((item) => item.threadKey != null && !ids.has(`${item.creatorId}\0${item.threadKey}\0${item.id}`));
 }
 
-/** Un rechazo devuelve el borrador tal cual: texto, precio y piezas. */
+export function priceLabelFromCents(cents: number | null): string | null {
+  if (cents == null || cents <= 0) return null;
+  return `$${(cents / 100).toFixed(2)}`;
+}
+
+/** Solo el error del usuario que mira frena su cola. El de otro chatter no. */
+export function holdsForUser(
+  items: readonly { id: string; creatorId: string; threadKey: string | null; status: string; authorId: string | null }[],
+  userId: string | null,
+): LaneHold[] {
+  if (!userId) return [];
+  return items.flatMap((item) => (
+    item.status === "error" && item.authorId === userId && item.threadKey
+      ? [{ clientId: item.id, creatorId: item.creatorId, threadKey: item.threadKey }]
+      : []
+  ));
+}
+
+/** Descartar solo saca el envío si el servidor dijo que sí. Un 403 deja la cola igual. */
+export function applyDiscardResult<T extends { clientId: string }>(
+  jobs: readonly T[],
+  clientId: string,
+  result: { ok: boolean },
+): T[] {
+  if (!result.ok) return [...jobs];
+  return jobs.filter((job) => job.clientId !== clientId);
+}
+
+/** Recuperar y reintentar usan el precio y las piezas que guardó el servidor. */
+export function draftFromPending(item: {
+  body: string;
+  priceCents: number | null;
+  vault: readonly VaultAttachment[];
+}): ComposerDraft {
+  return draftFromRejected({
+    body: item.body,
+    priceCents: item.priceCents,
+    priceLabel: priceLabelFromCents(item.priceCents),
+    vault: item.vault.map((piece) => ({ id: piece.id, name: piece.name })),
+  });
+}
 export function draftFromRejected(draft: ComposerDraft): ComposerDraft {
   return {
     body: draft.body,

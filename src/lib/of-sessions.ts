@@ -179,6 +179,9 @@ export type CreatorChatList = {
     body: string;
     scheduledAt: string | null;
     authorName: string | null;
+    authorId: string | null;
+    priceCents: number | null;
+    vault: Array<{ id: string; name: string }>;
     status: "pending" | "error";
     errorReason: string | null;
   }>;

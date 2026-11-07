@@ -6,6 +6,7 @@ import type { VaultSendPiece } from "./vault-piece.ts";
 import type { ReadSql } from "../sync/store.ts";
 import {
   discardOutboundError,
+  expireStuckPending,
   insertOutboundOnce,
   markOutboundAwaiting,
   markOutboundError,
@@ -20,7 +21,7 @@ const CLIENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[
 export class OutboundClaimError extends Error {
   readonly status: 403 | 409;
   constructor(status: 403 | 409) {
-    super("No se puede reenviar");
+    super(status === 403 ? "No es tuyo" : "No se puede reenviar");
     this.name = "OutboundClaimError";
     this.status = status;
   }
@@ -86,6 +87,7 @@ export async function sendChatMessageView(
   if (!typedBody) throw new WorkspaceAccessError("Escribe un mensaje.");
   if (!input.threadKey) return { sent: false, reason: "Sin hilo", messageId: null };
   const sql = prepared.sql;
+  await expireStuckPending(sql);
   const replay = await replayOf(sql, clientId, access.userId, input.creatorId, input.threadKey);
   if (replay === "busy") return { sent: false, reason: "Ya se está enviando", messageId: null };
   const body = replay ? replay.body : typedBody;
@@ -121,6 +123,7 @@ export async function sendChatMessageView(
   if (!planned.ok) return { sent: false, reason: planned.reason, messageId: null };
   const id = clientId ?? crypto.randomUUID();
   const claimKey = sendClaimKey({
+    authorId: access.userId,
     creatorId,
     threadKey,
     fanKey,
@@ -136,6 +139,8 @@ export async function sendChatMessageView(
     return { sent: false, reason: "Ya se está enviando", messageId: null };
   }
   prepared.vaultPieces?.splice(0, prepared.vaultPieces.length, ...planned.pieces);
+  let browserOpened = false;
+  let confirmedId: string | null = null;
   try {
     if (!replay) {
       const inserted = await insertOutboundOnce(sql, {
@@ -166,10 +171,15 @@ export async function sendChatMessageView(
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       sales: planned.sales,
       outboundMedia: vaultItemIds.length > 0 ? { sql, outboundId: id } : null,
-      open: prepared.open,
+      open: async () => {
+        browserOpened = true;
+        return prepared.open();
+      },
     });
+    if (result.opened) browserOpened = true;
     if (result.sent && result.messageId) {
       await markOutboundSent(sql, id, result.messageId);
+      confirmedId = result.messageId;
       const confirmed = new Set(result.attachedIds ?? []);
       if (fanKey) {
         for (const itemKey of vaultItemIds) {
@@ -197,6 +207,11 @@ export async function sendChatMessageView(
     return { sent: false, reason, messageId: null };
   } catch (error) {
     if (error instanceof OutboundClaimError) throw error;
+    if (confirmedId) return { sent: true, reason: null, messageId: confirmedId };
+    if (browserOpened) {
+      await markOutboundAwaiting(sql, id).catch(() => undefined);
+      return { sent: false, reason: "Pendiente de confirmar", messageId: null };
+    }
     const reason = publicSendReason(error instanceof Error ? error.message : "No se envió");
     console.info(`[fanlink:send] error motivo=${reason}`);
     await markOutboundError(sql, id, reason).catch(() => undefined);
@@ -215,6 +230,7 @@ export async function discardOutboundView(
   if (access.role !== "owner" && !access.perms.includes("mensajes")) {
     throw new WorkspaceAccessError("No tienes permiso para escribir.");
   }
+  await expireStuckPending(hooks.sql);
   const row = await readOutboundClaim(hooks.sql, clientId);
   if (!row) return { ok: true };
   if (row.authorId !== access.userId) throw new OutboundClaimError(403);

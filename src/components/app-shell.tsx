@@ -30,6 +30,7 @@ import { useCrm, type Perm } from "@/lib/crm";
 import { hasPerm } from "@/lib/access-policy";
 import { SessionSync } from "@/components/session-sync";
 import { UserButton } from "@/lib/auth/gates";
+import { chatSendSession } from "@/lib/chat-send-session";
 
 type Item = { href: string; label: string; icon: LucideIcon; perm?: Perm };
 
@@ -137,7 +138,10 @@ function MenuFlyout({ title, items, onPick }: { title: string; items: Item[]; on
             <Link
               key={item.label}
               to={item.href}
-              onClick={onPick}
+              onClick={() => {
+                chatSendSession.onMenuNavigate();
+                onPick();
+              }}
               className="flex items-center gap-3 rounded-xl border border-[#e6e8ee] bg-white px-3 py-2 hover:border-[#3b6cff]"
             >
               <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[#eef2ff] text-[#3b6cff]">

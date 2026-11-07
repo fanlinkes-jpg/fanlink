@@ -618,14 +618,63 @@ export async function outboundSendStateReady(sql: ReadSql): Promise<boolean> {
   return ready;
 }
 
+export const STUCK_PENDING_MS = 180_000;
+
+/**
+ * Un pending que no es programado ni «Pendiente de confirmar» y lleva más de
+ * 3 minutos sin id de OnlyFans se da por interrumpido. Así se puede descartar.
+ * Awaiting, enviado y lo recién encolado no se tocan.
+ */
+export async function expireStuckPending(sql: ReadSql, now = new Date()): Promise<void> {
+  const table = await sql.query<{ name: string | null }>("select to_regclass('public.of_chat_outbound')::text as name");
+  if (!table[0]?.name) return;
+  const cutoff = new Date(now.getTime() - STUCK_PENDING_MS).toISOString();
+  await sql.query(
+    `update of_chat_outbound
+     set status = 'error', error_reason = 'se interrumpió'
+     where coalesce(status, 'pending') = 'pending'
+       and scheduled_at is null
+       and of_message_key is null
+       and matched_message_key is null
+       and coalesce(error_reason, '') <> 'Pendiente de confirmar'
+       and created_at < $1`,
+    [cutoff],
+  );
+}
+
 export async function listPendingOutbounds(
   sql: ReadSql,
   creatorIds: string[],
-): Promise<Array<{ id: string; creatorId: string; threadKey: string | null; body: string; scheduledAt: string | null; authorName: string | null; status: "pending" | "error"; errorReason: string | null }>> {
+): Promise<Array<{
+  id: string;
+  creatorId: string;
+  threadKey: string | null;
+  body: string;
+  scheduledAt: string | null;
+  authorName: string | null;
+  authorId: string | null;
+  priceCents: number | null;
+  vault: Array<{ id: string; name: string }>;
+  status: "pending" | "error";
+  errorReason: string | null;
+}>> {
   if (!creatorIds.length) return [];
+  await expireStuckPending(sql);
   const filter = creatorIds.map((_, index) => `$${index + 1}`).join(", ");
-  const rows = await sql.query<{ id: string; creator_id: string; thread_key: string | null; body: string; scheduled_at: Date | string | null; author_name: string | null; status: string | null; error_reason: string | null }>(
-    `select o.id, o.creator_id, o.thread_key, o.body, o.scheduled_at, p.display_name as author_name, o.status, o.error_reason
+  const rows = await sql.query<{
+    id: string;
+    creator_id: string;
+    thread_key: string | null;
+    body: string;
+    scheduled_at: Date | string | null;
+    author_name: string | null;
+    author_id: string | null;
+    price_cents: number | string | null;
+    status: string | null;
+    error_reason: string | null;
+  }>(
+    `select o.id, o.creator_id, o.thread_key, o.body, o.scheduled_at, p.display_name as author_name,
+            o.author_id, o.price_cents, o.status, o.error_reason
      from of_chat_outbound o
      left join staff_profile p on p.user_id = o.author_id
      where o.creator_id in (${filter}) and o.matched_message_key is null
@@ -633,6 +682,7 @@ export async function listPendingOutbounds(
      order by o.created_at`,
     creatorIds,
   );
+  const vault = await pendingVaultPieces(sql, rows);
   return rows.map((row) => ({
     id: row.id,
     creatorId: row.creator_id,
@@ -640,6 +690,9 @@ export async function listPendingOutbounds(
     body: row.body,
     scheduledAt: row.scheduled_at == null ? null : row.scheduled_at instanceof Date ? row.scheduled_at.toISOString() : String(row.scheduled_at),
     authorName: row.author_name,
+    authorId: row.author_id,
+    priceCents: centsOrNull(row.price_cents),
+    vault: vault.get(row.id) ?? [],
     status: row.status === "error" ? "error" : "pending",
     errorReason: row.error_reason,
   }));
@@ -931,6 +984,51 @@ export async function discardOutboundError(sql: ReadSql, id: string, authorId: s
     [id, authorId],
   );
   return rows.length > 0;
+}
+
+/** Piezas del borrador. Si la tabla aún no existe (bases viejas de test), no hay piezas. */
+async function pendingVaultPieces(
+  sql: ReadSql,
+  rows: ReadonlyArray<{ id: string; creator_id: string }>,
+): Promise<Map<string, Array<{ id: string; name: string }>>> {
+  const map = new Map<string, Array<{ id: string; name: string }>>();
+  if (rows.length === 0) return map;
+  const mediaTable = await sql.query<{ name: string | null }>("select to_regclass('public.of_outbound_media')::text as name");
+  if (!mediaTable[0]?.name) return map;
+  const ids = rows.map((row) => row.id);
+  const slots = ids.map((_, index) => `$${index + 1}`).join(", ");
+  const media = await sql.query<{ outbound_id: string; media_id: string | null }>(
+    `select outbound_id, media_id, position from of_outbound_media
+     where outbound_id in (${slots})
+     order by position nulls last, media_id`,
+    ids,
+  );
+  const titles = new Map<string, string>();
+  const vaultTable = await sql.query<{ name: string | null }>("select to_regclass('public.of_vault_item')::text as name");
+  if (vaultTable[0]?.name) {
+    const creatorIds = [...new Set(rows.map((row) => row.creator_id))];
+    const creatorSlots = creatorIds.map((_, index) => `$${index + 1}`).join(", ");
+    const named = await sql.query<{ creator_id: string; item_key: string | null; title: string | null }>(
+      `select creator_id, item_key, title from of_vault_item
+       where creator_id in (${creatorSlots}) and item_key is not null`,
+      creatorIds,
+    );
+    for (const row of named) {
+      if (!row.item_key) continue;
+      const title = row.title?.replace(/\s+/g, " ").trim();
+      titles.set(`${row.creator_id}\0${row.item_key}`, title || row.item_key);
+    }
+  }
+  const creatorOf = new Map(rows.map((row) => [row.id, row.creator_id]));
+  for (const piece of media) {
+    if (!piece.media_id) continue;
+    const creatorId = creatorOf.get(piece.outbound_id) ?? "";
+    const name = titles.get(`${creatorId}\0${piece.media_id}`) ?? piece.media_id;
+    const list = map.get(piece.outbound_id) ?? [];
+    list.push({ id: piece.media_id, name });
+    map.set(piece.outbound_id, list);
+  }
+  return map;
 }
 
 function flagOrNull(value: boolean | string | null): boolean | null {
