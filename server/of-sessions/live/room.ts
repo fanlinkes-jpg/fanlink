@@ -315,9 +315,8 @@ function armControlTimer(room: Room): void {
 function scheduleStop(room: Room): void {
   if (rooms.get(room.key) !== room) return;
   if (room.idle) clearTimeout(room.idle);
-  room.idle = setTimeout(() => {
-    if (room.viewers.length === 0) void stopRoom(room);
-  }, 5_000);
+  room.idle = null;
+  console.info(liveLog("fin", { accountId: room.accountId, detail: "el visor se fue; la bandeja sigue abierta" }));
 }
 
 async function stopRoom(room: Room): Promise<void> {
