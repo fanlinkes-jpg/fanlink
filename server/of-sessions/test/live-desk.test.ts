@@ -52,6 +52,9 @@ test("un miembro no llega a statements, estadísticas, banca, pagos ni ajustes",
   }
   assert.equal(liveRequestAllowed("https://onlyfans.com/my/chats/chat/28022478"), true);
   assert.equal(liveRequestAllowed("https://onlyfans.com/api2/v2/chats/28022478/messages"), true);
+  assert.equal(liveRequestAllowed("https://onlyfans.com/api2/v2/users/me"), true);
+  assert.equal(liveRequestAllowed("https://onlyfans.com/api2/v2/init"), true);
+  assert.equal(liveRequestAllowed("https://onlyfans.com/api2/v2/users/me", "POST", true), false);
   assert.equal(liveRequestAllowed("https://cdn2.onlyfans.com/my/statements"), false);
 });
 

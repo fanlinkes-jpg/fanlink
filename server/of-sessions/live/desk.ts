@@ -30,6 +30,8 @@ export function liveViewGate(
 }
 
 const LIVE_CHAT_PREFIXES = ["/my/chats", "/api2/v2/chats", "/api2/v2/messages"] as const;
+/** Sin esto la página se queda en el logo. Solo lectura. */
+const LIVE_BOOT_PREFIXES = ["/api2/v2/init", "/api2/v2/users/me", "/api2/v2/users/list"] as const;
 const LIVE_DENIED_SEGMENTS = [
   "statements", "statistics", "banking", "payouts", "payout", "settings",
   "payments", "billing", "wallet", "cards", "bank", "earnings", "invoices",
@@ -59,8 +61,13 @@ export function liveRequestAllowed(raw: string, method = "GET", typing = false):
     return false;
   }
   if (path.includes("..") || path.includes("\\")) return false;
+  if (liveBootPath(path)) return method.toUpperCase() === "GET" || method.toUpperCase() === "HEAD";
   if (!liveHostPathAllowed(host, path)) return false;
   return !liveWriteBlocked(method, path, typing);
+}
+
+function liveBootPath(path: string): boolean {
+  return LIVE_BOOT_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
 }
 
 function liveHostPathAllowed(host: string, path: string): boolean {
