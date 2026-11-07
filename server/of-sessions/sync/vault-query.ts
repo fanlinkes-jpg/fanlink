@@ -3,7 +3,7 @@ import { emptyVaultQuery, folderAndChildren, searchVaultLists, vaultQueryFromUnk
 import { itemSaleBlocked } from "./vault-block.ts";
 import { suggestVaultPrice, trailerPackages, type VaultFile, type VaultKind } from "./vault-model.ts";
 import type { ReadSql } from "./store.ts";
-import { fanVaultUses, loadVaultMirror, loadVaultQuery, saveVaultQuery } from "./vault-store.ts";
+import { fanVaultUses, loadVaultMirror, loadVaultQuery, piecePurchaseCents, saveVaultQuery } from "./vault-store.ts";
 
 export type VaultActor = {
   userId: string;
@@ -122,7 +122,7 @@ export async function queryVaultForActor(sql: ReadSql, actor: VaultActor, body: 
   const ranked = query.bestSeller ? bestOf(rows) : rows;
   const bestIds = new Set(bestOf(rows).map((item) => item.id));
   const sorted = [...ranked].sort((left, right) => compare(left, right, query.sort));
-  const purchases = purchaseCents(uses);
+  const purchases = await piecePurchaseCents(sql, creatorId);
   const packs = new Map(trailerPackages(mirror.items).flatMap((pack) => [
     [pack.trailerId, { withId: pack.paidId, label: pack.label }] as const,
     [pack.paidId, { withId: pack.trailerId, label: pack.label }] as const,
@@ -191,17 +191,6 @@ export function presentCard(
       authorLabel: use.authorId ?? "Sin datos",
     })),
   };
-}
-
-function purchaseCents(uses: ReadonlyArray<{ itemKey: string; priceCents: number | null; purchased: boolean | null }>): Map<string, number[]> {
-  const map = new Map<string, number[]>();
-  for (const use of uses) {
-    if (use.purchased !== true || use.priceCents == null || use.priceCents <= 0) continue;
-    const list = map.get(use.itemKey) ?? [];
-    list.push(use.priceCents);
-    map.set(use.itemKey, list);
-  }
-  return map;
 }
 
 async function selectVaultItems(

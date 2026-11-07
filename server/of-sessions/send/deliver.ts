@@ -3,7 +3,7 @@ import { chatSendGate, createSendLimiter, publicSendReason, sendPerMinute, type 
 import { itemSaleBlocked, type SaleFolder } from "../sync/vault-block.ts";
 import type { ReadSql } from "../sync/store.ts";
 
-export type SendAttempt = { messageId: string | null; reason: string | null; awaitingId?: boolean };
+export type SendAttempt = { messageId: string | null; reason: string | null; awaitingId?: boolean; attachedIds?: string[] };
 
 export type DeliverSale = {
   folderId: string | null;
@@ -30,11 +30,11 @@ export type DeliverInput = {
 const sharedLimiter = createSendLimiter();
 
 /** Una cuenta a la vez. Si el gate, NO VENDER o un medio no dejan, no abre el navegador y no reintenta. */
-export async function deliverChatSend(input: DeliverInput): Promise<{ sent: boolean; opened: boolean; messageId: string | null; reason: string | null; awaitingId?: boolean }> {
+export async function deliverChatSend(input: DeliverInput): Promise<{ sent: boolean; opened: boolean; messageId: string | null; reason: string | null; awaitingId?: boolean; attachedIds: string[] }> {
   const gate = chatSendGate(input.flag, input.allowlist, input.account);
-  if (!gate.allowed) return { sent: false, opened: false, messageId: null, reason: gate.reason };
+  if (!gate.allowed) return { sent: false, opened: false, messageId: null, reason: gate.reason, attachedIds: [] };
   if (input.sales?.some((sale) => itemSaleBlocked(sale))) {
-    return { sent: false, opened: false, messageId: null, reason: "NO VENDER" };
+    return { sent: false, opened: false, messageId: null, reason: "NO VENDER", attachedIds: [] };
   }
   const accountId = input.account.accountId ?? input.account.creatorId ?? "cuenta";
   const limiter = input.limiter ?? sharedLimiter;
@@ -51,7 +51,7 @@ export async function deliverChatSend(input: DeliverInput): Promise<{ sent: bool
       attempt = await runOpen();
     }, true);
     if (!media.sent || !attempt) {
-      return { sent: false, opened: false, messageId: null, reason: media.reason ?? "El envío de medios no existe" };
+      return { sent: false, opened: false, messageId: null, reason: media.reason ?? "El envío de medios no existe", attachedIds: [] };
     }
     return finish(opened, attempt);
   }
@@ -63,10 +63,11 @@ export async function deliverChatSend(input: DeliverInput): Promise<{ sent: bool
   return finish(opened, attempt);
 }
 
-function finish(opened: boolean, attempt: SendAttempt): { sent: boolean; opened: boolean; messageId: string | null; reason: string | null; awaitingId?: boolean } {
-  if (attempt.messageId) return { sent: true, opened, messageId: attempt.messageId, reason: null };
-  if (attempt.awaitingId) return { sent: false, opened, messageId: null, reason: null, awaitingId: true };
-  return { sent: false, opened, messageId: null, reason: publicSendReason(attempt.reason ?? "No se envió") };
+function finish(opened: boolean, attempt: SendAttempt): { sent: boolean; opened: boolean; messageId: string | null; reason: string | null; awaitingId?: boolean; attachedIds: string[] } {
+  const attachedIds = attempt.attachedIds ?? [];
+  if (attempt.messageId) return { sent: true, opened, messageId: attempt.messageId, reason: null, attachedIds };
+  if (attempt.awaitingId) return { sent: false, opened, messageId: null, reason: null, awaitingId: true, attachedIds };
+  return { sent: false, opened, messageId: null, reason: publicSendReason(attempt.reason ?? "No se envió"), attachedIds };
 }
 
 export function sendLimitFromEnv(env: NodeJS.ProcessEnv = process.env): number {

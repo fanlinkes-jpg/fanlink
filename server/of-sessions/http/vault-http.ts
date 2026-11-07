@@ -139,16 +139,24 @@ async function streamMedia(
   const range = request.headers.get("range");
   const bytes = await fetchBytes(target, range);
   if (!bytes) return new Response("Sin datos", { status: 404 });
-  const copy = Uint8Array.from(bytes.body);
+  const body = mediaBody(bytes);
+  if (!body) return new Response("Sin datos", { status: 404 });
+  const length = bytes.contentLength ?? bytes.body?.byteLength ?? null;
   const headers = new Headers({
     "content-type": bytes.contentType || "application/octet-stream",
     "cache-control": "private, no-store",
     "x-content-type-options": "nosniff",
     "accept-ranges": "bytes",
-    "content-length": String(copy.byteLength),
   });
+  if (length != null) headers.set("content-length", String(length));
   if (bytes.contentRange) headers.set("content-range", bytes.contentRange);
-  return new Response(copy.buffer, { status: bytes.status, headers });
+  return new Response(body, { status: bytes.status, headers });
+}
+
+function mediaBody(bytes: MediaBytes): BodyInit | null {
+  if (bytes.stream) return bytes.stream;
+  if (!bytes.body) return null;
+  return bytes.body.buffer.slice(bytes.body.byteOffset, bytes.body.byteOffset + bytes.body.byteLength) as ArrayBuffer;
 }
 
 async function readJson(request: Request): Promise<unknown> {

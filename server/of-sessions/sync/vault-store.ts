@@ -2,6 +2,8 @@ import type { ReadSql } from "./store.ts";
 import { emptyVaultQuery, vaultQueryFromUnknown, type VaultQuery } from "./vault-filter.ts";
 import { historyFromMedia, historyFromSends, mergeFanUses, parseVaultBundle, type FanVaultUse, type VaultFile, type VaultList } from "./vault-model.ts";
 import type { SaleFolder } from "./vault-block.ts";
+import { itemSaleBlocked } from "./vault-block.ts";
+import { planVaultPieces, type VaultSendPiece } from "../send/vault-piece.ts";
 
 export async function saveVaultMirror(sql: ReadSql, creatorId: string, items: readonly VaultFile[], lists: readonly VaultList[], now = new Date()): Promise<void> {
   const syncedAt = now.toISOString();
@@ -69,6 +71,14 @@ export async function saveVaultMirror(sql: ReadSql, creatorId: string, items: re
       );
     }
   }
+  if (await hasColumn(sql, "of_vault_item", "paid_with_id")) {
+    for (const item of items) {
+      await sql.query(
+        "update of_vault_item set paid_with_id = $3 where creator_id = $1 and item_key = $2",
+        [creatorId, item.id, item.paidWithId ?? null],
+      );
+    }
+  }
 }
 
 /** Lo que la página de OnlyFans ya pidió al abrir la bóveda entra en el espejo. */
@@ -95,10 +105,11 @@ export async function loadVaultMirror(sql: ReadSql, creatorId: string): Promise<
     item_key: string; title: string | null; kind: string | null; seconds: number | null; preview: string | null;
     folder: string | null; tags: unknown; list_key: string | null; list_name: string | null;
     description: string | null; uploaded_at: Date | string | null; price_cents: number | null;
-    sales_count: number | null; sent_count: number | null;
+    sales_count: number | null; sent_count: number | null; paid_with_id?: string | null;
   }>(
     `select item_key, title, kind, seconds, preview, folder, tags, list_key, list_name,
             description, uploaded_at, price_cents, sales_count, sent_count
+            ${await hasColumn(sql, "of_vault_item", "paid_with_id") ? ", paid_with_id" : ""}
      from of_vault_item where creator_id = $1 and item_key is not null order by title`,
     [creatorId],
   );
@@ -124,6 +135,7 @@ export async function loadVaultMirror(sql: ReadSql, creatorId: string): Promise<
       priceCents: row.price_cents,
       salesCount: row.sales_count,
       sentCount: row.sent_count,
+      paidWithId: row.paid_with_id ?? null,
     })),
     syncedAt: sync[0]?.synced_at == null ? null : sync[0].synced_at instanceof Date ? sync[0].synced_at.toISOString() : String(sync[0].synced_at),
   };
@@ -152,6 +164,52 @@ export async function loadSaleContext(sql: ReadSql, creatorId: string, itemIds: 
     };
   });
   return { sales, missing };
+}
+
+export async function prepareVaultSend(sql: ReadSql, creatorId: string, itemIds: readonly string[]): Promise<
+  { ok: true; pieces: VaultSendPiece[]; sales: Awaited<ReturnType<typeof loadSaleContext>>["sales"] }
+  | { ok: false; reason: "NO VENDER" | "Sin datos" }
+> {
+  if (itemIds.length === 0) return { ok: true, pieces: [], sales: [] };
+  const loaded = await loadSaleContext(sql, creatorId, itemIds);
+  if (loaded.missing.length > 0 || loaded.sales.some((sale) => itemSaleBlocked(sale))) {
+    return { ok: false, reason: "NO VENDER" };
+  }
+  const rows = await sql.query<{
+    item_key: string;
+    title: string | null;
+    folder: string | null;
+    list_name: string | null;
+    list_key: string | null;
+  }>(
+    "select item_key, title, folder, list_name, list_key from of_vault_item where creator_id = $1 and item_key is not null",
+    [creatorId],
+  );
+  const planned = planVaultPieces(rows.map((row) => ({
+    id: row.item_key,
+    title: row.title,
+    folder: row.folder,
+    listName: row.list_name,
+    listId: row.list_key,
+  })), itemIds);
+  if (!planned.ok) return planned;
+  return { ok: true, pieces: planned.pieces, sales: loaded.sales };
+}
+
+export async function piecePurchaseCents(sql: ReadSql, creatorId: string): Promise<Map<string, number[]>> {
+  const rows = await sql.query<{ item_key: string; price_cents: number | null }>(
+    `select item_key, price_cents from of_vault_fan_send
+     where creator_id = $1 and purchased is true and price_cents is not null and price_cents > 0`,
+    [creatorId],
+  );
+  const map = new Map<string, number[]>();
+  for (const row of rows) {
+    if (row.price_cents == null || row.price_cents <= 0) continue;
+    const list = map.get(row.item_key) ?? [];
+    list.push(row.price_cents);
+    map.set(row.item_key, list);
+  }
+  return map;
 }
 
 export async function recordOutboundMedia(sql: ReadSql, outboundId: string, creatorId: string, mediaIds: readonly string[]): Promise<void> {

@@ -138,11 +138,21 @@ test("no vender bloquea, el precio sugerido no se inventa y el historial no dupl
   assert.equal(uses[0]?.purchased, true);
   assert.equal(uses[0]?.sentAt, "2026-11-02T00:00:00.000Z");
   const packs = trailerPackages([
-    item({ id: "t", title: "Tráiler gratis", priceCents: 0, tags: ["Tráiler"], listId: "set", folder: "set" }),
+    item({ id: "t", title: "Tráiler gratis", priceCents: 0, tags: ["Tráiler"], listId: "set", folder: "set", paidWithId: "p" }),
     item({ id: "p", title: "de pago", priceCents: 2500, listId: "set", folder: "set" }),
+    item({ id: "otro", title: "primero de la carpeta", priceCents: 900, listId: "set", folder: "set" }),
   ]);
   assert.equal(packs.length, 1);
   assert.equal(packs[0]?.trailerId, "t");
+  assert.equal(packs[0]?.paidId, "p");
+  assert.equal(trailerPackages([
+    item({ id: "suelto", title: "Tráiler", priceCents: 0, tags: ["Tráiler"], listId: "set", folder: "set" }),
+    item({ id: "pago", title: "de pago", priceCents: 2500, listId: "set", folder: "set" }),
+  ]).length, 0);
+  assert.equal(trailerPackages([
+    item({ id: "incognito", title: "Tráiler", priceCents: null, tags: ["Tráiler"], paidWithId: "pago" }),
+    item({ id: "pago", title: "de pago", priceCents: 2500 }),
+  ]).length, 0);
 });
 
 test("el buscador encuentra por etiqueta o por carpeta, dentro de la abierta o en todas", () => {

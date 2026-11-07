@@ -148,7 +148,11 @@ function ofChatHtml(mode: "live" | "slow" | "late" | "verylate" | "hang" | "post
        box.addEventListener("keydown", (event) => {
          if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void post(false); }
        });
-       document.querySelector("[at-attr='vault_btn']").onclick = () => { void fetch("/fixture/vault"); };
+       document.querySelector("[at-attr='vault_btn']").onclick = () => {
+         void fetch("/fixture/vault");
+         const box = document.getElementById("vault-box");
+         if (box) box.hidden = false;
+       };
        void fetch("/api2/v2/chats/${chatId}/messages/read", { method: "POST" });`;
   return pageHtml(
     "Hilo",
@@ -168,6 +172,13 @@ function ofChatHtml(mode: "live" | "slow" | "late" | "verylate" | "hang" | "post
          <input at-attr="price_input" placeholder="Free" />
          <button type="button" at-attr="submit_post">Save</button>
        </div>
+       <div id="vault-box" hidden>
+         <button type="button" data-vault-piece data-vault-id="playa-1" data-vault-folder="Playa" data-vault-title="playa">playa</button>
+         <button type="button" data-vault-piece data-media-id="gemela" data-vault-folder="Ciudad" data-vault-title="playa">playa</button>
+         <button type="button" data-vault-piece data-vault-folder="Norte" data-vault-title="norte">norte</button>
+         <button type="button" data-vault-piece data-vault-id="roto" data-vault-folder="Playa" data-vault-title="roto" data-vault-skip="1">roto</button>
+       </div>
+       <div data-fanlink-attachments></div>
      </div>
      <script>
        document.querySelector("[at-attr='price_btn']").onclick = () => { document.getElementById("price-box").hidden = false; };
@@ -175,6 +186,14 @@ function ofChatHtml(mode: "live" | "slow" | "late" | "verylate" | "hang" | "post
          document.querySelector("[at-attr='price_input']").dataset.saved = document.querySelector("[at-attr='price_input']").value;
          document.getElementById("price-box").hidden = true;
        };
+       document.querySelectorAll("[data-vault-piece]").forEach((button) => {
+         button.addEventListener("click", () => {
+           if (button.getAttribute("data-vault-skip") === "1") return;
+           const chip = document.createElement("span");
+           chip.setAttribute("data-fanlink-attachment", button.getAttribute("data-vault-id") || button.getAttribute("data-media-id") || button.getAttribute("data-vault-title") || "");
+           document.querySelector("[data-fanlink-attachments]").appendChild(chip);
+         });
+       });
        ${sendScript}
      </script>`,
   );

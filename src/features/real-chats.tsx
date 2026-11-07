@@ -209,7 +209,6 @@ export function RealChatsPage() {
       setError("Los archivos locales siguen pendientes. El vault de OnlyFans sí se adjunta.");
       return;
     }
-    const vaultTitle = attachments.find((file) => file.kind === "vault")?.name ?? null;
     const vaultItemIds = attachments.filter((file) => file.kind === "vault").map((file) => file.id.replace(/^vault-/, ""));
     const body = draft.trim();
     const price = draftPrice;
@@ -223,7 +222,6 @@ export function RealChatsPage() {
           threadKey: selected.threadKey,
           body,
           priceCents: price,
-          vaultTitle,
           vaultItemIds,
         },
       });

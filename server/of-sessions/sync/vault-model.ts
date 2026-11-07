@@ -19,6 +19,8 @@ export type VaultFile = {
   sentCount: number | null;
   /** URL del archivo, no de la miniatura. No sale en el JSON del chatter. */
   fullUrl?: string | null;
+  /** Id del vídeo de pago, si el tráiler lo dice. Sin esto no se empareja. */
+  paidWithId?: string | null;
 };
 
 export type VaultList = { id: string; name: string };
@@ -44,8 +46,8 @@ export function vaultSaleBlocked(folder: string | null, title: string | null): b
 }
 
 /**
- * Precio sugerido solo con ventas reales (mediana). Sin compras: «Sin datos».
- * No hay banda por defecto ni un precio inventado.
+ * Precio sugerido solo con ventas reales de esa pieza, a cualquier fan (mediana).
+ * Sin compras: «Sin datos». No hay banda por defecto ni un precio inventado.
  */
 export function suggestVaultPrice(input: {
   seconds: number | null;
@@ -97,25 +99,17 @@ export type TrailerPackage = {
 function isFreeTrailer(item: VaultFile): boolean {
   const text = `${item.title} ${item.tags.join(" ")}`.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
   const marked = text.includes("trailer");
-  const free = item.priceCents === 0 || item.priceCents == null;
-  return marked && free && item.kind !== "audio";
+  return marked && item.priceCents === 0 && item.kind !== "audio";
 }
 
-/** En la misma carpeta, un tráiler gratis y el vídeo de pago que lo acompaña. */
+/** Solo si el tráiler señala el id del vídeo de pago. Un precio desconocido no es gratis. */
 export function trailerPackages(items: readonly VaultFile[]): TrailerPackage[] {
-  const groups = new Map<string, VaultFile[]>();
-  for (const item of items) {
-    const key = item.listId ?? item.folder ?? item.listName;
-    if (!key) continue;
-    const list = groups.get(key) ?? [];
-    list.push(item);
-    groups.set(key, list);
-  }
+  const byId = new Map(items.map((item) => [item.id, item]));
   const packs: TrailerPackage[] = [];
-  for (const group of groups.values()) {
-    const trailer = group.find((item) => isFreeTrailer(item));
-    const paid = group.find((item) => item.kind === "video" && item.priceCents != null && item.priceCents > 0 && !isFreeTrailer(item));
-    if (!trailer || !paid || trailer.id === paid.id) continue;
+  for (const trailer of items) {
+    if (!isFreeTrailer(trailer) || !trailer.paidWithId || trailer.paidWithId === trailer.id) continue;
+    const paid = byId.get(trailer.paidWithId);
+    if (!paid || paid.kind !== "video" || paid.priceCents == null || paid.priceCents <= 0 || isFreeTrailer(paid)) continue;
     packs.push({ trailerId: trailer.id, paidId: paid.id, label: "Tráiler gratis + vídeo de pago" });
   }
   return packs;
@@ -266,6 +260,7 @@ function parseVaultItem(item: unknown, lists: readonly VaultList[]): VaultFile[]
     salesCount: countOrNull(row.salesCount ?? row.purchases),
     sentCount: countOrNull(row.sentCount ?? row.sent),
     fullUrl: fullOf(row),
+    paidWithId: textOf(row.paidMediaId ?? row.pairedMediaId ?? row.fullMediaId),
   }];
 }
 

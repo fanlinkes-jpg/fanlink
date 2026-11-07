@@ -2,6 +2,7 @@ import type { BrowserContext, Locator, Page } from "playwright";
 import { openWorkPage } from "../sessions/work-page.ts";
 import { chatPageUrl, parseChatMessages } from "../sync/chats.ts";
 import { confirmedOwnMessage, humanTypeDelay, publicSendReason } from "./gate.ts";
+import { attachmentsConfirmed, vaultPieceMatch, type ShownVaultPiece, type VaultSendPiece } from "./vault-piece.ts";
 import {
   COMPOSER_SELECTORS,
   MESSAGE_LIST_SELECTOR,
@@ -65,8 +66,8 @@ export type ComposeRequest = {
   body: string;
   priceCents: number | null;
   files?: string[];
-  vaultTitle?: string | null;
-  vaultTitles?: string[];
+  /** Piezas ya comprobadas contra el espejo. El título que mande el navegador no entra. */
+  vaultPieces?: readonly VaultSendPiece[];
   scheduleAt?: string | null;
   tagHandle?: string | null;
   bold?: boolean;
@@ -82,6 +83,8 @@ export type ComposeResult = {
   reason: string | null;
   /** El texto salió, pero la página no dio un id de OnlyFans. */
   awaitingId?: boolean;
+  /** Ids que quedaron en el compositor antes de pulsar Send. */
+  attachedIds?: string[];
 };
 
 /**
@@ -151,6 +154,7 @@ export async function composeChat(context: BrowserContext, request: ComposeReque
   };
   let result: ComposeResult = { messageId: null, reason: "No se envió" };
   let payloadFrom = 0;
+  let confirmedIds: string[] = [];
   try {
     const url = chatPageUrl(request.chatsUrl, request.threadKey, request.siteId);
     console.info(`[fanlink:send] inicio hilo=${request.threadKey} origen=${threadIdKind(request.threadKey, request.fanKey)}`);
@@ -197,16 +201,12 @@ export async function composeChat(context: BrowserContext, request: ComposeReque
       const input = page.locator("input[type='file']").first();
       await input.setInputFiles(request.files);
     }
-    const titles = [...(request.vaultTitles ?? []), ...(request.vaultTitle ? [request.vaultTitle] : [])]
-      .map((title) => title.trim())
-      .filter((title, index, all) => title && all.indexOf(title) === index);
-    if (titles.length > 0) {
-      const vault = page.locator("[data-fanlink-vault], button[aria-label='Add from media vault'], button[aria-label='Añadir del vault']").first();
-      await vault.click();
-      for (const title of titles) {
-        await page.getByRole("button", { name: title, exact: true }).click();
-      }
+    const attached = await attachVaultPieces(page, request.vaultPieces ?? []);
+    if (!attached.ok) {
+      result = await giveUp(attached.reason);
+      return result;
     }
+    confirmedIds = attached.ids;
     if (request.scheduleAt) {
       const schedule = page.locator("[data-fanlink-schedule], button[aria-label='Schedule your message'], button[aria-label='Programar tu mensaje']").first();
       await schedule.click();
@@ -269,6 +269,7 @@ export async function composeChat(context: BrowserContext, request: ComposeReque
       if (!result.reason) result.reason = "no enviado";
       console.info(`[fanlink:send] estado=no-enviado post=${net.postLabel()}${where}`);
     }
+    result.attachedIds = confirmedIds;
     page.off("response", onResponse);
     await page.close().catch(() => undefined);
   }
@@ -549,4 +550,44 @@ export function isMessageWrite(method: string, url: string): boolean {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const VAULT_PIECE = "[data-vault-piece], [data-vault-id], [data-media-id]";
+const ATTACHMENT = "[data-fanlink-attachment], [data-attachment-id]";
+
+/** Abre la bóveda, señala cada pieza por id o por carpeta y no pulsa Send si falta alguna. */
+async function attachVaultPieces(page: Page, pieces: readonly VaultSendPiece[]): Promise<{ ok: true; ids: string[] } | { ok: false; reason: string }> {
+  if (pieces.length === 0) return { ok: true, ids: [] };
+  const vault = page.locator("[data-fanlink-vault], button[aria-label='Add from media vault'], button[aria-label='Añadir del vault'], [at-attr='vault_btn']").first();
+  if (!(await vault.count())) return { ok: false, reason: "No se pudo adjuntar la pieza" };
+  await vault.click();
+  await page.locator(VAULT_PIECE).first().waitFor({ state: "visible", timeout: 8_000 }).catch(() => undefined);
+  const shown = await readShownPieces(page);
+  for (const piece of pieces) {
+    const how = vaultPieceMatch(piece, shown);
+    if (!how) return { ok: false, reason: "No se pudo adjuntar la pieza" };
+    const index = shown.findIndex((item) => pieceShown(piece, item, how));
+    if (index < 0) return { ok: false, reason: "No se pudo adjuntar la pieza" };
+    await page.locator(VAULT_PIECE).nth(index).click();
+  }
+  const count = await page.locator(ATTACHMENT).count();
+  if (!attachmentsConfirmed(count, pieces.length)) return { ok: false, reason: "No se pudo adjuntar la pieza" };
+  return { ok: true, ids: pieces.map((piece) => piece.id) };
+}
+
+function pieceShown(piece: VaultSendPiece, item: ShownVaultPiece, how: "id" | "folder"): boolean {
+  if (how === "id") return item.id === piece.id;
+  return item.title.trim() === piece.title && foldPiece(item.folder ?? "") === foldPiece(piece.folder ?? "");
+}
+
+function foldPiece(value: string): string {
+  return value.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+}
+
+async function readShownPieces(page: Page): Promise<ShownVaultPiece[]> {
+  return page.locator(VAULT_PIECE).evaluateAll((nodes) => nodes.map((node) => ({
+    id: node.getAttribute("data-vault-id") || node.getAttribute("data-media-id") || null,
+    title: (node.getAttribute("data-vault-title") || node.textContent || "").trim(),
+    folder: node.getAttribute("data-vault-folder"),
+  })));
 }

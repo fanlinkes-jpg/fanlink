@@ -353,7 +353,7 @@ export const openLiveView = createServerFn({ method: "POST" })
 
 export const sendChatMessage = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; vaultTitle?: string | null; vaultItemIds?: string[] }) => input)
+  .validator((input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; vaultItemIds?: string[] }) => input)
   .handler(async ({ context, data }) => {
     const { sendChatMessageView } = await import("./of-sessions-runtime.server");
     return sendChatMessageView(context.userId, data);

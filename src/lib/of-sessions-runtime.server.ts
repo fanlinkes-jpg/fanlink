@@ -842,14 +842,14 @@ export async function chatSendAccessView(userId: string): Promise<{ creatorIds: 
 
 export async function resolveChatSendHooks(
   userId: string,
-  input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; vaultTitle?: string | null; vaultItemIds?: string[] },
+  input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; vaultItemIds?: string[] },
 ): Promise<SendChatHooks> {
   const access = await accessFor(userId);
   const sessions = await getOfSessionManager();
   const accounts = await sessions.listAccounts();
   const known = accounts.flatMap((item) => item.creatorId ? [item.creatorId] : []);
   const account = accounts.find((item) => item.creatorId === input.creatorId) ?? null;
-  const vaultTitles: string[] = [];
+  const vaultPieces: SendChatHooks["vaultPieces"] = [];
   return {
     sql: await getSql(),
     access: { userId: access.userId, role: access.role, perms: access.perms, creatorIds: known },
@@ -862,7 +862,7 @@ export async function resolveChatSendHooks(
       label: account.label,
     } : null,
     env: process.env,
-    vaultTitles,
+    vaultPieces,
     open: () => {
       if (!account) return Promise.resolve({ messageId: null, reason: "Envío real desactivado" });
       return sessions.withSession(account.id, (context) => composeChat(context, {
@@ -873,8 +873,7 @@ export async function resolveChatSendHooks(
         accountUserId: account.identityUserId,
         body: input.body,
         priceCents: input.priceCents,
-        vaultTitle: input.vaultTitle ?? null,
-        vaultTitles,
+        vaultPieces,
         typeDelayMs: null,
       }));
     },
