@@ -96,14 +96,15 @@ export function acceptLiveSocket(socket: WebSocket): Promise<void> {
 export async function joinLive(socket: WebSocket, ticketId: string): Promise<void> {
   const ticket = takeLiveTicket(ticketId);
   if (!ticket) {
-    socket.close();
+    refuseLive(socket, "live", "El pase del directo no vale. Recarga la página.");
     return;
   }
-  const room = await ensureRoom(ticket);
-  if (!liveViewerAccepted(room.viewers.length)) {
-    socket.close();
-    return;
-  }
+  try {
+    const room = await ensureRoom(ticket);
+    if (!liveViewerAccepted(room.viewers.length)) {
+      refuseLive(socket, room.accountId, "Ya hay demasiada gente en esta página.");
+      return;
+    }
   const claimed = claimControl(room.holder, ticket.userId);
   if (claimed.role === "control" && room.heldSince == null) {
     room.heldSince = new Date().toISOString();
@@ -130,6 +131,21 @@ export async function joinLive(socket: WebSocket, ticketId: string): Promise<voi
     if (freed.holder !== room.holder) applyHolder(room, freed.holder);
     if (room.viewers.length === 0) scheduleStop(room);
   });
+  } catch (error) {
+    refuseLive(socket, ticket.accountId, liveFailureText(error));
+  }
+}
+
+function refuseLive(socket: WebSocket, accountId: string, reason: string): void {
+  console.info(liveLog("error", { accountId, detail: reason }));
+  sendJson(socket, { type: "bye", reason });
+  socket.close();
+}
+
+function liveFailureText(error: unknown): string {
+  const message = error instanceof Error ? error.message : "No se pudo abrir OnlyFans";
+  const line = message.split("\n")[0] ?? message;
+  return line.replace(/\/Users\/\S+/g, "…").slice(0, 160);
 }
 
 async function ensureRoom(ticket: LiveTicket): Promise<Room> {

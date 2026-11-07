@@ -374,10 +374,16 @@ export function liveOriginAllowed(origin: string | undefined, host: string | und
   try {
     const url = new URL(origin);
     const expected = host.split(",")[0]?.trim() ?? "";
-    return url.host === expected;
+    return sameLiveHost(url.host, expected);
   } catch {
     return false;
   }
+}
+
+function sameLiveHost(left: string, right: string): boolean {
+  if (left === right) return true;
+  const local = (value: string) => value.replace(/^localhost(?=:|$)/, "127.0.0.1").replace(/^\[::1\](?=:|$)/, "127.0.0.1");
+  return local(left) === local(right);
 }
 
 export function liveUpgradeAllowed(requestUrl: string, origin: string | undefined, host: string | undefined): boolean {

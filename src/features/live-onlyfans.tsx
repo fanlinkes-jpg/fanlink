@@ -53,9 +53,15 @@ export function LiveOnlyFans({
       socket.binaryType = "arraybuffer";
       socketRef.current = socket;
       let sized = false;
+      let told = "";
       socket.onmessage = (event) => {
         if (typeof event.data === "string") {
-          const status = JSON.parse(event.data) as { type?: string; role?: string; send?: boolean; holder?: boolean };
+          const status = JSON.parse(event.data) as { type?: string; role?: string; send?: boolean; holder?: boolean; reason?: string };
+          if (status.type === "bye") {
+            told = status.reason || "Vista cerrada";
+            setNote(told);
+            return;
+          }
           const typing = status.role === "control" && status.send !== false;
           canTypeRef.current = typing;
           if (status.type === "file" && canTypeRef.current) fileRef.current?.click();
@@ -91,7 +97,7 @@ export function LiveOnlyFans({
         send({ type: "auth", ticket: result.ticket ?? "" });
       };
       socket.onclose = () => {
-        if (!closed) setNote("Vista cerrada");
+        if (!closed && !told) setNote("Vista cerrada");
       };
     }).catch(() => {
       if (!closed) setNote("Vista en directo desactivada");

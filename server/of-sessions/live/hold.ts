@@ -1,4 +1,10 @@
-const holds = new Map<string, number>();
+const holds = globalHolds();
+
+function globalHolds(): Map<string, number> {
+  const holder = globalThis as typeof globalThis & { __fanlinkLiveHolds?: Map<string, number> };
+  holder.__fanlinkLiveHolds ??= new Map();
+  return holder.__fanlinkLiveHolds;
+}
 
 /** La página real tiene el navegador de esa cuenta. El lector de fondo no abre otro. */
 export function noteLiveHold(accountId: string): void {
