@@ -40,6 +40,7 @@ test("la vista en directo sigue apagada sin el flag o fuera de la allowlist", ()
 test("la pestaña no sale de OnlyFans ni de su CDN", () => {
   assert.equal(liveRequestAllowed("https://onlyfans.com/my/chats/chat/28022478"), true);
   assert.equal(liveRequestAllowed("https://cdn2.onlyfans.com/v.mp4"), true);
+  assert.equal(liveRequestAllowed("https://static2.onlyfans.com/theme/onlyfans/spa/app.js"), true);
   assert.equal(liveRequestAllowed("https://example.com/"), false);
   assert.equal(liveRequestAllowed("https://onlyfans.com.evil/x"), false);
   assert.equal(liveRequestAllowed("about:blank"), true);
