@@ -204,6 +204,6 @@ Bóveda y reproducción, en local, sin envío real (los flags no se exportan):
 npm run dev
 ```
 
-Abre `http://127.0.0.1:8080/vault` y, en un chat, `http://127.0.0.1:8080/mensajes`. Pulsa **Add from media vault**: listas a la izquierda, grid a la derecha. Sin filas en el espejo sale **Sin datos**. En un mensaje con medio, **Reproducir** llama a `/api/chat-media`. Sin sesión esa ruta responde 401.
+Abre `http://127.0.0.1:8080/vault` y, en un chat, `http://127.0.0.1:8080/mensajes`. Pulsa **Add from media vault** y **Leer vault de OnlyFans**: lo leído se guarda en el espejo y el grid lo enseña. Sin filas sale **Sin datos**. Un vídeo de la bóveda usa `GET /api/vault-media?...&variant=full` y el del hilo `GET /api/chat-media`, los dos con `Range`. Sin sesión responden 401. El envío de una pieza solo sale si `FANLINK_ENABLE_SEND=true` y la cuenta está en la allowlist; si no se exportan, sigue apagado.
 
 El login, la restauración, la caducidad y el cifrado se prueban contra un sitio local con el mismo contrato, no contra OnlyFans.
