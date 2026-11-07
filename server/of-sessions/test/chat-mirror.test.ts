@@ -21,7 +21,7 @@ test("el hilo marca el medio y el precio pagado", async () => {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     await page.goto(`http://127.0.0.1:${port}/mensajes`, { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: /Fan Uno/ }).click();
-    await page.getByText("Medio").waitFor();
+    await page.getByRole("button", { name: "Reproducir" }).waitFor();
     await page.getByText("Purchased — has purchased your message for $20.00").first().waitFor();
     await page.getByText("ELENA").waitFor();
     await page.getByText("$150.00 pagado").waitFor();
