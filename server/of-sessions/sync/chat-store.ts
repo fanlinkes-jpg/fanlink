@@ -628,7 +628,8 @@ export async function listPendingOutbounds(
     `select o.id, o.creator_id, o.thread_key, o.body, o.scheduled_at, p.display_name as author_name, o.status, o.error_reason
      from of_chat_outbound o
      left join staff_profile p on p.user_id = o.author_id
-     where o.creator_id in (${filter}) and o.matched_message_key is null and coalesce(o.status, 'pending') <> 'sent'
+     where o.creator_id in (${filter}) and o.matched_message_key is null
+       and coalesce(o.status, 'pending') not in ('sent', 'discarded')
      order by o.created_at`,
     creatorIds,
   );
@@ -831,6 +832,105 @@ export async function recordOutbound(sql: ReadSql, draft: OutboundDraft & { crea
      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
     [draft.id, draft.creatorId, draft.threadKey, draft.fanKey, draft.authorId, draft.body, draft.priceCents, draft.createdAt, draft.ofMessageKey, draft.scheduledAt ?? null],
   );
+}
+
+export type OutboundClaimRow = {
+  id: string;
+  creatorId: string;
+  threadKey: string | null;
+  fanKey: string | null;
+  authorId: string;
+  body: string;
+  priceCents: number | null;
+  status: string;
+  errorReason: string | null;
+  ofMessageKey: string | null;
+  matchedMessageKey: string | null;
+};
+
+/** La fila del clientId, si existe. No inventa un autor. */
+export async function readOutboundClaim(sql: ReadSql, id: string): Promise<OutboundClaimRow | null> {
+  const rows = await sql.query<{
+    id: string;
+    creator_id: string;
+    thread_key: string | null;
+    fan_key: string | null;
+    author_id: string;
+    body: string;
+    price_cents: number | string | null;
+    status: string | null;
+    error_reason: string | null;
+    of_message_key: string | null;
+    matched_message_key: string | null;
+  }>(
+    `select id, creator_id, thread_key, fan_key, author_id, body, price_cents, status, error_reason, of_message_key, matched_message_key
+     from of_chat_outbound where id = $1`,
+    [id],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    id: row.id,
+    creatorId: row.creator_id,
+    threadKey: row.thread_key,
+    fanKey: row.fan_key,
+    authorId: row.author_id,
+    body: row.body,
+    priceCents: centsOrNull(row.price_cents),
+    status: row.status ?? "pending",
+    errorReason: row.error_reason,
+    ofMessageKey: row.of_message_key,
+    matchedMessageKey: row.matched_message_key,
+  };
+}
+
+/** Inserta una sola vez. Si el id ya existe, no pisa la fila. */
+export async function insertOutboundOnce(sql: ReadSql, draft: OutboundDraft & { creatorId: string }): Promise<boolean> {
+  const rows = await sql.query<{ id: string }>(
+    `insert into of_chat_outbound (id, creator_id, thread_key, fan_key, author_id, body, price_cents, created_at, of_message_key, scheduled_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     on conflict (id) do nothing
+     returning id`,
+    [draft.id, draft.creatorId, draft.threadKey, draft.fanKey, draft.authorId, draft.body, draft.priceCents, draft.createdAt, draft.ofMessageKey, draft.scheduledAt ?? null],
+  );
+  return rows.length > 0;
+}
+
+/** Solo un error propio vuelve a pending. Enviado o pendiente de confirmar no. */
+export async function reopenOutboundError(
+  sql: ReadSql,
+  id: string,
+  authorId: string,
+  creatorId: string,
+  threadKey: string,
+): Promise<boolean> {
+  const rows = await sql.query<{ id: string }>(
+    `update of_chat_outbound
+     set status = 'pending', error_reason = null
+     where id = $1 and author_id = $2 and creator_id = $3 and thread_key = $4
+       and status = 'error'
+       and coalesce(error_reason, '') <> 'Pendiente de confirmar'
+       and of_message_key is null
+       and matched_message_key is null
+     returning id`,
+    [id, authorId, creatorId, threadKey],
+  );
+  return rows.length > 0;
+}
+
+/** Solo un error propio se descarta. No borra la fila. */
+export async function discardOutboundError(sql: ReadSql, id: string, authorId: string): Promise<boolean> {
+  const rows = await sql.query<{ id: string }>(
+    `update of_chat_outbound
+     set status = 'discarded'
+     where id = $1 and author_id = $2 and status = 'error'
+       and coalesce(error_reason, '') <> 'Pendiente de confirmar'
+       and of_message_key is null
+       and matched_message_key is null
+     returning id`,
+    [id, authorId],
+  );
+  return rows.length > 0;
 }
 
 function flagOrNull(value: boolean | string | null): boolean | null {

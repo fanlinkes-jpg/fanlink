@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AtSign, Clock, DollarSign, FolderOpen, ImagePlus, Languages, ScrollText, Send, Type } from "lucide-react";
-import { chatSendAccess, listCreatorChats, loadMoreChats, loadOlderMessages, readChatVault, recordChatOutbound, saveFanNote, saveFanProfile, sendChatMessage, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
+import { chatSendAccess, discardChatOutbound, listCreatorChats, loadMoreChats, loadOlderMessages, readChatVault, recordChatOutbound, saveFanNote, saveFanProfile, sendChatMessage, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
 import { useCrm, type VaultItem } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
 import { useChatFanCards } from "@/lib/use-chat-fan-cards";
@@ -11,6 +11,18 @@ import { LiveOnlyFans } from "@/features/live-onlyfans";
 import { MessagePriceDialog } from "@/features/message-price-dialog";
 import { FULL_EMOJIS, QUICK_EMOJIS, TEXT_COLORS, authorLabel, matchScripts, mentionToken, paymentLabel, slashQuery, wrapSelection } from "@/lib/composer-tools";
 import { pendingForThread } from "@/lib/pending-thread";
+import {
+  acceptSend,
+  bubbleCaption,
+  draftFromRejected,
+  enterSendsMessage,
+  pendingBesideLocal,
+  reconcileBubbles,
+  runnableJobIds,
+  shouldWarnOnLeave,
+  type LaneHold,
+  type OutboundSend,
+} from "@/lib/send-queue";
 import { spendTone } from "@/lib/spend-tiers";
 import { ChatMediaPlayer } from "@/features/chat-media-player";
 import { VaultBrowser } from "@/features/vault-browser";
@@ -48,6 +60,37 @@ function ThreadMessage({ message }: { message: {
   );
 }
 
+function OutboundBubbleView({
+  job,
+  onRetry,
+  onDiscard,
+  onRestore,
+}: {
+  job: OutboundSend;
+  onRetry: () => void;
+  onDiscard: () => void;
+  onRestore: () => void;
+}) {
+  const caption = bubbleCaption(job.state, job.reason);
+  return (
+    <li className="text-right">
+      <div className="inline-block max-w-[70%] rounded-2xl bg-[#e7f0ff] px-3 py-2 text-left text-sm">
+        {job.vault.length > 0 ? <p className="text-[10px] text-[#6d7585]">{job.vault.map((item) => item.name).join(", ")}</p> : null}
+        {job.body ? <p>{job.body}</p> : null}
+      </div>
+      {job.priceLabel ? <p className="mt-1 text-[10px] text-[#6d7585]">Precio {job.priceLabel}</p> : null}
+      {caption ? <p className="mt-1 text-[10px] text-[#8a5a12]">{caption}</p> : null}
+      {job.state === "error" ? (
+        <p className="mt-1 flex justify-end gap-2 text-[10px]">
+          <button type="button" className="text-[#2456c7]" onClick={onRetry}>Reintentar</button>
+          <button type="button" className="text-[#2456c7]" onClick={onDiscard}>Descartar</button>
+          <button type="button" className="text-[#2456c7]" onClick={onRestore}>Recuperar</button>
+        </p>
+      ) : null}
+    </li>
+  );
+}
+
 export function RealChatsPage() {
   const creators = useCrm((s) => s.creators);
   const creatorId = useCrm((s) => s.creatorId);
@@ -68,7 +111,7 @@ export function RealChatsPage() {
   const [draftPrice, setDraftPrice] = useState<number | null>(null);
   const [priceLabel, setPriceLabel] = useState<string | null>(null);
   const [sendCreators, setSendCreators] = useState<string[]>([]);
-  const [sending, setSending] = useState(false);
+  const [jobList, setJobList] = useState<OutboundSend[]>([]);
   const [pendingOut, setPendingOut] = useState<Array<{ id: string; creatorId: string; threadKey: string; body: string; scheduledAt: string | null; authorName: string | null; status: "pending" | "error"; errorReason: string | null }>>([]);
   const [scheduleAt, setScheduleAt] = useState("");
   const [panel, setPanel] = useState<ComposerPanel>(null);
@@ -79,9 +122,14 @@ export function RealChatsPage() {
   const draftBox = useRef<HTMLDivElement>(null);
   const fileBox = useRef<HTMLInputElement>(null);
   const savedRange = useRef<Range | null>(null);
-  const sendLock = useRef(false);
   const olderLock = useRef(false);
   const listLock = useRef(false);
+  const jobsRef = useRef<OutboundSend[]>([]);
+  const pendingRef = useRef(pendingOut);
+  const runningRef = useRef(new Set<string>());
+  const threadBox = useRef<HTMLOListElement>(null);
+  const stickToBottom = useRef(true);
+  const seenThread = useRef<string | null>(null);
   const [libraryQuery, setLibraryQuery] = useState("");
   const [tagQuery, setTagQuery] = useState("");
   const [ofVault, setOfVault] = useState<Array<{ id: string; title: string; kind: "foto" | "video" | "audio" | null }>>([]);
@@ -92,9 +140,11 @@ export function RealChatsPage() {
     try {
       const list = await listCreatorChats();
       setData(list);
-      setPendingOut(list.pending.flatMap((item) => (
+      const nextPending = list.pending.flatMap((item) => (
         item.threadKey ? [{ id: item.id, creatorId: item.creatorId, threadKey: item.threadKey, body: item.body, scheduledAt: item.scheduledAt, authorName: item.authorName, status: item.status, errorReason: item.errorReason }] : []
-      )));
+      ));
+      pendingRef.current = nextPending;
+      setPendingOut(nextPending);
       setError(null);
     } catch (err) {
       setError(sessionErrorText(err));
@@ -149,6 +199,27 @@ export function RealChatsPage() {
     });
     return () => source.close();
   }, [selected?.creatorId, selected?.threadKey]);
+  useEffect(() => {
+    const onLeave = (event: BeforeUnloadEvent) => {
+      if (!shouldWarnOnLeave(jobsRef.current)) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onLeave);
+    return () => window.removeEventListener("beforeunload", onLeave);
+  }, []);
+  const openThread = selected ? `${selected.creatorId}:${selected.threadKey}` : null;
+  const threadTail = `${messages.at(-1)?.messageKey ?? ""}:${jobList.map((job) => `${job.clientId}:${job.state}`).join(",")}:${pendingOut.length}`;
+  useLayoutEffect(() => {
+    const node = threadBox.current;
+    if (!node) return;
+    if (seenThread.current !== openThread) {
+      seenThread.current = openThread;
+      stickToBottom.current = true;
+    }
+    if (!stickToBottom.current) return;
+    node.scrollTop = node.scrollHeight;
+  }, [threadTail, openThread]);
   const creatorName = creatorId === "all"
     ? "Todas las cuentas"
     : creators.find((creator) => creator.id === creatorId)?.name ?? "Cuenta";
@@ -202,44 +273,167 @@ export function RealChatsPage() {
     if (node) setDraft(draftPlain(node));
   }
 
-  async function sendNow() {
-    if (sendLock.current || !selected || !draft.trim() || !realSend || sending) return;
+  function setJobs(next: OutboundSend[]) {
+    jobsRef.current = next;
+    setJobList(next);
+  }
+
+  function patchJob(clientId: string, partial: Partial<OutboundSend>) {
+    setJobs(jobsRef.current.map((job) => job.clientId === clientId ? { ...job, ...partial } : job));
+  }
+
+  function holdsOf(items: typeof pendingOut): LaneHold[] {
+    return items.flatMap((item) => (
+      item.status === "error" ? [{ clientId: item.id, creatorId: item.creatorId, threadKey: item.threadKey }] : []
+    ));
+  }
+
+  async function deliver(job: OutboundSend) {
+    try {
+      const result = await sendChatMessage({
+        data: {
+          creatorId: job.creatorId,
+          fanKey: job.fanKey,
+          threadKey: job.threadKey,
+          body: job.body,
+          priceCents: job.priceCents,
+          vaultItemIds: job.vault.map((item) => item.id),
+          clientId: job.clientId,
+        },
+      });
+      if (result.sent && result.messageId) {
+        patchJob(job.clientId, { state: "sent", messageId: result.messageId, reason: null });
+        await refresh();
+        return;
+      }
+      if (result.reason === "Pendiente de confirmar") {
+        patchJob(job.clientId, { state: "awaiting", reason: result.reason });
+        await refresh();
+        return;
+      }
+      patchJob(job.clientId, { state: "error", reason: result.reason ?? "No se envió" });
+    } catch (err) {
+      patchJob(job.clientId, { state: "error", reason: sessionErrorText(err) });
+    }
+  }
+
+  function pump() {
+    const ids = runnableJobIds(jobsRef.current, holdsOf(pendingRef.current));
+    for (const id of ids) {
+      if (runningRef.current.has(id)) continue;
+      const job = jobsRef.current.find((item) => item.clientId === id);
+      if (!job || job.state !== "queued") continue;
+      runningRef.current.add(id);
+      patchJob(id, { state: "sending", reason: null });
+      void deliver(job).finally(() => {
+        runningRef.current.delete(id);
+        pump();
+      });
+    }
+  }
+
+  function sendNow() {
+    if (!selected) return;
     const localFiles = attachments.filter((file) => file.kind !== "vault");
     if (localFiles.length > 0) {
       setError("Los archivos locales siguen pendientes. El vault de OnlyFans sí se adjunta.");
       return;
     }
-    const vaultItemIds = attachments.filter((file) => file.kind === "vault").map((file) => file.id.replace(/^vault-/, ""));
-    const body = draft.trim();
-    const price = draftPrice;
-    sendLock.current = true;
-    setSending(true);
-    try {
-      const result = await sendChatMessage({
-        data: {
-          creatorId: selected.creatorId,
-          fanKey: selected.fanKey,
-          threadKey: selected.threadKey,
-          body,
-          priceCents: price,
-          vaultItemIds,
-        },
-      });
-      if (result.sent) {
-        replaceDraft("");
-        setAttachments([]);
-        setDraftPrice(null);
-        setPriceLabel(null);
-        setError(null);
-      }
-      await refresh();
-      if (!result.sent && result.reason !== "Pendiente de confirmar") setError(result.reason ?? "No se envió");
-    } catch (err) {
-      setError(sessionErrorText(err));
-    } finally {
-      sendLock.current = false;
-      setSending(false);
+    const body = (draftBox.current ? draftPlain(draftBox.current) : draft).trim();
+    if (!body) return;
+    const vault = attachments.filter((file) => file.kind === "vault").map((file) => ({
+      id: file.id.replace(/^vault-/, ""),
+      name: file.name,
+    }));
+    const now = Date.now();
+    const next: Omit<OutboundSend, "state"> = {
+      clientId: crypto.randomUUID(),
+      creatorId: selected.creatorId,
+      threadKey: selected.threadKey,
+      fanKey: selected.fanKey,
+      body,
+      priceCents: draftPrice,
+      priceLabel,
+      vault,
+      at: now,
+      messageId: null,
+      reason: null,
+    };
+    const decision = acceptSend(jobsRef.current, next, now);
+    if (!decision.accepted) return;
+    const files = attachments;
+    setJobs(decision.jobs);
+    replaceDraft("");
+    setDraftPrice(null);
+    setPriceLabel(null);
+    setAttachments([]);
+    setError(null);
+    for (const file of files) {
+      if (file.url) URL.revokeObjectURL(file.url);
     }
+    pump();
+  }
+
+  function restoreDraft(source: { body: string; priceCents: number | null; priceLabel: string | null; vault: Array<{ id: string; name: string }> }) {
+    const next = draftFromRejected(source);
+    replaceDraft(next.body);
+    setDraftPrice(next.priceCents);
+    setPriceLabel(next.priceLabel);
+    setAttachments((current) => {
+      for (const file of current) {
+        if (file.url) URL.revokeObjectURL(file.url);
+      }
+      return next.vault.map((item) => ({ id: `vault-${item.id}`, url: null, name: item.name, kind: "vault" as const }));
+    });
+  }
+
+  function retrySend(clientId: string) {
+    const local = jobsRef.current.find((job) => job.clientId === clientId);
+    if (local) {
+      if (local.state !== "error") return;
+      patchJob(clientId, { state: "queued", reason: null });
+      pump();
+      return;
+    }
+    const item = pendingRef.current.find((row) => row.id === clientId && row.status === "error");
+    if (!item) return;
+    const job: OutboundSend = {
+      clientId: item.id,
+      creatorId: item.creatorId,
+      threadKey: item.threadKey,
+      fanKey: selected?.fanKey ?? null,
+      body: item.body,
+      priceCents: null,
+      priceLabel: null,
+      vault: [],
+      at: 0,
+      state: "queued",
+      messageId: null,
+      reason: null,
+    };
+    const next = [...jobsRef.current];
+    const index = next.findIndex((row) => row.creatorId === item.creatorId && row.threadKey === item.threadKey);
+    if (index < 0) next.push(job);
+    else next.splice(index, 0, job);
+    setJobs(next);
+    pump();
+  }
+
+  async function discardSend(clientId: string) {
+    try {
+      await discardChatOutbound({ data: { clientId } });
+    } catch (err) {
+      const text = sessionErrorText(err);
+      if (text !== "No se puede reenviar") {
+        patchJob(clientId, { state: "error", reason: text });
+        return;
+      }
+    }
+    setJobs(jobsRef.current.filter((job) => job.clientId !== clientId));
+    pendingRef.current = pendingRef.current.filter((item) => item.id !== clientId);
+    setPendingOut(pendingRef.current);
+    await refresh();
+    pump();
   }
 
   async function loadOfVault() {
@@ -467,22 +661,34 @@ export function RealChatsPage() {
             {surface === "onlyfans" && selected ? (
               <LiveOnlyFans creatorId={selected.creatorId} threadKey={selected.threadKey} fanKey={selected.fanKey} />
             ) : null}
-            <ol className={`min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4 ${surface === "onlyfans" ? "hidden" : ""}`} onScroll={(event) => {
-              if (event.currentTarget.scrollTop > 24 || !selected || olderLock.current) return;
+            <ol ref={threadBox} className={`min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4 ${surface === "onlyfans" ? "hidden" : ""}`} onScroll={(event) => {
+              const node = event.currentTarget;
+              stickToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80;
+              if (node.scrollTop > 24 || !selected || olderLock.current) return;
               olderLock.current = true;
               void loadOlderMessages({ data: { creatorId: selected.creatorId, threadKey: selected.threadKey } }).then(() => refresh()).catch(() => undefined).finally(() => {
                 olderLock.current = false;
               });
             }}>
-              {!selected || messages.length === 0 ? <li className="text-sm text-[#6d7585]">{selected ? "Sin datos" : "Sin sincronizar"}</li> : null}
-              {pendingForThread(pendingOut, selected).map((item) => (
-                <li key={item.id} className="text-right">
-                  <p className="inline-block max-w-[70%] rounded-2xl border border-dashed border-[#c5cad6] px-3 py-2 text-sm">{item.body}</p>
-                  <p className="mt-1 text-[10px] text-[#8a5a12]">{pendingCaption(item)}</p>
-                </li>
-              ))}
+              {!selected || (messages.length === 0 && pendingForThread(pendingOut, selected).length === 0 && jobList.every((job) => job.creatorId !== selected.creatorId || job.threadKey !== selected.threadKey)) ? <li className="text-sm text-[#6d7585]">{selected ? "Sin datos" : "Sin sincronizar"}</li> : null}
               {messages.map((message) => (
                 <ThreadMessage key={message.messageKey} message={message} />
+              ))}
+              {pendingBesideLocal(pendingForThread(pendingOut, selected), jobList).map((item) => (
+                <li key={item.id} className="text-right">
+                  <p className="inline-block max-w-[70%] rounded-2xl border border-dashed border-[#c5cad6] px-3 py-2 text-sm">{item.body}</p>
+                  <p className="mt-1 text-[10px] text-[#8a5a12]">{item.status === "error" ? bubbleCaption("error", item.errorReason) : pendingCaption(item)}</p>
+                  {item.status === "error" ? (
+                    <p className="mt-1 flex justify-end gap-2 text-[10px]">
+                      <button type="button" className="text-[#2456c7]" onClick={() => retrySend(item.id)}>Reintentar</button>
+                      <button type="button" className="text-[#2456c7]" onClick={() => void discardSend(item.id)}>Descartar</button>
+                      <button type="button" className="text-[#2456c7]" onClick={() => restoreDraft({ body: item.body, priceCents: null, priceLabel: null, vault: [] })}>Recuperar</button>
+                    </p>
+                  ) : null}
+                </li>
+              ))}
+              {reconcileBubbles(jobList, messages).filter((job) => selected && job.creatorId === selected.creatorId && job.threadKey === selected.threadKey).map((job) => (
+                <OutboundBubbleView key={job.clientId} job={job} onRetry={() => retrySend(job.clientId)} onDiscard={() => void discardSend(job.clientId)} onRestore={() => restoreDraft(job)} />
               ))}
               {messages.some((message) => message.fromFan) && fanTranslation ? <li className="text-[10px] text-[#6d7585]">Traducción: Sin datos</li> : null}
             </ol>
@@ -566,10 +772,9 @@ export function RealChatsPage() {
                   suppressContentEditableWarning
                   onInput={(event) => setDraft(draftPlain(event.currentTarget))}
                   onKeyDown={(event) => {
-                    if (event.key !== "Enter" || event.shiftKey) return;
-                    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+                    if (!enterSendsMessage(event.key, event.shiftKey, event.nativeEvent.isComposing || event.keyCode === 229)) return;
                     event.preventDefault();
-                    void sendNow();
+                    sendNow();
                   }}
                   onBlur={rememberSelection}
                   onKeyUp={rememberSelection}
@@ -599,7 +804,7 @@ export function RealChatsPage() {
                 <ToolButton label="Format text" title="Format text · Formato de texto" active={panel === "formato"} onClick={() => toggle("formato")}><Type className="h-6 w-6" /></ToolButton>
                 <ToolButton label="Translation" title="Translation · Traducción" active={panel === "traduccion"} onClick={() => toggle("traduccion")}><Languages className="h-6 w-6" /></ToolButton>
                 {realSend ? <span className="ml-auto shrink-0 text-xs font-semibold text-[#137333]">Envío real</span> : null}
-                <button type="button" disabled={!realSend || !draft.trim() || sending} title={realSend ? "Envío real" : "Envío real desactivado en esta cuenta"} aria-label="Enviar" onClick={() => void sendNow()} className={`${realSend ? "" : "ml-auto"} grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#3b6cff] text-white disabled:opacity-60`}><Send className="h-5 w-5" /></button>
+                <button type="button" disabled={!draft.trim()} title={realSend ? "Envío real" : "Envío real desactivado en esta cuenta"} aria-label="Enviar" onClick={() => sendNow()} className={`${realSend ? "" : "ml-auto"} grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#3b6cff] text-white disabled:opacity-60`}><Send className="h-5 w-5" /></button>
               </div>
             </form>
       </section>
@@ -932,7 +1137,7 @@ function selectionOffsets(root: HTMLElement): { start: number; end: number } {
 
 function pendingCaption(item: { scheduledAt: string | null; authorName: string | null; status: "pending" | "error"; errorReason: string | null }): string {
   if (item.status === "error" && item.errorReason === "no enviado") return "no enviado";
-  if (item.status === "error") return `Error · ${item.errorReason ?? "No se envió"} · sin reintento`;
+  if (item.status === "error") return `No se envió: ${item.errorReason ?? "No se envió"}`;
   if (item.scheduledAt) return `Pendiente · programado ${item.scheduledAt.slice(0, 16).replace("T", " ")} · ${item.authorName ?? "Sin datos"} · no enviado`;
   if (item.errorReason === "Pendiente de confirmar") return "Pendiente de confirmar";
   return "Pendiente · no enviado";

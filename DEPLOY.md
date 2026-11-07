@@ -72,7 +72,7 @@ export FANLINK_SEND_ALLOW_ACCOUNTS=9ikis52,@bigpoppa1111
 export FANLINK_SEND_PER_MINUTE=4
 ```
 
-Solo esa cuenta (el id `9ikis52` o el handle `@bigpoppa1111`, el que tenga guardado la ficha o la comprobación) puede pulsar Enviar. El servidor rechaza cualquier otra aunque la petición llegue igual. Hace falta el perfil de Chromium de Conectar. El envío abre `/my/chats/chat/{id}`, escribe en la caja y pulsa Send; el precio pasa por el modal nativo. No llama `api2` firmado. Si OnlyFans no devuelve el mensaje propio, el borrador queda en error y no se reintenta.
+Solo esa cuenta (el id `9ikis52` o el handle `@bigpoppa1111`, el que tenga guardado la ficha o la comprobación) puede salir de verdad. El servidor rechaza cualquier otra aunque la petición llegue igual. Hace falta el perfil de Chromium de Conectar. El envío abre `/my/chats/chat/{id}`, escribe en la caja y pulsa Send; el precio pasa por el modal nativo. No llama `api2` firmado. En el CRM la burbuja sale al instante, antes de esa espera. Si OnlyFans no devuelve el mensaje propio, el borrador queda en error: se puede reintentar a mano con el mismo id. Un envío ya marcado como enviado, o «Pendiente de confirmar», no se reintenta aunque hayan pasado 30 segundos. Con los flags apagados no se abre el navegador. No hace falta ninguna variable nueva y no cambia `FANLINK_SESSION_KEY`. Mientras el navegador tenga envíos en cola que aún no están confirmados en el servidor, cerrar la pestaña avisa: no se crea la fila al encolar.
 
 ## 6. OnlyFans en directo
 
