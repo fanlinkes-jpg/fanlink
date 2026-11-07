@@ -840,7 +840,7 @@ export async function chatSendAccessView(userId: string): Promise<{ creatorIds: 
 
 export async function sendChatMessageView(
   userId: string,
-  input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; vaultTitle?: string | null },
+  input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; vaultTitle?: string | null; vaultItemIds?: string[] },
 ): Promise<{ sent: boolean; reason: string | null; messageId: string | null }> {
   const access = await accessFor(userId);
   if (access.role !== "owner" && !access.perms.includes("mensajes")) {
@@ -863,6 +863,7 @@ export async function sendChatMessageView(
   }
   const sql = await getSql();
   const id = crypto.randomUUID();
+  const vaultItemIds = (input.vaultItemIds ?? []).filter((item) => item.trim());
   await recordOutbound(sql, {
     id,
     creatorId: input.creatorId,
@@ -875,6 +876,9 @@ export async function sendChatMessageView(
     ofMessageKey: null,
     scheduledAt: null,
   });
+  const { loadSaleContext, noteVaultFanSend, recordOutboundMedia } = await import("../../server/of-sessions/sync/vault-store.ts");
+  const sales = vaultItemIds.length > 0 ? await loadSaleContext(sql, input.creatorId, vaultItemIds) : [];
+  if (vaultItemIds.length > 0) await recordOutboundMedia(sql, id, input.creatorId, vaultItemIds);
   try {
     const result = await deliverChatSend({
       flag: process.env.FANLINK_ENABLE_SEND,
@@ -883,6 +887,8 @@ export async function sendChatMessageView(
       account: fields,
       now: () => Date.now(),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      sales,
+      outboundMedia: vaultItemIds.length > 0 ? { sql, outboundId: id } : null,
       open: () => sessions.withSession(account.id, (context) => composeChat(context, {
         chatsUrl: onlyFansSite.chatsUrl ?? "https://onlyfans.com/my/chats",
         siteId: onlyFansSite.id,
@@ -897,6 +903,19 @@ export async function sendChatMessageView(
     });
     if (result.sent && result.messageId) {
       await markOutboundSent(sql, id, result.messageId);
+      if (input.fanKey) {
+        for (const itemKey of vaultItemIds) {
+          await noteVaultFanSend(sql, {
+            id: crypto.randomUUID(),
+            creatorId: input.creatorId,
+            fanKey: input.fanKey,
+            itemKey,
+            sentAt: new Date().toISOString(),
+            priceCents: input.priceCents,
+            authorId: access.userId,
+          });
+        }
+      }
       return { sent: true, reason: null, messageId: result.messageId };
     }
     if (result.awaitingId) {

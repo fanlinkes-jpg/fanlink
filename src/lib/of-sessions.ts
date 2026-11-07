@@ -335,6 +335,14 @@ export const readChatVault = createServerFn({ method: "POST" })
     return readChatVaultView(context.userId, data);
   });
 
+export const queryVaultMirror = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string; fanKey: string | null; chatterId?: string | null; query?: unknown; remember?: boolean; listText?: string }) => input)
+  .handler(async ({ context, data }) => {
+    const { queryVaultMirrorView } = await import("./vault-runtime.server");
+    return queryVaultMirrorView(context.userId, data);
+  });
+
 export const openLiveView = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((input: { creatorId: string; threadKey: string; fanKey: string | null }) => input)
@@ -345,7 +353,7 @@ export const openLiveView = createServerFn({ method: "POST" })
 
 export const sendChatMessage = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; vaultTitle?: string | null }) => input)
+  .validator((input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; vaultTitle?: string | null; vaultItemIds?: string[] }) => input)
   .handler(async ({ context, data }) => {
     const { sendChatMessageView } = await import("./of-sessions-runtime.server");
     return sendChatMessageView(context.userId, data);
