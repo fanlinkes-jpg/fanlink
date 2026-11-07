@@ -55,6 +55,7 @@ export function createChatSendSession(options?: {
   const listeners = new Set<() => void>();
   const running = new Set<string>();
   const waiters: Array<() => void> = [];
+  let ownerId: string | null = null;
 
   function emit() {
     for (const listener of listeners) listener();
@@ -75,15 +76,30 @@ export function createChatSendSession(options?: {
     setJobs(jobs.map((job) => job.clientId === clientId ? { ...job, ...partial } : job));
   }
 
+  function releaseHold(clientId: string) {
+    const next = holds.filter((hold) => hold.clientId !== clientId);
+    if (next.length !== holds.length) holds = next;
+  }
+
+  function clearQueue() {
+    jobs = [];
+    holds = [];
+    running.clear();
+    waiters.splice(0);
+    emit();
+  }
+
   async function deliver(job: OutboundSend) {
     try {
       const result = await transport(job);
       if (result.sent && result.messageId) {
         patch(job.clientId, { state: "sent", messageId: result.messageId, reason: null });
+        releaseHold(job.clientId);
         return;
       }
       if (result.reason === "Pendiente de confirmar") {
         patch(job.clientId, { state: "awaiting", reason: result.reason });
+        releaseHold(job.clientId);
         return;
       }
       patch(job.clientId, { state: "error", reason: result.reason ?? "No se envió" });
@@ -142,7 +158,9 @@ export function createChatSendSession(options?: {
     },
     subscribe(listener: () => void) {
       listeners.add(listener);
-      return () => listeners.delete(listener);
+      return () => {
+        listeners.delete(listener);
+      };
     },
     setTransport(next: SendTransport) {
       transport = next;
@@ -185,13 +203,6 @@ export function createChatSendSession(options?: {
       if (next.length !== jobs.length) setJobs(next);
       pump();
     },
-    /** Cambiar de sección no vacía la cola. */
-    leaveRoute(): OutboundSend[] {
-      return jobs;
-    },
-    onMenuNavigate(): OutboundSend[] {
-      return jobs;
-    },
     shouldWarn(): boolean {
       return shouldWarnOnLeave(jobs);
     },
@@ -199,12 +210,15 @@ export function createChatSendSession(options?: {
       if (running.size === 0) return Promise.resolve();
       return new Promise((resolve) => waiters.push(resolve));
     },
+    /** Vacía la cola de este navegador. No cambia el usuario atado. */
     reset() {
-      jobs = [];
-      holds = [];
-      running.clear();
-      waiters.splice(0);
-      emit();
+      clearQueue();
+    },
+    /** Si entra otro usuario, se tira la cola anterior. El mismo id no la toca. */
+    bindUser(userId: string | null) {
+      if (userId === ownerId) return;
+      ownerId = userId;
+      clearQueue();
     },
   };
 }

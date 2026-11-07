@@ -144,7 +144,7 @@ test("el historial solo anota las piezas adjuntadas y dos envíos iguales no sal
     assert.equal(await count(db, "of_chat_outbound"), 1);
     const failed = await sendChatMessageView("chatter-a", {
       creatorId: "9ikis52", fanKey: "7", threadKey: "7", body: "reintento", priceCents: null, vaultItemIds: ["otra"],
-    }, hooks(sql, async () => ({ messageId: null, reason: "no enviado" })));
+    }, hooks(sql, async () => ({ messageId: null, reason: "no está el botón Send" })));
     assert.equal(failed.sent, false);
     const retry = await sendChatMessageView("chatter-a", {
       creatorId: "9ikis52", fanKey: "7", threadKey: "7", body: "reintento", priceCents: null, vaultItemIds: ["otra"],

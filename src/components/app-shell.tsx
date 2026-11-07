@@ -1,5 +1,5 @@
 import { ClientOnly, Link, useNavigate, useRouterState } from "@tanstack/react-router";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   BarChart3,
   CalendarClock,
@@ -30,6 +30,8 @@ import { useCrm, type Perm } from "@/lib/crm";
 import { hasPerm } from "@/lib/access-policy";
 import { SessionSync } from "@/components/session-sync";
 import { UserButton } from "@/lib/auth/gates";
+import { useCurrentUser } from "@/lib/auth/use-current-user";
+import { installChatSendTransport } from "@/lib/chat-send-bind";
 import { chatSendSession } from "@/lib/chat-send-session";
 
 type Item = { href: string; label: string; icon: LucideIcon; perm?: Perm };
@@ -138,10 +140,7 @@ function MenuFlyout({ title, items, onPick }: { title: string; items: Item[]; on
             <Link
               key={item.label}
               to={item.href}
-              onClick={() => {
-                chatSendSession.onMenuNavigate();
-                onPick();
-              }}
+              onClick={onPick}
               className="flex items-center gap-3 rounded-xl border border-[#e6e8ee] bg-white px-3 py-2 hover:border-[#3b6cff]"
             >
               <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[#eef2ff] text-[#3b6cff]">
@@ -199,6 +198,13 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
   const workspaceReady = useCrm((s) => s.workspaceReady);
   const workspaceNotice = useCrm((s) => s.workspaceNotice);
   const teamAccess = useCrm((s) => s.teamAccess);
+  const user = useCurrentUser();
+  useEffect(() => {
+    installChatSendTransport();
+  }, []);
+  useEffect(() => {
+    chatSendSession.bindUser(user?.id ?? null);
+  }, [user?.id]);
 
   const allowed = (items: Item[]) => items.filter((item) => hasPerm(teamAccess, item.perm ?? "mensajes") || !item.perm);
   const currentOk = MENUS.flatMap((m) => m.items).every((item) => {

@@ -618,27 +618,80 @@ export async function outboundSendStateReady(sql: ReadSql): Promise<boolean> {
   return ready;
 }
 
-export const STUCK_PENDING_MS = 180_000;
+export const SEND_LEASE_MS = 20_000;
+
+const outboundLeaseReady = new WeakMap<object, boolean>();
+
+/** La 0043 añade claimed_at. Sin esa columna no hay lease y no se caduca por reloj. */
+async function leaseColumnsReady(sql: ReadSql): Promise<boolean> {
+  if (outboundLeaseReady.get(sql) === true) return true;
+  const columns = await sql.query<{ column_name: string }>(
+    "select column_name from information_schema.columns where table_name = 'of_chat_outbound' and column_name = 'claimed_at'",
+  );
+  const ready = columns.length > 0;
+  if (ready) outboundLeaseReady.set(sql, true);
+  return ready;
+}
 
 /**
- * Un pending que no es programado ni «Pendiente de confirmar» y lleva más de
- * 3 minutos sin id de OnlyFans se da por interrumpido. Así se puede descartar.
- * Awaiting, enviado y lo recién encolado no se tocan.
+ * El proceso que envía renueva claimed_at y la clave de 30 s mientras sigue vivo,
+ * también si está esperando el cupo de 4 por minuto. Otro proceso no pisa el owner.
+ */
+export async function pulseOutboundLease(
+  sql: ReadSql,
+  id: string,
+  owner: string,
+  claimKey: string | null,
+  now = new Date(),
+): Promise<void> {
+  if (!(await leaseColumnsReady(sql))) return;
+  await sql.query(
+    `update of_chat_outbound
+     set claimed_at = $3, claim_owner = $2
+     where id = $1
+       and coalesce(status, 'pending') = 'pending'
+       and coalesce(error_reason, '') <> 'Pendiente de confirmar'
+       and (claim_owner is null or claim_owner = $2)`,
+    [id, owner, now.toISOString()],
+  );
+  if (!claimKey) return;
+  await sql.query(
+    `update of_chat_send_claim set created_at = $3
+     where claim_key = $1 and outbound_id = $2`,
+    [claimKey, id, now.toISOString()],
+  );
+}
+
+/**
+ * Si nadie late, el pending pasa a «Pendiente de confirmar». Nunca a un error
+ * reintentable: el mensaje puede haber salido. Un envío con claimed_at fresco
+ * no caduca aunque created_at tenga más de 3 minutos.
  */
 export async function expireStuckPending(sql: ReadSql, now = new Date()): Promise<void> {
   const table = await sql.query<{ name: string | null }>("select to_regclass('public.of_chat_outbound')::text as name");
   if (!table[0]?.name) return;
-  const cutoff = new Date(now.getTime() - STUCK_PENDING_MS).toISOString();
-  await sql.query(
+  if (!(await leaseColumnsReady(sql))) return;
+  const cutoff = new Date(now.getTime() - SEND_LEASE_MS).toISOString();
+  const expired = await sql.query<{ id: string }>(
     `update of_chat_outbound
-     set status = 'error', error_reason = 'se interrumpió'
+     set status = 'pending', error_reason = 'Pendiente de confirmar', claimed_at = null
      where coalesce(status, 'pending') = 'pending'
        and scheduled_at is null
        and of_message_key is null
        and matched_message_key is null
        and coalesce(error_reason, '') <> 'Pendiente de confirmar'
-       and created_at < $1`,
+       and created_at < $1
+       and (claimed_at is null or claimed_at < $1)
+     returning id`,
     [cutoff],
+  );
+  if (expired.length === 0) return;
+  const claimTable = await sql.query<{ name: string | null }>("select to_regclass('public.of_chat_send_claim')::text as name");
+  if (!claimTable[0]?.name) return;
+  const slots = expired.map((_, index) => `$${index + 2}`).join(", ");
+  await sql.query(
+    `update of_chat_send_claim set created_at = $1 where outbound_id in (${slots})`,
+    [now.toISOString(), ...expired.map((row) => row.id)],
   );
 }
 

@@ -52,16 +52,40 @@ test("si el primero falla, el siguiente del hilo no sale y el otro hilo sí", as
   assert.equal(session.getJobs().find((job) => job.body === "uno")?.state, "error");
 });
 
-test("cambiar de ruta con la cola llena no la vacía", () => {
+test("desmontar la página no vacía la cola", () => {
   const session = createChatSendSession({ uuid: () => "id-1" });
   session.setTransport(() => new Promise(() => undefined));
+  const mounted = session.subscribe(() => undefined);
   const queued = session.press({ ...draft, key: "Enter", shiftKey: false, realSend: true, now: 1_000 });
   assert.equal(queued.action, "queued");
-  assert.equal(session.leaveRoute().length, 1);
-  assert.equal(session.onMenuNavigate().length, 1);
+  mounted();
   assert.equal(session.getJobs().length, 1);
-  assert.equal(session.getJobs()[0]?.body, "hola");
+  assert.equal(session.getJobs()[0]?.clientId, "id-1");
+  const seen: string[] = [];
+  session.subscribe(() => {
+    seen.push(session.getJobs()[0]?.body ?? "");
+  });
+  session.noteFailure("id-1", "sigue");
+  assert.deepEqual(seen, ["hola"]);
+  assert.equal(session.getJobs()[0]?.state, "error");
   assert.equal(session.shouldWarn(), true);
+});
+
+test("cerrar sesión o cambiar de usuario vacía la cola", () => {
+  const session = createChatSendSession({ uuid: () => "id-1" });
+  session.setTransport(() => new Promise(() => undefined));
+  session.bindUser("ana");
+  session.press({ ...draft, key: "Enter", shiftKey: false, realSend: true, now: 1_000 });
+  assert.equal(session.getJobs().length, 1);
+  session.bindUser("ana");
+  assert.equal(session.getJobs().length, 1);
+  session.bindUser("luis");
+  assert.equal(session.getJobs().length, 0);
+  session.press({ ...draft, key: "Enter", shiftKey: false, realSend: true, now: 2_000 });
+  assert.equal(session.getJobs().length, 1);
+  session.reset();
+  assert.equal(session.getJobs().length, 0);
+  assert.equal(session.shouldWarn(), false);
 });
 
 test("Enter encola y Mayúsculas+Enter no", () => {

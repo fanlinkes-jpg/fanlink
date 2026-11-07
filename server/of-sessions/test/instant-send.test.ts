@@ -7,7 +7,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { WorkspaceAccessError } from "../../../src/lib/access-policy.ts";
 import { discardOutboundView, OutboundClaimError, sendChatMessageView, type SendChatHooks } from "../send/chat-message.ts";
 import { sendClaimKey } from "../send/claim.ts";
-import { listPendingOutbounds, markOutboundAwaiting, recordOutbound } from "../sync/chat-store.ts";
+import { listPendingOutbounds, markOutboundAwaiting, pulseOutboundLease, recordOutbound } from "../sync/chat-store.ts";
 import type { ReadSql } from "../sync/store.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -15,7 +15,7 @@ const FILES = [
   "0007_of_reads.sql", "0008_sync_schedule.sql", "0009_of_chats.sql", "0013_chat_price.sql",
   "0019_chat_author.sql", "0024_outbound_schedule.sql", "0025_outbound_send.sql",
   "0037_vault_mirror.sql", "0038_vault_fan_filter.sql", "0039_outbound_media.sql",
-  "0040_vault_full_tags.sql", "0041_send_claim.sql", "0042_vault_paid_with.sql",
+  "0040_vault_full_tags.sql", "0041_send_claim.sql", "0042_vault_paid_with.sql", "0043_outbound_lease.sql",
 ];
 
 const account = { id: "acc-9", creatorId: "9ikis52", identityHandle: "bigpoppa1111", identityUserId: "42", identityState: "ok", label: "Prueba" };
@@ -120,12 +120,12 @@ test("un chatter no reutiliza el clientId de otro, ni de otra creadora u otro hi
     let opened = 0;
     const open: SendChatHooks["open"] = async () => {
       opened += 1;
-      return { messageId: null, reason: "no enviado" };
+      return { messageId: null, reason: "no está el botón Send" };
     };
     const failed = await sendChatMessageView("chatter-a", {
       creatorId: "9ikis52", fanKey: "7", threadKey: "7", body: "secreto del otro", priceCents: null, clientId,
     }, hooks(sql, open));
-    assert.equal(failed.reason, "no enviado");
+    assert.equal(failed.reason, "no está el botón Send");
     const intruder = hooks(sql, open);
     intruder.access = { ...access, userId: "chatter-b" };
     await assert.rejects(
@@ -245,10 +245,10 @@ test("reintentar un error reutiliza el clientId y no crea otra fila", async () =
       creatorId: "9ikis52", fanKey: "7", threadKey: "7", body: "hola", priceCents: 500, clientId,
     }, hooks(sql, async () => {
       opened += 1;
-      return { messageId: null, reason: "no enviado" };
+      return { messageId: null, reason: "no está el botón Send" };
     }));
     assert.equal(first.sent, false);
-    assert.equal(first.reason, "no enviado");
+    assert.equal(first.reason, "no está el botón Send");
     const again = await sendChatMessageView("chatter-a", {
       creatorId: "9ikis52", fanKey: "7", threadKey: "7", body: "texto distinto", priceCents: 100, clientId,
     }, hooks(sql, async () => {
@@ -377,7 +377,7 @@ test("si el navegador ya se abrió y falla, queda pendiente de confirmar y no se
   }
 });
 
-test("un pending atascado caduca, conserva precio y piezas, y su autor lo descarta", async () => {
+test("un pending sin lease pasa a Pendiente de confirmar y no se reintenta", async () => {
   const db = new PGlite();
   try {
     await apply(db);
@@ -439,14 +439,16 @@ test("un pending atascado caduca, conserva precio y piezas, y su autor lo descar
     });
     const pending = await listPendingOutbounds(sql, ["9ikis52"]);
     const stuck = pending.find((item) => item.id === stuckId);
-    assert.equal(stuck?.status, "error");
-    assert.equal(stuck?.errorReason, "se interrumpió");
+    assert.equal(stuck?.status, "pending");
+    assert.equal(stuck?.errorReason, "Pendiente de confirmar");
     assert.equal(stuck?.priceCents, 500);
     assert.equal(stuck?.authorId, "chatter-a");
     assert.deepEqual(stuck?.vault, [{ id: "v1", name: "playa" }]);
     assert.equal(pending.find((item) => item.id === freshId)?.status, "pending");
+    assert.equal(pending.find((item) => item.id === freshId)?.errorReason ?? null, null);
     assert.equal(pending.find((item) => item.id === waitingId)?.errorReason, "Pendiente de confirmar");
     assert.equal(pending.find((item) => item.id === scheduledId)?.status, "pending");
+    assert.equal(pending.find((item) => item.id === scheduledId)?.errorReason ?? null, null);
     await assert.rejects(
       () => discardOutboundView({ clientId: freshId }, { sql, access }),
       (error: unknown) => error instanceof OutboundClaimError && error.status === 409,
@@ -460,11 +462,142 @@ test("un pending atascado caduca, conserva precio y piezas, y su autor lo descar
       () => discardOutboundView({ clientId: stuckId }, { sql, access: intruder }),
       (error: unknown) => error instanceof OutboundClaimError && error.status === 403 && error.message === "No es tuyo",
     );
-    const still = await db.query<{ status: string }>("select status from of_chat_outbound where id = $1", [stuckId]);
-    assert.equal(still.rows[0]?.status, "error");
-    assert.deepEqual(await discardOutboundView({ clientId: stuckId }, { sql, access }), { ok: true });
-    const gone = (await listPendingOutbounds(sql, ["9ikis52"])).find((item) => item.id === stuckId);
-    assert.equal(gone, undefined);
+    await assert.rejects(
+      () => discardOutboundView({ clientId: stuckId }, { sql, access }),
+      (error: unknown) => error instanceof OutboundClaimError && error.status === 409,
+    );
+    let opened = 0;
+    await assert.rejects(
+      () => sendChatMessageView("chatter-a", {
+        creatorId: "9ikis52", fanKey: "7", threadKey: "7", body: "colgado", priceCents: 500, clientId: stuckId,
+      }, hooks(sql, async () => {
+        opened += 1;
+        return { messageId: "otra-vez", reason: null };
+      })),
+      (error: unknown) => error instanceof OutboundClaimError && error.status === 409,
+    );
+    assert.equal(opened, 0);
+    const still = await db.query<{ status: string; error_reason: string | null }>(
+      "select status, error_reason from of_chat_outbound where id = $1",
+      [stuckId],
+    );
+    assert.equal(still.rows[0]?.status, "pending");
+    assert.equal(still.rows[0]?.error_reason, "Pendiente de confirmar");
+  } finally {
+    await db.close();
+  }
+});
+
+test("un envío lento de más de 3 minutos no se manda otra vez", async () => {
+  const db = new PGlite();
+  let release: () => void = () => undefined;
+  const hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let first: Promise<unknown> = Promise.resolve();
+  try {
+    await apply(db);
+    await db.exec("insert into staff_profile (user_id, display_name, role) values ('chatter-a', 'Ana', 'member')");
+    const sql = asSql(db);
+    const clientId = crypto.randomUUID();
+    let opened = 0;
+    first = sendChatMessageView("chatter-a", {
+      creatorId: "9ikis52", fanKey: "7", threadKey: "7", body: "mira el set", priceCents: 500, clientId,
+    }, hooks(sql, async () => {
+      opened += 1;
+      await hold;
+      return { messageId: "m-lento", reason: null };
+    }));
+    let owner = "";
+    for (let attempt = 0; attempt < 50 && !owner; attempt += 1) {
+      const rows = await db.query<{ claim_owner: string | null }>(
+        "select claim_owner from of_chat_outbound where id = $1",
+        [clientId],
+      );
+      owner = rows.rows[0]?.claim_owner ?? "";
+      if (!owner) await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.ok(owner);
+    await db.query(
+      "update of_chat_outbound set created_at = now() - interval '4 minutes', claimed_at = now() - interval '4 minutes' where id = $1",
+      [clientId],
+    );
+    await db.query("update of_chat_send_claim set created_at = now() - interval '31 seconds'");
+    const claimKey = sendClaimKey({
+      authorId: "chatter-a",
+      creatorId: "9ikis52",
+      threadKey: "7",
+      fanKey: "7",
+      body: "mira el set",
+      priceCents: 500,
+      vaultItemIds: [],
+    });
+    await pulseOutboundLease(sql, clientId, owner, claimKey);
+    let retried = 0;
+    const again = await sendChatMessageView("chatter-a", {
+      creatorId: "9ikis52", fanKey: "7", threadKey: "7", body: "mira el set", priceCents: 500, clientId,
+    }, hooks(sql, async () => {
+      retried += 1;
+      return { messageId: "m-doble", reason: null };
+    }));
+    assert.equal(again.sent, false);
+    assert.equal(again.reason, "Ya se está enviando");
+    assert.equal(retried, 0);
+    let other = 0;
+    const duplicated = await sendChatMessageView("chatter-a", {
+      creatorId: "9ikis52", fanKey: "7", threadKey: "7", body: "mira el set", priceCents: 500, clientId: crypto.randomUUID(),
+    }, hooks(sql, async () => {
+      other += 1;
+      return { messageId: "m-otro", reason: null };
+    }));
+    assert.equal(duplicated.reason, "Ya se está enviando");
+    assert.equal(other, 0);
+    release();
+    const done = await first;
+    assert.equal((done as { sent: boolean; messageId: string | null }).sent, true);
+    assert.equal((done as { messageId: string | null }).messageId, "m-lento");
+    assert.equal(opened, 1);
+    assert.equal(await count(db, "of_chat_outbound"), 1);
+  } finally {
+    release();
+    await first.catch(() => undefined);
+    await db.close();
+  }
+});
+
+test("si el navegador ya se abrió y vuelve no enviado, queda pendiente de confirmar", async () => {
+  const db = new PGlite();
+  try {
+    await apply(db);
+    await db.exec("insert into staff_profile (user_id, display_name, role) values ('chatter-a', 'Ana', 'member')");
+    const sql = asSql(db);
+    const clientId = crypto.randomUUID();
+    let opened = 0;
+    const first = await sendChatMessageView("chatter-a", {
+      creatorId: "9ikis52", fanKey: "7", threadKey: "7", body: "hola", priceCents: 500, clientId,
+    }, hooks(sql, async () => {
+      opened += 1;
+      return { messageId: null, reason: "no enviado" };
+    }));
+    assert.equal(first.sent, false);
+    assert.equal(first.reason, "Pendiente de confirmar");
+    await db.exec("update of_chat_send_claim set created_at = now() - interval '31 seconds'");
+    await assert.rejects(
+      () => sendChatMessageView("chatter-a", {
+        creatorId: "9ikis52", fanKey: "7", threadKey: "7", body: "hola", priceCents: 500, clientId,
+      }, hooks(sql, async () => {
+        opened += 1;
+        return { messageId: "m-2", reason: null };
+      })),
+      (error: unknown) => error instanceof OutboundClaimError && error.status === 409,
+    );
+    assert.equal(opened, 1);
+    const row = await db.query<{ status: string; error_reason: string | null }>(
+      "select status, error_reason from of_chat_outbound where id = $1",
+      [clientId],
+    );
+    assert.equal(row.rows[0]?.status, "pending");
+    assert.equal(row.rows[0]?.error_reason, "Pendiente de confirmar");
   } finally {
     await db.close();
   }

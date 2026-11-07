@@ -11,12 +11,40 @@ import {
   markOutboundAwaiting,
   markOutboundError,
   markOutboundSent,
+  pulseOutboundLease,
   readOutboundClaim,
   reopenOutboundError,
+  SEND_LEASE_MS,
   type OutboundClaimRow,
 } from "../sync/chat-store.ts";
 
 const CLIENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const SEND_PROCESS_ID = crypto.randomUUID();
+
+/** Motivos que salen antes de pulsar Send. Cualquier otro, con el navegador abierto, no se reintenta. */
+const BEFORE_CLICK = new Set([
+  "no se abrió el hilo",
+  "OnlyFans pide iniciar sesión: pulsa Reconectar",
+  "no está la caja del chat",
+  "No está el precio nativo",
+  "no está el botón Send",
+  "No se pudo adjuntar la pieza",
+]);
+
+export function beforeSendClick(reason: string | null): boolean {
+  return BEFORE_CLICK.has((reason ?? "").trim());
+}
+
+/** Late mientras el envío sigue vivo, también en la espera del cupo por minuto. */
+function startLease(sql: SendChatHooks["sql"], id: string, claimKey: string): () => void {
+  const beat = () => {
+    void pulseOutboundLease(sql, id, SEND_PROCESS_ID, claimKey).catch(() => undefined);
+  };
+  beat();
+  const timer = setInterval(beat, Math.max(1_000, Math.floor(SEND_LEASE_MS / 3)));
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
 
 export class OutboundClaimError extends Error {
   readonly status: 403 | 409;
@@ -141,6 +169,7 @@ export async function sendChatMessageView(
   prepared.vaultPieces?.splice(0, prepared.vaultPieces.length, ...planned.pieces);
   let browserOpened = false;
   let confirmedId: string | null = null;
+  let stopLease: () => void = () => undefined;
   try {
     if (!replay) {
       const inserted = await insertOutboundOnce(sql, {
@@ -162,6 +191,7 @@ export async function sendChatMessageView(
       }
       if (vaultItemIds.length > 0) await recordOutboundMedia(sql, id, creatorId, vaultItemIds);
     }
+    stopLease = startLease(sql, id, claimKey);
     const result = await deliverChatSend({
       flag: prepared.env.FANLINK_ENABLE_SEND,
       allowlist: prepared.env.FANLINK_SEND_ALLOW_ACCOUNTS,
@@ -197,7 +227,7 @@ export async function sendChatMessageView(
       }
       return { sent: true, reason: null, messageId: result.messageId };
     }
-    if (result.awaitingId) {
+    if (result.awaitingId || (result.opened && !beforeSendClick(result.reason))) {
       await markOutboundAwaiting(sql, id);
       return { sent: false, reason: "Pendiente de confirmar", messageId: null };
     }
@@ -217,6 +247,8 @@ export async function sendChatMessageView(
     await markOutboundError(sql, id, reason).catch(() => undefined);
     await releaseSendClaim(sql, claimKey, id).catch(() => undefined);
     return { sent: false, reason, messageId: null };
+  } finally {
+    stopLease();
   }
 }
 

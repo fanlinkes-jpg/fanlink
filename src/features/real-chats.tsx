@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AtSign, Clock, DollarSign, FolderOpen, ImagePlus, Languages, ScrollText, Send, Type } from "lucide-react";
-import { chatSendAccess, discardChatOutbound, listCreatorChats, loadMoreChats, loadOlderMessages, readChatVault, recordChatOutbound, saveFanNote, saveFanProfile, sendChatMessage, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
+import { chatSendAccess, discardChatOutbound, listCreatorChats, loadMoreChats, loadOlderMessages, readChatVault, recordChatOutbound, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
 import { useCrm, type VaultItem } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
 import { useChatFanCards } from "@/lib/use-chat-fan-cards";
@@ -218,6 +218,15 @@ export function RealChatsPage() {
     window.addEventListener("beforeunload", onLeave);
     return () => window.removeEventListener("beforeunload", onLeave);
   }, []);
+  useEffect(() => {
+    chatSendSession.setHolds(holdsForUser(pendingOut, user?.id ?? null));
+  }, [pendingOut, user?.id]);
+  useEffect(() => {
+    return chatSendSession.subscribe(() => {
+      const jobs = chatSendSession.getJobs();
+      if (jobs.some((job) => job.state === "sent" || job.state === "awaiting")) void refresh();
+    });
+  }, []);
   const openThread = selected ? `${selected.creatorId}:${selected.threadKey}` : null;
   const threadTail = `${messages.at(-1)?.messageKey ?? ""}:${jobList.map((job) => `${job.clientId}:${job.state}`).join(",")}:${pendingOut.length}`;
   useLayoutEffect(() => {
@@ -238,26 +247,6 @@ export function RealChatsPage() {
   const scriptHits = matchScripts(scripts, slash != null ? slash : libraryQuery);
   const showScripts = panel === "guiones" || slash != null;
   const realSend = selected != null && sendCreators.includes(selected.creatorId);
-  chatSendSession.setHolds(holdsForUser(pendingOut, user?.id ?? null));
-  chatSendSession.setTransport(async (job) => {
-    try {
-      const result = await sendChatMessage({
-        data: {
-          creatorId: job.creatorId,
-          fanKey: job.fanKey,
-          threadKey: job.threadKey,
-          body: job.body,
-          priceCents: job.priceCents,
-          vaultItemIds: job.vault.map((item) => item.id),
-          clientId: job.clientId,
-        },
-      });
-      if ((result.sent && result.messageId) || result.reason === "Pendiente de confirmar") void refresh();
-      return { sent: result.sent, reason: result.reason, messageId: result.messageId };
-    } catch (err) {
-      return { sent: false, reason: sessionErrorText(err), messageId: null };
-    }
-  });
   const vaultItems = vault.filter((item) => item.creatorId === selected?.creatorId);
   const tagCreators = creators.filter((creator) => creator.id !== selected?.creatorId && creator.handle.trim() !== "");
 
