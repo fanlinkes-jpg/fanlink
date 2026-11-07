@@ -827,6 +827,20 @@ export async function recordChatOutboundView(
   return { ok: true, sent: false };
 }
 
+export async function discardChatOutboundView(userId: string, input: { clientId: string }): Promise<{ ok: true }> {
+  const access = await accessFor(userId);
+  const { discardOutboundView } = await import("../../server/of-sessions/send/chat-message.ts");
+  return discardOutboundView(input, {
+    sql: await getSql(),
+    access: {
+      userId: access.userId,
+      role: access.role,
+      perms: access.perms,
+      creatorIds: access.creatorIds,
+    },
+  });
+}
+
 export async function chatSendAccessView(userId: string): Promise<{ creatorIds: string[] }> {
   const access = await accessFor(userId);
   if (access.role !== "owner" && !access.perms.includes("mensajes")) return { creatorIds: [] };

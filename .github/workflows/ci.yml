@@ -11,7 +11,7 @@ on:
       - cursor/chat-mirror-617f
       - cursor/of-live-view-617f
       - cursor/dashboard-617f
-      - grok/video-vault-v2
+      - grok/chat-instant-send
 
 concurrency:
   # El push y el pull request no comparten grupo: uno no cancela al otro.
