@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { queryVaultMirror } from "@/lib/of-sessions";
 import { vaultMediaSrc } from "@/lib/chat-media";
+import { VAULT_FILTER_DEBOUNCE_MS } from "@/lib/vault-debounce";
 
 type VaultCard = {
   id: string;
@@ -13,6 +14,8 @@ type VaultCard = {
   ventasLabel: string;
   bestSellerLabel: string | null;
   suggestedLabel: string;
+  packageLabel: string;
+  packageWithId: string | null;
   sentToFan: boolean | null;
   boughtByFan: boolean | null;
   blocked: boolean;
@@ -26,6 +29,7 @@ type VaultPayload = {
   notice?: string | null;
   lists?: VaultList[];
   items?: VaultCard[];
+  query?: typeof EMPTY_QUERY;
   error?: string;
 };
 
@@ -48,41 +52,75 @@ const EMPTY_QUERY = {
   bestSeller: false,
   minBuyRate: null as number | null,
   sort: "fecha" as "fecha" | "duracion" | "ventas" | "precio",
+  themes: [] as string[],
 };
 
 export function VaultBrowser({
   creatorId,
   fanKey,
   onAttach,
+  reloadToken = 0,
 }: {
   creatorId: string;
   fanKey: string | null;
-  onAttach?: (item: { id: string; title: string }) => void;
+  onAttach?: (item: { id: string; title: string; withId?: string | null; withTitle?: string | null }) => void;
+  reloadToken?: number;
 }) {
   const [listText, setListText] = useState("");
   const [query, setQuery] = useState(EMPTY_QUERY);
   const [items, setItems] = useState<VaultCard[]>([]);
   const [lists, setLists] = useState<VaultList[]>([]);
   const [notice, setNotice] = useState<string | null>("Sin datos");
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
     let alive = true;
-    void queryVaultMirror({ data: { creatorId, fanKey, query, listText, remember: true } }).then((payload) => {
+    setReady(false);
+    void queryVaultMirror({ data: { creatorId, fanKey, listText: "", remember: false } }).then((payload) => {
       if (!alive) return;
       const view = payload as VaultPayload;
-      setItems(view.items ?? []);
-      setLists(view.lists ?? []);
-      setNotice(view.notice ?? (view.items && view.items.length > 0 ? null : "Sin datos"));
+      setQuery({ ...EMPTY_QUERY, ...(view.query ?? {}) });
+      applyView(view);
+      setReady(true);
     }).catch(() => {
       if (!alive) return;
       setItems([]);
       setLists([]);
       setNotice("Sin datos");
+      setReady(true);
     });
     return () => {
       alive = false;
     };
-  }, [creatorId, fanKey, query, listText]);
+    function applyView(view: VaultPayload) {
+      setItems(view.items ?? []);
+      setLists(view.lists ?? []);
+      setNotice(view.notice ?? (view.items && view.items.length > 0 ? null : "Sin datos"));
+    }
+  }, [creatorId, fanKey, reloadToken]);
+
+  useEffect(() => {
+    if (!ready) return;
+    let alive = true;
+    const handle = setTimeout(() => {
+      void queryVaultMirror({ data: { creatorId, fanKey, query, listText, remember: true } }).then((payload) => {
+        if (!alive) return;
+        const view = payload as VaultPayload;
+        setItems(view.items ?? []);
+        setLists(view.lists ?? []);
+        setNotice(view.notice ?? (view.items && view.items.length > 0 ? null : "Sin datos"));
+      }).catch(() => {
+        if (!alive) return;
+        setItems([]);
+        setLists([]);
+        setNotice("Sin datos");
+      });
+    }, VAULT_FILTER_DEBOUNCE_MS);
+    return () => {
+      alive = false;
+      clearTimeout(handle);
+    };
+  }, [ready, creatorId, fanKey, query, listText]);
 
   return (
     <div className="flex min-h-64 gap-3">
@@ -103,6 +141,7 @@ export function VaultBrowser({
       <section className="min-w-0 flex-1 space-y-2">
         <div className="flex flex-wrap gap-1 text-[11px]">
           <input aria-label="Buscar en la bóveda" value={query.text} placeholder="Etiqueta o carpeta" onChange={(event) => setQuery({ ...query, text: event.target.value })} className="rounded border border-[#e6e8ee] px-2 py-1" />
+          <input aria-label="Temática" value={query.themes[0] ?? ""} placeholder="Temática" onChange={(event) => setQuery({ ...query, themes: event.target.value.trim() ? [event.target.value] : [] })} className="w-24 rounded border border-[#e6e8ee] px-2 py-1" />
           <select aria-label="Tipo" value={query.kinds[0] ?? ""} onChange={(event) => setQuery({ ...query, kinds: event.target.value ? [event.target.value] : [] })} className="rounded border border-[#e6e8ee] px-1 py-1">
             <option value="">Tipo</option>
             <option value="video">Vídeo</option>
@@ -155,21 +194,29 @@ export function VaultBrowser({
           {items.length === 0 ? <p className="text-xs text-[#6d7585]">Sin datos</p> : null}
           {items.map((item) => (
             <article key={item.id} className="rounded border border-[#e6e8ee] p-2 text-[11px]">
-              <img src={vaultMediaSrc(creatorId, item.id)} alt="" className="mb-1 h-16 w-full rounded object-cover" />
+              {item.kind === "video" ? (
+                <video controls preload="none" src={vaultMediaSrc(creatorId, item.id, "full")} className="mb-1 h-24 w-full rounded bg-black" />
+              ) : (
+                <img src={vaultMediaSrc(creatorId, item.id, "preview")} alt="" className="mb-1 h-16 w-full rounded object-cover" />
+              )}
               <p className="font-medium">{item.title || "Sin datos"}</p>
               <p>{item.seconds == null ? "Sin datos" : formatSeconds(item.seconds)} · {item.folder ?? "Sin datos"}</p>
               <p>{item.ventasLabel}{item.salesCount == null ? "" : ` ${item.salesCount}`}{item.bestSellerLabel ? ` · ${item.bestSellerLabel}` : ""}</p>
               <p>Precio sugerido: {item.suggestedLabel}</p>
+              <p>{item.packageLabel || "Sin datos"}</p>
               <p>{tagLine(item.tags)}</p>
               <p>{item.sentToFan ? "Ya se le envió a este fan" : item.sentToFan == null ? "Sin datos" : "Sin constancia de envío"}</p>
-              {item.history[0] ? (
-                <p>{item.history[0].sentAt ?? "Sin datos"} · {item.history[0].priceLabel} · {item.history[0].purchasedLabel} · {item.history[0].authorLabel}</p>
-              ) : <p>Sin datos</p>}
+              {item.history.length > 0 ? item.history.map((row, index) => (
+                <p key={`${row.authorLabel}-${row.sentAt ?? index}`}>{row.sentAt ?? "Sin datos"} · {row.priceLabel} · {row.purchasedLabel} · {row.authorLabel}</p>
+              )) : <p>Sin datos</p>}
               <button
                 type="button"
                 disabled={item.blocked || !onAttach}
                 className="mt-1 rounded border border-[#e6e8ee] px-2 py-1 disabled:opacity-40"
-                onClick={() => onAttach?.(item)}
+                onClick={() => {
+                  const other = items.find((row) => row.id === item.packageWithId);
+                  onAttach?.({ id: item.id, title: item.title, withId: item.packageWithId, withTitle: other?.title ?? null });
+                }}
               >
                 {item.blocked ? "NO VENDER" : "Adjuntar"}
               </button>

@@ -4,6 +4,7 @@ import { getSql } from "@/lib/db";
 import { ensureStaff } from "@/lib/workspace-store";
 import { handleVaultMedia } from "../../../server/of-sessions/http/vault-http.ts";
 import { readSessionMediaBytes } from "../../../server/of-sessions/sync/media-bytes.ts";
+import { accountCreatorIds } from "../../../server/of-sessions/http/vault-accounts.ts";
 
 export const Route = createFileRoute("/api/vault-media")({
   server: {
@@ -13,17 +14,19 @@ export const Route = createFileRoute("/api/vault-media")({
           const userId = await requireUserId();
           const sql = await getSql();
           const access = await ensureStaff(sql, userId, !authConfigured && userId === DEV_USER_ID);
+          const creatorIds = await accountCreatorIds(sql);
           const creatorId = new URL(request.url).searchParams.get("creatorId") ?? "";
           return handleVaultMedia(request, {
-            session: async () => ({ userId: access.userId, role: access.role, perms: access.perms }),
-            findPreview: async (creator, mediaId) => {
-              const rows = await sql.query<{ preview: string | null }>(
-                "select preview from of_vault_item where creator_id = $1 and item_key = $2",
+            session: async () => ({ userId: access.userId, role: access.role, perms: access.perms, creatorIds }),
+            findPreview: async (creator, mediaId, variant) => {
+              const rows = await sql.query<{ preview: string | null; full_url: string | null }>(
+                "select preview, full_url from of_vault_item where creator_id = $1 and item_key = $2",
                 [creator, mediaId],
               );
+              if (variant === "full") return rows[0]?.full_url ?? null;
               return rows[0]?.preview ?? null;
             },
-            fetchBytes: (target) => readSessionMediaBytes(creatorId, target),
+            fetchBytes: (target, range) => readSessionMediaBytes(creatorId, target, range),
             log: (line) => {
               console.info(line);
             },

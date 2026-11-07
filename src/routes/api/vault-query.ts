@@ -3,6 +3,7 @@ import { authConfigured, DEV_USER_ID, requireUserId, UnauthorizedError } from "@
 import { getSql } from "@/lib/db";
 import { ensureStaff } from "@/lib/workspace-store";
 import { handleVaultQuery } from "../../../server/of-sessions/http/vault-http.ts";
+import { accountCreatorIds } from "../../../server/of-sessions/http/vault-accounts.ts";
 
 export const Route = createFileRoute("/api/vault-query")({
   server: {
@@ -12,8 +13,9 @@ export const Route = createFileRoute("/api/vault-query")({
           const userId = await requireUserId();
           const sql = await getSql();
           const access = await ensureStaff(sql, userId, !authConfigured && userId === DEV_USER_ID);
+          const creatorIds = await accountCreatorIds(sql);
           return handleVaultQuery(request, {
-            session: async () => ({ userId: access.userId, role: access.role, perms: access.perms }),
+            session: async () => ({ userId: access.userId, role: access.role, perms: access.perms, creatorIds }),
             sql,
           });
         } catch (error) {

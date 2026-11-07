@@ -10,7 +10,7 @@ export function chatMediaSrc(input: { creatorId: string; threadKey: string; mess
   return `/api/chat-media?${params.toString()}`;
 }
 
-export function vaultMediaSrc(creatorId: string, mediaId: string): string {
-  const params = new URLSearchParams({ creatorId, mediaId });
+export function vaultMediaSrc(creatorId: string, mediaId: string, variant: "full" | "preview" = "preview"): string {
+  const params = new URLSearchParams({ creatorId, mediaId, variant });
   return `/api/vault-media?${params.toString()}`;
 }

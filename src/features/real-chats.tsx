@@ -85,6 +85,7 @@ export function RealChatsPage() {
   const [libraryQuery, setLibraryQuery] = useState("");
   const [tagQuery, setTagQuery] = useState("");
   const [ofVault, setOfVault] = useState<Array<{ id: string; title: string; kind: "foto" | "video" | "audio" | null }>>([]);
+  const [vaultReload, setVaultReload] = useState(0);
   const [surface, setSurface] = useState<"equipo" | "onlyfans">("equipo");
 
   async function refresh() {
@@ -249,6 +250,7 @@ export function RealChatsPage() {
     try {
       const result = await readChatVault({ data: { creatorId: selected.creatorId, threadKey: selected.threadKey } });
       setOfVault(result.items);
+      setVaultReload((value) => value + 1);
     } catch (err) {
       setOfVault([]);
       setError(sessionErrorText(err));
@@ -329,11 +331,17 @@ export function RealChatsPage() {
     setPanel(null);
   }
 
-  function attachVault(item: { id: string; title: string }) {
-    setAttachments((current) => current.some((file) => file.id === `vault-${item.id}`) ? current : [
-      ...current,
-      { id: `vault-${item.id}`, url: null, name: item.title, kind: "vault" as const },
-    ]);
+  function attachVault(item: { id: string; title: string; withId?: string | null; withTitle?: string | null }) {
+    const pieces = [{ id: item.id, title: item.title }];
+    if (item.withId && item.withId !== item.id) pieces.push({ id: item.withId, title: item.withTitle || "Vídeo de pago" });
+    setAttachments((current) => {
+      const next = [...current];
+      for (const piece of pieces) {
+        if (next.some((file) => file.id === `vault-${piece.id}`)) continue;
+        next.push({ id: `vault-${piece.id}`, url: null, name: piece.title, kind: "vault" as const });
+      }
+      return next;
+    });
     setPanel(null);
   }
 
@@ -492,6 +500,7 @@ export function RealChatsPage() {
                     fanTranslation={fanTranslation}
                     textSize={textSize}
                     ofVault={ofVault}
+                    vaultReload={vaultReload}
                     creatorId={selected?.creatorId ?? creatorId}
                     fanKey={selected?.fanKey ?? null}
                     onReadVault={() => void loadOfVault()}
@@ -759,6 +768,7 @@ function ComposerPanelBody({
   panel,
   vaultItems,
   ofVault,
+  vaultReload,
   creatorId,
   fanKey,
   onReadVault,
@@ -777,6 +787,7 @@ function ComposerPanelBody({
   panel: Exclude<ComposerPanel, "guiones" | null>;
   vaultItems: VaultItem[];
   ofVault: Array<{ id: string; title: string; kind: "foto" | "video" | "audio" | null }>;
+  vaultReload: number;
   creatorId: string;
   fanKey: string | null;
   onReadVault: () => void;
@@ -785,7 +796,7 @@ function ComposerPanelBody({
   onTagQuery: (value: string) => void;
   fanTranslation: boolean;
   textSize: "sm" | "base" | "lg";
-  onVault: (item: { id: string; title: string }) => void;
+  onVault: (item: { id: string; title: string; withId?: string | null; withTitle?: string | null }) => void;
   onTag: (handle: string) => void;
   onFormat: (command: "bold" | "italic" | "foreColor", value?: string) => void;
   onSize: (size: "sm" | "base" | "lg") => void;
@@ -799,7 +810,7 @@ function ComposerPanelBody({
           <p className="text-xs font-medium">Add from media vault</p>
           <button type="button" className="rounded border border-[#e6e8ee] px-2 py-1 text-xs" onClick={onReadVault}>Leer vault de OnlyFans</button>
           {creatorId && creatorId !== "all" ? (
-            <VaultBrowser creatorId={creatorId} fanKey={fanKey} onAttach={onVault} />
+            <VaultBrowser creatorId={creatorId} fanKey={fanKey} reloadToken={vaultReload} onAttach={onVault} />
           ) : <p className="text-xs text-[#6d7585]">Sin datos</p>}
           {ofVault.length > 0 ? (
             <ul className="space-y-1">

@@ -186,9 +186,11 @@ export function VaultPage() {
   const creators = useCrm((s) => s.creators);
   const creatorId = useCrm((s) => s.creatorId);
   const setAttach = useCrm((s) => s.setAttach);
+  const teamAccess = useCrm((s) => s.teamAccess);
   const navigate = useNavigate();
   const [folder, setFolder] = useState("Todas");
   const [sort, setSort] = useState<"revenue" | "rate">("revenue");
+  const showDemo = teamAccess?.role === "owner";
   const folders = ["Todas", ...new Set(vault.map((v) => v.folder))];
   const items = vault
     .filter((v) => creatorId === "all" || v.creatorId === creatorId)
@@ -202,6 +204,8 @@ export function VaultPage() {
         <p className="text-sm text-muted">Listas a la izquierda y el contenido a la derecha. Los filtros se aplican en el servidor. Un chatter ve ventas y «Más vendido», no importes de la agencia.</p>
       </div>
       {creatorId !== "all" ? <VaultBrowser creatorId={creatorId} fanKey={null} /> : <p className="text-sm text-muted">Sin datos</p>}
+      {showDemo ? (
+      <>
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="font-display text-2xl font-semibold">Vault Pro</h1>
@@ -249,6 +253,8 @@ export function VaultPage() {
           );
         })}
       </div>
+      </>
+      ) : null}
     </div>
   );
 }

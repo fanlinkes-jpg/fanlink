@@ -5,6 +5,7 @@ import { ensureStaff } from "@/lib/workspace-store";
 import { handleChatMedia } from "../../../server/of-sessions/http/vault-http.ts";
 import { readSessionMediaBytes } from "../../../server/of-sessions/sync/media-bytes.ts";
 import { decodeMedia } from "../../../server/of-sessions/sync/history.ts";
+import { accountCreatorIds } from "../../../server/of-sessions/http/vault-accounts.ts";
 
 export const Route = createFileRoute("/api/chat-media")({
   server: {
@@ -14,9 +15,10 @@ export const Route = createFileRoute("/api/chat-media")({
           const userId = await requireUserId();
           const sql = await getSql();
           const access = await ensureStaff(sql, userId, !authConfigured && userId === DEV_USER_ID);
+          const creatorIds = await accountCreatorIds(sql);
           const creatorId = new URL(request.url).searchParams.get("creatorId") ?? "";
           return handleChatMedia(request, {
-            session: async () => ({ userId: access.userId, role: access.role, perms: access.perms }),
+            session: async () => ({ userId: access.userId, role: access.role, perms: access.perms, creatorIds }),
             findMedia: async (creator, threadKey, messageKey, index) => {
               const rows = await sql.query<{ media_json: string | null }>(
                 "select media_json from of_chat_message where creator_id = $1 and thread_key = $2 and message_key = $3",
@@ -25,7 +27,7 @@ export const Route = createFileRoute("/api/chat-media")({
               const item = decodeMedia(rows[0]?.media_json ?? null)?.[index];
               return { url: item?.full ?? item?.preview ?? null };
             },
-            fetchBytes: (target) => readSessionMediaBytes(creatorId, target),
+            fetchBytes: (target, range) => readSessionMediaBytes(creatorId, target, range),
             log: (line) => {
               console.info(line);
             },
