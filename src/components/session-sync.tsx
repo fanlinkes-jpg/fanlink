@@ -40,17 +40,24 @@ export function SessionSync() {
         remote = await loadWorkspace();
       } catch (error) {
         if (!stop) {
+          const raw = error instanceof Error ? error.message : "";
+          const offline = raw === "Failed to fetch" || raw === "Load failed";
+          const current = useCrm.getState().teamAccess;
           useCrm.setState({
             workspaceReady: true,
-            teamAccess: {
-              userId: "",
-              role: "member",
-              perms: [],
-              creatorIds: [],
-              displayName: "Sin sesión",
-              devMode: false,
-            },
-            workspaceNotice: error instanceof Error ? error.message : "No se ha podido leer la base compartida.",
+            workspaceNotice: offline
+              ? "El servidor no responde. Espera unos segundos o vuelve a arrancar npm run dev."
+              : (raw || "No se ha podido leer la base compartida."),
+            ...(current?.userId ? {} : {
+              teamAccess: {
+                userId: "",
+                role: "member",
+                perms: [],
+                creatorIds: [],
+                displayName: "Sin sesión",
+                devMode: false,
+              },
+            }),
           });
         }
         return;
