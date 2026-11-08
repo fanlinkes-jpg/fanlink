@@ -647,7 +647,7 @@ export function RealChatsPage() {
             </ol>
             <form className="relative shrink-0 border-t border-[#e6e8ee] p-2" onSubmit={(event) => event.preventDefault()}>
               {panel && panel !== "guiones" && panel !== "vault" && panel !== "etiqueta" ? (
-                <div role="region" aria-label={panelLabel(panel)} className={`absolute inset-x-2 bottom-full z-20 mb-1 overflow-y-auto rounded-xl border border-[#e6e8ee] bg-white p-3 text-sm shadow-lg ${panel === "vault" ? "max-h-[28rem]" : "max-h-52"}`}>
+                <div role="region" aria-label={panelLabel(panel)} className="absolute inset-x-2 bottom-full z-20 mb-1 max-h-52 overflow-y-auto rounded-xl border border-[#e6e8ee] bg-white p-3 text-sm shadow-lg">
                   <ComposerPanelBody
                     panel={panel}
                     vaultItems={vaultItems}
