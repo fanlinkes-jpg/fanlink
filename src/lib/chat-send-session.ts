@@ -10,6 +10,11 @@ import {
 
 export const REAL_SEND_OFF_REASON = "Envío real desactivado";
 
+function cleanTag(value: string | null | undefined): string | null {
+  const handle = value?.replace(/^@/, "").trim() ?? "";
+  return /^[A-Za-z0-9._]{2,40}$/.test(handle) ? handle : null;
+}
+
 export type SendTransportResult = {
   sent: boolean;
   reason: string | null;
@@ -26,6 +31,7 @@ export type ComposerSend = {
   priceCents: number | null;
   priceLabel: string | null;
   vault: VaultAttachment[];
+  tagHandle?: string | null;
 };
 
 export type PressResult =
@@ -141,6 +147,7 @@ export function createChatSendSession(options?: {
       priceCents: input.priceCents,
       priceLabel: input.priceLabel,
       vault: input.vault.map((item) => ({ id: item.id, name: item.name })),
+      tagHandle: cleanTag(input.tagHandle),
       at: now,
       messageId: null,
       reason: null,

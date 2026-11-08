@@ -29,6 +29,38 @@ export function parseVaultPayload(payload: unknown): VaultFile[] {
   return out;
 }
 
+/** Abre la bóveda real y se queda con el JSON que pide esa página. El listener va antes de navegar. */
+export async function captureVaultAt(page: Page, vaultUrl: string, waitMs = 12_000): Promise<unknown[]> {
+  const found: unknown[] = [];
+  const onResponse = (response: { url(): string; status(): number; text(): Promise<string> }) => {
+    if (response.status() < 200 || response.status() >= 300) return;
+    if (!/vault/i.test(response.url())) return;
+    void response.text().then((raw) => {
+      try {
+        found.push(JSON.parse(raw) as unknown);
+      } catch {
+        // La página puede pedir un HTML, no un listado.
+      }
+    }).catch(() => undefined);
+  };
+  page.on("response", onResponse);
+  try {
+    await page.goto(vaultUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
+    const button = page.locator("[at-attr='vault_btn'], button[aria-label*='vault' i], button[aria-label*='bóveda' i], button[aria-label*='boveda' i]").first();
+    if (await button.count()) await button.click().catch(() => undefined);
+    const deadline = Date.now() + waitMs;
+    let firstAt = 0;
+    while (Date.now() < deadline) {
+      if (found.length > 0 && firstAt === 0) firstAt = Date.now();
+      if (firstAt > 0 && Date.now() - firstAt > 3_000) break;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    return found;
+  } finally {
+    page.off("response", onResponse);
+  }
+}
+
 export async function captureVaultPayloads(page: Page, waitMs = 2_500): Promise<unknown[]> {
   const found: unknown[] = [];
   await listenVault(page, waitMs, (payload) => {

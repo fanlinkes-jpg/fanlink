@@ -14,6 +14,7 @@ export function installChatSendTransport(): void {
           body: job.body,
           priceCents: job.priceCents,
           vaultItemIds: job.vault.map((item) => item.id),
+          tagHandle: job.tagHandle,
           clientId: job.clientId,
         },
       });

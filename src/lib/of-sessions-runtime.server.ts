@@ -33,7 +33,7 @@ import { listChatMeta, listChats, listOpenHistory, listPendingOutbounds, markCha
 import { historyPerMinute, listPageDone, nextHistoryThread, oldestCursor, pageFinished } from "../../server/of-sessions/sync/history.ts";
 import { captureChatListPage, captureOlderMessages } from "../../server/of-sessions/sync/history-scroll.ts";
 import { openWorkPage } from "../../server/of-sessions/sessions/work-page.ts";
-import { captureVaultPayloads, type VaultFile } from "../../server/of-sessions/sync/vault-listen.ts";
+import { captureVaultAt, type VaultFile } from "../../server/of-sessions/sync/vault-listen.ts";
 import { chatPageUrl } from "../../server/of-sessions/sync/chats.ts";
 import { sendPace } from "../../server/of-sessions/send/gate.ts";
 import { chatSendGate, publicSendReason, type SendAccount } from "../../server/of-sessions/send/gate.ts";
@@ -841,6 +841,11 @@ export async function discardChatOutboundView(userId: string, input: { clientId:
   });
 }
 
+function cleanTagHandle(value: string | null | undefined): string | null {
+  const handle = value?.replace(/^@/, "").trim() ?? "";
+  return /^[A-Za-z0-9._]{2,40}$/.test(handle) ? handle : null;
+}
+
 export async function chatSendAccessView(userId: string): Promise<{ creatorIds: string[] }> {
   const access = await accessFor(userId);
   if (access.role !== "owner" && !access.perms.includes("mensajes")) return { creatorIds: [] };
@@ -856,7 +861,7 @@ export async function chatSendAccessView(userId: string): Promise<{ creatorIds: 
 
 export async function resolveChatSendHooks(
   userId: string,
-  input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; vaultItemIds?: string[] },
+  input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; vaultItemIds?: string[]; tagHandle?: string | null },
 ): Promise<SendChatHooks> {
   const access = await accessFor(userId);
   const sessions = await getOfSessionManager();
@@ -888,6 +893,7 @@ export async function resolveChatSendHooks(
         body: input.body,
         priceCents: input.priceCents,
         vaultPieces,
+        tagHandle: cleanTagHandle(input.tagHandle),
         typeDelayMs: null,
       }));
     },
@@ -905,11 +911,7 @@ export async function readChatVaultView(userId: string, input: { creatorId: stri
   const ran = await sessions.runQueued(account.id, async (context) => {
     const page = await openWorkPage(context);
     try {
-      await page.goto(chatPageUrl(onlyFansSite.chatsUrl ?? "https://onlyfans.com/my/chats", input.threadKey, onlyFansSite.id), {
-        waitUntil: "domcontentloaded",
-        timeout: 30_000,
-      }).catch(() => undefined);
-      return await captureVaultPayloads(page);
+      return await captureVaultAt(page, "https://onlyfans.com/my/vault");
     } finally {
       await page.close().catch(() => undefined);
     }

@@ -67,8 +67,25 @@ export function suggestVaultPrice(input: {
 
 export function parseVaultBundle(payload: unknown): { items: VaultFile[]; lists: VaultList[] } {
   const lists = vaultLists(payload);
-  const items = vaultList(payload).flatMap((item) => parseVaultItem(item, lists));
+  const raw = vaultList(payload);
+  for (const entry of raw) {
+    if (!isFolderRow(entry)) continue;
+    const row = entry as Record<string, unknown>;
+    const id = textOf(row.id);
+    const name = textOf(row.name ?? row.title);
+    if (id && name && !lists.some((list) => list.id === id)) lists.push({ id, name });
+  }
+  const items = raw.filter((entry) => !isFolderRow(entry)).flatMap((item) => parseVaultItem(item, lists));
   return { items, lists };
+}
+
+function isFolderRow(item: unknown): boolean {
+  if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+  const row = item as Record<string, unknown>;
+  if (row.files || row.mediaId || row.src || row.previewUrl) return false;
+  const type = (textOf(row.type) ?? "").toLowerCase();
+  if (["photo", "image", "video", "audio", "gif", "foto"].some((kind) => type.includes(kind))) return false;
+  return Boolean(textOf(row.id) && textOf(row.name ?? row.title));
 }
 
 export function parseVaultPayload(payload: unknown): VaultFile[] {

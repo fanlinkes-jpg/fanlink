@@ -363,6 +363,7 @@ export const sendChatMessage = createServerFn({ method: "POST" })
     body: string;
     priceCents: number | null;
     vaultItemIds?: string[];
+    tagHandle?: string | null;
     clientId?: string;
   }) => input)
   .handler(async ({ context, data }) => {

@@ -97,6 +97,7 @@ type SendInput = {
   body: string;
   priceCents: number | null;
   vaultItemIds?: string[];
+  tagHandle?: string | null;
   clientId?: string | null;
 };
 

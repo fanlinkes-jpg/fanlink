@@ -21,6 +21,7 @@ export type OutboundSend = SendJob & {
   vault: VaultAttachment[];
   messageId: string | null;
   reason: string | null;
+  tagHandle: string | null;
 };
 
 export type ComposerDraft = {

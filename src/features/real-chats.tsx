@@ -130,6 +130,7 @@ export function RealChatsPage() {
   const [pending, setPending] = useState(false);
   const [filter, setFilter] = useState<"todos" | "propinas" | "online">("todos");
   const [insightsOpen, setInsightsOpen] = useState(false);
+  const [tagHandle, setTagHandle] = useState<string | null>(null);
   const [menu, setMenu] = useState(false);
   const [fanMenu, setFanMenu] = useState(false);
   const [draft, setDraft] = useState("");
@@ -322,6 +323,7 @@ export function RealChatsPage() {
     setDraftPrice(null);
     setPriceLabel(null);
     setAttachments([]);
+    setTagHandle(null);
     setError(null);
     for (const file of files) {
       if (file.url) URL.revokeObjectURL(file.url);
@@ -351,6 +353,7 @@ export function RealChatsPage() {
       priceCents: draftPrice,
       priceLabel,
       vault,
+      tagHandle,
     });
     if (decision.action === "blocked") {
       setError(decision.reason);
@@ -390,6 +393,7 @@ export function RealChatsPage() {
       priceCents: recovered.priceCents,
       priceLabel: recovered.priceLabel,
       vault: recovered.vault,
+      tagHandle,
       at: 0,
       state: "queued",
       messageId: null,
@@ -697,7 +701,7 @@ export function RealChatsPage() {
                     fanKey={selected?.fanKey ?? null}
                     onReadVault={() => void loadOfVault()}
                     onVault={attachVault}
-                    onTag={(handle) => { insertAtCursor(mentionToken(handle)); setPanel(null); }}
+                    onTag={(handle) => { const name = handle.replace(/^@/, "").trim(); setTagHandle(name || null); insertAtCursor(mentionToken(handle)); setPanel(null); }}
                     onFormat={formatCommand}
                     onSize={setTextSize}
                     onFanTranslation={() => setFanTranslation((value) => !value)}
@@ -736,6 +740,7 @@ export function RealChatsPage() {
               </div>
               <div className="my-2 border-t border-[#e6e8ee]" />
               {priceLabel ? <p className="mb-1 text-xs font-medium text-[#8a5a12]">Precio {priceLabel}</p> : null}
+              {tagHandle ? <p className="mb-1 text-xs font-medium text-[#2456c7]">Etiqueta @{tagHandle}</p> : null}
               {attachments.length > 0 ? (
                 <div className="mb-1 flex gap-2 overflow-x-auto">
                   {attachments.map((file) => (
@@ -858,7 +863,7 @@ export function RealChatsPage() {
                 fanKey={selected?.fanKey ?? null}
                 onReadVault={() => void loadOfVault()}
                 onVault={attachVault}
-                onTag={(handle) => { insertAtCursor(mentionToken(handle)); setPanel(null); }}
+                onTag={(handle) => { const name = handle.replace(/^@/, "").trim(); setTagHandle(name || null); insertAtCursor(mentionToken(handle)); setPanel(null); }}
                 onFormat={formatCommand}
                 onSize={setTextSize}
                 onFanTranslation={() => setFanTranslation((value) => !value)}
@@ -1073,6 +1078,11 @@ function ComposerPanelBody({
             <p className="mt-2 text-xs text-[#8a96a3]">El uso de contenido de terceros sin permiso legal constituye una violación de nuestra política de uso aceptable.</p>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
+            {/^[A-Za-z0-9._]{2,40}$/.test(tagQuery.replace(/^@/, "").trim()) ? (
+              <button type="button" className="block w-full px-4 py-3 text-left text-sm hover:bg-[#f4f7fb]" onClick={() => onTag(tagQuery.replace(/^@/, "").trim())}>
+                Etiquetar @{tagQuery.replace(/^@/, "").trim()} en OnlyFans
+              </button>
+            ) : null}
             {visible.length === 0 ? (
               <div className="grid h-full place-items-center px-6 py-16 text-center text-[#b0b6c0]">
                 <p className="text-4xl">@</p>
