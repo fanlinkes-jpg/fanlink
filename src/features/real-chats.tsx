@@ -621,7 +621,7 @@ export function RealChatsPage() {
               {messages.map((message) => (
                 <ThreadMessage key={message.messageKey} message={message} />
               ))}
-              {pendingBesideLocal(pendingForThread(pendingOut, selected), jobList).map((item) => {
+              {pendingBesideLocal(pendingForThread(pendingOut, selected), jobList).filter((item) => item.errorReason !== "Pendiente de confirmar").map((item) => {
                 const recovered = draftFromPending(item);
                 const mine = item.authorId != null && item.authorId === user?.id;
                 return (
@@ -640,7 +640,7 @@ export function RealChatsPage() {
                   </li>
                 );
               })}
-              {reconcileBubbles(jobList, messages).filter((job) => selected && job.creatorId === selected.creatorId && job.threadKey === selected.threadKey).map((job) => (
+              {reconcileBubbles(jobList, messages).filter((job) => job.state !== "awaiting" && selected && job.creatorId === selected.creatorId && job.threadKey === selected.threadKey).map((job) => (
                 <OutboundBubbleView key={job.clientId} job={job} onRetry={() => retrySend(job.clientId)} onDiscard={() => void discardSend(job.clientId)} onRestore={() => restoreDraft(job)} />
               ))}
               {messages.some((message) => message.fromFan) && fanTranslation ? <li className="text-[10px] text-[#6d7585]">Traducción: Sin datos</li> : null}
