@@ -25,6 +25,31 @@ import { spendTone } from "@/lib/spend-tiers";
 import { ChatMediaPlayer } from "@/features/chat-media-player";
 import { VaultBrowser } from "@/features/vault-browser";
 
+function profileHref(handle: string | null): string | null {
+  const name = handle?.replace(/^@/, "").trim();
+  return name ? `https://onlyfans.com/${name}` : null;
+}
+
+function chatHref(fanKey: string | null): string | null {
+  const id = fanKey?.trim();
+  return id ? `https://onlyfans.com/my/chats/chat/${id}` : null;
+}
+
+function FanLink({ item, href }: { item: string; href: string | null }) {
+  return (
+    <button
+      type="button"
+      disabled={!href}
+      className="block w-full px-3 py-2 text-left hover:bg-[#f4f7ff] disabled:text-[#b0b6c0]"
+      onClick={() => {
+        if (href) void navigator.clipboard.writeText(href);
+      }}
+    >
+      {item}
+    </button>
+  );
+}
+
 function ThreadMessage({ message }: { message: {
   creatorId: string;
   threadKey: string;
@@ -106,6 +131,7 @@ export function RealChatsPage() {
   const [filter, setFilter] = useState<"todos" | "propinas" | "online">("todos");
   const [insightsOpen, setInsightsOpen] = useState(false);
   const [menu, setMenu] = useState(false);
+  const [fanMenu, setFanMenu] = useState(false);
   const [draft, setDraft] = useState("");
   const [draftPrice, setDraftPrice] = useState<number | null>(null);
   const [priceLabel, setPriceLabel] = useState<string | null>(null);
@@ -576,9 +602,18 @@ export function RealChatsPage() {
       <section className="hidden h-full min-h-0 min-w-0 flex-1 md:flex">
         <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <header className="flex shrink-0 items-center justify-between gap-3 border-b border-[#e6e8ee] px-4 py-3">
-              <div className="min-w-0">
-                <p className="truncate font-medium">{selected ? (selected.fanName ?? selected.fanHandle ?? "Fan") : "Sin sincronizar"}</p>
+              <div className="relative min-w-0">
+                <button type="button" className="truncate text-left font-medium" onClick={() => setFanMenu((open) => !open)} aria-expanded={fanMenu} aria-label="Opciones del fan">
+                  {selected ? (selected.fanName ?? selected.fanHandle ?? "Fan") : "Sin sincronizar"}
+                </button>
                 {selected && creatorId === "all" ? <p className="truncate text-xs text-[#6d7585]">{creators.find((creator) => creator.id === selected.creatorId)?.name ?? "Cuenta"}</p> : null}
+                {fanMenu && selected ? (
+                  <div className="absolute left-0 top-full z-30 mt-1 w-64 rounded-xl border border-[#e6e8ee] bg-white py-1 text-sm shadow-lg">
+                    <p className="truncate px-3 py-2 text-xs text-[#6d7585]">{selected.fanHandle ? `@${selected.fanHandle.replace(/^@/, "")}` : "Sin usuario"}</p>
+                    <FanLink item="Copiar enlace del perfil" href={profileHref(selected.fanHandle)} />
+                    <FanLink item="Copiar enlace del chat" href={chatHref(selected.fanKey)} />
+                  </div>
+                ) : null}
               </div>
               <div className="flex items-center gap-2">
                 <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => void refresh()}>Recargar</button>
@@ -806,15 +841,10 @@ export function RealChatsPage() {
             role="dialog"
             aria-modal="true"
             aria-label={panel === "vault" ? "Bóveda" : "Etiquetar"}
-            className={`flex max-h-[85vh] w-full flex-col overflow-hidden rounded-2xl bg-white p-4 shadow-xl ${panel === "vault" ? "max-w-5xl" : "max-w-md"}`}
+            className={`flex w-full flex-col overflow-hidden rounded-2xl bg-white shadow-xl ${panel === "vault" ? "h-[82vh] max-w-5xl" : "max-h-[85vh] max-w-lg"}`}
             onMouseDown={(event) => event.stopPropagation()}
           >
-            <div className="mb-2 flex shrink-0 items-center justify-between">
-              <h2 className="text-base font-semibold">{panel === "vault" ? "Bóveda" : "Etiquetar creadora"}</h2>
-              <button type="button" className="rounded px-2 py-1 text-sm" onClick={() => setPanel(null)}>Cerrar</button>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto">
-              <ComposerPanelBody
+            <ComposerPanelBody
                 panel={panel}
                 vaultItems={vaultItems}
                 tagCreators={tagCreators}
@@ -833,8 +863,8 @@ export function RealChatsPage() {
                 onSize={setTextSize}
                 onFanTranslation={() => setFanTranslation((value) => !value)}
                 onEmoji={insertAtCursor}
+                onClose={() => setPanel(null)}
               />
-            </div>
           </div>
         </div>,
         document.body,
@@ -986,6 +1016,7 @@ function ComposerPanelBody({
   onSize,
   onFanTranslation,
   onEmoji,
+  onClose,
 }: {
   panel: Exclude<ComposerPanel, "guiones" | null>;
   vaultItems: VaultItem[];
@@ -1005,25 +1036,15 @@ function ComposerPanelBody({
   onSize: (size: "sm" | "base" | "lg") => void;
   onFanTranslation: () => void;
   onEmoji: (emoji: string) => void;
+  onClose?: () => void;
 }) {
   switch (panel) {
     case "vault": {
       return (
-        <div className="space-y-2">
-          <p className="text-xs font-medium">Add from media vault</p>
-          <button type="button" className="rounded border border-[#e6e8ee] px-2 py-1 text-xs" onClick={onReadVault}>Leer vault de OnlyFans</button>
+        <div role="region" aria-label="Panel Add from media vault" className="flex h-[72vh] min-h-0 flex-col">
           {creatorId && creatorId !== "all" ? (
-            <VaultBrowser creatorId={creatorId} fanKey={fanKey} reloadToken={vaultReload} onAttach={onVault} />
-          ) : <p className="text-xs text-[#6d7585]">Sin datos</p>}
-          {ofVault.length > 0 ? (
-            <ul className="space-y-1">
-              {ofVault.map((item) => (
-                <li key={item.id}>
-                  <button type="button" className="w-full rounded px-2 py-1 text-left text-xs hover:bg-[#f4f7ff]" onClick={() => onVault(item)}>{item.title || "Sin datos"}</button>
-                </li>
-              ))}
-            </ul>
-          ) : null}
+            <VaultBrowser layout="of" creatorId={creatorId} fanKey={fanKey} reloadToken={vaultReload} onAttach={onVault} onClose={onClose} />
+          ) : <p className="p-4 text-sm text-[#8a96a3]">Sin datos</p>}
         </div>
       );
     }
@@ -1038,20 +1059,45 @@ function ComposerPanelBody({
       const needle = tagQuery.trim().toLowerCase();
       const visible = tagCreators.filter((creator) => !needle || creator.name.toLowerCase().includes(needle) || creator.handle.toLowerCase().includes(needle));
       return (
-        <div className="space-y-2">
-          <input aria-label="Buscar creadora" value={tagQuery} placeholder="Buscar creadora" onChange={(event) => onTagQuery(event.target.value)} className="h-8 w-full rounded border border-[#e6e8ee] px-2 text-sm" />
-          <p className="text-xs text-[#6d7585]">No hay formularios en el CRM. Esto etiqueta a otra creadora.</p>
-          {visible.length === 0 ? <p className="text-xs text-[#6d7585]">Sin datos</p> : (
-            <ul className="space-y-1">
-              {visible.map((creator) => (
-                <li key={creator.id}>
-                  <button type="button" className="w-full rounded px-2 py-1 text-left hover:bg-[#f4f7ff]" onClick={() => onTag(creator.handle)}>
-                    {creator.name} · @{creator.handle.replace(/^@/, "")}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
+        <div role="region" aria-label="Panel Tag other creator" className="flex min-h-[28rem] flex-col">
+          <div className="flex items-center gap-2 border-b border-[#eceff3] px-4 py-3">
+            <p className="text-sm font-semibold tracking-wide">ETIQUETA A OTROS CREADORES</p>
+            <input aria-label="Buscar creadora" value={tagQuery} placeholder="Buscar" onChange={(event) => onTagQuery(event.target.value)} className="ml-auto h-8 w-28 rounded-full border border-[#e6e8ee] px-3 text-xs" />
+          </div>
+          <div className="flex gap-2 border-b border-[#eceff3] px-4 py-3">
+            <span className="rounded-full bg-[#d7ebff] px-4 py-1.5 text-sm font-medium text-[#0091ea]">Usuario de etiquetas</span>
+            <span className="rounded-full bg-[#f2f3f5] px-4 py-1.5 text-sm text-[#8a96a3]">Formulario de publicación</span>
+          </div>
+          <div className="border-b border-[#eceff3] px-4 py-4 text-sm">
+            <p>Agrega un formulario de publicación o etiqueta a otra persona cuando publiques contenido en el que aparezca.</p>
+            <p className="mt-2 text-xs text-[#8a96a3]">El uso de contenido de terceros sin permiso legal constituye una violación de nuestra política de uso aceptable.</p>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {visible.length === 0 ? (
+              <div className="grid h-full place-items-center px-6 py-16 text-center text-[#b0b6c0]">
+                <p className="text-4xl">@</p>
+                <p className="mt-3 text-sm">Aún no hay menciones ni etiquetas</p>
+                <p className="mt-1 text-xs">Sin datos</p>
+              </div>
+            ) : (
+              <ul>
+                {visible.map((creator) => (
+                  <li key={creator.id}>
+                    <button type="button" className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-[#f4f7fb]" onClick={() => onTag(creator.handle)}>
+                      <span className="grid h-10 w-10 place-items-center rounded-full bg-[#eef2ff] text-sm">{creator.name.slice(0, 1)}</span>
+                      <span>
+                        <span className="block text-sm font-medium">{creator.name}</span>
+                        <span className="text-xs text-[#8a96a3]">@{creator.handle.replace(/^@/, "")}</span>
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className="flex justify-end border-t border-[#eceff3] px-4 py-3">
+            <button type="button" className="text-sm font-semibold uppercase tracking-wide text-[#00aff0]" onClick={onClose}>Cerrar</button>
+          </div>
         </div>
       );
     }

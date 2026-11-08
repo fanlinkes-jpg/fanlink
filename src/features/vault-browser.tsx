@@ -60,15 +60,20 @@ export function VaultBrowser({
   fanKey,
   onAttach,
   reloadToken = 0,
+  layout = "full",
+  onClose,
 }: {
   creatorId: string;
   fanKey: string | null;
   onAttach?: (item: { id: string; title: string; withId?: string | null; withTitle?: string | null }) => void;
   reloadToken?: number;
+  layout?: "full" | "of";
+  onClose?: () => void;
 }) {
   const [listText, setListText] = useState("");
   const [query, setQuery] = useState(EMPTY_QUERY);
   const [items, setItems] = useState<VaultCard[]>([]);
+  const [library, setLibrary] = useState<VaultCard[]>([]);
   const [lists, setLists] = useState<VaultList[]>([]);
   const [notice, setNotice] = useState<string | null>("Sin datos");
   const [ready, setReady] = useState(false);
@@ -94,6 +99,7 @@ export function VaultBrowser({
     };
     function applyView(view: VaultPayload) {
       setItems(view.items ?? []);
+      setLibrary(view.items ?? []);
       setLists(view.lists ?? []);
       setNotice(view.notice ?? (view.items && view.items.length > 0 ? null : "Sin datos"));
     }
@@ -121,6 +127,97 @@ export function VaultBrowser({
       clearTimeout(handle);
     };
   }, [ready, creatorId, fanKey, query, listText]);
+
+  const kind = query.kinds[0] ?? "";
+  const folderName = lists.find((folder) => folder.id === query.folderId)?.name ?? "Todos los medios";
+  if (layout === "of") {
+    return (
+      <div className="flex h-full min-h-0 flex-col bg-white text-[#1c2333]">
+        <div className="flex min-h-0 flex-1">
+          <aside className="flex w-72 shrink-0 flex-col border-r border-[#eceff3]">
+            <div className="flex items-center gap-2 border-b border-[#eceff3] px-4 py-3">
+              <p className="text-sm font-semibold tracking-wide">BÓVEDA</p>
+              <input aria-label="Buscar listas" value={listText} placeholder="Buscar" onChange={(event) => setListText(event.target.value)} className="ml-auto h-8 w-28 rounded-full border border-[#e6e8ee] px-3 text-xs" />
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <p className="px-4 pb-1 pt-3 text-[11px] font-semibold tracking-wide text-[#8a96a3]">DEFAULT</p>
+              <VaultFolder
+                name="Todos los medios"
+                active={query.scope !== "carpeta"}
+                creatorId={creatorId}
+                items={library}
+                onClick={() => setQuery({ ...query, folderId: null, scope: "todas" })}
+              />
+              {lists.map((folder) => (
+                <VaultFolder
+                  key={folder.id}
+                  name={folder.name}
+                  creatorId={creatorId}
+                  active={query.folderId === folder.id}
+                  items={library.filter((item) => item.folder === folder.name || item.folder === folder.id)}
+                  onClick={() => setQuery({ ...query, folderId: folder.id, scope: "carpeta" })}
+                />
+              ))}
+              {lists.length === 0 ? <p className="px-4 py-3 text-xs text-[#8a96a3]">Sin datos</p> : null}
+            </div>
+          </aside>
+          <section className="flex min-w-0 flex-1 flex-col">
+            <div className="border-b border-[#eceff3] px-4 py-3">
+              <p className="text-sm font-semibold uppercase tracking-wide">{folderName}</p>
+            </div>
+            <p className="px-4 pb-1 pt-3 text-[11px] font-semibold tracking-wide text-[#8a96a3]">RECIENTE</p>
+            <div className="flex flex-wrap gap-2 px-4 py-3">
+              {[
+                ["", "Todo"],
+                ["foto", "Foto"],
+                ["gif", "GIF"],
+                ["video", "Vídeo"],
+                ["audio", "Audio"],
+              ].map(([id, label]) => (
+                <button
+                  key={label}
+                  type="button"
+                  className={`rounded-full px-4 py-1.5 text-sm ${kind === id ? "bg-[#d7ebff] font-medium text-[#0091ea]" : "bg-[#f2f3f5] text-[#1c2333]"}`}
+                  onClick={() => setQuery({ ...query, kinds: id ? [id] : [] })}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="grid min-h-0 flex-1 grid-cols-3 content-start gap-2 overflow-y-auto px-4 pb-4">
+              {items.length === 0 ? <p className="col-span-3 text-sm text-[#8a96a3]">Sin datos</p> : null}
+              {items.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  disabled={item.blocked || !onAttach}
+                  className="relative aspect-[4/3] overflow-hidden rounded-md bg-[#f2f3f5] text-left disabled:opacity-50"
+                  onClick={() => {
+                    const other = items.find((row) => row.id === item.packageWithId);
+                    onAttach?.({ id: item.id, title: item.title, withId: item.packageWithId, withTitle: other?.title ?? null });
+                  }}
+                >
+                  {item.kind === "video" ? (
+                    <video preload="none" src={vaultMediaSrc(creatorId, item.id, "preview")} className="h-full w-full object-cover" />
+                  ) : (
+                    <img src={vaultMediaSrc(creatorId, item.id, "preview")} alt="" className="h-full w-full object-cover" />
+                  )}
+                  {item.kind === "video" && item.seconds != null ? (
+                    <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1 text-[11px] text-white">{formatSeconds(item.seconds)}</span>
+                  ) : null}
+                  <span className="absolute right-1.5 top-1.5 h-5 w-5 rounded-full border-2 border-white bg-black/20" />
+                  {item.blocked ? <span className="absolute bottom-1 right-1 rounded bg-white/90 px-1 text-[10px]">NO VENDER</span> : null}
+                </button>
+              ))}
+            </div>
+          </section>
+        </div>
+        <div className="flex justify-end border-t border-[#eceff3] px-4 py-3">
+          <button type="button" className="text-sm font-semibold uppercase tracking-wide text-[#00aff0]" onClick={onClose}>Cerrar</button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-64 gap-3">
@@ -225,6 +322,33 @@ export function VaultBrowser({
         </div>
       </section>
     </div>
+  );
+}
+
+function VaultFolder({
+  name,
+  active,
+  items,
+  creatorId,
+  onClick,
+}: {
+  name: string;
+  active: boolean;
+  items: VaultCard[];
+  creatorId: string;
+  onClick: () => void;
+}) {
+  const photos = items.filter((item) => item.kind === "foto").length;
+  const videos = items.filter((item) => item.kind === "video").length;
+  const thumb = items.find((item) => item.kind !== "audio");
+  return (
+    <button type="button" onClick={onClick} className={`flex w-full items-center gap-3 px-4 py-3 text-left ${active ? "bg-[#f4f7fb]" : "hover:bg-[#fafbfc]"}`}>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-semibold">{name}</span>
+        <span className="text-xs text-[#8a96a3]">{items.length === 0 ? "vacío" : `${photos} fotos · ${videos} vídeos`}</span>
+      </span>
+      {thumb ? <img src={vaultMediaSrc(creatorId, thumb.id, "preview")} alt="" className="h-12 w-16 rounded object-cover" /> : null}
+    </button>
   );
 }
 
