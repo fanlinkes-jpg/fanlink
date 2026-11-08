@@ -197,11 +197,8 @@ export function VaultBrowser({
                     onAttach?.({ id: item.id, title: item.title, withId: item.packageWithId, withTitle: other?.title ?? null });
                   }}
                 >
-                  {item.kind === "video" ? (
-                    <video preload="none" src={vaultMediaSrc(creatorId, item.id, "preview")} className="h-full w-full object-cover" />
-                  ) : (
-                    <img src={vaultMediaSrc(creatorId, item.id, "preview")} alt="" className="h-full w-full object-cover" />
-                  )}
+                  <span className="absolute inset-x-1 bottom-6 truncate text-[10px] text-[#1c2333]">{item.title || "Sin datos"}</span>
+                  <img src={vaultMediaSrc(creatorId, item.id, "preview")} alt={item.title || ""} className="absolute inset-0 h-full w-full object-cover" onError={(event) => { event.currentTarget.hidden = true; }} />
                   {item.kind === "video" && item.seconds != null ? (
                     <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1 text-[11px] text-white">{formatSeconds(item.seconds)}</span>
                   ) : null}

@@ -300,8 +300,21 @@ function tagsOf(row: Record<string, unknown>): string[] {
 
 function previewOf(row: Record<string, unknown>): string | null {
   const files = nested(row.files);
-  const thumb = nested(files?.thumb) ?? nested(row.thumb) ?? nested(row.preview);
-  return textOf(thumb?.url ?? files?.squarePreview ?? row.previewUrl);
+  const candidates = [
+    nested(files?.thumb)?.url,
+    nested(files?.preview)?.url,
+    nested(files?.squarePreview)?.url,
+    files?.squarePreview,
+    nested(row.thumb)?.url,
+    nested(row.preview)?.url,
+    row.previewUrl,
+    row.src,
+  ];
+  for (const value of candidates) {
+    const text = textOf(value);
+    if (text && /^https?:\/\//.test(text)) return text;
+  }
+  return null;
 }
 
 function vaultLists(payload: unknown): VaultList[] {

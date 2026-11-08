@@ -1,4 +1,4 @@
-import { mediaHostAllowed } from "./history.ts";
+import { mediaHostAllowed, nextMediaUrl } from "./history.ts";
 
 export type MediaBytes = {
   status: number;
@@ -57,8 +57,15 @@ export async function readSessionMediaBytes(
       const cookies = await context.cookies(target);
       const headers: Record<string, string> = {};
       if (cookies.length > 0) headers.cookie = cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
+      headers.referer = "https://onlyfans.com/";
       if (header) headers.range = header;
-      const response = await fetch(target, { headers, redirect: "manual" });
+      let response = await fetch(target, { headers, redirect: "manual" });
+      if (response.status >= 300 && response.status < 400) {
+        const next = nextMediaUrl(target, response.headers.get("location"));
+        await response.body?.cancel().catch(() => undefined);
+        if (!next) return null;
+        response = await fetch(next, { headers, redirect: "manual" });
+      }
       const media = mediaFromFetchResponse(response);
       if (!media) await response.body?.cancel().catch(() => undefined);
       return media;
