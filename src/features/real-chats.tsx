@@ -7,7 +7,6 @@ import { sessionErrorText } from "@/lib/use-creator-sessions";
 import { useChatFanCards } from "@/lib/use-chat-fan-cards";
 import { chatFanCardFor, fanCardTransactions } from "@/lib/chat-fan-cards";
 import { FanInsights } from "@/features/fan-insights";
-import { LiveOnlyFans } from "@/features/live-onlyfans";
 import { MessagePriceDialog } from "@/features/message-price-dialog";
 import { FULL_EMOJIS, QUICK_EMOJIS, TEXT_COLORS, authorLabel, matchScripts, mentionToken, paymentLabel, slashQuery, wrapSelection } from "@/lib/composer-tools";
 import { pendingForThread } from "@/lib/pending-thread";
@@ -132,7 +131,6 @@ export function RealChatsPage() {
   const [tagQuery, setTagQuery] = useState("");
   const [ofVault, setOfVault] = useState<Array<{ id: string; title: string; kind: "foto" | "video" | "audio" | null }>>([]);
   const [vaultReload, setVaultReload] = useState(0);
-  const [surface, setSurface] = useState<"equipo" | "onlyfans">("equipo");
 
   async function refresh() {
     try {
@@ -558,6 +556,7 @@ export function RealChatsPage() {
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-1">
                       <span className="truncate text-sm font-medium">{thread.fanName ?? "Fan"}</span>
+                      {creatorId === "all" ? <span className="shrink-0 rounded bg-[#f3f4f6] px-1 text-[10px] text-[#6d7585]">{creators.find((creator) => creator.id === thread.creatorId)?.name ?? "Cuenta"}</span> : null}
                       {thread.unread > 0 ? <span className="rounded bg-[#e7f0ff] px-1 text-[10px] font-semibold text-[#2456c7]">NEW</span> : null}
                       {thread.online === false ? <span className="rounded bg-[#f3f4f6] px-1 text-[10px] text-[#6d7585]">OFF</span> : null}
                     </span>
@@ -574,14 +573,12 @@ export function RealChatsPage() {
         )}
         </div>
       </section>
-      <section className="hidden h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden md:flex">
+      <section className="hidden h-full min-h-0 min-w-0 flex-1 md:flex">
+        <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <header className="flex shrink-0 items-center justify-between gap-3 border-b border-[#e6e8ee] px-4 py-3">
-              <div className="flex min-w-0 items-center gap-2">
+              <div className="min-w-0">
                 <p className="truncate font-medium">{selected ? (selected.fanName ?? selected.fanHandle ?? "Fan") : "Sin sincronizar"}</p>
-                <div className="flex shrink-0 rounded-lg bg-[#f3f4f6] p-0.5 text-xs">
-                  <button type="button" className={`rounded-md px-2 py-1 ${surface === "equipo" ? "bg-white font-medium" : "text-[#6d7585]"}`} onClick={() => setSurface("equipo")}>Equipo</button>
-                  <button type="button" className={`rounded-md px-2 py-1 ${surface === "onlyfans" ? "bg-white font-medium" : "text-[#6d7585]"}`} onClick={() => setSurface("onlyfans")}>OnlyFans</button>
-                </div>
+                {selected && creatorId === "all" ? <p className="truncate text-xs text-[#6d7585]">{creators.find((creator) => creator.id === selected.creatorId)?.name ?? "Cuenta"}</p> : null}
               </div>
               <div className="flex items-center gap-2">
                 <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => void refresh()}>Recargar</button>
@@ -611,10 +608,7 @@ export function RealChatsPage() {
                 ) : null}
               </div>
             ) : null}
-            {surface === "onlyfans" && selected ? (
-              <LiveOnlyFans creatorId={selected.creatorId} threadKey={selected.threadKey} fanKey={selected.fanKey} />
-            ) : null}
-            <ol ref={threadBox} className={`min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4 ${surface === "onlyfans" ? "hidden" : ""}`} onScroll={(event) => {
+            <ol ref={threadBox} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4" onScroll={(event) => {
               const node = event.currentTarget;
               stickToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80;
               if (node.scrollTop > 24 || !selected || olderLock.current) return;
@@ -651,7 +645,7 @@ export function RealChatsPage() {
               ))}
               {messages.some((message) => message.fromFan) && fanTranslation ? <li className="text-[10px] text-[#6d7585]">Traducción: Sin datos</li> : null}
             </ol>
-            <form className={`relative shrink-0 border-t border-[#e6e8ee] p-2 ${surface === "onlyfans" ? "hidden" : ""}`} onSubmit={(event) => event.preventDefault()}>
+            <form className="relative shrink-0 border-t border-[#e6e8ee] p-2" onSubmit={(event) => event.preventDefault()}>
               {panel && panel !== "guiones" ? (
                 <div role="region" aria-label={panelLabel(panel)} className={`absolute inset-x-2 bottom-full z-20 mb-1 overflow-y-auto rounded-xl border border-[#e6e8ee] bg-white p-3 text-sm shadow-lg ${panel === "vault" ? "max-h-[28rem]" : "max-h-52"}`}>
                   <ComposerPanelBody
@@ -767,6 +761,14 @@ export function RealChatsPage() {
                 <button type="button" disabled={!realSend || !draft.trim()} title={realSend ? "Envío real" : "Envío real desactivado en esta cuenta"} aria-label="Enviar" onClick={() => commitSend("Enter", false, false)} className={`${realSend ? "" : "ml-auto"} grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#3b6cff] text-white disabled:opacity-60`}><Send className="h-5 w-5" /></button>
               </div>
             </form>
+        </div>
+        <aside className="hidden h-full w-[340px] shrink-0 border-l border-[#e6e8ee] xl:block">
+          {selected ? (
+            <InsightPane thread={selected} cards={fanCards.fans} crmFans={crmFans} messages={messages} profiles={data?.profiles ?? []} notes={data?.notes ?? []} onNotes={saveNote} onProfile={(profile) => { void saveFanProfile({ data: profile }).then(() => refresh()); }} onCopyDraft={(body, price) => { replaceDraft(body); setDraftPrice(price); setPriceLabel(`$${(price / 100).toFixed(2)}`); }} onCreatorNote={(body) => { if (!selected.fanKey) return; void saveFanNote({ data: { creatorId: selected.creatorId, fanKey: selected.fanKey, body } }).then(() => refresh()); }} />
+          ) : (
+            <div className="grid h-full place-items-center px-6 text-center text-sm text-[#6d7585]">Elige una conversación</div>
+          )}
+        </aside>
       </section>
       {insightsOpen ? (
         <div className="fixed inset-0 z-50">
