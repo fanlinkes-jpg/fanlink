@@ -646,7 +646,7 @@ export function RealChatsPage() {
               {messages.some((message) => message.fromFan) && fanTranslation ? <li className="text-[10px] text-[#6d7585]">Traducción: Sin datos</li> : null}
             </ol>
             <form className="relative shrink-0 border-t border-[#e6e8ee] p-2" onSubmit={(event) => event.preventDefault()}>
-              {panel && panel !== "guiones" ? (
+              {panel && panel !== "guiones" && panel !== "vault" && panel !== "etiqueta" ? (
                 <div role="region" aria-label={panelLabel(panel)} className={`absolute inset-x-2 bottom-full z-20 mb-1 overflow-y-auto rounded-xl border border-[#e6e8ee] bg-white p-3 text-sm shadow-lg ${panel === "vault" ? "max-h-[28rem]" : "max-h-52"}`}>
                   <ComposerPanelBody
                     panel={panel}
@@ -751,7 +751,7 @@ export function RealChatsPage() {
               <div role="toolbar" aria-label="Herramientas del mensaje" className="mt-2 flex items-center gap-1">
                 <ToolButton label="Add media" title="Add media · Añadir archivo" onClick={() => fileBox.current?.click()}><ImagePlus className="h-6 w-6" /></ToolButton>
                 <ToolButton label="GIF" title="GIF" active={panel === "gif"} onClick={() => toggle("gif")}><span className="text-[13px] font-bold leading-none">GIF</span></ToolButton>
-                <ToolButton label="Add from media vault" title="Add from media vault · Añadir del vault" active={panel === "vault"} onClick={() => toggle("vault")}><FolderOpen className="h-6 w-6" /></ToolButton>
+                <ToolButton label="Add from media vault" title="Add from media vault · Añadir del vault" active={panel === "vault"} onClick={() => { if (panel === "vault") setPanel(null); else void loadOfVault(); }}><FolderOpen className="h-6 w-6" /></ToolButton>
                 <ToolButton label="Schedule your message" title="Schedule your message · Programar tu mensaje" active={dialog === "programar"} onClick={() => { setPanel(null); setDialog((current) => current === "programar" ? null : "programar"); }}><Clock className="h-6 w-6" /></ToolButton>
                 <ToolButton label="Price" title="Price · Precio" active={dialog === "precio"} onClick={() => { setPanel(null); setDialog((current) => current === "precio" ? null : "precio"); }}><DollarSign className="h-6 w-6" /></ToolButton>
                 <ToolButton label="Tag other creator" title="Tag other creator · Etiquetar otra creadora" active={panel === "etiqueta"} onClick={() => toggle("etiqueta")}><AtSign className="h-6 w-6" /></ToolButton>
@@ -799,6 +799,45 @@ export function RealChatsPage() {
             </div>
           </div>
         </div>
+      ) : null}
+      {(panel === "vault" || panel === "etiqueta") && typeof document !== "undefined" ? createPortal(
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4" onMouseDown={() => setPanel(null)}>
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={panel === "vault" ? "Bóveda" : "Etiquetar"}
+            className={`flex max-h-[85vh] w-full flex-col overflow-hidden rounded-2xl bg-white p-4 shadow-xl ${panel === "vault" ? "max-w-5xl" : "max-w-md"}`}
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="mb-2 flex shrink-0 items-center justify-between">
+              <h2 className="text-base font-semibold">{panel === "vault" ? "Bóveda" : "Etiquetar creadora"}</h2>
+              <button type="button" className="rounded px-2 py-1 text-sm" onClick={() => setPanel(null)}>Cerrar</button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <ComposerPanelBody
+                panel={panel}
+                vaultItems={vaultItems}
+                tagCreators={tagCreators}
+                tagQuery={tagQuery}
+                onTagQuery={setTagQuery}
+                fanTranslation={fanTranslation}
+                textSize={textSize}
+                ofVault={ofVault}
+                vaultReload={vaultReload}
+                creatorId={selected?.creatorId ?? creatorId}
+                fanKey={selected?.fanKey ?? null}
+                onReadVault={() => void loadOfVault()}
+                onVault={attachVault}
+                onTag={(handle) => { insertAtCursor(mentionToken(handle)); setPanel(null); }}
+                onFormat={formatCommand}
+                onSize={setTextSize}
+                onFanTranslation={() => setFanTranslation((value) => !value)}
+                onEmoji={insertAtCursor}
+              />
+            </div>
+          </div>
+        </div>,
+        document.body,
       ) : null}
       {dialog === "precio" ? (
         <MessagePriceDialog
