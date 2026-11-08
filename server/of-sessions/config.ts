@@ -7,7 +7,7 @@ export interface FanlinkConfig {
   port: number;
   /** Login interactivo. La app real siempre abre una ventana visible. */
   headlessLogin: boolean;
-  /** Sync, escucha y envío. Headless salvo FANLINK_HEADFUL=true. */
+  /** Sync, escucha y envío. Siempre sin ventana: el chatter no ve OnlyFans. */
   headlessWork: boolean;
   /** Si OnlyFans rechaza la sesión, reabrir la ventana para la persona. */
   openLoginOnInvalidate: boolean;
@@ -50,7 +50,7 @@ export function loadConfig(
     host: env.HOST?.trim() || "127.0.0.1",
     port,
     headlessLogin: false,
-    headlessWork: env.FANLINK_HEADFUL !== "true",
+    headlessWork: true,
     openLoginOnInvalidate: env.FANLINK_OPEN_LOGIN_ON_INVALIDATE !== "false",
     loginTimeoutMs,
     probeTimeoutMs: 30_000,

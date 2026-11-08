@@ -21,15 +21,7 @@ export function contextShowsInbox(context: BrowserContext): boolean {
   });
 }
 
-/** El lector no cierra la pestaña que el operador está viendo. */
+/** Cierra la pestaña de trabajo. El chatter no se queda con la conversación de OnlyFans abierta. */
 export async function closeIfIdle(page: Page): Promise<void> {
-  if (isLivePage(page)) return;
-  let url = "";
-  try {
-    url = page.url();
-  } catch {
-    return;
-  }
-  if (url.includes("/my/chats")) return;
   await page.close().catch(() => undefined);
 }
