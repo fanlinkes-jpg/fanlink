@@ -757,8 +757,7 @@ export function RealChatsPage() {
                 <ToolButton label="Tag other creator" title="Tag other creator · Etiquetar otra creadora" active={panel === "etiqueta"} onClick={() => toggle("etiqueta")}><AtSign className="h-6 w-6" /></ToolButton>
                 <ToolButton label="Format text" title="Format text · Formato de texto" active={panel === "formato"} onClick={() => toggle("formato")}><Type className="h-6 w-6" /></ToolButton>
                 <ToolButton label="Translation" title="Translation · Traducción" active={panel === "traduccion"} onClick={() => toggle("traduccion")}><Languages className="h-6 w-6" /></ToolButton>
-                {realSend ? <span className="ml-auto shrink-0 text-xs font-semibold text-[#137333]">Envío real</span> : null}
-                <button type="button" disabled={!realSend || !draft.trim()} title={realSend ? "Envío real" : "Envío real desactivado en esta cuenta"} aria-label="Enviar" onClick={() => commitSend("Enter", false, false)} className={`${realSend ? "" : "ml-auto"} grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#3b6cff] text-white disabled:opacity-60`}><Send className="h-5 w-5" /></button>
+                <button type="button" disabled={!realSend || !draft.trim()} title={realSend ? "Enviar" : "Envío real desactivado en esta cuenta"} aria-label="Enviar" onClick={() => commitSend("Enter", false, false)} className="ml-auto grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#3b6cff] text-white disabled:opacity-60"><Send className="h-5 w-5" /></button>
               </div>
             </form>
         </div>
