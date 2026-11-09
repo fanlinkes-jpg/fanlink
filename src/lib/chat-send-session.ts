@@ -221,8 +221,9 @@ export function createChatSendSession(options?: {
     reset() {
       clearQueue();
     },
-    /** Si entra otro usuario, se tira la cola anterior. El mismo id no la toca. */
-    bindUser(userId: string | null) {
+    /** Si entra otro usuario, se tira la cola anterior. Un vacío mientras la sesión carga no la toca. */
+    bindUser(userId: string | null, options?: { pending?: boolean }) {
+      if (options?.pending && !userId) return;
       if (userId === ownerId) return;
       ownerId = userId;
       clearQueue();

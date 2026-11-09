@@ -83,6 +83,8 @@ test("cerrar sesión o cambiar de usuario vacía la cola", () => {
   assert.equal(session.getJobs().length, 0);
   session.press({ ...draft, key: "Enter", shiftKey: false, realSend: true, now: 2_000 });
   assert.equal(session.getJobs().length, 1);
+  session.bindUser(null, { pending: true });
+  assert.equal(session.getJobs().length, 1);
   session.reset();
   assert.equal(session.getJobs().length, 0);
   assert.equal(session.shouldWarn(), false);

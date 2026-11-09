@@ -841,6 +841,20 @@ export async function discardChatOutboundView(userId: string, input: { clientId:
   });
 }
 
+export async function reviewChatOutboundView(userId: string, input: { clientId: string }): Promise<{ ok: true }> {
+  const access = await accessFor(userId);
+  const { reviewAwaitingView } = await import("../../server/of-sessions/send/chat-message.ts");
+  return reviewAwaitingView(input, {
+    sql: await getSql(),
+    access: {
+      userId: access.userId,
+      role: access.role,
+      perms: access.perms,
+      creatorIds: access.creatorIds,
+    },
+  });
+}
+
 function cleanTagHandle(value: string | null | undefined): string | null {
   const handle = value?.replace(/^@/, "").trim() ?? "";
   return /^[A-Za-z0-9._]{2,40}$/.test(handle) ? handle : null;
@@ -922,7 +936,7 @@ export async function readChatVaultView(userId: string, input: { creatorId: stri
   const saved = await persistVaultRead(await getSql(), input.creatorId, ran.value);
   if (saved.length === 0) {
     console.info(`[fanlink:vault] vacia chat=${input.threadKey} json=${ran.ok ? ran.value.length : 0}`);
-    return { items: [], reason: "Sin datos" };
+    return { items: [], reason: "No se ha podido leer la bóveda." };
   }
   console.info(`[fanlink:vault] piezas=${saved.length} chat=${input.threadKey}`);
   return {

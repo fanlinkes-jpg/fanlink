@@ -1039,6 +1039,22 @@ export async function discardOutboundError(sql: ReadSql, id: string, authorId: s
   return rows.length > 0;
 }
 
+/** La dueña cierra un pendiente de confirmar. No lo reenvía y no borra la fila. */
+export async function reviewAwaitingOutbound(sql: ReadSql, id: string): Promise<boolean> {
+  const rows = await sql.query<{ id: string }>(
+    `update of_chat_outbound
+     set status = 'discarded', error_reason = 'Revisado'
+     where id = $1
+       and error_reason = 'Pendiente de confirmar'
+       and coalesce(status, 'pending') not in ('sent', 'discarded')
+       and of_message_key is null
+       and matched_message_key is null
+     returning id`,
+    [id],
+  );
+  return rows.length > 0;
+}
+
 /** Piezas del borrador. Si la tabla aún no existe (bases viejas de test), no hay piezas. */
 async function pendingVaultPieces(
   sql: ReadSql,

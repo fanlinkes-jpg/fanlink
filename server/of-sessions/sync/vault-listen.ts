@@ -30,12 +30,18 @@ export function parseVaultPayload(payload: unknown): VaultFile[] {
   return out;
 }
 
-/** Una página de OnlyFans: las carpetas y 40 medios de la carpeta abierta. No recorre el resto. */
+const VAULT_LIST_CAP = 100;
+const VAULT_MEDIA_CAP = 40;
+const VAULT_OFFSET_CAP = 2_000;
+
+/** Una página por clic: como mucho 100 carpetas y 40 medios. Si api2 no responde, para. */
 export async function readVaultFromPage(page: Page, listId = "all", offset = 0): Promise<unknown[]> {
+  const cleanOffset = Number.isFinite(offset) && offset > 0 ? Math.min(VAULT_OFFSET_CAP, Math.floor(offset)) : 0;
+  const cleanList = listId.trim().slice(0, 80) || "all";
   if (!page.url().includes("onlyfans.com/")) {
     await page.goto("https://onlyfans.com/my/chats", { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
   }
-  const pulled = await page.evaluate(async ({ listId, offset }) => {
+  const pulled = await page.evaluate(async ({ listId, offset, listCap, mediaCap }) => {
     async function pull(path: string): Promise<unknown | null> {
       try {
         const response = await fetch(path, { credentials: "include", headers: { accept: "application/json" } });
@@ -47,20 +53,18 @@ export async function readVaultFromPage(page: Page, listId = "all", offset = 0):
     }
     const out: unknown[] = [];
     if (offset === 0) {
-      const lists = await pull("/api2/v2/vault/lists?view=main&offset=0&limit=100");
+      const lists = await pull(`/api2/v2/vault/lists?view=main&offset=0&limit=${listCap}`);
       if (lists) out.push(lists);
     }
-    const media = await pull(`/api2/v2/vault/media?limit=40&offset=${offset}&field=recent&sort=desc&list=${encodeURIComponent(listId)}`);
+    const media = await pull(`/api2/v2/vault/media?limit=${mediaCap}&offset=${offset}&field=recent&sort=desc&list=${encodeURIComponent(listId)}`);
     if (media) out.push(media);
     return out;
-  }, { listId, offset }).catch(() => [] as unknown[]);
+  }, { listId: cleanList, offset: cleanOffset, listCap: VAULT_LIST_CAP, mediaCap: VAULT_MEDIA_CAP }).catch(() => [] as unknown[]);
   const parsed = pulled.map((payload) => parseVaultBundle(payload));
   const folders = new Set(parsed.flatMap((bundle) => bundle.lists.map((list) => list.id)));
   const files = new Set(parsed.flatMap((bundle) => bundle.items.map((item) => item.id)));
-  console.info(`[fanlink:vault] pagina lista=${listId} offset=${offset} carpetas=${folders.size} medios=${files.size}`);
-  if (folders.size > 0 || files.size > 0) return pulled;
-  if (offset > 0) return [];
-  return captureVaultAt(page, "https://onlyfans.com/my/vault");
+  console.info(`[fanlink:vault] pagina lista=${cleanList} offset=${cleanOffset} carpetas=${folders.size} medios=${files.size}`);
+  return pulled;
 }
 
 /** Abre la página y espera el JSON de los medios. No vuelve antes de leer el cuerpo. */

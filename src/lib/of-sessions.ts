@@ -379,6 +379,14 @@ export const discardChatOutbound = createServerFn({ method: "POST" })
     return discardChatOutboundView(context.userId, data);
   });
 
+export const reviewChatOutbound = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { clientId: string }) => input)
+  .handler(async ({ context, data }) => {
+    const { reviewChatOutboundView } = await import("./of-sessions-runtime.server");
+    return reviewChatOutboundView(context.userId, data);
+  });
+
 export const recordChatOutbound = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; ofMessageKey: string | null; scheduledAt?: string | null }) => input)

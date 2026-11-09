@@ -14,6 +14,7 @@ import {
   pulseOutboundLease,
   readOutboundClaim,
   reopenOutboundError,
+  reviewAwaitingOutbound,
   SEND_LEASE_MS,
   type OutboundClaimRow,
 } from "../sync/chat-store.ts";
@@ -269,6 +270,19 @@ export async function discardOutboundView(
   if (row.authorId !== access.userId) throw new OutboundClaimError(403);
   if (row.status !== "error" || sealedOutbound(row)) throw new OutboundClaimError(409);
   const done = await discardOutboundError(hooks.sql, clientId, access.userId);
+  if (!done) throw new OutboundClaimError(409);
+  return { ok: true };
+}
+
+/** La dueña cierra un «Pendiente de confirmar» sin volver a enviarlo. */
+export async function reviewAwaitingView(
+  input: { clientId: string },
+  hooks: { sql: ReadSql; access: SendChatHooks["access"] },
+): Promise<{ ok: true }> {
+  if (hooks.access.role !== "owner") throw new WorkspaceAccessError("No tienes permiso para escribir.");
+  const clientId = parseClientId(input.clientId);
+  if (!clientId) throw new WorkspaceAccessError("clientId no válido");
+  const done = await reviewAwaitingOutbound(hooks.sql, clientId);
   if (!done) throw new OutboundClaimError(409);
   return { ok: true };
 }

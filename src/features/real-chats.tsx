@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AtSign, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, ScrollText, Send, Type } from "lucide-react";
-import { chatSendAccess, discardChatOutbound, listCreatorChats, loadMoreChats, loadOlderMessages, readChatVault, recordChatOutbound, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
+import { chatSendAccess, discardChatOutbound, listCreatorChats, loadMoreChats, loadOlderMessages, readChatVault, recordChatOutbound, reviewChatOutbound, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
 import { useCrm, type VaultItem } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
 import { useChatFanCards } from "@/lib/use-chat-fan-cards";
@@ -65,13 +65,16 @@ function ThreadMessage({ message }: { message: {
 } }) {
   const slides = message.media ?? [];
   const hasMedia = (message.mediaCount ?? 0) > 0 || slides.length > 0;
-  const messageLocked = message.priceCents != null && message.priceCents > 0 && message.purchased === false;
+  const messageLocked = message.purchased === true
+    ? false
+    : message.priceCents != null && message.priceCents > 0 && message.purchased === false;
+  const slideLocked = (slide: { locked?: boolean | null }) => message.purchased === true ? false : messageLocked || slide.locked === true;
   const openSlides = slides.length === 0
     ? (hasMedia && !messageLocked ? [{ kind: "video" as const, index: 0 }] : [])
-    : slides.flatMap((slide, index) => (messageLocked || slide.locked === true ? [] : [{ kind: slide.kind, index }]));
+    : slides.flatMap((slide, index) => (slideLocked(slide) ? [] : [{ kind: slide.kind, index }]));
   const lockedCount = slides.length === 0
     ? (hasMedia && messageLocked ? 1 : 0)
-    : slides.filter((slide) => messageLocked || slide.locked === true).length;
+    : slides.filter((slide) => slideLocked(slide)).length;
   const who = message.fromFan ? "" : message.authorName ? authorLabel(message.authorName, false) : authorLabel(null, message.automatic);
   const pay = paymentLabel(message);
   return (
@@ -99,11 +102,13 @@ function OutboundBubbleView({
   onRetry,
   onDiscard,
   onRestore,
+  onReview,
 }: {
   job: OutboundSend;
   onRetry: () => void;
   onDiscard: () => void;
   onRestore: () => void;
+  onReview?: () => void;
 }) {
   const caption = bubbleCaption(job.state, job.reason);
   return (
@@ -119,6 +124,11 @@ function OutboundBubbleView({
           <button type="button" className="text-[#2456c7]" onClick={onRetry}>Reintentar</button>
           <button type="button" className="text-[#2456c7]" onClick={onDiscard}>Descartar</button>
           <button type="button" className="text-[#2456c7]" onClick={onRestore}>Recuperar</button>
+        </p>
+      ) : null}
+      {job.state === "awaiting" && onReview ? (
+        <p className="mt-1 flex justify-end text-[10px]">
+          <button type="button" className="text-[#2456c7]" onClick={onReview}>Marcar como revisado</button>
         </p>
       ) : null}
     </li>
@@ -430,10 +440,22 @@ export function RealChatsPage() {
     await refresh();
   }
 
+  async function reviewSend(clientId: string) {
+    try {
+      await reviewChatOutbound({ data: { clientId } });
+    } catch (err) {
+      setError(sessionErrorText(err));
+      return;
+    }
+    chatSendSession.remove(clientId);
+    await refresh();
+  }
+
   async function loadOfVault(listId = "all", offset = 0) {
-    if (!selected || vaultPage.current.busy) return;
-    vaultPage.current = { listId, offset, busy: true };
     setPanel("vault");
+    if (!selected) return;
+    if (vaultPage.current.busy) return;
+    vaultPage.current = { listId, offset, busy: true };
     if (offset === 0) setVaultReading(true);
     try {
       const result = await readChatVault({ data: { creatorId: selected.creatorId, threadKey: selected.threadKey, listId, offset } });
@@ -680,7 +702,7 @@ export function RealChatsPage() {
               {messages.map((message) => (
                 <ThreadMessage key={message.messageKey} message={message} />
               ))}
-              {pendingBesideLocal(pendingForThread(pendingOut, selected), jobList).filter((item) => item.errorReason !== "Pendiente de confirmar").map((item) => {
+              {pendingBesideLocal(pendingForThread(pendingOut, selected), jobList).map((item) => {
                 const recovered = draftFromPending(item);
                 const mine = item.authorId != null && item.authorId === user?.id;
                 return (
@@ -696,11 +718,16 @@ export function RealChatsPage() {
                         <button type="button" className="text-[#2456c7]" onClick={() => restoreDraft(recovered)}>Recuperar</button>
                       </p>
                     ) : null}
+                    {item.errorReason === "Pendiente de confirmar" && teamAccess?.role === "owner" ? (
+                      <p className="mt-1 flex justify-end text-[10px]">
+                        <button type="button" className="text-[#2456c7]" onClick={() => void reviewSend(item.id)}>Marcar como revisado</button>
+                      </p>
+                    ) : null}
                   </li>
                 );
               })}
-              {reconcileBubbles(jobList, messages).filter((job) => job.state !== "awaiting" && selected && job.creatorId === selected.creatorId && job.threadKey === selected.threadKey).map((job) => (
-                <OutboundBubbleView key={job.clientId} job={job} onRetry={() => retrySend(job.clientId)} onDiscard={() => void discardSend(job.clientId)} onRestore={() => restoreDraft(job)} />
+              {reconcileBubbles(jobList, messages).filter((job) => selected && job.creatorId === selected.creatorId && job.threadKey === selected.threadKey).map((job) => (
+                <OutboundBubbleView key={job.clientId} job={job} onRetry={() => retrySend(job.clientId)} onDiscard={() => void discardSend(job.clientId)} onRestore={() => restoreDraft(job)} onReview={job.state === "awaiting" && teamAccess?.role === "owner" ? () => void reviewSend(job.clientId) : undefined} />
               ))}
               {messages.some((message) => message.fromFan) && fanTranslation ? <li className="text-[10px] text-[#6d7585]">Traducción: Sin datos</li> : null}
             </ol>
@@ -726,6 +753,34 @@ export function RealChatsPage() {
                     onSize={setTextSize}
                     onFanTranslation={() => setFanTranslation((value) => !value)}
                     onEmoji={insertAtCursor}
+                  />
+                </div>
+              ) : null}
+              {panel === "vault" || panel === "etiqueta" ? (
+                <div className={`absolute inset-x-2 bottom-full z-20 mb-1 flex flex-col overflow-hidden rounded-2xl border border-[#e6e8ee] bg-white shadow-xl ${panel === "vault" ? "h-[min(52vh,560px)]" : "max-h-[min(60vh,32rem)]"}`}>
+                  <ComposerPanelBody
+                    panel={panel}
+                    vaultItems={vaultItems}
+                    tagCreators={tagCreators}
+                    tagQuery={tagQuery}
+                    onTagQuery={setTagQuery}
+                    fanTranslation={fanTranslation}
+                    textSize={textSize}
+                    ofVault={ofVault}
+                    vaultReload={vaultReload}
+                    creatorId={selected?.creatorId ?? creatorId}
+                    fanKey={selected?.fanKey ?? null}
+                    onReadVault={() => void loadOfVault()}
+                    onVault={attachVault}
+                    onTag={(handle) => { const name = handle.replace(/^@/, "").trim(); setTagHandle(name || null); insertAtCursor(mentionToken(handle)); setPanel(null); }}
+                    onFormat={formatCommand}
+                    onSize={setTextSize}
+                    onFanTranslation={() => setFanTranslation((value) => !value)}
+                    onEmoji={insertAtCursor}
+                    onClose={() => setPanel(null)}
+                    reading={vaultReading}
+                    onVaultMore={() => void loadOfVault(vaultPage.current.listId, vaultPage.current.offset)}
+                    onOpenFolder={(listId) => void loadOfVault(listId ?? "all", 0)}
                   />
                 </div>
               ) : null}
@@ -859,43 +914,6 @@ export function RealChatsPage() {
             </div>
           </div>
         </div>
-      ) : null}
-      {(panel === "vault" || panel === "etiqueta") && typeof document !== "undefined" ? createPortal(
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4" onMouseDown={() => setPanel(null)}>
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label={panel === "vault" ? "Bóveda" : "Etiquetar"}
-            className={`flex w-full flex-col overflow-hidden rounded-2xl bg-white shadow-xl ${panel === "vault" ? "h-[82vh] max-w-5xl" : "max-h-[85vh] max-w-lg"}`}
-            onMouseDown={(event) => event.stopPropagation()}
-          >
-            <ComposerPanelBody
-                panel={panel}
-                vaultItems={vaultItems}
-                tagCreators={tagCreators}
-                tagQuery={tagQuery}
-                onTagQuery={setTagQuery}
-                fanTranslation={fanTranslation}
-                textSize={textSize}
-                ofVault={ofVault}
-                vaultReload={vaultReload}
-                creatorId={selected?.creatorId ?? creatorId}
-                fanKey={selected?.fanKey ?? null}
-                onReadVault={() => void loadOfVault()}
-                onVault={attachVault}
-                onTag={(handle) => { const name = handle.replace(/^@/, "").trim(); setTagHandle(name || null); insertAtCursor(mentionToken(handle)); setPanel(null); }}
-                onFormat={formatCommand}
-                onSize={setTextSize}
-                onFanTranslation={() => setFanTranslation((value) => !value)}
-                onEmoji={insertAtCursor}
-                onClose={() => setPanel(null)}
-                reading={vaultReading}
-                onVaultMore={() => void loadOfVault(vaultPage.current.listId, vaultPage.current.offset)}
-                onOpenFolder={(listId) => void loadOfVault(listId ?? "all", 0)}
-              />
-          </div>
-        </div>,
-        document.body,
       ) : null}
       {dialog === "precio" ? (
         <MessagePriceDialog
@@ -1075,7 +1093,7 @@ function ComposerPanelBody({
   switch (panel) {
     case "vault": {
       return (
-        <div role="region" aria-label="Panel Add from media vault" className="flex h-[72vh] min-h-0 flex-col">
+        <div role="region" aria-label="Panel Add from media vault" className="flex h-full min-h-0 flex-col">
           {reading ? <p className="px-4 py-2 text-sm text-[#8a96a3]">Leyendo la bóveda de OnlyFans…</p> : null}
           {creatorId && creatorId !== "all" ? (
             <VaultBrowser layout="of" creatorId={creatorId} fanKey={fanKey} reloadToken={vaultReload} onAttach={onVault} onClose={onClose} onMore={onVaultMore} onOpenFolder={onOpenFolder} />
