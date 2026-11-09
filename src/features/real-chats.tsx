@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AtSign, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, ScrollText, Send, Type } from "lucide-react";
-import { chatSendAccess, discardChatOutbound, listCreatorChats, loadMoreChats, loadOlderMessages, readChatVault, recordChatOutbound, reviewChatOutbound, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
+import { chatSendAccess, discardChatOutbound, listCreatorChats, loadMoreChats, loadOlderMessages, readChatVault, recordChatOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
 import { useCrm, type VaultItem } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
 import { useChatFanCards } from "@/lib/use-chat-fan-cards";
@@ -177,6 +177,12 @@ export function RealChatsPage() {
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
+  const [fanAction, setFanAction] = useState<null | "lists" | "discount" | "restrict" | "block" | "report">(null);
+  const [fanBusy, setFanBusy] = useState(false);
+  const [fanActionError, setFanActionError] = useState<string | null>(null);
+  const [fanLists, setFanLists] = useState<Array<{ name: string; on: boolean }>>([]);
+  const [discountPercent, setDiscountPercent] = useState("10");
+  const [reportText, setReportText] = useState("");
   const [draft, setDraft] = useState("");
   const [draftPrice, setDraftPrice] = useState<number | null>(null);
   const [priceLabel, setPriceLabel] = useState<string | null>(null);
@@ -671,6 +677,24 @@ export function RealChatsPage() {
     setFanMenu(false);
   }
 
+  function runMenu(request: { action: "lists" } | { action: "list"; name: string } | { action: "discount"; percent: number } | { action: "restrict" } | { action: "block" } | { action: "report"; reason: string }) {
+    if (!selected?.fanKey) return;
+    setFanBusy(true);
+    setFanActionError(null);
+    void runFanChatMenu({ data: { creatorId: selected.creatorId, fanKey: selected.fanKey, request } }).then((result) => {
+      const answer = result as { ok: boolean; reason: string | null; lists: Array<{ name: string; on: boolean }> };
+      setFanLists(answer.lists ?? []);
+      if (!answer.ok) {
+        setFanActionError(answer.reason ?? "No se ha podido hacer en OnlyFans.");
+        return;
+      }
+      if (request.action !== "lists" && request.action !== "list") {
+        setFanAction(null);
+        setFanMenu(false);
+      }
+    }).catch((err: unknown) => setFanActionError(sessionErrorText(err))).finally(() => setFanBusy(false));
+  }
+
   return (
     <div className="absolute inset-0 flex min-h-0 overflow-hidden bg-white text-[#1c2333]">
       <section className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden border-r border-[#e6e8ee] md:w-[340px] md:shrink-0">
@@ -783,6 +807,50 @@ export function RealChatsPage() {
                           <div className="my-1 border-t border-[#e6e8ee]" />
                           <button type="button" className="block w-full px-4 py-3 text-left hover:bg-[#f4f7ff]" onClick={() => toggleMark("hidden")}>{marks.hidden.includes(threadMark(selected.creatorId, selected.threadKey)) ? "Mostrar chat" : "Ocultar chat"}</button>
                           <button type="button" className="block w-full px-4 py-3 text-left text-[#2456c7] hover:bg-[#f4f7ff]" onClick={() => toggleMark("muted")}>{marks.muted.includes(threadMark(selected.creatorId, selected.threadKey)) ? "Activar avisos" : "Silenciar avisos"}</button>
+                          <div className="my-1 border-t border-[#e6e8ee]" />
+                          {fanAction ? (
+                            <div className="px-4 py-3">
+                              <button type="button" className="text-xs text-[#6d7585]" onClick={() => { setFanAction(null); setFanActionError(null); }}>Volver</button>
+                              {fanAction === "lists" ? (
+                                <div className="mt-2 space-y-1">
+                                  {fanBusy && fanLists.length === 0 ? <p className="text-xs text-[#6d7585]">Leyendo las listas de OnlyFans…</p> : null}
+                                  {fanLists.map((item) => (
+                                    <button key={item.name} type="button" disabled={fanBusy} className="block w-full rounded px-2 py-2 text-left text-sm hover:bg-[#f4f7ff] disabled:opacity-50" onClick={() => runMenu({ action: "list", name: item.name })}>
+                                      {item.on ? "Quitar de" : "Añadir a"} {item.name}
+                                    </button>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {fanAction === "discount" ? (
+                                <form className="mt-2 space-y-2" onSubmit={(event) => { event.preventDefault(); const percent = Number(discountPercent); if (Number.isInteger(percent) && percent >= 1 && percent <= 100) runMenu({ action: "discount", percent }); }}>
+                                  <p className="text-xs text-[#6d7585]">Porcentaje en OnlyFans, del 1 al 100.</p>
+                                  <input aria-label="Porcentaje de descuento" value={discountPercent} onChange={(event) => setDiscountPercent(event.target.value)} inputMode="numeric" className="h-9 w-full rounded-lg border border-[#e6e8ee] px-2 text-sm" />
+                                  <button type="submit" disabled={fanBusy} className="text-sm font-medium text-[#2456c7] disabled:opacity-50">Aplicar</button>
+                                </form>
+                              ) : null}
+                              {fanAction === "restrict" || fanAction === "block" ? (
+                                <div className="mt-2 space-y-2">
+                                  <p className="text-xs text-[#6d7585]">Esto se hace en la cuenta de OnlyFans.</p>
+                                  <button type="button" disabled={fanBusy} className="text-sm font-medium text-[#2456c7] disabled:opacity-50" onClick={() => runMenu({ action: fanAction })}>{fanAction === "block" ? "Bloquear" : "Restringir"}</button>
+                                </div>
+                              ) : null}
+                              {fanAction === "report" ? (
+                                <form className="mt-2 space-y-2" onSubmit={(event) => { event.preventDefault(); if (reportText.trim()) runMenu({ action: "report", reason: reportText.trim() }); }}>
+                                  <textarea aria-label="Motivo de la denuncia" value={reportText} onChange={(event) => setReportText(event.target.value)} className="h-20 w-full rounded-lg border border-[#e6e8ee] px-2 py-1 text-sm" />
+                                  <button type="submit" disabled={fanBusy || !reportText.trim()} className="text-sm font-medium text-[#2456c7] disabled:opacity-50">Denunciar</button>
+                                </form>
+                              ) : null}
+                              {fanActionError ? <p className="mt-2 text-xs text-[#8a5a12]">{fanActionError}</p> : null}
+                            </div>
+                          ) : (
+                            <>
+                              <button type="button" disabled={!selected.fanKey || fanBusy} className="block w-full px-4 py-3 text-left hover:bg-[#f4f7ff] disabled:text-[#b0b6c0]" onClick={() => { setFanAction("lists"); setFanLists([]); setFanActionError(null); runMenu({ action: "lists" }); }}>Añadir o quitar de listas</button>
+                              <button type="button" disabled={!selected.fanKey || fanBusy} className="block w-full px-4 py-3 text-left hover:bg-[#f4f7ff] disabled:text-[#b0b6c0]" onClick={() => { setFanAction("discount"); setFanActionError(null); }}>Dar un descuento</button>
+                              <button type="button" disabled={!selected.fanKey || fanBusy} className="block w-full px-4 py-3 text-left hover:bg-[#f4f7ff] disabled:text-[#b0b6c0]" onClick={() => { setFanAction("restrict"); setFanActionError(null); }}>Restringir</button>
+                              <button type="button" disabled={!selected.fanKey || fanBusy} className="block w-full px-4 py-3 text-left hover:bg-[#f4f7ff] disabled:text-[#b0b6c0]" onClick={() => { setFanAction("block"); setFanActionError(null); }}>Bloquear</button>
+                              <button type="button" disabled={!selected.fanKey || fanBusy} className="block w-full px-4 py-3 text-left hover:bg-[#f4f7ff] disabled:text-[#b0b6c0]" onClick={() => { setFanAction("report"); setFanActionError(null); }}>Denunciar</button>
+                            </>
+                          )}
                         </>
                       )}
                     </div>

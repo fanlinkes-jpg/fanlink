@@ -34,6 +34,7 @@ import { historyPerMinute, listPageDone, nextHistoryThread, oldestCursor, pageFi
 import { captureChatListPage, captureOlderMessages } from "../../server/of-sessions/sync/history-scroll.ts";
 import { openWorkPage } from "../../server/of-sessions/sessions/work-page.ts";
 import { readVaultFromPage, type VaultFile } from "../../server/of-sessions/sync/vault-listen.ts";
+import { normalizeFanMenuRequest, runFanMenuOnPage, type FanMenuResult } from "../../server/of-sessions/sync/fan-menu.ts";
 import { chatPageUrl } from "../../server/of-sessions/sync/chats.ts";
 import { sendPace } from "../../server/of-sessions/send/gate.ts";
 import { chatSendGate, publicSendReason, type SendAccount } from "../../server/of-sessions/send/gate.ts";
@@ -943,6 +944,29 @@ export async function readChatVaultView(userId: string, input: { creatorId: stri
     items: saved.map((item) => ({ id: item.id, title: item.title, kind: item.kind })),
     reason: null,
   };
+}
+
+export async function runFanChatMenuView(userId: string, input: { creatorId: string; fanKey: string; request: unknown }): Promise<FanMenuResult> {
+  const access = await accessFor(userId);
+  if (access.role !== "owner" && !access.perms.includes("mensajes")) {
+    throw new WorkspaceAccessError("No tienes permiso para escribir.");
+  }
+  const request = normalizeFanMenuRequest(input.request);
+  if (!request || !input.fanKey.trim()) return { ok: false, reason: "Sin datos", lists: [] };
+  const sessions = await getOfSessionManager();
+  const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
+  if (!account) return { ok: false, reason: "Sin datos", lists: [] };
+  const url = chatPageUrl(onlyFansSite.chatsUrl ?? "https://onlyfans.com/my/chats", input.fanKey, "onlyfans");
+  const ran = await sessions.runQueued(account.id, async (context) => {
+    const page = await openWorkPage(context);
+    try {
+      return await runFanMenuOnPage(page, url, request);
+    } finally {
+      await page.close().catch(() => undefined);
+    }
+  }, { wait: true });
+  if (!ran.ok) return { ok: false, reason: "OnlyFans está ocupado con otra lectura.", lists: [] };
+  return ran.value;
 }
 
 export async function loadOlderMessagesView(userId: string, input: { creatorId: string; threadKey: string }): Promise<{ ok: boolean }> {
