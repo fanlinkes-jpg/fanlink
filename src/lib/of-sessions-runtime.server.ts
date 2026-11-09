@@ -177,6 +177,9 @@ export function kickInboxWatch(): void {
     save: async (creatorId, messages) => {
       await saveChatRead(await getSql(), creatorId, { threads: [], messages, reason: null, jsonPaths: [] });
     },
+    saveThreads: async (creatorId, threads) => {
+      await saveChatRead(await getSql(), creatorId, { threads, messages: [], reason: null, jsonPaths: [] });
+    },
     onNavigate: (threadKey) => {
       threadRef.key = threadKey ?? "";
     },

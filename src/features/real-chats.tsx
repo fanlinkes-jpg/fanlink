@@ -243,6 +243,8 @@ export function RealChatsPage() {
     void refresh();
     void chatSendAccess().then((access) => setSendCreators(access.creatorIds)).catch(() => setSendCreators([]));
     setMarks(readChatMarks());
+    const timer = setInterval(() => { void refresh(); }, 15_000);
+    return () => clearInterval(timer);
   }, []);
 
   const threads = (data?.threads ?? []).filter(
@@ -860,7 +862,7 @@ export function RealChatsPage() {
               <div className="flex items-center gap-2">
                 <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => void refresh()}>Recargar</button>
                 <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => setInsightsOpen(true)}>Ficha del fan</button>
-                <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => setMenu((open) => !open)} aria-label="Menú">Menú</button>
+                <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => { setFanMenu((open) => !open); setRenaming(false); }} aria-label="Menú" aria-expanded={fanMenu}>Menú</button>
               </div>
             </header>
             {menu && selected ? (
