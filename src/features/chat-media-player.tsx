@@ -7,27 +7,38 @@ export function ChatMediaPlayer({
   messageKey,
   index,
   kind,
+  locked = false,
 }: {
   creatorId: string;
   threadKey: string;
   messageKey: string;
   index: number;
   kind: "foto" | "video" | "audio" | null;
+  locked?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const src = chatMediaSrc({ creatorId, threadKey, messageKey, index });
-  const label = kind === "audio" ? "Reproducir audio" : kind === "foto" ? "Ver foto" : "Reproducir";
+  const preview = chatMediaSrc({ creatorId, threadKey, messageKey, index, variant: "preview" });
+  const full = chatMediaSrc({ creatorId, threadKey, messageKey, index, variant: "full" });
+  if (kind === "audio") {
+    return <audio controls preload="none" src={locked ? preview : full} className="mb-1 w-full max-w-xs" />;
+  }
+  const label = locked ? "Contenido bloqueado" : kind === "foto" ? "Ver foto" : "Reproducir";
   return (
     <div className="mb-1">
-      <button type="button" aria-label={label} className="block w-full rounded bg-[#eceef2] px-2 py-3 text-center text-xs text-[#6d7585]" onClick={() => setOpen(true)}>
-        {label}
+      <button
+        type="button"
+        aria-label={label}
+        className="relative block w-full max-w-xs overflow-hidden rounded-lg bg-[#eceef2]"
+        onClick={() => { if (!locked) setOpen(true); }}
+      >
+        <img src={preview} alt="" className={`h-40 w-full object-cover ${locked ? "scale-105 blur-md" : ""}`} />
+        {kind === "video" ? <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1 text-[11px] text-white">Vídeo</span> : null}
+        {locked ? <span className="absolute inset-0 grid place-items-center text-xs font-semibold text-white">Bloqueado</span> : null}
       </button>
       {open ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/80 p-4" role="dialog" aria-label="Reproducir">
           <button type="button" className="absolute right-4 top-4 rounded bg-white px-3 py-1 text-sm" onClick={() => setOpen(false)}>Cerrar</button>
-          {kind === "audio" ? <audio controls preload="none" src={src} className="w-full max-w-md" /> : null}
-          {kind === "foto" ? <img src={src} alt="" className="max-h-[80vh] max-w-full object-contain" /> : null}
-          {kind !== "audio" && kind !== "foto" ? <video controls preload="none" src={src} className="max-h-[80vh] max-w-full" /> : null}
+          {kind === "foto" ? <img src={full} alt="" className="max-h-[80vh] max-w-full object-contain" /> : <video controls autoPlay src={full} className="max-h-[80vh] max-w-full" />}
         </div>
       ) : null}
     </div>

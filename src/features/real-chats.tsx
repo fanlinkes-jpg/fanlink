@@ -59,22 +59,23 @@ function ThreadMessage({ message }: { message: {
   authorName: string | null;
   automatic: boolean | null;
   mediaCount: number | null;
-  media: Array<{ kind: "foto" | "video" | "audio" | null }> | null;
+  media: Array<{ kind: "foto" | "video" | "audio" | null; locked?: boolean | null }> | null;
   priceCents: number | null;
   purchased: boolean | null;
 } }) {
   const slides = message.media ?? [];
   const hasMedia = (message.mediaCount ?? 0) > 0 || slides.length > 0;
+  const locked = message.priceCents != null && message.priceCents > 0 && message.purchased !== true;
   const who = message.fromFan ? "" : message.authorName ? authorLabel(message.authorName, false) : authorLabel(null, message.automatic);
   const pay = paymentLabel(message);
   return (
     <li className={message.fromFan ? "" : "text-right"}>
       <div className={`inline-block max-w-[70%] rounded-2xl px-3 py-2 text-left text-sm ${message.fromFan ? "bg-[#f4f6fb]" : "bg-[#e7f0ff]"}`}>
         {hasMedia && slides.length === 0 ? (
-          <ChatMediaPlayer creatorId={message.creatorId} threadKey={message.threadKey} messageKey={message.messageKey} index={0} kind="video" />
+          <ChatMediaPlayer creatorId={message.creatorId} threadKey={message.threadKey} messageKey={message.messageKey} index={0} kind="video" locked={locked} />
         ) : null}
         {slides.map((slide, index) => (
-          <ChatMediaPlayer key={`${message.messageKey}-${index}`} creatorId={message.creatorId} threadKey={message.threadKey} messageKey={message.messageKey} index={index} kind={slide.kind} />
+          <ChatMediaPlayer key={`${message.messageKey}-${index}`} creatorId={message.creatorId} threadKey={message.threadKey} messageKey={message.messageKey} index={index} kind={slide.kind} locked={locked || slide.locked === true} />
         ))}
         {message.body ? <p>{message.body}</p> : null}
       </div>
