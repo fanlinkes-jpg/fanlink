@@ -183,6 +183,9 @@ export function kickInboxWatch(): void {
     saveUsers: async (creatorId, users) => {
       await saveFanCards(await getSql(), creatorId, users);
     },
+    saveNotes: async (creatorId, items) => {
+      await saveNotificationRead(await getSql(), creatorId, { items, reason: null, captured: true });
+    },
     onNavigate: (threadKey) => {
       threadRef.key = threadKey ?? "";
     },

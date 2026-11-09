@@ -2,9 +2,11 @@ import type { BrowserContext, Page } from "playwright";
 import { closeIfIdle } from "../live/pages.ts";
 import {
   mergeNotifications,
+  NOTIFICATION_TYPE_READS,
   notificationScrolls,
   parseNotificationPayload,
   redactedNotificationUrl,
+  type NotificationKind,
   type ParsedNotification,
 } from "../../../src/lib/notifications.ts";
 import { logApiResponse } from "./wait-for-data.ts";
@@ -73,6 +75,11 @@ export async function collectNotifications(
         notes.captured = true;
       }
     }
+    const typed = await readNotificationTypes(page);
+    if (typed.length > 0) {
+      notes.items = replaceNotifications(notes.items, typed);
+      notes.captured = true;
+    }
     return {
       items: notes.items,
       reason: notes.captured ? null : "sin respuesta de notificaciones",
@@ -140,6 +147,42 @@ function readNotificationMarker(): unknown {
   } catch {
     return null;
   }
+}
+
+function replaceNotifications(current: ParsedNotification[], incoming: ParsedNotification[]): ParsedNotification[] {
+  const map = new Map(current.map((item) => [item.key, item]));
+  for (const item of incoming) map.set(item.key, item);
+  return [...map.values()];
+}
+
+/** Cada pestaña de OnlyFans es una petición distinta. La general no trae las etiquetas. */
+export async function readNotificationTypes(page: Page): Promise<ParsedNotification[]> {
+  if (!page.url().includes("onlyfans.com/")) return [];
+  const types = NOTIFICATION_TYPE_READS.map((row) => row[0]);
+  const payloads = await page.evaluate(async (wanted: string[]) => {
+    const out: Array<{ type: string; body: unknown }> = [];
+    for (const type of wanted) {
+      try {
+        const response = await fetch(`/api2/v2/users/notifications?type=${type}&limit=30&skip_users=all&format=infinite`, {
+          credentials: "include",
+          headers: { accept: "application/json" },
+        });
+        if (!response.ok) continue;
+        out.push({ type, body: await response.json() });
+      } catch {
+        // El siguiente tipo sigue.
+      }
+    }
+    return out;
+  }, [...types]).catch(() => [] as Array<{ type: string; body: unknown }>);
+  const kindByType = new Map<string, NotificationKind>(NOTIFICATION_TYPE_READS);
+  const items: ParsedNotification[] = [];
+  for (const row of payloads) {
+    const kind = kindByType.get(row.type);
+    if (!kind) continue;
+    for (const item of parseNotificationPayload(row.body)) items.push({ ...item, kind });
+  }
+  return items;
 }
 
 function delay(ms: number): Promise<void> {

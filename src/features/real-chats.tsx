@@ -317,6 +317,8 @@ export function RealChatsPage() {
 
   useEffect(() => {
     void loadNotes();
+    const timer = setInterval(() => { void loadNotes(); }, 20_000);
+    return () => clearInterval(timer);
   }, [creatorId, creators.length]);
 
   function placeNotes() {

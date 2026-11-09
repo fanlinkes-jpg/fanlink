@@ -52,6 +52,17 @@ test("lee tipos conocidos y deja el resto en Sin datos", () => {
   assert.equal(byKey.get("n2")?.threadKey, "77");
   assert.equal(byKey.get("n2")?.amountCents, null);
   assert.equal(byKey.get("n3")?.pending, true);
+  assert.equal(byKey.get("n3")?.kind, "tag");
+  const tabs = parseNotificationPayload({
+    list: [
+      { id: "e1", type: "tags", text: "te etiquetó", createdAt: "2026-11-09T10:00:00.000Z", user: { id: 1, name: "Ana" } },
+      { id: "e2", type: "expired", text: "caducó", createdAt: "2026-11-09T10:00:00.000Z", user: { id: 2, name: "Luis" } },
+      { id: "e3", type: "comments", text: "comentó", createdAt: "2026-11-09T10:00:00.000Z", user: { id: 3, name: "Paz" } },
+    ],
+  });
+  assert.equal(tabs.find((row) => row.key === "e1")?.kind, "tag");
+  assert.equal(tabs.find((row) => row.key === "e2")?.kind, "subscription");
+  assert.equal(tabs.find((row) => row.key === "e3")?.kind, "comment");
   assert.equal(tabOf("ppv"), "purchases");
   assert.equal(tabOf("tag"), "tags");
   assert.equal(byKey.get("n4")?.kind, "other");

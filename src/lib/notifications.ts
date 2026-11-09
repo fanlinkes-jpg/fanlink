@@ -244,6 +244,18 @@ export function isNotificationResponseUrl(url: string): boolean {
   }
 }
 
+export const NOTIFICATION_TYPE_READS = [
+  ["subscriptions", "subscription"],
+  ["purchases", "ppv"],
+  ["tips", "tip"],
+  ["tags", "tag"],
+  ["comments", "comment"],
+  ["mentions", "mention"],
+  ["likes", "like"],
+  ["promotions", "promotion"],
+  ["onlyfans", "system"],
+] as const;
+
 export function notificationScrolls(requested: number): number {
   if (!Number.isFinite(requested) || requested <= 0) return 0;
   return Math.min(NOTIFICATION_MAX_SCROLLS, Math.floor(requested));
@@ -403,17 +415,17 @@ function notificationFrom(record: Record<string, unknown>): ParsedNotification |
 
 function kindOf(raw: string): NotificationKind {
   const value = raw.toLowerCase().replace(/[\s-]+/g, "_");
-  if (["like", "liked", "favorite", "favourite", "favorited"].includes(value)) return "like";
-  if (["comment", "commented", "reply"].includes(value)) return "comment";
+  if (["like", "liked", "likes", "favorite", "favourite", "favorited"].includes(value)) return "like";
+  if (["comment", "commented", "comments", "reply"].includes(value)) return "comment";
   if (["mention", "mentioned", "mentions"].includes(value)) return "mention";
-  if (["tag", "tagged", "label", "labels"].includes(value)) return "tag";
-  if (["subscribe", "subscribed", "subscription", "new_subscriber", "subscriber"].includes(value)) return "subscription";
+  if (["tag", "tags", "tagged", "label", "labels"].includes(value)) return "tag";
+  if (["subscribe", "subscribed", "subscription", "subscriptions", "new_subscriber", "subscriber", "expired", "expire", "unsubscribed"].includes(value)) return "subscription";
   if (["renewal", "rebill", "recurring", "renewed"].includes(value)) return "renewal";
   if (["tip", "tips"].includes(value)) return "tip";
-  if (["ppv", "purchase", "paided_message", "paid_message", "unlock", "message_purchase"].includes(value)) return "ppv";
+  if (["ppv", "purchase", "purchases", "paided_message", "paid_message", "unlock", "message_purchase"].includes(value)) return "ppv";
   if (["promotion", "promo", "promotional", "discount", "campaign"].includes(value)) return "promotion";
   if (["message", "chat", "new_message"].includes(value)) return "message";
-  if (["system", "announcement", "warning", "notice"].includes(value)) return "system";
+  if (["system", "announcement", "warning", "notice", "deactivated_media"].includes(value)) return "system";
   if (["payout", "payouts", "earning", "earnings", "balance", "balances", "gross", "revenue", "statement", "withdrawal"].includes(value)) return "agency";
   return "other";
 }
