@@ -837,10 +837,10 @@ export function RealChatsPage() {
                     {(notes ?? []).filter((item) => noteMatches(item.kind, noteFilter)).map((item) => {
                       const thread = (data?.threads ?? []).find((row) => row.creatorId === item.creatorId && (
                         (item.threadKey != null && row.threadKey === item.threadKey)
-                        || (item.fanKey != null && (row.fanKey === item.fanKey || row.threadKey === item.fanKey))
+                        || (item.fanKey != null && (row.fanKey === item.fanKey || row.threadKey === item.fanKey || row.fanHandle?.replace(/^@/, "") === item.fanKey))
                       ));
                       const name = item.fanName ?? thread?.fanName ?? "Sin datos";
-                      const handle = thread?.fanHandle?.replace(/^@/, "") ?? null;
+                      const handle = thread?.fanHandle?.replace(/^@/, "") ?? (item.fanKey && !/^\d+$/.test(item.fanKey) ? item.fanKey : null);
                       const canOpen = thread != null;
                       return (
                         <li key={`${item.creatorId}:${item.key}`} className="border-b border-[#eef0f3]">

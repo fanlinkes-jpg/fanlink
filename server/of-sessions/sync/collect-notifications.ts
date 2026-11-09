@@ -218,17 +218,28 @@ async function readNotificationPage(page: Page, open: boolean): Promise<ParsedNo
   try {
     await openNotificationBell(page, open);
     for (const [label, kind] of TAB_CLICKS) {
-      const tab = page.getByText(new RegExp(label, "i")).first();
+      const tab = page.locator("button, a, [role='tab']").filter({ hasText: new RegExp(`^\\s*${label}\\b`, "i") }).first();
       const visible = await tab.isVisible().catch(() => false);
       if (!visible) continue;
       forced = kind;
       console.info(`[fanlink:avisos] pestaña=${label}`);
+      const arrived = page.waitForResponse(
+        (response) => response.url().includes("/users/notifications") && response.status() >= 200 && response.status() < 300,
+        { timeout: 6_000 },
+      ).catch(() => null);
       await tab.click({ timeout: 2_000 }).catch(() => undefined);
-      await delay(800);
-      for (let step = 0; step < 3; step += 1) {
+      await arrived;
+      for (let step = 0; step < 4; step += 1) {
+        const more = page.waitForResponse(
+          (response) => response.url().includes("/users/notifications") && response.status() >= 200 && response.status() < 300,
+          { timeout: 2_000 },
+        ).catch(() => null);
         await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => undefined);
-        await delay(500);
+        await more;
       }
+      const seen = await readPaintedRows(page);
+      console.info(`[fanlink:avisos] pantalla=${label} filas=${seen.length}`);
+      for (const row of seen) found.push(paintedNote(kind, row));
     }
     const fetched = await pullNotificationTypes(page);
     for (const item of fetched) found.push(item);
@@ -296,6 +307,65 @@ async function openNotificationBell(page: Page, open: boolean): Promise<void> {
     await page.goto("https://onlyfans.com/my/notifications", { waitUntil: "domcontentloaded", timeout: 20_000 }).catch(() => undefined);
   }
   await delay(1_500);
+}
+
+function paintedNote(kind: NotificationKind, row: { name: string; handle: string; body: string; when: string }): ParsedNotification {
+  return {
+    key: `pantalla:${kind}:${row.handle}:${row.body.slice(0, 80)}`,
+    kind,
+    body: row.body,
+    fanKey: row.handle,
+    fanName: row.name || row.handle,
+    threadKey: null,
+    amountCents: null,
+    occurredAt: paintedWhen(row.when),
+    pending: false,
+  };
+}
+
+function paintedWhen(label: string): string | null {
+  const text = label.trim().toLowerCase();
+  if (text === "hoy") return new Date().toISOString();
+  if (text === "ayer") return new Date(Date.now() - 86_400_000).toISOString();
+  const match = text.match(/^(\d{1,2})\s+([a-záéíóú.]+)/i);
+  if (!match) return null;
+  const months: Record<string, number> = { ene: 0, feb: 1, mar: 2, abr: 3, may: 4, jun: 5, jul: 6, ago: 7, sep: 8, oct: 9, nov: 10, dic: 11 };
+  const month = months[match[2].slice(0, 3).normalize("NFD").replace(/\p{M}/gu, "")];
+  if (month == null) return null;
+  const now = new Date();
+  const day = new Date(Date.UTC(now.getUTCFullYear(), month, Number(match[1]), 12));
+  if (day.getTime() > now.getTime() + 86_400_000) day.setUTCFullYear(day.getUTCFullYear() - 1);
+  return day.toISOString();
+}
+
+async function readPaintedRows(page: Page): Promise<Array<{ name: string; handle: string; body: string; when: string }>> {
+  return page.evaluate(() => {
+    const rows: Array<{ name: string; handle: string; body: string; when: string }> = [];
+    const seen = new Set<string>();
+    for (const node of document.querySelectorAll("div, li, article")) {
+      const text = (node as HTMLElement).innerText?.trim() ?? "";
+      if (!text || text.length > 400 || text.split("\n").length > 8) continue;
+      const handle = text.match(/@([a-z0-9_.]{2,})/i);
+      if (!handle) continue;
+      const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
+      const nameLine = lines.find((line) => line.includes(`@${handle[1]}`)) ?? "";
+      const name = nameLine.replace(`@${handle[1]}`, "").replace(/[✓✔]/g, "").trim();
+      const body = lines.find((line) => line !== nameLine && !/^añadir a favoritos/i.test(line) && !/^(hoy|ayer|\d{1,2}\s+\p{L}+)$/iu.test(line));
+      const when = lines.find((line) => /^(hoy|ayer|\d{1,2}\s+\p{L}+)$/iu.test(line)) ?? "";
+      if (!body) continue;
+      const key = `${handle[1]}|${body}|${when}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push({ name, handle: handle[1], body, when });
+    }
+    return rows.slice(0, 40);
+  }).catch(() => []);
+}
+  try {
+    return new URL(url).searchParams.get("type");
+  } catch {
+    return null;
+  }
 }
 
 function notificationTypeOf(url: string): string | null {
