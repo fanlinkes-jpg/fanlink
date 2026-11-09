@@ -25,6 +25,7 @@ import {
 } from "./chats.ts";
 import { outcomeFromParsed, preferOutcome, type SectionOutcome } from "./parse.ts";
 import { logUnparsed, shapeSummary } from "./shape.ts";
+import { readVaultFromPage } from "./vault-listen.ts";
 import { logApiResponse, logSection, sectionWaitMs, settleUntil } from "./wait-for-data.ts";
 
 export type CollectedChats = {
@@ -32,6 +33,7 @@ export type CollectedChats = {
   messages: ChatMessage[];
   reason: string | null;
   jsonPaths: string[];
+  vaultPayloads?: unknown[];
   loginRequired?: boolean;
   alreadyRunning?: boolean;
 };
@@ -139,11 +141,15 @@ export async function collectChats(
     if (reason) {
       console.info(`[fanlink:chat] ${reason}${notes.paths.length ? ` | json: ${notes.paths.join(", ")}` : ""}`);
     }
+    const vaultPayloads = site.id === "onlyfans" && notes.sawLoggedIn && page
+      ? await readVaultFromPage(page).catch(() => [])
+      : [];
     return {
       threads: notes.threads.slice(0, 200),
       messages: notes.messages.slice(0, 200),
       reason,
       jsonPaths: notes.paths,
+      vaultPayloads,
       loginRequired,
     };
   } finally {

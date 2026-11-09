@@ -30,6 +30,30 @@ export function parseVaultPayload(payload: unknown): VaultFile[] {
   return out;
 }
 
+/** Pide la lista real de la bóveda desde la página ya logueada. No pulsa botones. */
+export async function readVaultFromPage(page: Page): Promise<unknown[]> {
+  await page.goto("https://onlyfans.com/my/chats", { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
+  const pulled = await page.evaluate(async () => {
+    const paths = [
+      "/api2/v2/vault/lists?view=main&offset=0&limit=10",
+      "/api2/v2/vault/media?limit=40&offset=0&field=recent&sort=desc&list=all",
+    ];
+    const out: unknown[] = [];
+    for (const path of paths) {
+      try {
+        const response = await fetch(path, { credentials: "include", headers: { accept: "application/json" } });
+        if (!response.ok) continue;
+        out.push(await response.json());
+      } catch {
+        // La página no ha firmado esta petición.
+      }
+    }
+    return out;
+  }).catch(() => [] as unknown[]);
+  if (pulled.some((payload) => parseVaultBundle(payload).items.length > 0 || parseVaultBundle(payload).lists.length > 0)) return pulled;
+  return captureVaultAt(page, "https://onlyfans.com/my/vault");
+}
+
 /** Abre la página y espera el JSON de los medios. No vuelve antes de leer el cuerpo. */
 export async function captureVaultAt(page: Page, vaultUrl: string, waitMs = 15_000): Promise<unknown[]> {
   const found: unknown[] = [];

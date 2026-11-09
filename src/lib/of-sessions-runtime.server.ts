@@ -33,8 +33,7 @@ import { listChatMeta, listChats, listOpenHistory, listPendingOutbounds, markCha
 import { historyPerMinute, listPageDone, nextHistoryThread, oldestCursor, pageFinished } from "../../server/of-sessions/sync/history.ts";
 import { captureChatListPage, captureOlderMessages } from "../../server/of-sessions/sync/history-scroll.ts";
 import { openWorkPage } from "../../server/of-sessions/sessions/work-page.ts";
-import { captureVaultAt, type VaultFile } from "../../server/of-sessions/sync/vault-listen.ts";
-import { parseVaultBundle } from "../../server/of-sessions/sync/vault-model.ts";
+import { readVaultFromPage, type VaultFile } from "../../server/of-sessions/sync/vault-listen.ts";
 import { chatPageUrl } from "../../server/of-sessions/sync/chats.ts";
 import { sendPace } from "../../server/of-sessions/send/gate.ts";
 import { chatSendGate, publicSendReason, type SendAccount } from "../../server/of-sessions/send/gate.ts";
@@ -284,6 +283,7 @@ function bootChatLoop(sessions: SessionManager): void {
       if (!account?.creatorId) return;
       const sql = await getSql();
       const events = await saveChatRead(sql, account.creatorId, read);
+      await saveVaultPayloads(sql, account.creatorId, read.vaultPayloads);
       await deliverFanAlerts(sql, events);
     },
   });
@@ -598,6 +598,7 @@ export async function syncCreatorChatView(userId: string, creatorId: string): Pr
   if (!read.alreadyRunning) {
     const sql = await getSql();
     const events = await saveChatRead(sql, id, read);
+    await saveVaultPayloads(sql, id, read.vaultPayloads);
     await deliverFanAlerts(sql, events);
   }
 }
@@ -901,6 +902,13 @@ export async function resolveChatSendHooks(
   };
 }
 
+async function saveVaultPayloads(sql: Awaited<ReturnType<typeof getSql>>, creatorId: string, payloads: unknown[] | undefined): Promise<void> {
+  if (!payloads || payloads.length === 0) return;
+  const { persistVaultRead } = await import("../../server/of-sessions/sync/vault-store.ts");
+  const saved = await persistVaultRead(sql, creatorId, payloads);
+  console.info(`[fanlink:vault] piezas=${saved.length}`);
+}
+
 export async function readChatVaultView(userId: string, input: { creatorId: string; threadKey: string }): Promise<{ items: VaultFile[]; reason: string | null }> {
   const access = await accessFor(userId);
   if (access.role !== "owner" && !access.perms.includes("mensajes")) {
@@ -912,11 +920,8 @@ export async function readChatVaultView(userId: string, input: { creatorId: stri
   const ran = await sessions.runQueued(account.id, async (context) => {
     const page = await openWorkPage(context);
     try {
-      const chatUrl = chatPageUrl(onlyFansSite.chatsUrl ?? "https://onlyfans.com/my/chats", input.threadKey, onlyFansSite.id);
-      const fromChat = await captureVaultAt(page, chatUrl);
-      if (fromChat.some((payload) => parseVaultBundle(payload).items.length > 0)) return fromChat;
-      const fromVault = await captureVaultAt(page, "https://onlyfans.com/my/vault");
-      return fromChat.concat(fromVault);
+      const fromPage = await readVaultFromPage(page);
+      return fromPage;
     } finally {
       await page.close().catch(() => undefined);
     }

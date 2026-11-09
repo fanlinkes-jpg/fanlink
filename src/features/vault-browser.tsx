@@ -184,26 +184,24 @@ export function VaultBrowser({
                 </button>
               ))}
             </div>
-            <div className="grid min-h-0 flex-1 grid-cols-3 content-start gap-2 overflow-y-auto px-4 pb-4">
-              {items.length === 0 ? <p className="col-span-3 text-sm text-[#8a96a3]">Sin datos</p> : null}
+            <div className="grid min-h-0 flex-1 grid-cols-4 content-start gap-3 overflow-y-auto px-4 pb-4">
+              {items.length === 0 ? <p className="col-span-4 text-sm text-[#8a96a3]">Sin datos</p> : null}
               {items.map((item) => (
                 <button
                   key={item.id}
                   type="button"
                   disabled={item.blocked || !onAttach}
-                  className="relative aspect-[4/3] overflow-hidden rounded-md bg-[#f2f3f5] text-left disabled:opacity-50"
+                  className="relative aspect-[3/4] overflow-hidden rounded-lg bg-[#f2f3f5] text-left disabled:opacity-50"
                   onClick={() => {
                     const other = items.find((row) => row.id === item.packageWithId);
                     onAttach?.({ id: item.id, title: item.title, withId: item.packageWithId, withTitle: other?.title ?? null });
                   }}
                 >
-                  <span className="absolute inset-x-1 bottom-6 truncate text-[10px] text-[#1c2333]">{item.title || "Sin datos"}</span>
                   <VaultThumb creatorId={creatorId} itemId={item.id} title={item.title} />
                   {item.kind === "video" && item.seconds != null ? (
-                    <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1 text-[11px] text-white">{formatSeconds(item.seconds)}</span>
+                    <span className="absolute bottom-2 right-2 rounded bg-black/70 px-1.5 py-0.5 text-[11px] text-white">{formatSeconds(item.seconds)}</span>
                   ) : null}
-                  <span className="absolute right-1.5 top-1.5 h-5 w-5 rounded-full border-2 border-white bg-black/20" />
-                  {item.blocked ? <span className="absolute bottom-1 right-1 rounded bg-white/90 px-1 text-[10px]">NO VENDER</span> : null}
+                  {item.kind === "foto" ? <span className="absolute bottom-2 right-2 rounded bg-black/70 px-1 text-[11px] text-white">Foto</span> : null}
                 </button>
               ))}
             </div>
