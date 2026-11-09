@@ -379,8 +379,9 @@ export class SessionManager {
   }
 
   /** Una lectura a la vez, el mismo perfil que la sincronización. */
-  runQueued<T>(accountId: string, run: (context: BrowserContext) => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; busy: true }> {
-    if (liveHoldsAccount(accountId) || this.reading.size > 0) return Promise.resolve({ ok: false, busy: true });
+  runQueued<T>(accountId: string, run: (context: BrowserContext) => Promise<T>, options?: { wait?: boolean }): Promise<{ ok: true; value: T } | { ok: false; busy: true }> {
+    if (liveHoldsAccount(accountId)) return Promise.resolve({ ok: false, busy: true });
+    if (!options?.wait && this.reading.size > 0) return Promise.resolve({ ok: false, busy: true });
     this.reading.add(accountId);
     const job = this.readTail.then(async () => {
       const value = await this.withSession(accountId, run);

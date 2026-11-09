@@ -920,8 +920,8 @@ export async function readChatVaultView(userId: string, input: { creatorId: stri
     } finally {
       await page.close().catch(() => undefined);
     }
-  });
-  if (!ran.ok || ran.value.length === 0) return { items: [], reason: "Sin datos" };
+  }, { wait: true });
+  if (!ran.ok) return { items: [], reason: "OnlyFans está ocupado con otra lectura." };
   const { persistVaultRead } = await import("../../server/of-sessions/sync/vault-store.ts");
   const saved = await persistVaultRead(await getSql(), input.creatorId, ran.value);
   if (saved.length === 0) {
