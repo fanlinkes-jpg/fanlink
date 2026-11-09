@@ -2,15 +2,11 @@ import type { BrowserContext, Page } from "playwright";
 import { openWorkPage } from "../sessions/work-page.ts";
 import { closeIfIdle } from "../live/pages.ts";
 import { chatPageUrl, classifyChatPath, isUsersDirectoryUrl, parseChatList, parseChatMessages, parsePreviewMessages, parseUsersDirectory, type ChatMessage, type ChatThread, type ChatUser } from "./chats.ts";
-import { readNotificationTypes } from "./collect-notifications.ts";
-import type { ParsedNotification } from "../../../src/lib/notifications.ts";
 import { parseLivePayload } from "./live-frames.ts";
 import { FALLBACK_RELOAD_MS, nextFallbackThread, WATCH_IDLE_MS, type WatchedThread } from "./watch-plan.ts";
 
 /** La lista se vuelve a pedir. Si no, un chat nuevo no entra en la bandeja. */
 export const LIST_RELOAD_MS = 60_000;
-/** Cada tipo de aviso. La bandeja general no trae etiquetas ni el resto. */
-export const NOTE_RELOAD_MS = 180_000;
 
 export type WatchTarget = {
   accountId: string;
@@ -30,7 +26,6 @@ export type WatchSession = {
     onBlock: (reason: string) => void;
   }): void;
   close(): Promise<void>;
-  readNotes?(): Promise<ParsedNotification[]>;
 };
 
 /**
@@ -45,7 +40,6 @@ export async function runInboxWatch(input: {
   save: (creatorId: string, messages: ChatMessage[]) => Promise<void>;
   saveThreads?: (creatorId: string, threads: ChatThread[]) => Promise<void>;
   saveUsers?: (creatorId: string, users: ChatUser[]) => Promise<void>;
-  saveNotes?: (creatorId: string, items: ParsedNotification[]) => Promise<void>;
   /** Devuelve los milisegundos de la pausa de la cuenta. La pestaña espera eso, no un fijo de 15 s. */
   onBlock: (accountId: string, reason: string) => number;
   onNavigate?: (threadKey: string | null) => void;
@@ -64,7 +58,6 @@ export async function runInboxWatch(input: {
   let lastUsefulAt: number | null = null;
   let lastGlobalReloadAt: number | null = null;
   let lastListReloadAt: number | null = null;
-  let lastNoteReloadAt: number | null = null;
   let lastWatcherAt = input.now();
   let blockedUntil: number | null = null;
   const reloadedAt = new Map<string, number>();
@@ -153,11 +146,6 @@ export async function runInboxWatch(input: {
       await input.sleep(200);
       continue;
     }
-    if (session?.readNotes && input.saveNotes && (lastNoteReloadAt == null || now - lastNoteReloadAt >= NOTE_RELOAD_MS)) {
-      const notes = await session.readNotes().catch(() => [] as ParsedNotification[]);
-      lastNoteReloadAt = input.now();
-      if (creatorId && notes.length) void input.saveNotes(creatorId, notes);
-    }
     const next = quiet
       ? nextFallbackThread(target.threads, reloadedAt, openedAt, lastGlobalReloadAt, now, fallbackMs)
       : null;
@@ -220,7 +208,6 @@ export function watchPage(page: Page, threadKey: () => string): WatchSession {
       });
     },
     close: () => closeIfIdle(page),
-    readNotes: () => readNotificationTypes(page),
   };
 }
 
