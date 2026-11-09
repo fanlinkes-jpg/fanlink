@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { AtSign, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, ScrollText, Send, Type } from "lucide-react";
+import { AtSign, Bell, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, MessageSquare, RefreshCw, ScrollText, Send, Type } from "lucide-react";
 import { chatSendAccess, discardChatOutbound, listCreatorChats, loadMoreChats, loadOlderMessages, readChatVault, recordChatOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
+import { listCreatorNotifications, type NotificationListItem } from "@/lib/of-notifications";
 import { useCrm, type VaultItem } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
 import { useChatFanCards } from "@/lib/use-chat-fan-cards";
@@ -40,6 +41,45 @@ function madridClock(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value.slice(11, 16);
   return new Intl.DateTimeFormat("es-ES", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Europe/Madrid" }).format(date);
+}
+
+const NOTE_FILTERS = [
+  ["suscripciones", "Suscripciones"],
+  ["propinas", "Propinas"],
+  ["compras", "Compras"],
+  ["onlyfans", "OnlyFans"],
+  ["etiquetas", "Etiquetas"],
+  ["gusta", "Me gusta"],
+  ["promociones", "Promociones"],
+  ["menciones", "Menciones"],
+] as const;
+
+type NoteFilter = (typeof NOTE_FILTERS)[number][0];
+type NoteRow = NotificationListItem & { creatorId: string };
+
+function noteMatches(kind: string, filter: NoteFilter): boolean {
+  if (filter === "suscripciones") return kind === "subscription" || kind === "renewal";
+  if (filter === "propinas") return kind === "tip";
+  if (filter === "compras") return kind === "ppv";
+  if (filter === "onlyfans") return kind === "system" || kind === "agency";
+  if (filter === "etiquetas") return kind === "tag";
+  if (filter === "gusta") return kind === "like";
+  if (filter === "promociones") return kind === "promotion";
+  return kind === "mention" || kind === "comment";
+}
+
+function noteWhen(value: string | null): string {
+  if (!value) return "Sin datos";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Sin datos";
+  return new Intl.DateTimeFormat("es-ES", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Europe/Madrid",
+  }).format(date);
 }
 
 function FanLink({ item, href, copied, onCopy }: { item: string; href: string | null; copied: boolean; onCopy: (href: string) => void }) {
@@ -187,6 +227,11 @@ export function RealChatsPage() {
   const [fanBusy, setFanBusy] = useState(false);
   const [fanActionError, setFanActionError] = useState<string | null>(null);
   const [fanLists, setFanLists] = useState<Array<{ name: string; on: boolean }>>([]);
+  const [notesOpen, setNotesOpen] = useState(false);
+  const [noteFilter, setNoteFilter] = useState<NoteFilter>("suscripciones");
+  const [notes, setNotes] = useState<NoteRow[] | null>(null);
+  const notesButton = useRef<HTMLButtonElement>(null);
+  const [notesPos, setNotesPos] = useState({ top: 0, left: 0 });
   const [discountPercent, setDiscountPercent] = useState("10");
   const [reportText, setReportText] = useState("");
   const [draft, setDraft] = useState("");
@@ -252,6 +297,46 @@ export function RealChatsPage() {
     const timer = setInterval(() => { void refresh(); }, 15_000);
     return () => clearInterval(timer);
   }, []);
+
+  async function loadNotes() {
+    const ids = (creatorId === "all" ? creators : creators.filter((creator) => creator.id === creatorId)).map((creator) => creator.id);
+    if (ids.length === 0) {
+      setNotes([]);
+      return;
+    }
+    const pages = await Promise.all(ids.map(async (id) => {
+      try {
+        const page = await listCreatorNotifications({ data: { creatorId: id } });
+        return page.items.map((item) => ({ ...item, creatorId: id }));
+      } catch {
+        return [] as NoteRow[];
+      }
+    }));
+    setNotes(pages.flat().sort((left, right) => (right.occurredAt ?? "").localeCompare(left.occurredAt ?? "")));
+  }
+
+  useEffect(() => {
+    void loadNotes();
+  }, [creatorId, creators.length]);
+
+  function placeNotes() {
+    const rect = notesButton.current?.getBoundingClientRect();
+    if (!rect) return;
+    const width = 440;
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+    setNotesPos({ top: rect.bottom + 8, left });
+  }
+
+  function openNote(item: NoteRow) {
+    const pool = data?.threads ?? [];
+    const thread = pool.find((row) => row.creatorId === item.creatorId && (
+      (item.threadKey != null && row.threadKey === item.threadKey)
+      || (item.fanKey != null && (row.fanKey === item.fanKey || row.threadKey === item.fanKey))
+    ));
+    if (!thread) return;
+    setSelectedKey(`${thread.creatorId}:${thread.threadKey}`);
+    setNotesOpen(false);
+  }
 
   const threads = (data?.threads ?? []).filter(
     (thread) => creatorId === "all" || thread.creatorId === creatorId,
@@ -714,7 +799,69 @@ export function RealChatsPage() {
             ) : (
               <span className="rounded-lg bg-[#f3f4f6] px-3 py-1.5 text-xs text-[#6d7585]">Fans en línea: Sin datos</span>
             )}
-            <span className="rounded-lg bg-[#e8f8ef] px-3 py-1.5 text-xs text-[#137333]">Notificaciones {threads.length === 0 ? "Sin datos" : unread}</span>
+            <button
+              ref={notesButton}
+              type="button"
+              className="relative inline-flex items-center gap-1.5 rounded-lg bg-[#1f9d55] px-3 py-1.5 text-xs font-medium text-white"
+              onClick={() => { placeNotes(); setNotesOpen((open) => !open); void loadNotes(); }}
+            >
+              <Bell className="h-3.5 w-3.5" />
+              Notificaciones
+              {(notes ? notes.filter((item) => !item.seen).length : unread) > 0 ? (
+                <span className="absolute -right-1.5 -top-1.5 grid h-4 min-w-4 place-items-center rounded-full bg-[#3b6cff] px-1 text-[10px] font-semibold text-white">
+                  {notes ? notes.filter((item) => !item.seen).length : unread}
+                </span>
+              ) : null}
+            </button>
+            {notesOpen ? createPortal(
+              <>
+                <button type="button" aria-label="Cerrar notificaciones" className="fixed inset-0 z-40 cursor-default" onClick={() => setNotesOpen(false)} />
+                <div className="fixed z-50 flex max-h-[min(560px,70vh)] w-[440px] max-w-[calc(100vw-16px)] flex-col overflow-hidden rounded-xl border border-[#e6e8ee] bg-white shadow-xl" style={{ top: notesPos.top, left: notesPos.left }}>
+                  <div className="flex items-center justify-between px-4 py-3">
+                    <h2 className="text-base font-semibold">Notificaciones</h2>
+                    <button type="button" aria-label="Actualizar notificaciones" className="grid h-8 w-8 place-items-center rounded-full text-[#6d7585] hover:bg-[#f4f7ff]" onClick={() => void loadNotes()}><RefreshCw className="h-4 w-4" /></button>
+                  </div>
+                  <div className="flex gap-2 overflow-x-auto px-4 pb-3">
+                    {NOTE_FILTERS.map(([id, label]) => {
+                      const count = (notes ?? []).filter((item) => !item.seen && noteMatches(item.kind, id)).length;
+                      const on = noteFilter === id;
+                      return (
+                        <button key={id} type="button" onClick={() => setNoteFilter(id)} className={`relative shrink-0 rounded-full px-3 py-1.5 text-xs font-medium ${on ? "bg-[#3b6cff] text-white" : "bg-[#f3f4f6] text-[#3c4456]"}`}>
+                          {label}
+                          {count > 0 ? <span className={`ml-1 inline-grid h-4 min-w-4 place-items-center rounded-full px-1 text-[10px] ${on ? "bg-white text-[#3b6cff]" : "bg-[#1f9d55] text-white"}`}>{count}</span> : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <ul className="min-h-0 flex-1 overflow-y-auto border-t border-[#e6e8ee]">
+                    {notes == null ? <li className="px-4 py-6 text-sm text-[#6d7585]">Sin datos</li> : null}
+                    {notes != null && notes.filter((item) => noteMatches(item.kind, noteFilter)).length === 0 ? <li className="px-4 py-6 text-sm text-[#6d7585]">Sin notificaciones</li> : null}
+                    {(notes ?? []).filter((item) => noteMatches(item.kind, noteFilter)).map((item) => {
+                      const name = item.fanName ?? "Sin datos";
+                      const canOpen = (data?.threads ?? []).some((row) => row.creatorId === item.creatorId && (
+                        (item.threadKey != null && row.threadKey === item.threadKey)
+                        || (item.fanKey != null && (row.fanKey === item.fanKey || row.threadKey === item.fanKey))
+                      ));
+                      return (
+                        <li key={`${item.creatorId}:${item.key}`} className="border-b border-[#e6e8ee]">
+                          <button type="button" disabled={!canOpen} onClick={() => openNote(item)} className="flex w-full items-start gap-3 px-4 py-3 text-left hover:bg-[#f4f7ff] disabled:cursor-default disabled:hover:bg-transparent">
+                            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#eef2ff] text-xs font-semibold text-[#2456c7]">{name.slice(0, 1)}</span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-sm font-semibold">{name}{item.fanKey ? <span className="ml-1 font-normal text-[#6d7585]">@{item.fanKey}</span> : null}</span>
+                              <span className="mt-0.5 block text-sm text-[#1c2333]">{item.labels.title}</span>
+                              <span className="block text-sm text-[#6d7585]">{item.labels.body}</span>
+                              <span className="mt-1 block text-xs text-[#6d7585]">{noteWhen(item.occurredAt)}</span>
+                            </span>
+                            <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg border ${canOpen ? "border-[#3b6cff] text-[#3b6cff]" : "border-[#e6e8ee] text-[#b0b6c0]"}`} aria-hidden="true"><MessageSquare className="h-4 w-4" /></span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              </>,
+              document.body,
+            ) : null}
           </div>
           <div className="flex items-center gap-2">
             <select value={creatorId} onChange={(event) => setCreator(event.target.value)} className="h-8 min-w-0 flex-1 rounded-lg border border-[#e6e8ee] px-2 text-xs" aria-label="Bandeja">
@@ -785,8 +932,8 @@ export function RealChatsPage() {
       </section>
       <section className="hidden h-full min-h-0 min-w-0 flex-1 md:flex">
         <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="flex shrink-0 items-center justify-between gap-3 border-b border-[#e6e8ee] px-4 py-3">
-              <div className="relative min-w-0">
+        <header className="relative flex shrink-0 items-center justify-between gap-3 border-b border-[#e6e8ee] px-4 py-3">
+              <div className="min-w-0">
                 <button type="button" className="truncate text-left font-medium" onClick={() => { setFanMenu((open) => !open); setRenaming(false); }} aria-expanded={fanMenu} aria-label="Opciones del fan">
                   {selected ? fanTitle(selected) : "Sin sincronizar"}
                 </button>
@@ -794,7 +941,7 @@ export function RealChatsPage() {
                 {fanMenu && selected ? (
                   <>
                     <button type="button" aria-label="Cerrar opciones del fan" className="fixed inset-0 z-20 cursor-default" onClick={() => { setFanMenu(false); setRenaming(false); }} />
-                    <div className="absolute left-0 top-full z-30 mt-1 w-72 rounded-xl border border-[#e6e8ee] bg-white py-1 text-sm shadow-lg">
+                    <div className="absolute right-4 top-full z-30 mt-1 w-72 rounded-xl border border-[#e6e8ee] bg-white py-1 text-sm shadow-lg">
                       <div className="flex items-center gap-2 border-b border-[#e6e8ee] px-4 py-3">
                         <span className="grid h-8 w-8 place-items-center rounded-full bg-[#eef2ff] text-xs font-medium">{fanTitle(selected).slice(0, 1)}</span>
                         <span className="min-w-0 truncate text-[#6d7585]">{selected.fanHandle ? `@${selected.fanHandle.replace(/^@/, "")}` : "Sin usuario"}</span>

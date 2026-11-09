@@ -19,6 +19,8 @@ export const NOTIFICATION_KINDS = [
   "tip",
   "ppv",
   "message",
+  "mention",
+  "promotion",
   "system",
   "agency",
   "other",
@@ -47,6 +49,8 @@ const KIND_LABEL: Record<NotificationKind, string> = {
   tip: "Propina",
   ppv: "Compra PPV",
   message: "Mensaje",
+  mention: "Mención",
+  promotion: "Promoción",
   system: "Aviso",
   agency: "Aviso de la agencia",
   other: "Otro",
@@ -117,7 +121,9 @@ export function tabOf(kind: NotificationKind): NotificationTab {
       return "subscriptions";
     case "tag":
       return "tags";
+    case "mention":
     case "message":
+    case "promotion":
     case "system":
     case "agency":
     case "other":
@@ -143,6 +149,8 @@ export function kindLabel(kind: NotificationKind): string {
     case "tip":
     case "ppv":
     case "message":
+    case "mention":
+    case "promotion":
     case "system":
     case "agency":
     case "other":
@@ -397,11 +405,13 @@ function kindOf(raw: string): NotificationKind {
   const value = raw.toLowerCase().replace(/[\s-]+/g, "_");
   if (["like", "liked", "favorite", "favourite", "favorited"].includes(value)) return "like";
   if (["comment", "commented", "reply"].includes(value)) return "comment";
-  if (["mention", "tag", "tagged", "label", "labels"].includes(value)) return "tag";
+  if (["mention", "mentioned", "mentions"].includes(value)) return "mention";
+  if (["tag", "tagged", "label", "labels"].includes(value)) return "tag";
   if (["subscribe", "subscribed", "subscription", "new_subscriber", "subscriber"].includes(value)) return "subscription";
   if (["renewal", "rebill", "recurring", "renewed"].includes(value)) return "renewal";
   if (["tip", "tips"].includes(value)) return "tip";
   if (["ppv", "purchase", "paided_message", "paid_message", "unlock", "message_purchase"].includes(value)) return "ppv";
+  if (["promotion", "promo", "promotional", "discount", "campaign"].includes(value)) return "promotion";
   if (["message", "chat", "new_message"].includes(value)) return "message";
   if (["system", "announcement", "warning", "notice"].includes(value)) return "system";
   if (["payout", "payouts", "earning", "earnings", "balance", "balances", "gross", "revenue", "statement", "withdrawal"].includes(value)) return "agency";

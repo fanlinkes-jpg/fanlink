@@ -338,6 +338,8 @@ function asKind(value: string): NotificationRecord["kind"] | null {
     case "tip":
     case "ppv":
     case "message":
+    case "mention":
+    case "promotion":
     case "system":
     case "agency":
     case "other":
