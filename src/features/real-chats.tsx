@@ -168,7 +168,7 @@ export function RealChatsPage() {
   const [libraryQuery, setLibraryQuery] = useState("");
   const [tagQuery, setTagQuery] = useState("");
   const [ofVault, setOfVault] = useState<Array<{ id: string; title: string; kind: "foto" | "video" | "audio" | null }>>([]);
-  const [vaultReload, setVaultReload] = useState(0);
+  const [vaultReading, setVaultReading] = useState(false);
 
   async function refresh() {
     try {
@@ -431,13 +431,17 @@ export function RealChatsPage() {
   async function loadOfVault() {
     if (!selected) return;
     setPanel("vault");
+    setVaultReading(true);
     try {
       const result = await readChatVault({ data: { creatorId: selected.creatorId, threadKey: selected.threadKey } });
       setOfVault(result.items);
       setVaultReload((value) => value + 1);
+      if (result.items.length === 0) setError(result.reason ?? "La bóveda de OnlyFans ha llegado vacía.");
     } catch (err) {
       setOfVault([]);
       setError(sessionErrorText(err));
+    } finally {
+      setVaultReading(false);
     }
   }
 
@@ -880,6 +884,7 @@ export function RealChatsPage() {
                 onFanTranslation={() => setFanTranslation((value) => !value)}
                 onEmoji={insertAtCursor}
                 onClose={() => setPanel(null)}
+                reading={vaultReading}
               />
           </div>
         </div>,
@@ -1033,6 +1038,7 @@ function ComposerPanelBody({
   onFanTranslation,
   onEmoji,
   onClose,
+  reading = false,
 }: {
   panel: Exclude<ComposerPanel, "guiones" | null>;
   vaultItems: VaultItem[];
@@ -1053,11 +1059,13 @@ function ComposerPanelBody({
   onFanTranslation: () => void;
   onEmoji: (emoji: string) => void;
   onClose?: () => void;
+  reading?: boolean;
 }) {
   switch (panel) {
     case "vault": {
       return (
         <div role="region" aria-label="Panel Add from media vault" className="flex h-[72vh] min-h-0 flex-col">
+          {reading ? <p className="px-4 py-2 text-sm text-[#8a96a3]">Leyendo la bóveda de OnlyFans…</p> : null}
           {creatorId && creatorId !== "all" ? (
             <VaultBrowser layout="of" creatorId={creatorId} fanKey={fanKey} reloadToken={vaultReload} onAttach={onVault} onClose={onClose} />
           ) : <p className="p-4 text-sm text-[#8a96a3]">Sin datos</p>}

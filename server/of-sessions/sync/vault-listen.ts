@@ -1,4 +1,5 @@
 import type { Page } from "playwright";
+import { parseVaultBundle } from "./vault-model.ts";
 
 export type VaultFile = {
   id: string;
@@ -29,35 +30,54 @@ export function parseVaultPayload(payload: unknown): VaultFile[] {
   return out;
 }
 
-/** Abre la bóveda real y se queda con el JSON que pide esa página. El listener va antes de navegar. */
-export async function captureVaultAt(page: Page, vaultUrl: string, waitMs = 12_000): Promise<unknown[]> {
+/** Abre la página y espera el JSON de los medios. No vuelve antes de leer el cuerpo. */
+export async function captureVaultAt(page: Page, vaultUrl: string, waitMs = 15_000): Promise<unknown[]> {
   const found: unknown[] = [];
+  const pending: Array<Promise<void>> = [];
   const onResponse = (response: { url(): string; status(): number; text(): Promise<string> }) => {
     if (response.status() < 200 || response.status() >= 300) return;
     if (!/vault/i.test(response.url())) return;
-    void response.text().then((raw) => {
+    pending.push(response.text().then((raw) => {
       try {
         found.push(JSON.parse(raw) as unknown);
       } catch {
         // La página puede pedir un HTML, no un listado.
       }
-    }).catch(() => undefined);
+    }).catch(() => undefined));
   };
   page.on("response", onResponse);
   try {
     await page.goto(vaultUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
-    const button = page.locator("[at-attr='vault_btn'], button[aria-label*='vault' i], button[aria-label*='bóveda' i], button[aria-label*='boveda' i]").first();
-    if (await button.count()) await button.click().catch(() => undefined);
+    await clickVaultButton(page);
     const deadline = Date.now() + waitMs;
-    let firstAt = 0;
     while (Date.now() < deadline) {
-      if (found.length > 0 && firstAt === 0) firstAt = Date.now();
-      if (firstAt > 0 && Date.now() - firstAt > 3_000) break;
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      if (found.some((payload) => parseVaultBundle(payload).items.length > 0)) break;
+      await new Promise((resolve) => setTimeout(resolve, 250));
     }
+    await Promise.all(pending);
     return found;
   } finally {
     page.off("response", onResponse);
+  }
+}
+
+async function clickVaultButton(page: Page): Promise<void> {
+  const selectors = [
+    "[at-attr='attach_vault']",
+    "[at-attr='add_vault_media']",
+    "[at-attr='vault_btn']",
+    "[data-fanlink-vault]",
+    "button[aria-label*='vault' i]",
+    "button[aria-label*='bóveda' i]",
+    "button[aria-label*='boveda' i]",
+    "button[aria-label*='media vault' i]",
+  ];
+  for (const selector of selectors) {
+    const button = page.locator(selector).first();
+    if (await button.count()) {
+      await button.click({ timeout: 2_000 }).catch(() => undefined);
+      return;
+    }
   }
 }
 
