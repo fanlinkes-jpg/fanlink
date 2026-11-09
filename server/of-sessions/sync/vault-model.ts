@@ -339,6 +339,14 @@ function vaultList(payload: unknown): unknown[] {
   for (const key of ["list", "items", "media", "files"]) {
     if (Array.isArray(row[key])) return row[key] as unknown[];
   }
+  const data = row.data;
+  if (data && typeof data === "object") {
+    if (Array.isArray(data)) return data;
+    const nested = data as Record<string, unknown>;
+    for (const key of ["list", "items", "media", "files"]) {
+      if (Array.isArray(nested[key])) return nested[key] as unknown[];
+    }
+  }
   return [];
 }
 

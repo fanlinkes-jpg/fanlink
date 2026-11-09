@@ -48,7 +48,7 @@ export async function captureVaultAt(page: Page, vaultUrl: string, waitMs = 15_0
   page.on("response", onResponse);
   try {
     await page.goto(vaultUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
-    const clicked = await clickVaultButton(page);
+    const clicked = await clickVaultButton(page) || await clickComposerMedia(page, () => found.some((payload) => parseVaultBundle(payload).items.length > 0));
     console.info(`[fanlink:vault] url=${page.url()} boton=${clicked ? "si" : "no"}`);
     const deadline = Date.now() + waitMs;
     while (Date.now() < deadline) {
@@ -82,6 +82,20 @@ async function clickVaultButton(page: Page): Promise<boolean> {
   }
   await button.click({ timeout: 2_000 }).catch(() => undefined);
   return true;
+}
+
+async function clickComposerMedia(page: Page, hasMedia: () => boolean): Promise<boolean> {
+  const buttons = page.locator("form button, .b-chat__footer button, .b-make-post button");
+  const count = await buttons.count().catch(() => 0);
+  for (let index = 0; index < Math.min(count, 8); index += 1) {
+    const button = buttons.nth(index);
+    const name = await button.innerText().catch(() => "");
+    if (/send|enviar/i.test(name)) continue;
+    await button.click({ timeout: 1_000 }).catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    if (hasMedia()) return true;
+  }
+  return false;
 }
 
 export async function captureVaultPayloads(page: Page, waitMs = 2_500): Promise<unknown[]> {
