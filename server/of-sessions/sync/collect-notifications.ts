@@ -216,17 +216,19 @@ async function readNotificationPage(page: Page, open: boolean): Promise<ParsedNo
   };
   page.on("response", onResponse);
   try {
-    if (open) {
-      await page.goto("https://onlyfans.com/my/notifications", { waitUntil: "domcontentloaded", timeout: 20_000 }).catch(() => undefined);
-      await delay(1_200);
-    }
+    await openNotificationBell(page, open);
     for (const [label, kind] of TAB_CLICKS) {
-      const tab = page.getByText(label, { exact: true }).first();
+      const tab = page.getByText(new RegExp(label, "i")).first();
       const visible = await tab.isVisible().catch(() => false);
       if (!visible) continue;
       forced = kind;
-      await tab.click({ timeout: 1_500 }).catch(() => undefined);
-      await delay(600);
+      console.info(`[fanlink:avisos] pestaña=${label}`);
+      await tab.click({ timeout: 2_000 }).catch(() => undefined);
+      await delay(800);
+      for (let step = 0; step < 3; step += 1) {
+        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => undefined);
+        await delay(500);
+      }
     }
     const fetched = await pullNotificationTypes(page);
     for (const item of fetched) found.push(item);
@@ -266,6 +268,34 @@ async function pullNotificationTypes(page: Page): Promise<ParsedNotification[]> 
     for (const item of parsed) items.push({ ...item, kind });
   }
   return items;
+}
+
+async function openNotificationBell(page: Page, open: boolean): Promise<void> {
+  if (!open && page.url().includes("/my/notifications")) {
+    await delay(600);
+    return;
+  }
+  const opened = await page.evaluate(() => {
+    const link = document.querySelector('a[href="/my/notifications"], a[href*="/my/notifications"]') as HTMLElement | null;
+    if (link) {
+      link.click();
+      return "campana";
+    }
+    const button = [...document.querySelectorAll("a, button")].find((node) => {
+      const label = `${node.getAttribute("aria-label") || ""} ${node.getAttribute("title") || ""}`;
+      return /notification|notificacion/i.test(label);
+    }) as HTMLElement | undefined;
+    if (button) {
+      button.click();
+      return "boton";
+    }
+    return "";
+  }).catch(() => "");
+  console.info(`[fanlink:avisos] abrir=${opened || "directo"}`);
+  if (!opened) {
+    await page.goto("https://onlyfans.com/my/notifications", { waitUntil: "domcontentloaded", timeout: 20_000 }).catch(() => undefined);
+  }
+  await delay(1_500);
 }
 
 function notificationTypeOf(url: string): string | null {

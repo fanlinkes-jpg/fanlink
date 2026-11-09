@@ -208,7 +208,6 @@ export function MessagesPage() {
         </div>
         <div className="mt-2 flex items-center gap-2 overflow-x-auto px-4 pb-2">
           {([
-            ["todos", "Todas"],
             ["prioridad", "Prioridad"],
             ["renovar", "Por renovar"],
             ["propina", "Con propina"],
