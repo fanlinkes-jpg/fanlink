@@ -36,6 +36,12 @@ function chatHref(fanKey: string | null): string | null {
   return id ? `https://onlyfans.com/my/chats/chat/${id}` : null;
 }
 
+function madridClock(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value.slice(11, 16);
+  return new Intl.DateTimeFormat("es-ES", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Europe/Madrid" }).format(date);
+}
+
 function FanLink({ item, href, copied, onCopy }: { item: string; href: string | null; copied: boolean; onCopy: (href: string) => void }) {
   return (
     <button
@@ -767,7 +773,7 @@ export function RealChatsPage() {
                     <span className="block truncate text-xs text-[#6d7585]">{thread.fanHandle ? `@${thread.fanHandle.replace(/^@/, "")}` : "Sin datos"}</span>
                     <span className="mt-1 flex items-baseline justify-between gap-2 text-xs text-[#6d7585]">
                       <span className="truncate">{thread.excerpt ?? "Sin datos"}</span>
-                      <span className="shrink-0">{thread.lastMessageAt ? thread.lastMessageAt.slice(11, 16) : "Sin datos"}</span>
+                      <span className="shrink-0">{thread.lastMessageAt ? madridClock(thread.lastMessageAt) : "Sin datos"}</span>
                     </span>
                   </span>
                 </button>

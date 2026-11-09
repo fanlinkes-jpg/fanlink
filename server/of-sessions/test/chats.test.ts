@@ -98,6 +98,16 @@ test("suma todas las respuestas de chats y completa el nombre con users/list", (
   assert.equal(named.find((row) => row.threadKey === "7")?.fanName, "Fan Uno");
   assert.equal(named.find((row) => row.threadKey === "7")?.avatarUrl, "https://cdn.example/a.jpg");
   assert.equal(JSON.stringify(named).includes("no-guardar"), false);
+  const bare = parseChatList({
+    list: [{
+      withUser: 9,
+      unreadMessagesCount: 1,
+      lastMessage: { id: 1, text: "nuevo", createdAt: "2026-11-09T21:34:00.000Z", fromUser: { id: 9 } },
+    }],
+  });
+  assert.equal(bare[0]?.threadKey, "9");
+  assert.equal(bare[0]?.fanKey, "9");
+  assert.equal(bare[0]?.excerpt, "nuevo");
   const messages = mergeMessages(
     parseChatMessages({ list: [], hasMore: true }, "7", "7"),
     parseChatMessages({

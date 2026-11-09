@@ -53,11 +53,23 @@ export async function saveChatRead(
            fan_key = excluded.fan_key,
            fan_handle = excluded.fan_handle,
            fan_name = excluded.fan_name,
-           last_message_at = excluded.last_message_at,
-           excerpt = excluded.excerpt,
+           last_message_at = case
+             when excluded.last_message_at is null then of_chat_thread.last_message_at
+             when of_chat_thread.last_message_at is null or excluded.last_message_at > of_chat_thread.last_message_at then excluded.last_message_at
+             else of_chat_thread.last_message_at
+           end,
+           excerpt = case
+             when excluded.last_message_at is null then of_chat_thread.excerpt
+             when of_chat_thread.last_message_at is null or excluded.last_message_at >= of_chat_thread.last_message_at then excluded.excerpt
+             else of_chat_thread.excerpt
+           end,
            unread = excluded.unread,
            synced_at = excluded.synced_at,
-           last_from_fan = excluded.last_from_fan,
+           last_from_fan = case
+             when excluded.last_message_at is null then of_chat_thread.last_from_fan
+             when of_chat_thread.last_message_at is null or excluded.last_message_at >= of_chat_thread.last_message_at then excluded.last_from_fan
+             else of_chat_thread.last_from_fan
+           end,
            spent_cents = excluded.spent_cents,
            subscribes_cents = excluded.subscribes_cents,
            tips_cents = excluded.tips_cents,
@@ -146,6 +158,44 @@ export async function saveChatRead(
     }
     await attachOutboundAuthors(sql, creatorId, read.messages, await outboundSendStateReady(sql));
     await noteHistoryCursor(sql, creatorId);
+    const newest = new Map<string, ChatMessage>();
+    for (const message of read.messages) {
+      const current = newest.get(message.threadKey);
+      if (!current || message.sentAt > current.sentAt) newest.set(message.threadKey, message);
+    }
+    for (const message of newest.values()) {
+      await sql.query(
+        `insert into of_chat_thread (
+           creator_id, thread_key, fan_key, last_message_at, excerpt, unread, synced_at, origin, last_from_fan
+         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         on conflict (creator_id, thread_key) do update set
+           fan_key = coalesce(of_chat_thread.fan_key, excluded.fan_key),
+           last_message_at = case
+             when of_chat_thread.last_message_at is null or excluded.last_message_at > of_chat_thread.last_message_at then excluded.last_message_at
+             else of_chat_thread.last_message_at
+           end,
+           excerpt = case
+             when of_chat_thread.last_message_at is null or excluded.last_message_at >= of_chat_thread.last_message_at then excluded.excerpt
+             else of_chat_thread.excerpt
+           end,
+           last_from_fan = case
+             when of_chat_thread.last_message_at is null or excluded.last_message_at >= of_chat_thread.last_message_at then excluded.last_from_fan
+             else of_chat_thread.last_from_fan
+           end,
+           synced_at = excluded.synced_at`,
+        [
+          creatorId,
+          message.threadKey,
+          message.fanKey,
+          message.sentAt,
+          (message.body || "").replace(/\s+/g, " ").trim().slice(0, 180),
+          message.fromFan ? 1 : 0,
+          syncedAt,
+          ORIGIN,
+          message.fromFan,
+        ],
+      );
+    }
     for (const event of events) {
       await sql.query(
         `insert into of_fan_message_event (id, creator_id, fan_key, fan_name, excerpt, sent_at)

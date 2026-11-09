@@ -397,7 +397,7 @@ export function chatFailureReason(input: { redirected: boolean; outcome: Section
 function threadFrom(record: Record<string, unknown>, accountId: string | null): ChatThread | null {
   const user = nested(record.withUser) ?? nested(record.user) ?? nested(record.fan);
   const last = nested(record.lastMessage) ?? nested(record.last_message);
-  const fanKey = clean(user?.id, 40);
+  const fanKey = personId(record.withUser) ?? personId(record.user) ?? personId(record.fan);
   const threadKey = fanKey ?? clean(record.id, 40) ?? clean(record.threadId, 40);
   const fanHandle = handle(user?.username ?? user?.handle);
   const fanName = clean(user?.name ?? user?.displayName, 80);
@@ -722,6 +722,11 @@ function excerptOf(value: string | null): string | null {
   const text = value.replace(/\s+/g, " ").trim();
   if (!text || SECRET.test(text)) return null;
   return text.slice(0, 140);
+}
+
+function personId(value: unknown): string | null {
+  if (typeof value === "number" || typeof value === "string") return clean(value, 40);
+  return clean(nested(value)?.id, 40);
 }
 
 function nested(value: unknown): Record<string, unknown> | null {
