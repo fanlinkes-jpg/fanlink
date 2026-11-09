@@ -34,14 +34,56 @@ const VAULT_LIST_CAP = 100;
 const VAULT_MEDIA_CAP = 40;
 const VAULT_OFFSET_CAP = 2_000;
 
-/** Una página por clic: como mucho 100 carpetas y 40 medios. Si api2 no responde, para. */
+/** El fetch suelto no firma la petición: OnlyFans la rechaza y el panel queda vacío. */
+export function chooseVaultPayloads(direct: readonly unknown[], fromPage: readonly unknown[]): unknown[] {
+  if (countVault(direct).files > 0) return trimVaultPayloads(direct);
+  if (countVault(fromPage).files > 0 || countVault(fromPage).folders > 0) return trimVaultPayloads(fromPage);
+  if (countVault(direct).folders > 0) return trimVaultPayloads(direct);
+  return [];
+}
+
+export function countVault(payloads: readonly unknown[]): { files: number; folders: number } {
+  const files = new Set<string>();
+  const folders = new Set<string>();
+  for (const payload of payloads) {
+    const bundle = parseVaultBundle(payload);
+    for (const list of bundle.lists) folders.add(list.id);
+    for (const item of bundle.items) files.add(item.id);
+  }
+  return { files: files.size, folders: folders.size };
+}
+
+function trimVaultPayloads(payloads: readonly unknown[]): unknown[] {
+  const out: unknown[] = [];
+  let folders = 0;
+  let files = 0;
+  for (const payload of payloads) {
+    const bundle = parseVaultBundle(payload);
+    if (bundle.lists.length === 0 && bundle.items.length === 0) continue;
+    out.push(payload);
+    folders += bundle.lists.length;
+    files += bundle.items.length;
+    if (files >= VAULT_MEDIA_CAP && folders > 0) break;
+    if (files >= VAULT_MEDIA_CAP && folders >= VAULT_LIST_CAP) break;
+  }
+  return out;
+}
+
+/** Una página por clic. Si el fetch no trae medios, se queda con lo que pide la página /my/vault. No pulsa el compositor. */
 export async function readVaultFromPage(page: Page, listId = "all", offset = 0): Promise<unknown[]> {
   const cleanOffset = Number.isFinite(offset) && offset > 0 ? Math.min(VAULT_OFFSET_CAP, Math.floor(offset)) : 0;
   const cleanList = listId.trim().slice(0, 80) || "all";
-  if (!page.url().includes("onlyfans.com/")) {
-    await page.goto("https://onlyfans.com/my/chats", { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
-  }
-  const pulled = await page.evaluate(async ({ listId, offset, listCap, mediaCap }) => {
+  const direct = await pullVaultApi(page, cleanList, cleanOffset);
+  const fromPage = countVault(direct).files > 0 ? [] : await readOpenedVault(page, cleanList, cleanOffset);
+  const chosen = chooseVaultPayloads(direct, fromPage);
+  const counts = countVault(chosen);
+  console.info(`[fanlink:vault] pagina lista=${cleanList} offset=${cleanOffset} carpetas=${counts.folders} medios=${counts.files}`);
+  return chosen;
+}
+
+async function pullVaultApi(page: Page, listId: string, offset: number): Promise<unknown[]> {
+  if (!page.url().includes("onlyfans.com/")) return [];
+  return page.evaluate(async ({ listId, offset, listCap, mediaCap }) => {
     async function pull(path: string): Promise<unknown | null> {
       try {
         const response = await fetch(path, { credentials: "include", headers: { accept: "application/json" } });
@@ -59,12 +101,64 @@ export async function readVaultFromPage(page: Page, listId = "all", offset = 0):
     const media = await pull(`/api2/v2/vault/media?limit=${mediaCap}&offset=${offset}&field=recent&sort=desc&list=${encodeURIComponent(listId)}`);
     if (media) out.push(media);
     return out;
-  }, { listId: cleanList, offset: cleanOffset, listCap: VAULT_LIST_CAP, mediaCap: VAULT_MEDIA_CAP }).catch(() => [] as unknown[]);
-  const parsed = pulled.map((payload) => parseVaultBundle(payload));
-  const folders = new Set(parsed.flatMap((bundle) => bundle.lists.map((list) => list.id)));
-  const files = new Set(parsed.flatMap((bundle) => bundle.items.map((item) => item.id)));
-  console.info(`[fanlink:vault] pagina lista=${cleanList} offset=${cleanOffset} carpetas=${folders.size} medios=${files.size}`);
-  return pulled;
+  }, { listId, offset, listCap: VAULT_LIST_CAP, mediaCap: VAULT_MEDIA_CAP }).catch(() => [] as unknown[]);
+}
+
+/** Abre la bóveda de OnlyFans y copia el JSON que ella misma pide. Sin clics al compositor. */
+async function readOpenedVault(page: Page, listId: string, offset: number): Promise<unknown[]> {
+  const found: unknown[] = [];
+  const pending: Array<Promise<void>> = [];
+  const onResponse = (response: { url(): string; status(): number; text(): Promise<string> }) => {
+    if (response.status() < 200 || response.status() >= 300) return;
+    if (!/\/api2\/v2\/vault\/(?:lists|media)(?:\?|$)/.test(response.url())) return;
+    pending.push(response.text().then((raw) => {
+      try {
+        found.push(JSON.parse(raw) as unknown);
+      } catch {
+        // No es el listado.
+      }
+    }).catch(() => undefined));
+  };
+  page.on("response", onResponse);
+  try {
+    await page.goto("https://onlyfans.com/my/vault", { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
+    await waitForVault(found, pending, 12_000, () => countVault(found).files > 0);
+    if (listId !== "all") await openFolder(page, found, pending, listId);
+    if (offset > 0) await scrollForMore(page, found, pending, offset);
+    await Promise.all(pending);
+    return found;
+  } finally {
+    page.off("response", onResponse);
+  }
+}
+
+async function openFolder(page: Page, found: unknown[], pending: Array<Promise<void>>, listId: string): Promise<void> {
+  const name = found.flatMap((payload) => parseVaultBundle(payload).lists).find((list) => list.id === listId)?.name;
+  if (!name) return;
+  const before = countVault(found).files;
+  const clicked = await page.getByRole("button", { name, exact: true }).click({ timeout: 2_000 }).then(() => true).catch(async () => {
+    return page.getByText(name, { exact: true }).first().click({ timeout: 2_000 }).then(() => true).catch(() => false);
+  });
+  if (!clicked) return;
+  await waitForVault(found, pending, 6_000, () => countVault(found).files > before);
+}
+
+async function scrollForMore(page: Page, found: unknown[], pending: Array<Promise<void>>, offset: number): Promise<void> {
+  const target = Math.min(VAULT_OFFSET_CAP, offset + 1);
+  const deadline = Date.now() + 8_000;
+  while (Date.now() < deadline && countVault(found).files < target && countVault(found).files < VAULT_MEDIA_CAP) {
+    await page.mouse.wheel(0, 1_400).catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+  await Promise.all(pending);
+}
+
+async function waitForVault(found: unknown[], pending: Array<Promise<void>>, waitMs: number, done: () => boolean): Promise<void> {
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline && !done()) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  await Promise.all(pending);
 }
 
 /** Abre la página y espera el JSON de los medios. No vuelve antes de leer el cuerpo. */
