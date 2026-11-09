@@ -44,6 +44,7 @@ function madridClock(value: string): string {
 }
 
 const NOTE_FILTERS = [
+  ["todas", "Todas"],
   ["suscripciones", "Suscripciones"],
   ["propinas", "Propinas"],
   ["compras", "Compras"],
@@ -58,6 +59,7 @@ type NoteFilter = (typeof NOTE_FILTERS)[number][0];
 type NoteRow = NotificationListItem & { creatorId: string };
 
 function noteMatches(kind: string, filter: NoteFilter): boolean {
+  if (filter === "todas") return true;
   if (filter === "suscripciones") return kind === "subscription" || kind === "renewal";
   if (filter === "propinas") return kind === "tip";
   if (filter === "compras") return kind === "ppv";
@@ -228,7 +230,7 @@ export function RealChatsPage() {
   const [fanActionError, setFanActionError] = useState<string | null>(null);
   const [fanLists, setFanLists] = useState<Array<{ name: string; on: boolean }>>([]);
   const [notesOpen, setNotesOpen] = useState(false);
-  const [noteFilter, setNoteFilter] = useState<NoteFilter>("suscripciones");
+  const [noteFilter, setNoteFilter] = useState<NoteFilter>("todas");
   const [notes, setNotes] = useState<NoteRow[] | null>(null);
   const notesButton = useRef<HTMLButtonElement>(null);
   const [notesPos, setNotesPos] = useState({ top: 0, left: 0 });

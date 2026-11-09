@@ -156,15 +156,17 @@ function replaceNotifications(current: ParsedNotification[], incoming: ParsedNot
   return [...map.values()];
 }
 
-/** Cada pestaña de OnlyFans es una petición distinta. La general no trae las etiquetas. */
+/** Cada pestaña de OnlyFans es una petición distinta. Se lee en la página que ya está dentro. */
 export async function readNotificationTypes(page: Page): Promise<ParsedNotification[]> {
   if (!page.url().includes("onlyfans.com/")) return [];
-  const own = page.url().includes("/my/notifications");
-  const extra = own ? page : await page.context().newPage();
+  const back = page.url();
+  const already = back.includes("/my/notifications");
   try {
-    return await readNotificationPage(extra, !own);
+    return await readNotificationPage(page, !already);
   } finally {
-    if (!own) await extra.close().catch(() => undefined);
+    if (!already && page.url() !== back) {
+      await page.goto(back, { waitUntil: "domcontentloaded", timeout: 20_000 }).catch(() => undefined);
+    }
   }
 }
 
@@ -244,7 +246,7 @@ async function pullNotificationTypes(page: Page): Promise<ParsedNotification[]> 
     const out: Array<{ type: string; status: number; body: unknown }> = [];
     for (const type of wanted) {
       try {
-        const response = await fetch(`/api2/v2/users/notifications?limit=30&skip_users=all&format=infinite&type=${type}`, {
+        const response = await fetch(`/api2/v2/users/notifications?limit=30&skip_users=none&format=infinite&type=${type}`, {
           credentials: "include",
           headers: { accept: "application/json" },
         });

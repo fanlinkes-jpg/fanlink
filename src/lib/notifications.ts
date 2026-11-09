@@ -261,7 +261,17 @@ const NOTIFICATION_TYPE_KIND = new Map<string, NotificationKind>(NOTIFICATION_TY
 /** El tipo que OnlyFans pone en la URL de cada pestaña. */
 export function kindFromNotificationType(type: string | null): NotificationKind | null {
   if (!type) return null;
-  return NOTIFICATION_TYPE_KIND.get(type.toLowerCase()) ?? null;
+  const value = type.toLowerCase();
+  if (["subscribed", "subscriptions", "subscription"].includes(value)) return "subscription";
+  if (["purchases", "purchase", "ppv"].includes(value)) return "ppv";
+  if (["tip", "tips"].includes(value)) return "tip";
+  if (["tags", "tag"].includes(value)) return "tag";
+  if (["commented", "comments", "comment"].includes(value)) return "comment";
+  if (["mentioned", "mentions", "mention"].includes(value)) return "mention";
+  if (["favorited", "likes", "like"].includes(value)) return "like";
+  if (["promotions", "promotion"].includes(value)) return "promotion";
+  if (["onlyfans", "system", "deactivated_media"].includes(value)) return "system";
+  return NOTIFICATION_TYPE_KIND.get(value) ?? null;
 }
 
 export function notificationScrolls(requested: number): number {
