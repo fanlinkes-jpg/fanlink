@@ -554,15 +554,15 @@ export function RealChatsPage() {
     setPanel(null);
   }
 
-  function attachVault(item: { id: string; title: string; withId?: string | null; withTitle?: string | null }) {
-    const pieces = [{ id: item.id, title: item.title }];
-    if (item.withId && item.withId !== item.id) pieces.push({ id: item.withId, title: item.withTitle || "Vídeo de pago" });
+  function attachVault(item: { id: string; title: string; withId?: string | null; withTitle?: string | null; seconds?: number | null; offerLabel?: string | null; dateLabel?: string | null }) {
+    const pieces = [{ id: item.id, title: item.title, seconds: item.seconds ?? null, offerLabel: item.offerLabel ?? null, dateLabel: item.dateLabel ?? null }];
+    if (item.withId && item.withId !== item.id) pieces.push({ id: item.withId, title: item.withTitle || "Vídeo de pago", seconds: null, offerLabel: null, dateLabel: null });
     const free = !(draftPrice != null && draftPrice > 0);
     setAttachments((current) => {
       const next = [...current];
       for (const piece of pieces) {
         if (next.some((file) => file.id === `vault-${piece.id}`)) continue;
-        next.push({ id: `vault-${piece.id}`, url: null, name: piece.title, kind: "vault" as const, free });
+        next.push({ id: `vault-${piece.id}`, url: null, name: piece.title, kind: "vault" as const, free, seconds: piece.seconds, offerLabel: piece.offerLabel, dateLabel: piece.dateLabel });
       }
       return next;
     });
@@ -838,19 +838,56 @@ export function RealChatsPage() {
               <div className="my-2 border-t border-[#e6e8ee]" />
               {priceLabel ? <p className="mb-1 text-xs font-medium text-[#8a5a12]">Precio {priceLabel}</p> : null}
               {tagHandle ? <p className="mb-1 text-xs font-medium text-[#2456c7]">Etiqueta @{tagHandle}</p> : null}
-              {attachments.length > 0 ? (
+              {attachments.some((file) => file.kind === "vault") ? (
+                <div className="mb-2 grid gap-2 rounded-xl bg-[#eef6ff] p-2 sm:grid-cols-2">
+                  <div>
+                    <p className="mb-1 text-xs font-medium text-[#1c2333]">Vista previa gratis</p>
+                    <div className="flex gap-2 overflow-x-auto">
+                      {attachments.filter((file) => file.kind === "vault" && file.free !== false).map((file) => (
+                        <VaultOfferThumb
+                          key={file.id}
+                          creatorId={selected?.creatorId ?? ""}
+                          mediaId={file.id.replace(/^vault-/, "")}
+                          name={file.name}
+                          free
+                          seconds={file.seconds ?? null}
+                          dateLabel={file.dateLabel ?? null}
+                          offerLabel={file.offerLabel ?? null}
+                          onToggle={() => toggleVaultOffer(file.id)}
+                          onRemove={() => removeAttachment(file.id)}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="mb-1 flex items-center gap-2">
+                      <p className="text-xs font-medium text-[#1c2333]">Precio</p>
+                      <button type="button" className="ml-auto rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-[#2456c7]" onClick={() => { offerPriceId.current = null; setPanel(null); setDialog("precio"); }}>
+                        {draftPrice != null && draftPrice > 0 ? `$${(draftPrice / 100).toFixed(2)}` : "Añadir"}
+                      </button>
+                    </div>
+                    <div className="flex gap-2 overflow-x-auto">
+                      {attachments.filter((file) => file.kind === "vault" && file.free === false).map((file) => (
+                        <VaultOfferThumb
+                          key={file.id}
+                          creatorId={selected?.creatorId ?? ""}
+                          mediaId={file.id.replace(/^vault-/, "")}
+                          name={file.name}
+                          free={false}
+                          seconds={file.seconds ?? null}
+                          dateLabel={file.dateLabel ?? null}
+                          offerLabel={file.offerLabel ?? null}
+                          onToggle={() => toggleVaultOffer(file.id)}
+                          onRemove={() => removeAttachment(file.id)}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+              {attachments.some((file) => file.kind !== "vault") ? (
                 <div className="mb-1 flex gap-2 overflow-x-auto">
-                  {attachments.map((file) => file.kind === "vault" ? (
-                    <VaultOfferThumb
-                      key={file.id}
-                      creatorId={selected?.creatorId ?? ""}
-                      mediaId={file.id.replace(/^vault-/, "")}
-                      name={file.name}
-                      free={file.free !== false}
-                      onToggle={() => toggleVaultOffer(file.id)}
-                      onRemove={() => removeAttachment(file.id)}
-                    />
-                  ) : (
+                  {attachments.filter((file) => file.kind !== "vault").map((file) => (
                     <figure key={file.id} className="relative shrink-0">
                       {file.kind === "video" && file.url ? <video src={file.url} className="h-16 w-16 rounded object-cover" /> : null}
                       {file.kind === "image" && file.url ? <img src={file.url} alt={file.name} className="h-16 w-16 rounded object-cover" /> : null}
@@ -1061,13 +1098,16 @@ function InsightPane({
 
 type ComposerPanel = "guiones" | "vault" | "gif" | "etiqueta" | "formato" | "traduccion" | "emojis" | null;
 
-type PendingFile = { id: string; url: string | null; name: string; kind: "image" | "video" | "vault"; free?: boolean };
+type PendingFile = { id: string; url: string | null; name: string; kind: "image" | "video" | "vault"; free?: boolean; seconds?: number | null; offerLabel?: string | null; dateLabel?: string | null };
 
 function VaultOfferThumb({
   creatorId,
   mediaId,
   name,
   free,
+  seconds,
+  dateLabel,
+  offerLabel,
   onToggle,
   onRemove,
 }: {
@@ -1075,29 +1115,40 @@ function VaultOfferThumb({
   mediaId: string;
   name: string;
   free: boolean;
+  seconds: number | null;
+  dateLabel: string | null;
+  offerLabel: string | null;
   onToggle: () => void;
   onRemove: () => void;
 }) {
   const [broken, setBroken] = useState(false);
   return (
-    <figure className="relative shrink-0">
+    <figure className="relative h-28 w-24 shrink-0 overflow-hidden rounded-xl bg-[#d7dee8]">
       {broken || !creatorId ? (
-        <span className="grid h-16 w-16 place-items-center rounded bg-[#f3f4f6] px-1 text-center text-[10px] leading-tight">{name}</span>
+        <span className="grid h-full w-full place-items-center px-1 text-center text-[10px] text-[#5c6570]">{name}</span>
       ) : (
-        <img src={vaultMediaSrc(creatorId, mediaId)} alt="" className="h-16 w-16 rounded object-cover" onError={() => setBroken(true)} />
+        <img src={vaultMediaSrc(creatorId, mediaId)} alt="" className="h-full w-full object-cover" onError={() => setBroken(true)} />
       )}
       <button
         type="button"
         aria-pressed={!free}
         aria-label={free ? "Gratis. Pulsar para dejarlo de pago" : "De pago. Pulsar para dejarlo gratis"}
-        className={`mt-0.5 block w-16 rounded px-1 py-0.5 text-[10px] font-medium ${free ? "bg-[#e8f7ef] text-[#0f7a45]" : "bg-[#1c2333] text-white"}`}
+        className={`absolute left-1 top-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${free ? "bg-black/70 text-white" : "bg-[#ff5a7a] text-white"}`}
         onClick={onToggle}
       >
-        {free ? "Gratis" : "De pago"}
+        {free ? "Gratis" : (offerLabel ?? "De pago")}
       </button>
-      <button type="button" aria-label={`Quitar ${name}`} className="mt-0.5 text-[10px] text-[#2456c7]" onClick={onRemove}>Quitar</button>
+      <button type="button" aria-label={`Quitar ${name}`} className="absolute right-1 top-1 grid h-4 w-4 place-items-center rounded-full bg-black/70 text-[10px] text-white" onClick={onRemove}>×</button>
+      {seconds != null ? <span className="absolute bottom-1 right-1 rounded bg-black/70 px-1 text-[10px] text-white">{formatClip(seconds)}</span> : null}
+      {dateLabel ? <span className="absolute bottom-1 left-1 rounded bg-black/70 px-1 text-[10px] text-white">{dateLabel}</span> : null}
     </figure>
   );
+}
+
+function formatClip(seconds: number): string {
+  const min = Math.floor(seconds / 60);
+  const sec = seconds % 60;
+  return `${String(min).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
 }
 
 function panelLabel(panel: Exclude<ComposerPanel, null>): string {
@@ -1159,7 +1210,7 @@ function ComposerPanelBody({
   onTagQuery: (value: string) => void;
   fanTranslation: boolean;
   textSize: "sm" | "base" | "lg";
-  onVault: (item: { id: string; title: string; withId?: string | null; withTitle?: string | null }) => void;
+  onVault: (item: { id: string; title: string; withId?: string | null; withTitle?: string | null; seconds?: number | null; offerLabel?: string | null; dateLabel?: string | null }) => void;
   onTag: (handle: string) => void;
   onFormat: (command: "bold" | "italic" | "foreColor", value?: string) => void;
   onSize: (size: "sm" | "base" | "lg") => void;

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { chooseVaultPayloads, countVault } from "../sync/vault-listen.ts";
 import { parseVaultBundle } from "../sync/vault-model.ts";
+import { presentCard } from "../sync/vault-query.ts";
 
 const lists = {
   list: [
@@ -50,4 +51,29 @@ test("si el fetch no trae medios, se usan los de la página", () => {
 test("un fetch vacío no cuenta como bóveda", () => {
   assert.deepEqual(chooseVaultPayloads([], []), []);
   assert.equal(countVault([{ ok: false }]).files, 0);
+});
+
+test("la ficha enseña precio, fecha y porcentaje sin el campo priceCents", () => {
+  const card = presentCard({
+    id: "v1",
+    title: "set",
+    kind: "video",
+    seconds: 23,
+    preview: null,
+    folder: "Sets",
+    tags: ["Feed"],
+    listId: "10",
+    listName: "Sets",
+    description: null,
+    uploadedAt: "2026-11-06T00:00:00.000Z",
+    priceCents: 1799,
+    salesCount: 1,
+    sentCount: 3,
+  }, [], new Set(), new Set(), new Set(), [], [], null);
+  assert.equal(card.offerLabel, "$17.99");
+  assert.equal(card.buyLabel, "33%");
+  assert.equal(card.dateLabel, "6 nov 26");
+  assert.equal(card.posted, true);
+  assert.equal(card.sentCount, 3);
+  assert.equal(JSON.stringify(card).includes("priceCents"), false);
 });

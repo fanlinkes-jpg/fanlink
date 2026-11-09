@@ -11,9 +11,14 @@ type VaultCard = {
   folder: string | null;
   tags: string[];
   salesCount: number | null;
+  sentCount?: number | null;
   ventasLabel: string;
   bestSellerLabel: string | null;
   suggestedLabel: string;
+  offerLabel?: string | null;
+  buyLabel?: string | null;
+  dateLabel?: string | null;
+  posted?: boolean;
   packageLabel: string;
   packageWithId: string | null;
   sentToFan: boolean | null;
@@ -67,7 +72,7 @@ export function VaultBrowser({
 }: {
   creatorId: string;
   fanKey: string | null;
-  onAttach?: (item: { id: string; title: string; withId?: string | null; withTitle?: string | null }) => void;
+  onAttach?: (item: { id: string; title: string; withId?: string | null; withTitle?: string | null; seconds?: number | null; offerLabel?: string | null; dateLabel?: string | null }) => void;
   reloadToken?: number;
   layout?: "full" | "of";
   onClose?: () => void;
@@ -80,6 +85,7 @@ export function VaultBrowser({
   const [library, setLibrary] = useState<VaultCard[]>([]);
   const [lists, setLists] = useState<VaultList[]>([]);
   const [notice, setNotice] = useState<string | null>("Sin datos");
+  const [picked, setPicked] = useState<string[]>([]);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
@@ -204,29 +210,67 @@ export function VaultBrowser({
               }}
             >
               {items.length === 0 ? <p className="col-span-4 text-sm text-[#8a96a3]">Sin datos</p> : null}
-              {items.map((item) => (
+              {items.map((item) => {
+                const selected = picked.includes(item.id);
+                return (
                 <button
                   key={item.id}
                   type="button"
+                  aria-pressed={selected}
                   disabled={item.blocked || !onAttach}
-                  className="relative aspect-[3/4] overflow-hidden rounded-lg bg-[#f2f3f5] text-left disabled:opacity-50"
-                  onClick={() => {
-                    const other = items.find((row) => row.id === item.packageWithId);
-                    onAttach?.({ id: item.id, title: item.title, withId: item.packageWithId, withTitle: other?.title ?? null });
-                  }}
+                  className={`overflow-hidden rounded-xl bg-white text-left shadow-sm disabled:opacity-50 ${selected ? "ring-2 ring-[#00aff0]" : ""}`}
+                  onClick={() => setPicked((current) => current.includes(item.id) ? current.filter((id) => id !== item.id) : [...current, item.id])}
                 >
-                  <VaultThumb creatorId={creatorId} itemId={item.id} title={item.title} />
-                  {item.kind === "video" && item.seconds != null ? (
-                    <span className="absolute bottom-2 right-2 rounded bg-black/70 px-1.5 py-0.5 text-[11px] text-white">{formatSeconds(item.seconds)}</span>
+                  <span className="relative block aspect-[3/4] bg-[#f2f3f5]">
+                    <VaultThumb creatorId={creatorId} itemId={item.id} title={item.title} />
+                    <span className={`absolute left-1.5 top-1.5 grid h-5 w-5 place-items-center rounded-full text-[11px] font-semibold ${selected ? "bg-[#00aff0] text-white" : "bg-white/80 text-transparent"}`}>{selected ? picked.indexOf(item.id) + 1 : ""}</span>
+                    {item.offerLabel ? (
+                      <span className="absolute right-1.5 top-1.5 rounded-full bg-[#ff5a7a] px-1.5 py-0.5 text-[10px] font-semibold text-white">{item.offerLabel}</span>
+                    ) : item.posted ? (
+                      <span className="absolute right-1.5 top-1.5 rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white">Publicado</span>
+                    ) : null}
+                    {item.dateLabel ? <span className="absolute bottom-1.5 left-1.5 rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white">{item.dateLabel}</span> : null}
+                    {item.kind === "video" && item.seconds != null ? (
+                      <span className="absolute bottom-1.5 right-1.5 rounded bg-black/70 px-1 py-0.5 text-[10px] text-white">{formatSeconds(item.seconds)}</span>
+                    ) : null}
+                  </span>
+                  {item.sentCount != null || item.buyLabel || item.salesCount != null ? (
+                    <span className="flex items-center gap-2 px-1.5 py-1 text-[10px] text-[#5c6570]">
+                      {item.sentCount != null ? <span>{item.sentCount} envíos</span> : null}
+                      {item.buyLabel ? <span>{item.buyLabel}</span> : null}
+                      {item.salesCount != null ? <span>{item.salesCount} ventas</span> : null}
+                    </span>
                   ) : null}
-                  {item.kind === "foto" ? <span className="absolute bottom-2 right-2 rounded bg-black/70 px-1 text-[11px] text-white">Foto</span> : null}
                 </button>
-              ))}
+                );
+              })}
             </div>
           </section>
         </div>
-        <div className="flex justify-end border-t border-[#eceff3] px-4 py-3">
-          <button type="button" className="text-sm font-semibold uppercase tracking-wide text-[#00aff0]" onClick={onClose}>Cerrar</button>
+        <div className="flex items-center justify-end gap-3 border-t border-[#eceff3] px-4 py-3">
+          <button type="button" className="text-sm font-semibold uppercase tracking-wide text-[#8a96a3]" onClick={onClose}>Cerrar</button>
+          <button
+            type="button"
+            disabled={picked.length === 0}
+            className="rounded-full bg-[#00aff0] px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
+            onClick={() => {
+              for (const id of picked) {
+                const item = items.find((row) => row.id === id);
+                if (!item || item.blocked) continue;
+                onAttach?.({
+                  id: item.id,
+                  title: item.title,
+                  seconds: item.seconds,
+                  offerLabel: item.offerLabel ?? null,
+                  dateLabel: item.dateLabel ?? null,
+                });
+              }
+              setPicked([]);
+              onClose?.();
+            }}
+          >
+            {picked.length === 0 ? "Añadir" : `Añadir ${picked.length}`}
+          </button>
         </div>
       </div>
     );

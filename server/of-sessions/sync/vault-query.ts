@@ -28,9 +28,14 @@ export type VaultCard = {
   folder: string | null;
   tags: string[];
   salesCount: number | null;
+  sentCount: number | null;
   ventasLabel: "Ventas" | "Sin datos";
   bestSellerLabel: "Más vendido" | null;
   suggestedLabel: string;
+  offerLabel: string | null;
+  buyLabel: string | null;
+  dateLabel: string | null;
+  posted: boolean;
   packageLabel: "Tráiler gratis + vídeo de pago" | "Sin datos";
   packageWithId: string | null;
   sentToFan: boolean | null;
@@ -146,6 +151,24 @@ export async function queryVaultForActor(sql: ReadSql, actor: VaultActor, body: 
   };
 }
 
+export function vaultOfferLabel(cents: number | null): string | null {
+  if (cents == null || cents <= 0) return null;
+  return `$${(cents / 100).toFixed(2)}`;
+}
+
+export function vaultBuyLabel(sent: number | null, sales: number | null): string | null {
+  if (sent == null || sent <= 0 || sales == null || sales < 0) return null;
+  return `${Math.round((sales / sent) * 100)}%`;
+}
+
+export function vaultDateLabel(uploadedAt: string | null): string | null {
+  if (!uploadedAt) return null;
+  const date = new Date(uploadedAt);
+  if (Number.isNaN(date.getTime())) return null;
+  const months = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+  return `${date.getUTCDate()} ${months[date.getUTCMonth()]} ${String(date.getUTCFullYear()).slice(2)}`;
+}
+
 export function presentCard(
   item: VaultFile,
   folders: ReadonlyArray<{ id: string; name: string; parentId: string | null }>,
@@ -171,9 +194,14 @@ export function presentCard(
     folder: item.folder,
     tags: item.tags,
     salesCount,
+    sentCount: item.sentCount,
     ventasLabel: salesCount == null ? "Sin datos" : "Ventas",
     bestSellerLabel: bestIds.has(item.id) ? "Más vendido" : null,
     suggestedLabel: suggested.label,
+    offerLabel: vaultOfferLabel(item.priceCents),
+    buyLabel: vaultBuyLabel(item.sentCount, salesCount),
+    dateLabel: vaultDateLabel(item.uploadedAt),
+    posted: item.tags.includes("Feed"),
     packageLabel: pack?.label ?? "Sin datos",
     packageWithId: pack?.withId ?? null,
     sentToFan: sentIds.has(item.id) ? true : uses.length === 0 && sentIds.size === 0 ? null : false,
