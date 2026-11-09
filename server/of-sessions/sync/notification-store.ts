@@ -53,9 +53,8 @@ export async function saveNotificationRead(
        ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
        on conflict (creator_id, notification_key) do update set
          kind = case
-           when of_notification.kind = 'other' and excluded.kind <> 'other'
-           then excluded.kind
-           when of_notification.kind = 'agency' and excluded.kind <> 'agency'
+           when of_notification.kind in ('agency', 'other')
+            and excluded.kind not in ('agency', 'other')
            then of_notification.kind
            when of_notification.kind in ('tip', 'ppv', 'subscription', 'renewal')
             and excluded.kind not in ('tip', 'ppv', 'subscription', 'renewal')
