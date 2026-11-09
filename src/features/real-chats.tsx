@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { AtSign, Bell, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, MessageSquare, RefreshCw, ScrollText, Send, Type } from "lucide-react";
+import { AtSign, Bell, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, RefreshCw, ScrollText, Send, Type } from "lucide-react";
 import { chatSendAccess, discardChatOutbound, listCreatorChats, loadMoreChats, loadOlderMessages, readChatVault, recordChatOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
 import { listCreatorNotifications, type NotificationListItem } from "@/lib/of-notifications";
 import { useCrm, type VaultItem } from "@/lib/crm";
@@ -46,14 +46,12 @@ function madridClock(value: string): string {
 type NoteRow = NotificationListItem & { creatorId: string };
 
 const NOTE_FILTERS = [
+  ["todas", "Todo"],
   ["suscripciones", "Suscripciones"],
-  ["propinas", "Propinas"],
   ["compras", "Compras"],
-  ["onlyfans", "OnlyFans"],
+  ["propinas", "Propinas"],
   ["etiquetas", "Etiquetas"],
-  ["gusta", "Me gusta"],
-  ["promociones", "Promociones"],
-  ["menciones", "Menciones"],
+  ["menciones", "Comentarios"],
 ] as const;
 
 type NoteFilter = "todas" | (typeof NOTE_FILTERS)[number][0];
@@ -63,25 +61,21 @@ function noteMatches(kind: string, filter: NoteFilter): boolean {
   if (filter === "suscripciones") return kind === "subscription" || kind === "renewal";
   if (filter === "propinas") return kind === "tip";
   if (filter === "compras") return kind === "ppv";
-  if (filter === "onlyfans") return kind === "system" || kind === "agency";
-  if (filter === "etiquetas") return kind === "tag";
-  if (filter === "gusta") return kind === "like";
-  if (filter === "promociones") return kind === "promotion";
-  return kind === "mention" || kind === "comment";
+  if (filter === "etiquetas") return kind === "tag" || kind === "mention";
+  return kind === "comment";
 }
 
 function noteWhen(value: string | null): string {
-  if (!value) return "Sin datos";
+  if (!value) return "";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Sin datos";
-  return new Intl.DateTimeFormat("es-ES", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: "Europe/Madrid",
-  }).format(date);
+  if (Number.isNaN(date.getTime())) return "";
+  const dayKey = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Madrid", year: "numeric", month: "2-digit", day: "2-digit" });
+  const today = dayKey.format(new Date());
+  const that = dayKey.format(date);
+  if (that === today) return "Hoy";
+  const yesterday = new Date(Date.now() - 86_400_000);
+  if (dayKey.format(yesterday) === that) return "Ayer";
+  return new Intl.DateTimeFormat("es-ES", { day: "numeric", month: "short", timeZone: "Europe/Madrid" }).format(date).replace(".", "");
 }
 
 function FanLink({ item, href, copied, onCopy }: { item: string; href: string | null; copied: boolean; onCopy: (href: string) => void }) {
@@ -825,38 +819,45 @@ export function RealChatsPage() {
                     <h2 className="text-base font-semibold">Notificaciones</h2>
                     <button type="button" aria-label="Actualizar notificaciones" className="grid h-8 w-8 place-items-center rounded-full text-[#6d7585] hover:bg-[#f4f7ff]" onClick={() => void loadNotes()}><RefreshCw className="h-4 w-4" /></button>
                   </div>
-                  <div className="flex flex-wrap gap-2 px-4 pb-3">
+                  <div className="flex gap-2 overflow-x-auto px-4 pb-3">
                     {NOTE_FILTERS.map(([id, label]) => {
-                      const count = (notes ?? []).filter((item) => !item.seen && noteMatches(item.kind, id)).length;
+                      const count = (notes ?? []).filter((item) => !item.seen && noteMatches(item.kind, id) && id !== "todas").length;
                       const on = noteFilter === id;
                       return (
-                        <button key={id} type="button" onClick={() => setNoteFilter(on ? "todas" : id)} className={`rounded-full px-3 py-1.5 text-xs font-medium ${on ? "bg-[#3b6cff] text-white" : "bg-[#f3f4f6] text-[#3c4456]"}`}>
+                        <button key={id} type="button" onClick={() => setNoteFilter(id)} className={`relative shrink-0 rounded-full px-3 py-1.5 text-sm ${on ? "bg-[#e7f3ff] text-[#1890d4]" : "bg-[#f2f3f5] text-[#3c4456]"}`}>
                           {label}
-                          {count > 0 ? <span className={`ml-1 inline-grid h-4 min-w-4 place-items-center rounded-full px-1 text-[10px] ${on ? "bg-white text-[#3b6cff]" : "bg-[#1f9d55] text-white"}`}>{count}</span> : null}
+                          {count > 0 ? <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-[#3b6cff] px-1 text-[10px] font-semibold text-white">{count}</span> : null}
                         </button>
                       );
                     })}
                   </div>
-                  <ul className="min-h-0 flex-1 overflow-y-auto border-t border-[#e6e8ee]">
+                  <ul className="min-h-0 flex-1 overflow-y-auto">
                     {notes == null ? <li className="px-4 py-6 text-sm text-[#6d7585]">Sin datos</li> : null}
                     {notes != null && notes.filter((item) => noteMatches(item.kind, noteFilter)).length === 0 ? <li className="px-4 py-6 text-sm text-[#6d7585]">Sin notificaciones</li> : null}
                     {(notes ?? []).filter((item) => noteMatches(item.kind, noteFilter)).map((item) => {
-                      const name = item.fanName ?? "Sin datos";
-                      const canOpen = (data?.threads ?? []).some((row) => row.creatorId === item.creatorId && (
+                      const thread = (data?.threads ?? []).find((row) => row.creatorId === item.creatorId && (
                         (item.threadKey != null && row.threadKey === item.threadKey)
                         || (item.fanKey != null && (row.fanKey === item.fanKey || row.threadKey === item.fanKey))
                       ));
+                      const name = item.fanName ?? thread?.fanName ?? "Sin datos";
+                      const handle = thread?.fanHandle?.replace(/^@/, "") ?? null;
+                      const canOpen = thread != null;
                       return (
-                        <li key={`${item.creatorId}:${item.key}`} className="border-b border-[#e6e8ee]">
-                          <button type="button" disabled={!canOpen} onClick={() => openNote(item)} className="flex w-full items-start gap-3 px-4 py-3 text-left hover:bg-[#f4f7ff] disabled:cursor-default disabled:hover:bg-transparent">
-                            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#eef2ff] text-xs font-semibold text-[#2456c7]">{name.slice(0, 1)}</span>
+                        <li key={`${item.creatorId}:${item.key}`} className="border-b border-[#eef0f3]">
+                          <button type="button" disabled={!canOpen} onClick={() => openNote(item)} className="flex w-full items-start gap-3 px-4 py-3 text-left hover:bg-[#f7f9fb] disabled:cursor-default">
+                            {thread?.avatarUrl ? (
+                              <img src={thread.avatarUrl} alt="" className="h-11 w-11 shrink-0 rounded-full object-cover" />
+                            ) : (
+                              <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#eef2ff] text-sm font-semibold text-[#2456c7]">{name.slice(0, 1)}</span>
+                            )}
                             <span className="min-w-0 flex-1">
-                              <span className="block truncate text-sm font-semibold">{name}{item.fanKey ? <span className="ml-1 font-normal text-[#6d7585]">@{item.fanKey}</span> : null}</span>
-                              <span className="mt-0.5 block text-sm text-[#1c2333]">{item.labels.title}</span>
-                              <span className="block text-sm text-[#6d7585]">{item.labels.body}</span>
-                              <span className="mt-1 block text-xs text-[#6d7585]">{noteWhen(item.occurredAt)}</span>
+                              <span className="block truncate text-sm">
+                                <span className="font-semibold">{name}</span>
+                                {handle ? <span className="ml-1 text-[#8b909a]">@{handle}</span> : null}
+                              </span>
+                              <span className="mt-0.5 block text-sm text-[#1c2333]">{item.body?.trim() || item.labels.body}</span>
+                              {item.occurredAt ? <span className="mt-1 block text-xs text-[#8b909a]">{noteWhen(item.occurredAt)}</span> : null}
                             </span>
-                            <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg border ${canOpen ? "border-[#3b6cff] text-[#3b6cff]" : "border-[#e6e8ee] text-[#b0b6c0]"}`} aria-hidden="true"><MessageSquare className="h-4 w-4" /></span>
                           </button>
                         </li>
                       );

@@ -405,7 +405,7 @@ function notificationFrom(record: Record<string, unknown>): ParsedNotification |
   const kind = kindOf(rawType);
   const fan = fanOf(record);
   const occurredAt = firstTime(record, ["createdAt", "created_at", "date", "publishedAt", "postedAt"]);
-  const body = firstString(record, ["text", "message", "body", "content", "excerpt"]);
+  const body = notificationText(record);
   const threadKey = firstString(record, ["chatId", "threadId", "threadKey", "relatedChatId"]);
   const key = notificationKey({
     id: firstString(record, ["id", "notificationId", "guid"]),
@@ -448,6 +448,20 @@ function kindOf(raw: string): NotificationKind {
   return "other";
 }
 
+function notificationText(record: Record<string, unknown>): string | null {
+  const raw = firstString(record, ["text", "message", "body", "content", "excerpt"]);
+  if (!raw) return null;
+  let text = raw;
+  const pairs = record.replacePairs;
+  if (pairs && typeof pairs === "object" && !Array.isArray(pairs)) {
+    for (const [key, value] of Object.entries(pairs as Record<string, unknown>)) {
+      if (typeof value === "string") text = text.split(key).join(value.replace(/<[^>]+>/g, ""));
+    }
+  }
+  const clean = text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  return clean || null;
+}
+
 function isPending(record: Record<string, unknown>, body: string | null): boolean {
   const status = firstString(record, ["status", "state"])?.toLowerCase() ?? "";
   if (record.isPending === true || record.pending === true || record.missing === true) return true;
@@ -458,7 +472,10 @@ function isPending(record: Record<string, unknown>, body: string | null): boolea
 function fanOf(record: Record<string, unknown>): { fanKey: string | null; fanName: string | null } {
   const user = nested(record, ["user", "fromUser", "relatedUser", "subscriber"]);
   const fanKey = firstString(record, ["userId", "fanId", "fanKey"]) ?? (user ? firstString(user, ["id", "userId"]) : null);
-  const fanName = firstString(record, ["username", "name", "fanName"]) ?? (user ? firstString(user, ["name", "username", "displayName"]) : null);
+  const fanName = (user ? firstString(user, ["name", "displayName"]) : null)
+    ?? firstString(record, ["name", "fanName"])
+    ?? (user ? firstString(user, ["username"]) : null)
+    ?? firstString(record, ["username"]);
   return { fanKey, fanName };
 }
 
