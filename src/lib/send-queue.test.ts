@@ -190,3 +190,14 @@ test("recuperar un pendiente del servidor conserva precio y piezas", () => {
   assert.deepEqual(draft.vault, [{ id: "v1", name: "playa" }]);
   assert.equal(draftFromPending({ body: "gratis", priceCents: null, vault: [] }).priceLabel, null);
 });
+
+test("recuperar conserva si el medio es gratis o de pago", () => {
+  const draft = draftFromRejected({
+    body: "foto",
+    priceCents: 500,
+    priceLabel: "$5.00",
+    vault: [{ id: "v1", name: "playa", free: false }, { id: "v2", name: "previa", free: true }],
+  });
+  assert.equal(draft.vault[0]?.free, false);
+  assert.equal(draft.vault[1]?.free, true);
+});

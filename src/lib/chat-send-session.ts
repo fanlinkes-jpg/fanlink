@@ -146,7 +146,7 @@ export function createChatSendSession(options?: {
       body,
       priceCents: input.priceCents,
       priceLabel: input.priceLabel,
-      vault: input.vault.map((item) => ({ id: item.id, name: item.name })),
+      vault: input.vault.map((item) => ({ id: item.id, name: item.name, ...(typeof item.free === "boolean" ? { free: item.free } : {}) })),
       tagHandle: cleanTag(input.tagHandle),
       at: now,
       messageId: null,

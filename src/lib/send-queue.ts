@@ -11,7 +11,7 @@ export type SendJob = {
   state: SendJobState;
 };
 
-export type VaultAttachment = { id: string; name: string };
+export type VaultAttachment = { id: string; name: string; free?: boolean };
 
 /** Lo que el compositor suelta al pulsar Enter. La cola solo mira el cuerpo y el hilo. */
 export type OutboundSend = SendJob & {
@@ -192,7 +192,7 @@ export function draftFromPending(item: {
     body: item.body,
     priceCents: item.priceCents,
     priceLabel: priceLabelFromCents(item.priceCents),
-    vault: item.vault.map((piece) => ({ id: piece.id, name: piece.name })),
+    vault: item.vault.map((piece) => ({ id: piece.id, name: piece.name, ...(typeof piece.free === "boolean" ? { free: piece.free } : {}) })),
   });
 }
 export function draftFromRejected(draft: ComposerDraft): ComposerDraft {
@@ -200,6 +200,6 @@ export function draftFromRejected(draft: ComposerDraft): ComposerDraft {
     body: draft.body,
     priceCents: draft.priceCents,
     priceLabel: draft.priceLabel,
-    vault: draft.vault.map((item) => ({ id: item.id, name: item.name })),
+    vault: draft.vault.map((item) => ({ id: item.id, name: item.name, ...(typeof item.free === "boolean" ? { free: item.free } : {}) })),
   };
 }

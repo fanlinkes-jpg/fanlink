@@ -23,6 +23,7 @@ import {
 } from "@/lib/send-queue";
 import { spendTone } from "@/lib/spend-tiers";
 import { ChatMediaPlayer } from "@/features/chat-media-player";
+import { vaultMediaSrc } from "@/lib/chat-media";
 import { VaultBrowser } from "@/features/vault-browser";
 
 function profileHref(handle: string | null): string | null {
@@ -180,7 +181,7 @@ export function RealChatsPage() {
   const [ofVault, setOfVault] = useState<Array<{ id: string; title: string; kind: "foto" | "video" | "audio" | null }>>([]);
   const [vaultReload, setVaultReload] = useState(0);
   const [vaultReading, setVaultReading] = useState(false);
-  const vaultPage = useRef({ listId: "all", offset: 0, busy: false });
+  const offerPriceId = useRef<string | null>(null);
 
   async function refresh() {
     try {
@@ -363,6 +364,7 @@ export function RealChatsPage() {
     const vault = attachments.filter((file) => file.kind === "vault").map((file) => ({
       id: file.id.replace(/^vault-/, ""),
       name: file.name,
+      free: file.free !== false,
     }));
     const decision = chatSendSession.press({
       key,
@@ -394,7 +396,13 @@ export function RealChatsPage() {
       for (const file of current) {
         if (file.url) URL.revokeObjectURL(file.url);
       }
-      return next.vault.map((item) => ({ id: `vault-${item.id}`, url: null, name: item.name, kind: "vault" as const }));
+      return next.vault.map((item) => ({
+        id: `vault-${item.id}`,
+        url: null,
+        name: item.name,
+        kind: "vault" as const,
+        free: item.free !== false,
+      }));
     });
   }
 
@@ -549,15 +557,29 @@ export function RealChatsPage() {
   function attachVault(item: { id: string; title: string; withId?: string | null; withTitle?: string | null }) {
     const pieces = [{ id: item.id, title: item.title }];
     if (item.withId && item.withId !== item.id) pieces.push({ id: item.withId, title: item.withTitle || "Vídeo de pago" });
+    const free = !(draftPrice != null && draftPrice > 0);
     setAttachments((current) => {
       const next = [...current];
       for (const piece of pieces) {
         if (next.some((file) => file.id === `vault-${piece.id}`)) continue;
-        next.push({ id: `vault-${piece.id}`, url: null, name: piece.title, kind: "vault" as const });
+        next.push({ id: `vault-${piece.id}`, url: null, name: piece.title, kind: "vault" as const, free });
       }
       return next;
     });
     setPanel(null);
+  }
+
+  function toggleVaultOffer(id: string) {
+    const file = attachments.find((item) => item.id === id);
+    if (!file || file.kind !== "vault") return;
+    const toPaid = file.free !== false;
+    if (toPaid && (draftPrice == null || draftPrice <= 0)) {
+      offerPriceId.current = id;
+      setPanel(null);
+      setDialog("precio");
+      return;
+    }
+    setAttachments((current) => current.map((item) => item.id === id ? { ...item, free: !toPaid } : item));
   }
 
   function removeAttachment(id: string) {
@@ -818,12 +840,22 @@ export function RealChatsPage() {
               {tagHandle ? <p className="mb-1 text-xs font-medium text-[#2456c7]">Etiqueta @{tagHandle}</p> : null}
               {attachments.length > 0 ? (
                 <div className="mb-1 flex gap-2 overflow-x-auto">
-                  {attachments.map((file) => (
+                  {attachments.map((file) => file.kind === "vault" ? (
+                    <VaultOfferThumb
+                      key={file.id}
+                      creatorId={selected?.creatorId ?? ""}
+                      mediaId={file.id.replace(/^vault-/, "")}
+                      name={file.name}
+                      free={file.free !== false}
+                      onToggle={() => toggleVaultOffer(file.id)}
+                      onRemove={() => removeAttachment(file.id)}
+                    />
+                  ) : (
                     <figure key={file.id} className="relative shrink-0">
-                      {file.kind === "video" && file.url ? <video src={file.url} className="h-14 w-14 rounded object-cover" /> : null}
-                      {file.kind === "image" && file.url ? <img src={file.url} alt={file.name} className="h-14 w-14 rounded object-cover" /> : null}
-                      {file.kind === "vault" || !file.url ? <span className="grid h-14 w-14 place-items-center rounded bg-[#f3f4f6] px-1 text-center text-[10px] leading-tight">{file.name}</span> : null}
-                      <figcaption className="max-w-14 truncate text-[10px] text-[#8a5a12]">Pendiente</figcaption>
+                      {file.kind === "video" && file.url ? <video src={file.url} className="h-16 w-16 rounded object-cover" /> : null}
+                      {file.kind === "image" && file.url ? <img src={file.url} alt={file.name} className="h-16 w-16 rounded object-cover" /> : null}
+                      {!file.url ? <span className="grid h-16 w-16 place-items-center rounded bg-[#f3f4f6] px-1 text-center text-[10px] leading-tight">{file.name}</span> : null}
+                      <figcaption className="max-w-16 truncate text-[10px] text-[#8a5a12]">Pendiente</figcaption>
                       <button type="button" aria-label={`Quitar ${file.name}`} className="mt-0.5 text-[10px] text-[#2456c7]" onClick={() => removeAttachment(file.id)}>Quitar</button>
                     </figure>
                   ))}
@@ -919,10 +951,21 @@ export function RealChatsPage() {
         <MessagePriceDialog
           initial={draftPrice == null ? "" : (draftPrice / 100).toFixed(2)}
           messages={messages}
-          onCancel={() => setDialog(null)}
+          onCancel={() => {
+            offerPriceId.current = null;
+            setDialog(null);
+          }}
           onSave={(cents) => {
+            const only = offerPriceId.current;
+            offerPriceId.current = null;
             setDraftPrice(cents);
             setPriceLabel(cents == null ? "Gratis" : `$${(cents / 100).toFixed(2)}`);
+            setAttachments((current) => current.map((file) => {
+              if (file.kind !== "vault") return file;
+              if (cents == null || cents <= 0) return { ...file, free: true };
+              if (only) return file.id === only ? { ...file, free: false } : file;
+              return { ...file, free: false };
+            }));
             setDialog(null);
           }}
         />
@@ -1018,7 +1061,44 @@ function InsightPane({
 
 type ComposerPanel = "guiones" | "vault" | "gif" | "etiqueta" | "formato" | "traduccion" | "emojis" | null;
 
-type PendingFile = { id: string; url: string | null; name: string; kind: "image" | "video" | "vault" };
+type PendingFile = { id: string; url: string | null; name: string; kind: "image" | "video" | "vault"; free?: boolean };
+
+function VaultOfferThumb({
+  creatorId,
+  mediaId,
+  name,
+  free,
+  onToggle,
+  onRemove,
+}: {
+  creatorId: string;
+  mediaId: string;
+  name: string;
+  free: boolean;
+  onToggle: () => void;
+  onRemove: () => void;
+}) {
+  const [broken, setBroken] = useState(false);
+  return (
+    <figure className="relative shrink-0">
+      {broken || !creatorId ? (
+        <span className="grid h-16 w-16 place-items-center rounded bg-[#f3f4f6] px-1 text-center text-[10px] leading-tight">{name}</span>
+      ) : (
+        <img src={vaultMediaSrc(creatorId, mediaId)} alt="" className="h-16 w-16 rounded object-cover" onError={() => setBroken(true)} />
+      )}
+      <button
+        type="button"
+        aria-pressed={!free}
+        aria-label={free ? "Gratis. Pulsar para dejarlo de pago" : "De pago. Pulsar para dejarlo gratis"}
+        className={`mt-0.5 block w-16 rounded px-1 py-0.5 text-[10px] font-medium ${free ? "bg-[#e8f7ef] text-[#0f7a45]" : "bg-[#1c2333] text-white"}`}
+        onClick={onToggle}
+      >
+        {free ? "Gratis" : "De pago"}
+      </button>
+      <button type="button" aria-label={`Quitar ${name}`} className="mt-0.5 text-[10px] text-[#2456c7]" onClick={onRemove}>Quitar</button>
+    </figure>
+  );
+}
 
 function panelLabel(panel: Exclude<ComposerPanel, null>): string {
   switch (panel) {
