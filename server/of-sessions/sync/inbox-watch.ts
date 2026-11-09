@@ -1,7 +1,7 @@
 import type { BrowserContext, Page } from "playwright";
 import { openWorkPage } from "../sessions/work-page.ts";
 import { closeIfIdle } from "../live/pages.ts";
-import { chatPageUrl, classifyChatPath, parseChatList, parseChatMessages, parsePreviewMessages, type ChatMessage, type ChatThread } from "./chats.ts";
+import { chatPageUrl, classifyChatPath, isUsersDirectoryUrl, parseChatList, parseChatMessages, parsePreviewMessages, parseUsersDirectory, type ChatMessage, type ChatThread, type ChatUser } from "./chats.ts";
 import { parseLivePayload } from "./live-frames.ts";
 import { FALLBACK_RELOAD_MS, nextFallbackThread, WATCH_IDLE_MS, type WatchedThread } from "./watch-plan.ts";
 
@@ -22,6 +22,7 @@ export type WatchSession = {
   listen(handlers: {
     onMessages: (messages: ChatMessage[]) => void;
     onThreads?: (threads: ChatThread[]) => void;
+    onUsers?: (users: ChatUser[]) => void;
     onBlock: (reason: string) => void;
   }): void;
   close(): Promise<void>;
@@ -38,6 +39,7 @@ export async function runInboxWatch(input: {
   open: (accountId: string) => Promise<WatchSession>;
   save: (creatorId: string, messages: ChatMessage[]) => Promise<void>;
   saveThreads?: (creatorId: string, threads: ChatThread[]) => Promise<void>;
+  saveUsers?: (creatorId: string, users: ChatUser[]) => Promise<void>;
   /** Devuelve los milisegundos de la pausa de la cuenta. La pestaña espera eso, no un fijo de 15 s. */
   onBlock: (accountId: string, reason: string) => number;
   onNavigate?: (threadKey: string | null) => void;
@@ -111,6 +113,10 @@ export async function runInboxWatch(input: {
           const id = current();
           if (id && threads.length) void input.saveThreads?.(id, threads);
         },
+        onUsers: (users) => {
+          const id = current();
+          if (id && users.length) void input.saveUsers?.(id, users);
+        },
         onBlock: (reason) => {
           if (!accountId) return;
           blockedUntil = input.now() + input.onBlock(accountId, reason);
@@ -166,7 +172,7 @@ export function watchPage(page: Page, threadKey: () => string): WatchSession {
       const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => null);
       return response?.status() ?? 0;
     },
-    listen({ onMessages, onThreads, onBlock }) {
+    listen({ onMessages, onThreads, onUsers, onBlock }) {
       page.on("websocket", (socket) => {
         socket.on("framereceived", (frame) => {
           const text = typeof frame.payload === "string" ? frame.payload : frame.payload.toString("utf8");
@@ -179,6 +185,14 @@ export function watchPage(page: Page, threadKey: () => string): WatchSession {
         const status = response.status();
         if (status === 403 || status === 429) onBlock(String(status));
         const kind = classifyChatPath(response.url());
+        if (isUsersDirectoryUrl(response.url())) {
+          void response.text().then((raw) => {
+            if (raw.length > 1_500_000) return;
+            const users = parseUsersDirectory(JSON.parse(raw) as unknown);
+            if (users.length) onUsers?.(users);
+          }).catch(() => undefined);
+          return;
+        }
         if (kind === "other") return;
         void response.text().then((raw) => {
           if (raw.length > 1_500_000) return;

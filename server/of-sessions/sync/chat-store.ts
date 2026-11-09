@@ -1,5 +1,5 @@
 import { normalizeOutboundText, outboundTextDelta, OUTBOUND_TIE_MS, type OutboundDraft } from "./author-match.ts";
-import { newFanEvents, collapseFans, type ChatMessage, type ChatThread, type FanMessageEvent } from "./chats.ts";
+import { newFanEvents, collapseFans, type ChatMessage, type ChatThread, type ChatUser, type FanMessageEvent } from "./chats.ts";
 import { decodeMedia, encodeMedia, oldestCursor } from "./history.ts";
 import type { ReadSql } from "./store.ts";
 
@@ -50,9 +50,9 @@ export async function saveChatRead(
            avatar_url, is_online, sub_price_cents, sub_expires_at, renew_auto, fan_lists
          ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
          on conflict (creator_id, thread_key) do update set
-           fan_key = excluded.fan_key,
-           fan_handle = excluded.fan_handle,
-           fan_name = excluded.fan_name,
+           fan_key = coalesce(excluded.fan_key, of_chat_thread.fan_key),
+           fan_handle = coalesce(excluded.fan_handle, of_chat_thread.fan_handle),
+           fan_name = coalesce(excluded.fan_name, of_chat_thread.fan_name),
            last_message_at = case
              when excluded.last_message_at is null then of_chat_thread.last_message_at
              when of_chat_thread.last_message_at is null or excluded.last_message_at > of_chat_thread.last_message_at then excluded.last_message_at
@@ -70,17 +70,17 @@ export async function saveChatRead(
              when of_chat_thread.last_message_at is null or excluded.last_message_at >= of_chat_thread.last_message_at then excluded.last_from_fan
              else of_chat_thread.last_from_fan
            end,
-           spent_cents = excluded.spent_cents,
-           subscribes_cents = excluded.subscribes_cents,
-           tips_cents = excluded.tips_cents,
-           posts_cents = excluded.posts_cents,
-           messages_cents = excluded.messages_cents,
-           avatar_url = excluded.avatar_url,
-           is_online = excluded.is_online,
-           sub_price_cents = excluded.sub_price_cents,
-           sub_expires_at = excluded.sub_expires_at,
-           renew_auto = excluded.renew_auto,
-           fan_lists = excluded.fan_lists`,
+           spent_cents = coalesce(excluded.spent_cents, of_chat_thread.spent_cents),
+           subscribes_cents = coalesce(excluded.subscribes_cents, of_chat_thread.subscribes_cents),
+           tips_cents = coalesce(excluded.tips_cents, of_chat_thread.tips_cents),
+           posts_cents = coalesce(excluded.posts_cents, of_chat_thread.posts_cents),
+           messages_cents = coalesce(excluded.messages_cents, of_chat_thread.messages_cents),
+           avatar_url = coalesce(excluded.avatar_url, of_chat_thread.avatar_url),
+           is_online = coalesce(excluded.is_online, of_chat_thread.is_online),
+           sub_price_cents = coalesce(excluded.sub_price_cents, of_chat_thread.sub_price_cents),
+           sub_expires_at = coalesce(excluded.sub_expires_at, of_chat_thread.sub_expires_at),
+           renew_auto = coalesce(excluded.renew_auto, of_chat_thread.renew_auto),
+           fan_lists = coalesce(excluded.fan_lists, of_chat_thread.fan_lists)`,
         [
           creatorId,
           thread.threadKey,
@@ -227,6 +227,45 @@ export async function saveChatRead(
     );
   }
   return events;
+}
+
+/** Rellena nombre, foto y gasto cuando la lista de chats venía sin la ficha. No pisa un dato que ya existe. */
+export async function saveFanCards(sql: ReadSql, creatorId: string, users: ChatUser[]): Promise<void> {
+  for (const user of users) {
+    if (!user.id) continue;
+    await sql.query(
+      `update of_chat_thread set
+         fan_name = coalesce(fan_name, $3),
+         fan_handle = coalesce(fan_handle, $4),
+         avatar_url = coalesce(avatar_url, $5),
+         spent_cents = coalesce(spent_cents, $6),
+         subscribes_cents = coalesce(subscribes_cents, $7),
+         tips_cents = coalesce(tips_cents, $8),
+         posts_cents = coalesce(posts_cents, $9),
+         messages_cents = coalesce(messages_cents, $10),
+         is_online = coalesce(is_online, $11),
+         sub_price_cents = coalesce(sub_price_cents, $12),
+         sub_expires_at = coalesce(sub_expires_at, $13),
+         renew_auto = coalesce(renew_auto, $14)
+       where creator_id = $1 and (fan_key = $2 or thread_key = $2)`,
+      [
+        creatorId,
+        user.id,
+        user.name,
+        user.username,
+        user.avatarUrl,
+        user.spentCents,
+        user.subscribesCents,
+        user.tipsCents,
+        user.postsCents,
+        user.messagesCents,
+        user.online,
+        user.subPriceCents,
+        user.subExpiresAt,
+        user.renewAuto,
+      ],
+    );
+  }
 }
 
 export async function listChats(

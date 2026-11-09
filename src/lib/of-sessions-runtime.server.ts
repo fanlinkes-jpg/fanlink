@@ -29,7 +29,7 @@ import { chatIntervalMinFromEnv } from "../../server/of-sessions/sync/chats.ts";
 import { chatIntervalMinutes, inboxIsOpen, activeThreadWatches } from "../../server/of-sessions/sync/live.ts";
 import { openWatchContext, runInboxWatch } from "../../server/of-sessions/sync/inbox-watch.ts";
 import { pickAccountWatch } from "../../server/of-sessions/sync/watch-plan.ts";
-import { listChatMeta, listChats, listOpenHistory, listPendingOutbounds, markChatList, markHistory, markOutboundAwaiting, markOutboundError, markOutboundSent, recordOutbound, saveChatRead } from "../../server/of-sessions/sync/chat-store.ts";
+import { listChatMeta, listChats, listOpenHistory, listPendingOutbounds, markChatList, markHistory, markOutboundAwaiting, markOutboundError, markOutboundSent, recordOutbound, saveChatRead, saveFanCards } from "../../server/of-sessions/sync/chat-store.ts";
 import { historyPerMinute, listPageDone, nextHistoryThread, oldestCursor, pageFinished } from "../../server/of-sessions/sync/history.ts";
 import { captureChatListPage, captureOlderMessages } from "../../server/of-sessions/sync/history-scroll.ts";
 import { openWorkPage } from "../../server/of-sessions/sessions/work-page.ts";
@@ -179,6 +179,9 @@ export function kickInboxWatch(): void {
     },
     saveThreads: async (creatorId, threads) => {
       await saveChatRead(await getSql(), creatorId, { threads, messages: [], reason: null, jsonPaths: [] });
+    },
+    saveUsers: async (creatorId, users) => {
+      await saveFanCards(await getSql(), creatorId, users);
     },
     onNavigate: (threadKey) => {
       threadRef.key = threadKey ?? "";
