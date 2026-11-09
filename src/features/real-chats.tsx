@@ -43,32 +43,7 @@ function madridClock(value: string): string {
   return new Intl.DateTimeFormat("es-ES", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Europe/Madrid" }).format(date);
 }
 
-const NOTE_FILTERS = [
-  ["todas", "Todas"],
-  ["suscripciones", "Suscripciones"],
-  ["propinas", "Propinas"],
-  ["compras", "Compras"],
-  ["onlyfans", "OnlyFans"],
-  ["etiquetas", "Etiquetas"],
-  ["gusta", "Me gusta"],
-  ["promociones", "Promociones"],
-  ["menciones", "Menciones"],
-] as const;
-
-type NoteFilter = (typeof NOTE_FILTERS)[number][0];
 type NoteRow = NotificationListItem & { creatorId: string };
-
-function noteMatches(kind: string, filter: NoteFilter): boolean {
-  if (filter === "todas") return true;
-  if (filter === "suscripciones") return kind === "subscription" || kind === "renewal";
-  if (filter === "propinas") return kind === "tip";
-  if (filter === "compras") return kind === "ppv";
-  if (filter === "onlyfans") return kind === "system" || kind === "agency";
-  if (filter === "etiquetas") return kind === "tag";
-  if (filter === "gusta") return kind === "like";
-  if (filter === "promociones") return kind === "promotion";
-  return kind === "mention" || kind === "comment";
-}
 
 function noteWhen(value: string | null): string {
   if (!value) return "Sin datos";
@@ -230,7 +205,6 @@ export function RealChatsPage() {
   const [fanActionError, setFanActionError] = useState<string | null>(null);
   const [fanLists, setFanLists] = useState<Array<{ name: string; on: boolean }>>([]);
   const [notesOpen, setNotesOpen] = useState(false);
-  const [noteFilter, setNoteFilter] = useState<NoteFilter>("todas");
   const [notes, setNotes] = useState<NoteRow[] | null>(null);
   const notesButton = useRef<HTMLButtonElement>(null);
   const [notesPos, setNotesPos] = useState({ top: 0, left: 0 });
@@ -825,22 +799,10 @@ export function RealChatsPage() {
                     <h2 className="text-base font-semibold">Notificaciones</h2>
                     <button type="button" aria-label="Actualizar notificaciones" className="grid h-8 w-8 place-items-center rounded-full text-[#6d7585] hover:bg-[#f4f7ff]" onClick={() => void loadNotes()}><RefreshCw className="h-4 w-4" /></button>
                   </div>
-                  <div className="flex gap-2 overflow-x-auto px-4 pb-3">
-                    {NOTE_FILTERS.map(([id, label]) => {
-                      const count = (notes ?? []).filter((item) => !item.seen && noteMatches(item.kind, id)).length;
-                      const on = noteFilter === id;
-                      return (
-                        <button key={id} type="button" onClick={() => setNoteFilter(id)} className={`relative shrink-0 rounded-full px-3 py-1.5 text-xs font-medium ${on ? "bg-[#3b6cff] text-white" : "bg-[#f3f4f6] text-[#3c4456]"}`}>
-                          {label}
-                          {count > 0 ? <span className={`ml-1 inline-grid h-4 min-w-4 place-items-center rounded-full px-1 text-[10px] ${on ? "bg-white text-[#3b6cff]" : "bg-[#1f9d55] text-white"}`}>{count}</span> : null}
-                        </button>
-                      );
-                    })}
-                  </div>
                   <ul className="min-h-0 flex-1 overflow-y-auto border-t border-[#e6e8ee]">
                     {notes == null ? <li className="px-4 py-6 text-sm text-[#6d7585]">Sin datos</li> : null}
-                    {notes != null && notes.filter((item) => noteMatches(item.kind, noteFilter)).length === 0 ? <li className="px-4 py-6 text-sm text-[#6d7585]">Sin notificaciones</li> : null}
-                    {(notes ?? []).filter((item) => noteMatches(item.kind, noteFilter)).map((item) => {
+                    {notes != null && notes.length === 0 ? <li className="px-4 py-6 text-sm text-[#6d7585]">Sin notificaciones</li> : null}
+                    {(notes ?? []).map((item) => {
                       const name = item.fanName ?? "Sin datos";
                       const canOpen = (data?.threads ?? []).some((row) => row.creatorId === item.creatorId && (
                         (item.threadKey != null && row.threadKey === item.threadKey)
