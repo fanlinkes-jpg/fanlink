@@ -36,19 +36,36 @@ function chatHref(fanKey: string | null): string | null {
   return id ? `https://onlyfans.com/my/chats/chat/${id}` : null;
 }
 
-function FanLink({ item, href }: { item: string; href: string | null }) {
+function FanLink({ item, href, copied, onCopy }: { item: string; href: string | null; copied: boolean; onCopy: (href: string) => void }) {
   return (
     <button
       type="button"
       disabled={!href}
-      className="block w-full px-3 py-2 text-left hover:bg-[#f4f7ff] disabled:text-[#b0b6c0]"
+      className="block w-full px-4 py-3 text-left hover:bg-[#f4f7ff] disabled:text-[#b0b6c0]"
       onClick={() => {
-        if (href) void navigator.clipboard.writeText(href);
+        if (href) onCopy(href);
       }}
     >
-      {item}
+      {copied ? "Copiado" : item}
     </button>
   );
+}
+
+const CHAT_MARKS_KEY = "fanlink.chat.marks";
+
+function readChatMarks(): { hidden: string[]; muted: string[] } {
+  if (typeof localStorage === "undefined") return { hidden: [], muted: [] };
+  try {
+    const parsed = JSON.parse(localStorage.getItem(CHAT_MARKS_KEY) ?? "") as { hidden?: unknown; muted?: unknown };
+    const list = (value: unknown) => Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+    return { hidden: list(parsed.hidden), muted: list(parsed.muted) };
+  } catch {
+    return { hidden: [], muted: [] };
+  }
+}
+
+function threadMark(creatorId: string, threadKey: string): string {
+  return `${creatorId}:${threadKey}`;
 }
 
 function ThreadMessage({ message }: { message: {
@@ -155,6 +172,11 @@ export function RealChatsPage() {
   const [tagHandle, setTagHandle] = useState<string | null>(null);
   const [menu, setMenu] = useState(false);
   const [fanMenu, setFanMenu] = useState(false);
+  const [marks, setMarks] = useState<{ hidden: string[]; muted: string[] }>({ hidden: [], muted: [] });
+  const [showHidden, setShowHidden] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+  const [copiedLink, setCopiedLink] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [draftPrice, setDraftPrice] = useState<number | null>(null);
   const [priceLabel, setPriceLabel] = useState<string | null>(null);
@@ -181,6 +203,7 @@ export function RealChatsPage() {
   const [ofVault, setOfVault] = useState<Array<{ id: string; title: string; kind: "foto" | "video" | "audio" | null }>>([]);
   const [vaultReload, setVaultReload] = useState(0);
   const [vaultReading, setVaultReading] = useState(false);
+  const vaultPage = useRef({ listId: "all", offset: 0, busy: false });
   const offerPriceId = useRef<string | null>(null);
 
   async function refresh() {
@@ -213,19 +236,27 @@ export function RealChatsPage() {
   useEffect(() => {
     void refresh();
     void chatSendAccess().then((access) => setSendCreators(access.creatorIds)).catch(() => setSendCreators([]));
+    setMarks(readChatMarks());
   }, []);
 
   const threads = (data?.threads ?? []).filter(
     (thread) => creatorId === "all" || thread.creatorId === creatorId,
   );
   const knowsOnline = threads.some((thread) => thread.online != null);
-  const visible = [...threads]
+  const ordered = [...threads]
     .filter((thread) => filter !== "propinas" || (thread.tipsCents != null && thread.tipsCents > 0))
     .filter((thread) => filter !== "online" || thread.online === true)
     .sort((left, right) => (right.lastMessageAt ?? "").localeCompare(left.lastMessageAt ?? ""));
-  const fanCards = useChatFanCards(visible);
   const selected =
-    visible.find((thread) => `${thread.creatorId}:${thread.threadKey}` === selectedKey) ?? visible[0] ?? null;
+    ordered.find((thread) => `${thread.creatorId}:${thread.threadKey}` === selectedKey)
+    ?? ordered.find((thread) => !marks.hidden.includes(threadMark(thread.creatorId, thread.threadKey)))
+    ?? ordered[0]
+    ?? null;
+  const visible = ordered.filter((thread) => {
+    const id = threadMark(thread.creatorId, thread.threadKey);
+    return showHidden || !marks.hidden.includes(id) || (selected != null && id === threadMark(selected.creatorId, selected.threadKey));
+  });
+  const fanCards = useChatFanCards(visible);
   const messages = (data?.messages ?? [])
     .filter((message) => message.creatorId === selected?.creatorId && message.threadKey === selected?.threadKey)
     .sort((left, right) => left.sentAt.localeCompare(right.sentAt));
@@ -291,7 +322,7 @@ export function RealChatsPage() {
   const creatorName = creatorId === "all"
     ? "Todas las cuentas"
     : creators.find((creator) => creator.id === creatorId)?.name ?? "Cuenta";
-  const unread = threads.reduce((sum, thread) => sum + thread.unread, 0);
+  const unread = threads.reduce((sum, thread) => sum + (marks.muted.includes(threadMark(thread.creatorId, thread.threadKey)) ? 0 : thread.unread), 0);
   const slash = slashQuery(draft);
   const scriptHits = matchScripts(scripts, slash != null ? slash : libraryQuery);
   const showScripts = panel === "guiones" || slash != null;
@@ -590,6 +621,56 @@ export function RealChatsPage() {
     });
   }
 
+  function fanNickname(creatorId: string, fanKey: string | null): string | null {
+    if (!fanKey) return null;
+    return (data?.profiles ?? []).find((item) => item.creatorId === creatorId && item.fanKey === fanKey)?.nickname ?? null;
+  }
+
+  function fanTitle(thread: { creatorId: string; fanKey: string | null; fanName: string | null; fanHandle: string | null }): string {
+    return fanNickname(thread.creatorId, thread.fanKey) || thread.fanName || thread.fanHandle || "Fan";
+  }
+
+  function saveMarks(next: { hidden: string[]; muted: string[] }) {
+    setMarks(next);
+    localStorage.setItem(CHAT_MARKS_KEY, JSON.stringify(next));
+  }
+
+  function toggleMark(kind: "hidden" | "muted") {
+    if (!selected) return;
+    const id = threadMark(selected.creatorId, selected.threadKey);
+    const has = marks[kind].includes(id);
+    const next = { ...marks, [kind]: has ? marks[kind].filter((item) => item !== id) : [...marks[kind], id] };
+    saveMarks(next);
+    if (kind === "hidden" && !has) {
+      const other = ordered.find((thread) => {
+        const mark = threadMark(thread.creatorId, thread.threadKey);
+        return mark !== id && !next.hidden.includes(mark);
+      });
+      if (other) setSelectedKey(`${other.creatorId}:${other.threadKey}`);
+    }
+    setFanMenu(false);
+  }
+
+  function saveRename() {
+    if (!selected?.fanKey) return;
+    const current = (data?.profiles ?? []).find((item) => item.creatorId === selected.creatorId && item.fanKey === selected.fanKey);
+    const nickname = renameValue.trim();
+    void saveFanProfile({
+      data: {
+        creatorId: selected.creatorId,
+        fanKey: selected.fanKey,
+        nickname: nickname || null,
+        birthday: current?.birthday ?? null,
+        timezone: current?.timezone ?? null,
+        source: current?.source ?? null,
+        salaryCents: current?.salaryCents ?? null,
+        lastPayDate: current?.lastPayDate ?? null,
+      },
+    }).then(() => refresh()).catch((err: unknown) => setError(sessionErrorText(err)));
+    setRenaming(false);
+    setFanMenu(false);
+  }
+
   return (
     <div className="absolute inset-0 flex min-h-0 overflow-hidden bg-white text-[#1c2333]">
       <section className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden border-r border-[#e6e8ee] md:w-[340px] md:shrink-0">
@@ -613,6 +694,9 @@ export function RealChatsPage() {
           <div className="flex gap-2">
             <button type="button" onClick={() => setFilter("todos")} className={`rounded-full px-3 py-1 text-xs ${filter === "todos" ? "bg-[#3b6cff] text-white" : "bg-[#f3f4f6] text-[#6d7585]"}`}>Todos</button>
             <button type="button" onClick={() => setFilter("propinas")} className={`rounded-full px-3 py-1 text-xs ${filter === "propinas" ? "bg-[#3b6cff] text-white" : "bg-[#f3f4f6] text-[#6d7585]"}`}>Con propinas</button>
+            {marks.hidden.length > 0 ? (
+              <button type="button" onClick={() => setShowHidden((open) => !open)} className={`rounded-full px-3 py-1 text-xs ${showHidden ? "bg-[#3b6cff] text-white" : "bg-[#f3f4f6] text-[#6d7585]"}`}>Ocultos {marks.hidden.length}</button>
+            ) : null}
           </div>
         </div>
         {error ? <p className="shrink-0 px-4 text-sm text-[#8a5a12]">{error}</p> : null}
@@ -641,7 +725,7 @@ export function RealChatsPage() {
                     {thread.avatarUrl ? (
                       <img src={thread.avatarUrl} alt="" className="h-10 w-10 rounded-full object-cover" />
                     ) : (
-                      <span className="grid h-10 w-10 place-items-center rounded-full bg-[#eef2ff] text-sm">{(thread.fanName ?? "F").slice(0, 1)}</span>
+                      <span className="grid h-10 w-10 place-items-center rounded-full bg-[#eef2ff] text-sm">{fanTitle(thread).slice(0, 1)}</span>
                     )}
                     <span className="text-[10px] font-medium" style={{ color: spendTone(thread.spentCents).color ?? "#6d7585" }}>
                       {spendTone(thread.spentCents).label}
@@ -649,9 +733,9 @@ export function RealChatsPage() {
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-1">
-                      <span className="truncate text-sm font-medium">{thread.fanName ?? "Fan"}</span>
+                      <span className="truncate text-sm font-medium">{fanTitle(thread)}</span>
                       {creatorId === "all" ? <span className="shrink-0 rounded bg-[#f3f4f6] px-1 text-[10px] text-[#6d7585]">{creators.find((creator) => creator.id === thread.creatorId)?.name ?? "Cuenta"}</span> : null}
-                      {thread.unread > 0 ? <span className="rounded bg-[#e7f0ff] px-1 text-[10px] font-semibold text-[#2456c7]">NEW</span> : null}
+                      {thread.unread > 0 && !marks.muted.includes(threadMark(thread.creatorId, thread.threadKey)) ? <span className="rounded bg-[#e7f0ff] px-1 text-[10px] font-semibold text-[#2456c7]">NEW</span> : null}
                       {thread.online === false ? <span className="rounded bg-[#f3f4f6] px-1 text-[10px] text-[#6d7585]">OFF</span> : null}
                     </span>
                     <span className="block truncate text-xs text-[#6d7585]">{thread.fanHandle ? `@${thread.fanHandle.replace(/^@/, "")}` : "Sin datos"}</span>
@@ -671,16 +755,38 @@ export function RealChatsPage() {
         <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <header className="flex shrink-0 items-center justify-between gap-3 border-b border-[#e6e8ee] px-4 py-3">
               <div className="relative min-w-0">
-                <button type="button" className="truncate text-left font-medium" onClick={() => setFanMenu((open) => !open)} aria-expanded={fanMenu} aria-label="Opciones del fan">
-                  {selected ? (selected.fanName ?? selected.fanHandle ?? "Fan") : "Sin sincronizar"}
+                <button type="button" className="truncate text-left font-medium" onClick={() => { setFanMenu((open) => !open); setRenaming(false); }} aria-expanded={fanMenu} aria-label="Opciones del fan">
+                  {selected ? fanTitle(selected) : "Sin sincronizar"}
                 </button>
                 {selected && creatorId === "all" ? <p className="truncate text-xs text-[#6d7585]">{creators.find((creator) => creator.id === selected.creatorId)?.name ?? "Cuenta"}</p> : null}
                 {fanMenu && selected ? (
-                  <div className="absolute left-0 top-full z-30 mt-1 w-64 rounded-xl border border-[#e6e8ee] bg-white py-1 text-sm shadow-lg">
-                    <p className="truncate px-3 py-2 text-xs text-[#6d7585]">{selected.fanHandle ? `@${selected.fanHandle.replace(/^@/, "")}` : "Sin usuario"}</p>
-                    <FanLink item="Copiar enlace del perfil" href={profileHref(selected.fanHandle)} />
-                    <FanLink item="Copiar enlace del chat" href={chatHref(selected.fanKey)} />
-                  </div>
+                  <>
+                    <button type="button" aria-label="Cerrar opciones del fan" className="fixed inset-0 z-20 cursor-default" onClick={() => { setFanMenu(false); setRenaming(false); }} />
+                    <div className="absolute left-0 top-full z-30 mt-1 w-72 rounded-xl border border-[#e6e8ee] bg-white py-1 text-sm shadow-lg">
+                      <div className="flex items-center gap-2 border-b border-[#e6e8ee] px-4 py-3">
+                        <span className="grid h-8 w-8 place-items-center rounded-full bg-[#eef2ff] text-xs font-medium">{fanTitle(selected).slice(0, 1)}</span>
+                        <span className="min-w-0 truncate text-[#6d7585]">{selected.fanHandle ? `@${selected.fanHandle.replace(/^@/, "")}` : "Sin usuario"}</span>
+                      </div>
+                      {renaming ? (
+                        <form className="space-y-2 px-4 py-3" onSubmit={(event) => { event.preventDefault(); saveRename(); }}>
+                          <input aria-label="Apodo" value={renameValue} onChange={(event) => setRenameValue(event.target.value)} className="h-9 w-full rounded-lg border border-[#e6e8ee] px-2 text-sm" placeholder="Apodo" />
+                          <div className="flex justify-end gap-2">
+                            <button type="button" className="text-xs text-[#6d7585]" onClick={() => setRenaming(false)}>Cancelar</button>
+                            <button type="submit" className="text-xs font-medium text-[#2456c7]" disabled={!selected.fanKey}>Guardar</button>
+                          </div>
+                        </form>
+                      ) : (
+                        <>
+                          <FanLink item="Copiar enlace del perfil" href={profileHref(selected.fanHandle)} copied={copiedLink === "perfil"} onCopy={(href) => { void navigator.clipboard.writeText(href); setCopiedLink("perfil"); }} />
+                          <FanLink item="Copiar enlace del chat" href={chatHref(selected.fanKey)} copied={copiedLink === "chat"} onCopy={(href) => { void navigator.clipboard.writeText(href); setCopiedLink("chat"); }} />
+                          <button type="button" className="block w-full px-4 py-3 text-left hover:bg-[#f4f7ff] disabled:text-[#b0b6c0]" disabled={!selected.fanKey} onClick={() => { setRenameValue(fanNickname(selected.creatorId, selected.fanKey) ?? selected.fanName ?? ""); setRenaming(true); }}>Renombrar</button>
+                          <div className="my-1 border-t border-[#e6e8ee]" />
+                          <button type="button" className="block w-full px-4 py-3 text-left hover:bg-[#f4f7ff]" onClick={() => toggleMark("hidden")}>{marks.hidden.includes(threadMark(selected.creatorId, selected.threadKey)) ? "Mostrar chat" : "Ocultar chat"}</button>
+                          <button type="button" className="block w-full px-4 py-3 text-left text-[#2456c7] hover:bg-[#f4f7ff]" onClick={() => toggleMark("muted")}>{marks.muted.includes(threadMark(selected.creatorId, selected.threadKey)) ? "Activar avisos" : "Silenciar avisos"}</button>
+                        </>
+                      )}
+                    </div>
+                  </>
                 ) : null}
               </div>
               <div className="flex items-center gap-2">
