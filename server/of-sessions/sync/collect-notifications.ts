@@ -1,6 +1,7 @@
 import type { BrowserContext, Page } from "playwright";
 import { closeIfIdle } from "../live/pages.ts";
 import {
+  kindFromNotificationType,
   mergeNotifications,
   NOTIFICATION_TYPE_READS,
   notificationScrolls,
@@ -158,31 +159,119 @@ function replaceNotifications(current: ParsedNotification[], incoming: ParsedNot
 /** Cada pestaña de OnlyFans es una petición distinta. La general no trae las etiquetas. */
 export async function readNotificationTypes(page: Page): Promise<ParsedNotification[]> {
   if (!page.url().includes("onlyfans.com/")) return [];
+  const own = page.url().includes("/my/notifications");
+  const extra = own ? page : await page.context().newPage();
+  try {
+    return await readNotificationPage(extra, !own);
+  } finally {
+    if (!own) await extra.close().catch(() => undefined);
+  }
+}
+
+const TAB_CLICKS: Array<[string, NotificationKind]> = [
+  ["Suscripciones", "subscription"],
+  ["Subscriptions", "subscription"],
+  ["Compras", "ppv"],
+  ["Purchases", "ppv"],
+  ["Propinas", "tip"],
+  ["Tips", "tip"],
+  ["Etiquetas", "tag"],
+  ["Tags", "tag"],
+  ["Comentarios", "comment"],
+  ["Comments", "comment"],
+  ["Menciones", "mention"],
+  ["Mentions", "mention"],
+  ["Me gusta", "like"],
+  ["Likes", "like"],
+  ["Promociones", "promotion"],
+  ["Promotions", "promotion"],
+  ["OnlyFans", "system"],
+];
+
+async function readNotificationPage(page: Page, open: boolean): Promise<ParsedNotification[]> {
+  const found: ParsedNotification[] = [];
+  const pending: Promise<void>[] = [];
+  let forced: NotificationKind | null = null;
+  const onResponse = (response: { url(): string; status(): number; text(): Promise<string> }) => {
+    if (!response.url().includes("/users/notifications")) return;
+    const status = response.status();
+    if (status < 200 || status >= 300) {
+      console.info(`[fanlink:avisos] pagina status=${status}`);
+      return;
+    }
+    const fromUrl = kindFromNotificationType(notificationTypeOf(response.url()));
+    const kind = fromUrl ?? forced;
+    pending.push(response.text().then((raw) => {
+      let payload: unknown;
+      try {
+        payload = JSON.parse(raw);
+      } catch {
+        return;
+      }
+      const parsed = parseNotificationPayload(payload);
+      for (const item of parsed) found.push(kind ? { ...item, kind } : item);
+    }).catch(() => undefined));
+  };
+  page.on("response", onResponse);
+  try {
+    if (open) {
+      await page.goto("https://onlyfans.com/my/notifications", { waitUntil: "domcontentloaded", timeout: 20_000 }).catch(() => undefined);
+      await delay(1_200);
+    }
+    for (const [label, kind] of TAB_CLICKS) {
+      const tab = page.getByText(label, { exact: true }).first();
+      const visible = await tab.isVisible().catch(() => false);
+      if (!visible) continue;
+      forced = kind;
+      await tab.click({ timeout: 1_500 }).catch(() => undefined);
+      await delay(600);
+    }
+    const fetched = await pullNotificationTypes(page);
+    for (const item of fetched) found.push(item);
+    await Promise.allSettled(pending.splice(0));
+  } finally {
+    page.off("response", onResponse);
+  }
+  const items = replaceNotifications([], found);
+  const tags = items.filter((item) => item.kind === "tag").length;
+  console.info(`[fanlink:avisos] leidos=${items.length} etiquetas=${tags}`);
+  return items;
+}
+
+async function pullNotificationTypes(page: Page): Promise<ParsedNotification[]> {
   const types = NOTIFICATION_TYPE_READS.map((row) => row[0]);
   const payloads = await page.evaluate(async (wanted: string[]) => {
-    const out: Array<{ type: string; body: unknown }> = [];
+    const out: Array<{ type: string; status: number; body: unknown }> = [];
     for (const type of wanted) {
       try {
-        const response = await fetch(`/api2/v2/users/notifications?type=${type}&limit=30&skip_users=all&format=infinite`, {
+        const response = await fetch(`/api2/v2/users/notifications?limit=30&skip_users=all&format=infinite&type=${type}`, {
           credentials: "include",
           headers: { accept: "application/json" },
         });
-        if (!response.ok) continue;
-        out.push({ type, body: await response.json() });
+        out.push({ type, status: response.status, body: response.ok ? await response.json() : null });
       } catch {
-        // El siguiente tipo sigue.
+        out.push({ type, status: 0, body: null });
       }
     }
     return out;
-  }, [...types]).catch(() => [] as Array<{ type: string; body: unknown }>);
-  const kindByType = new Map<string, NotificationKind>(NOTIFICATION_TYPE_READS);
+  }, [...types]).catch(() => [] as Array<{ type: string; status: number; body: unknown }>);
   const items: ParsedNotification[] = [];
   for (const row of payloads) {
-    const kind = kindByType.get(row.type);
+    const kind = kindFromNotificationType(row.type);
+    const parsed = row.body == null ? [] : parseNotificationPayload(row.body);
+    console.info(`[fanlink:avisos] ${row.type} status=${row.status} items=${parsed.length}`);
     if (!kind) continue;
-    for (const item of parseNotificationPayload(row.body)) items.push({ ...item, kind });
+    for (const item of parsed) items.push({ ...item, kind });
   }
   return items;
+}
+
+function notificationTypeOf(url: string): string | null {
+  try {
+    return new URL(url).searchParams.get("type");
+  } catch {
+    return null;
+  }
 }
 
 function delay(ms: number): Promise<void> {

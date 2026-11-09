@@ -245,16 +245,24 @@ export function isNotificationResponseUrl(url: string): boolean {
 }
 
 export const NOTIFICATION_TYPE_READS = [
-  ["subscriptions", "subscription"],
+  ["subscribed", "subscription"],
   ["purchases", "ppv"],
-  ["tips", "tip"],
+  ["tip", "tip"],
   ["tags", "tag"],
-  ["comments", "comment"],
-  ["mentions", "mention"],
-  ["likes", "like"],
+  ["commented", "comment"],
+  ["mentioned", "mention"],
+  ["favorited", "like"],
   ["promotions", "promotion"],
   ["onlyfans", "system"],
 ] as const;
+
+const NOTIFICATION_TYPE_KIND = new Map<string, NotificationKind>(NOTIFICATION_TYPE_READS);
+
+/** El tipo que OnlyFans pone en la URL de cada pestaña. */
+export function kindFromNotificationType(type: string | null): NotificationKind | null {
+  if (!type) return null;
+  return NOTIFICATION_TYPE_KIND.get(type.toLowerCase()) ?? null;
+}
 
 export function notificationScrolls(requested: number): number {
   if (!Number.isFinite(requested) || requested <= 0) return 0;
