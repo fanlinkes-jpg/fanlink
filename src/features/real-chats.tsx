@@ -867,7 +867,7 @@ export function RealChatsPage() {
               </div>
               <div className="flex items-center gap-2">
                 <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => void refresh()}>Recargar</button>
-                <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs xl:hidden" onClick={() => setInsightsOpen(true)}>Ficha del fan</button>
+                <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => setInsightsOpen(true)}>Ficha del fan</button>
                 <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => { setFanMenu((open) => !open); setRenaming(false); }} aria-label="Menú" aria-expanded={fanMenu}>Menú</button>
               </div>
             </header>
@@ -1127,13 +1127,6 @@ export function RealChatsPage() {
               </div>
             </form>
         </div>
-        <aside className="hidden h-full w-[340px] shrink-0 border-l border-[#e6e8ee] xl:block">
-          {selected ? (
-            <InsightPane thread={selected} cards={fanCards.fans} crmFans={crmFans} messages={messages} profiles={data?.profiles ?? []} notes={data?.notes ?? []} onNotes={saveNote} onProfile={(profile) => { void saveFanProfile({ data: profile }).then(() => refresh()); }} onCopyDraft={(body, price) => { replaceDraft(body); setDraftPrice(price); setPriceLabel(`$${(price / 100).toFixed(2)}`); }} onCreatorNote={(body) => { if (!selected.fanKey) return; void saveFanNote({ data: { creatorId: selected.creatorId, fanKey: selected.fanKey, body } }).then(() => refresh()); }} />
-          ) : (
-            <div className="grid h-full place-items-center px-6 text-center text-sm text-[#6d7585]">Elige una conversación</div>
-          )}
-        </aside>
       </section>
       {insightsOpen ? (
         <div className="fixed inset-0 z-50">
