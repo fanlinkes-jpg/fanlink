@@ -867,7 +867,7 @@ export function RealChatsPage() {
               </div>
               <div className="flex items-center gap-2">
                 <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => void refresh()}>Recargar</button>
-                <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => setInsightsOpen(true)}>Ficha del fan</button>
+                <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs xl:hidden" onClick={() => setInsightsOpen(true)}>Ficha del fan</button>
                 <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => { setFanMenu((open) => !open); setRenaming(false); }} aria-label="Menú" aria-expanded={fanMenu}>Menú</button>
               </div>
             </header>
