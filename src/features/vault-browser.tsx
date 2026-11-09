@@ -85,10 +85,18 @@ export function VaultBrowser({
   useEffect(() => {
     let alive = true;
     setReady(false);
-    void queryVaultMirror({ data: { creatorId, fanKey, listText: "", remember: false } }).then((payload) => {
+    void queryVaultMirror({
+      data: {
+        creatorId,
+        fanKey,
+        listText: "",
+        remember: false,
+        ...(layout === "of" ? { query: { ...EMPTY_QUERY } } : {}),
+      },
+    }).then((payload) => {
       if (!alive) return;
       const view = payload as VaultPayload;
-      setQuery({ ...EMPTY_QUERY, ...(view.query ?? {}) });
+      if (layout !== "of") setQuery({ ...EMPTY_QUERY, ...(view.query ?? {}) });
       applyView(view);
       setReady(true);
     }).catch(() => {
@@ -107,13 +115,13 @@ export function VaultBrowser({
       setLists(view.lists ?? []);
       setNotice(view.notice ?? (view.items && view.items.length > 0 ? null : "Sin datos"));
     }
-  }, [creatorId, fanKey, reloadToken]);
+  }, [creatorId, fanKey, reloadToken, layout]);
 
   useEffect(() => {
     if (!ready) return;
     let alive = true;
     const handle = setTimeout(() => {
-      void queryVaultMirror({ data: { creatorId, fanKey, query, listText, remember: true } }).then((payload) => {
+      void queryVaultMirror({ data: { creatorId, fanKey, query, listText, remember: layout !== "of" } }).then((payload) => {
         if (!alive) return;
         const view = payload as VaultPayload;
         setItems(view.items ?? []);
@@ -130,7 +138,7 @@ export function VaultBrowser({
       alive = false;
       clearTimeout(handle);
     };
-  }, [ready, creatorId, fanKey, query, listText]);
+  }, [ready, creatorId, fanKey, query, listText, layout]);
 
   const kind = query.kinds[0] ?? "";
   const folderName = lists.find((folder) => folder.id === query.folderId)?.name ?? "Todos los medios";

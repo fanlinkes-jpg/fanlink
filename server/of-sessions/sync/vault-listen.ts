@@ -75,7 +75,8 @@ export async function readVaultFromPage(page: Page, listId = "all", offset = 0):
   const cleanList = listId.trim().slice(0, 80) || "all";
   const direct = await pullVaultApi(page, cleanList, cleanOffset);
   const fromPage = countVault(direct).files > 0 ? [] : await readOpenedVault(page, cleanList, cleanOffset);
-  const chosen = chooseVaultPayloads(direct, fromPage);
+  const after = countVault(fromPage).files > 0 ? [] : await pullVaultApi(page, cleanList, cleanOffset);
+  const chosen = chooseVaultPayloads(countVault(direct).files > 0 ? direct : after, fromPage);
   const counts = countVault(chosen);
   console.info(`[fanlink:vault] pagina lista=${cleanList} offset=${cleanOffset} carpetas=${counts.folders} medios=${counts.files}`);
   return chosen;
@@ -110,7 +111,7 @@ async function readOpenedVault(page: Page, listId: string, offset: number): Prom
   const pending: Array<Promise<void>> = [];
   const onResponse = (response: { url(): string; status(): number; text(): Promise<string> }) => {
     if (response.status() < 200 || response.status() >= 300) return;
-    if (!/\/api2\/v2\/vault\/(?:lists|media)(?:\?|$)/.test(response.url())) return;
+    if (!/\/api2\/v2\/vault\//.test(response.url())) return;
     pending.push(response.text().then((raw) => {
       try {
         found.push(JSON.parse(raw) as unknown);
@@ -119,7 +120,8 @@ async function readOpenedVault(page: Page, listId: string, offset: number): Prom
       }
     }).catch(() => undefined));
   };
-  page.on("response", onResponse);
+  const target = page.context();
+  target.on("response", onResponse);
   try {
     await page.goto("https://onlyfans.com/my/vault", { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
     await waitForVault(found, pending, 12_000, () => countVault(found).files > 0);
@@ -128,7 +130,7 @@ async function readOpenedVault(page: Page, listId: string, offset: number): Prom
     await Promise.all(pending);
     return found;
   } finally {
-    page.off("response", onResponse);
+    target.off("response", onResponse);
   }
 }
 

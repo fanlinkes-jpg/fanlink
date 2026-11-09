@@ -436,10 +436,10 @@ export class SessionManager {
     return job;
   }
 
-  /** Mantiene el perfil abierto para escuchar. Cede si otra lectura ya lo usa. */
+  /** Mantiene el perfil abierto para escuchar. No entra en la cola: si lo hiciera, la bóveda esperaría mientras el chat sigue abierto. */
   holdWatch(accountId: string, run: (context: BrowserContext) => Promise<void>): Promise<boolean> {
     if (liveHoldsAccount(accountId)) return Promise.resolve(false);
-    const job = this.readTail.then(async () => {
+    return this.readTail.then(async () => {
       if (this.reading.size > 0) return false;
       this.reading.add(accountId);
       try {
@@ -449,11 +449,6 @@ export class SessionManager {
         this.reading.delete(accountId);
       }
     });
-    this.readTail = job.then(
-      () => undefined,
-      () => undefined,
-    );
-    return job;
   }
 
   private async readNotificationsNow(accountId: string): Promise<CollectedNotifications> {
