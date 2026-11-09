@@ -49,8 +49,8 @@ function startLease(sql: SendChatHooks["sql"], id: string, claimKey: string): ()
 
 export class OutboundClaimError extends Error {
   readonly status: 403 | 409;
-  constructor(status: 403 | 409) {
-    super(status === 403 ? "No es tuyo" : "No se puede reenviar");
+  constructor(status: 403 | 409, message?: string) {
+    super(message ?? (status === 403 ? "No es tuyo" : "No se puede reenviar"));
     this.name = "OutboundClaimError";
     this.status = status;
   }
@@ -279,7 +279,9 @@ export async function reviewAwaitingView(
   input: { clientId: string },
   hooks: { sql: ReadSql; access: SendChatHooks["access"] },
 ): Promise<{ ok: true }> {
-  if (hooks.access.role !== "owner") throw new WorkspaceAccessError("No tienes permiso para escribir.");
+  if (hooks.access.role !== "owner") {
+    throw new OutboundClaimError(403, "Solo la dueña puede marcar esto como revisado.");
+  }
   const clientId = parseClientId(input.clientId);
   if (!clientId) throw new WorkspaceAccessError("clientId no válido");
   const done = await reviewAwaitingOutbound(hooks.sql, clientId);

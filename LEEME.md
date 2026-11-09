@@ -179,7 +179,7 @@ Con Postgres (`DATABASE_URL`) la tabla persiste. Sin esa variable el CRM usa el 
 - `FANLINK_SESSION_KEY` — 32 bytes en base64 o hex. Obligatoria para guardar la sesión. No generes otra si ya hay `data/sessions`.
 - `FANLINK_ENABLE_SEND` — `true` solo si vas a enviar chats de verdad. Sin esta variable, o con otro valor, no se envía nada.
 - `FANLINK_SEND_ALLOW_ACCOUNTS` — ids o handles de las creadoras que sí pueden enviar. Ejemplo de la cuenta de prueba: `9ikis52,@bigpoppa1111`. El resto sigue apagado. La misma lista abre la pestaña OnlyFans en directo.
-- `FANLINK_LIVE_VIEW_ENABLED` — `true` solo para ver la página real de OnlyFans dentro del CRM. Sin esta variable sigue apagada. Teclear y subir archivos exigen también `FANLINK_ENABLE_SEND=true`; si no, la pestaña es solo lectura. El socket solo existe con `npm run dev`.
+- `FANLINK_LIVE_VIEW_ENABLED` — `true` solo para ver la página real de OnlyFans dentro del CRM. Sin esta variable sigue apagada y Mensajes es la bandeja del CRM: no se borra. Teclear y subir archivos exigen también `FANLINK_ENABLE_SEND=true`; si no, la pestaña es solo lectura. El socket solo existe con `npm run dev`. En el proceso de despliegue (`node .output/server`) no hay directo: se queda la bandeja.
 - `FANLINK_LIVE_FPS` — fotogramas del screencast, de 1 a 8. Por defecto 4. Hay como máximo 4 visores.
 - `FANLINK_LIVE_QUALITY` — calidad JPEG, de 20 a 80. Por defecto 40.
 - `FANLINK_LIVE_IDLE_MS` — suelta el control si quien lo tiene no toca la pestaña. Quien solo mira sigue dentro. Por defecto 90 segundos.

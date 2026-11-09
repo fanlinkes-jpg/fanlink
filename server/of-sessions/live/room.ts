@@ -40,6 +40,19 @@ type Room = {
 };
 
 const rooms = new Map<string, Room>();
+const opening = new Map<string, Promise<Room>>();
+
+/** Cierra la sala de esa cuenta antes de abrir el Chromium de Conectar. */
+export async function interruptLiveAccount(accountId: string): Promise<void> {
+  const mine = [...rooms.values()].filter((room) => room.accountId === accountId);
+  await Promise.all(mine.map((room) => stopRoom(room)));
+}
+
+function liveRoomGraceMs(): number {
+  const value = Number(process.env.FANLINK_LIVE_ROOM_GRACE_MS);
+  if (Number.isInteger(value) && value >= 0 && value <= 120_000) return value;
+  return 60_000;
+}
 
 type LiveOpener = {
   borrow: (accountId: string) => Promise<{ context: BrowserContext; release: () => Promise<void> }>;
@@ -101,6 +114,10 @@ export async function joinLive(socket: WebSocket, ticketId: string): Promise<voi
   }
   try {
     const room = await ensureRoom(ticket);
+    if (room.idle) {
+      clearTimeout(room.idle);
+      room.idle = null;
+    }
     if (!liveViewerAccepted(room.viewers.length)) {
       refuseLive(socket, room.accountId, "Ya hay demasiada gente en esta página.");
       return;
@@ -150,11 +167,27 @@ function liveFailureText(error: unknown): string {
 
 async function ensureRoom(ticket: LiveTicket): Promise<Room> {
   const key = liveRoomKey(ticket.accountId, ticket.threadKey);
+  const pending = opening.get(key);
+  if (pending) {
+    const room = await pending;
+    room.ticket = ticket;
+    return room;
+  }
   const existing = rooms.get(key);
   if (existing) {
     existing.ticket = ticket;
     return existing;
   }
+  const job = openFreshRoom(ticket, key);
+  opening.set(key, job);
+  try {
+    return await job;
+  } finally {
+    if (opening.get(key) === job) opening.delete(key);
+  }
+}
+
+async function openFreshRoom(ticket: LiveTicket, key: string): Promise<Room> {
   const room: Room = {
     key,
     accountId: ticket.accountId,
@@ -176,6 +209,10 @@ async function ensureRoom(ticket: LiveTicket): Promise<Room> {
     const borrowed = liveOpener
       ? await liveOpener.borrow(ticket.accountId)
       : await borrowAccount(ticket.accountId);
+    if (rooms.get(key) !== room) {
+      await borrowed.release().catch(() => undefined);
+      throw new Error("La sala se cerró.");
+    }
     room.release = borrowed.release;
     const openCast = liveOpener?.open ?? startLiveCast;
     room.cast = await openCast({
@@ -226,8 +263,22 @@ async function ensureRoom(ticket: LiveTicket): Promise<Room> {
         })).catch(() => undefined);
       },
     });
+    if (rooms.get(key) !== room) {
+      await room.cast?.stop().catch(() => undefined);
+      await room.release?.().catch(() => undefined);
+      room.cast = null;
+      room.release = null;
+      throw new Error("La sala se cerró.");
+    }
   } catch (error) {
     console.info(liveLog("error", { accountId: ticket.accountId, detail: error instanceof Error ? error.message.split("\n")[0] : "no se pudo abrir" }));
+    if (rooms.get(key) === room) await stopRoom(room);
+    else {
+      await room.cast?.stop().catch(() => undefined);
+      await room.release?.().catch(() => undefined);
+      room.cast = null;
+      room.release = null;
+    }
     throw error;
   }
   return room;
@@ -310,10 +361,14 @@ function armControlTimer(room: Room): void {
 }
 
 function scheduleStop(room: Room): void {
-  if (rooms.get(room.key) !== room) return;
+  if (rooms.get(room.key) !== room || room.viewers.length > 0) return;
   if (room.idle) clearTimeout(room.idle);
-  room.idle = null;
-  console.info(liveLog("fin", { accountId: room.accountId, detail: "el visor se fue; la bandeja sigue abierta" }));
+  room.idle = setTimeout(() => {
+    room.idle = null;
+    if (room.viewers.length > 0) return;
+    void stopRoom(room);
+  }, liveRoomGraceMs());
+  room.idle.unref?.();
 }
 
 async function stopRoom(room: Room): Promise<void> {
@@ -322,8 +377,12 @@ async function stopRoom(room: Room): Promise<void> {
   releaseLiveHold(room.accountId);
   if (room.idle) clearTimeout(room.idle);
   if (room.controlTimer) clearTimeout(room.controlTimer);
-  await room.cast?.stop().catch(() => undefined);
-  await room.release?.().catch(() => undefined);
+  const cast = room.cast;
+  const release = room.release;
+  room.cast = null;
+  room.release = null;
+  await cast?.stop().catch(() => undefined);
+  await release?.().catch(() => undefined);
   for (const viewer of room.viewers) viewer.socket.close();
 }
 

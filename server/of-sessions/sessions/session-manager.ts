@@ -675,6 +675,9 @@ export class SessionManager {
     let context: BrowserContext | undefined;
     try {
       if (this.closed) return;
+      const { interruptLiveAccount } = await import("../live/room.ts");
+      await interruptLiveAccount(accountId);
+      if (this.closed) return;
       await this.options.store.update(accountId, {
         status: "pending_login",
         loginInProgress: true,
