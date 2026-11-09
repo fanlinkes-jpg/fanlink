@@ -65,7 +65,7 @@ function ThreadMessage({ message }: { message: {
 } }) {
   const slides = message.media ?? [];
   const hasMedia = (message.mediaCount ?? 0) > 0 || slides.length > 0;
-  const locked = message.priceCents != null && message.priceCents > 0 && message.purchased !== true;
+  const locked = message.priceCents != null && message.priceCents > 0 && message.purchased === false;
   const who = message.fromFan ? "" : message.authorName ? authorLabel(message.authorName, false) : authorLabel(null, message.automatic);
   const pay = paymentLabel(message);
   return (
