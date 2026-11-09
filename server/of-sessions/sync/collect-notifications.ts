@@ -361,12 +361,6 @@ async function readPaintedRows(page: Page): Promise<Array<{ name: string; handle
     return rows.slice(0, 40);
   }).catch(() => []);
 }
-  try {
-    return new URL(url).searchParams.get("type");
-  } catch {
-    return null;
-  }
-}
 
 function notificationTypeOf(url: string): string | null {
   try {
