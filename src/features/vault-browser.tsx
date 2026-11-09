@@ -62,6 +62,8 @@ export function VaultBrowser({
   reloadToken = 0,
   layout = "full",
   onClose,
+  onMore,
+  onOpenFolder,
 }: {
   creatorId: string;
   fanKey: string | null;
@@ -69,6 +71,8 @@ export function VaultBrowser({
   reloadToken?: number;
   layout?: "full" | "of";
   onClose?: () => void;
+  onMore?: () => void;
+  onOpenFolder?: (listId: string | null) => void;
 }) {
   const [listText, setListText] = useState("");
   const [query, setQuery] = useState(EMPTY_QUERY);
@@ -146,7 +150,7 @@ export function VaultBrowser({
                 active={query.scope !== "carpeta"}
                 creatorId={creatorId}
                 items={library}
-                onClick={() => setQuery({ ...query, folderId: null, scope: "todas" })}
+                onClick={() => { onOpenFolder?.(null); setQuery({ ...query, folderId: null, scope: "todas" }); }}
               />
               {lists.map((folder) => (
                 <VaultFolder
@@ -155,7 +159,7 @@ export function VaultBrowser({
                   creatorId={creatorId}
                   active={query.folderId === folder.id}
                   items={library.filter((item) => item.folder === folder.name || item.folder === folder.id)}
-                  onClick={() => setQuery({ ...query, folderId: folder.id, scope: "carpeta" })}
+                  onClick={() => { onOpenFolder?.(folder.id); setQuery({ ...query, folderId: folder.id, scope: "carpeta" }); }}
                 />
               ))}
               {lists.length === 0 ? <p className="px-4 py-3 text-xs text-[#8a96a3]">Sin datos</p> : null}
@@ -184,7 +188,13 @@ export function VaultBrowser({
                 </button>
               ))}
             </div>
-            <div className="grid min-h-0 flex-1 grid-cols-4 content-start gap-3 overflow-y-auto px-4 pb-4">
+            <div
+              className="grid min-h-0 flex-1 grid-cols-4 content-start gap-3 overflow-y-auto px-4 pb-4"
+              onScroll={(event) => {
+                const el = event.currentTarget;
+                if (el.scrollTop + el.clientHeight >= el.scrollHeight - 160) onMore?.();
+              }}
+            >
               {items.length === 0 ? <p className="col-span-4 text-sm text-[#8a96a3]">Sin datos</p> : null}
               {items.map((item) => (
                 <button

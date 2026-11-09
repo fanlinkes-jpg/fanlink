@@ -283,7 +283,6 @@ function bootChatLoop(sessions: SessionManager): void {
       if (!account?.creatorId) return;
       const sql = await getSql();
       const events = await saveChatRead(sql, account.creatorId, read);
-      await saveVaultPayloads(sql, account.creatorId, read.vaultPayloads);
       await deliverFanAlerts(sql, events);
     },
   });
@@ -598,7 +597,6 @@ export async function syncCreatorChatView(userId: string, creatorId: string): Pr
   if (!read.alreadyRunning) {
     const sql = await getSql();
     const events = await saveChatRead(sql, id, read);
-    await saveVaultPayloads(sql, id, read.vaultPayloads);
     await deliverFanAlerts(sql, events);
   }
 }
@@ -902,14 +900,7 @@ export async function resolveChatSendHooks(
   };
 }
 
-async function saveVaultPayloads(sql: Awaited<ReturnType<typeof getSql>>, creatorId: string, payloads: unknown[] | undefined): Promise<void> {
-  if (!payloads || payloads.length === 0) return;
-  const { persistVaultRead } = await import("../../server/of-sessions/sync/vault-store.ts");
-  const saved = await persistVaultRead(sql, creatorId, payloads);
-  console.info(`[fanlink:vault] piezas=${saved.length}`);
-}
-
-export async function readChatVaultView(userId: string, input: { creatorId: string; threadKey: string }): Promise<{ items: VaultFile[]; reason: string | null }> {
+export async function readChatVaultView(userId: string, input: { creatorId: string; threadKey: string; listId?: string; offset?: number }): Promise<{ items: VaultFile[]; reason: string | null }> {
   const access = await accessFor(userId);
   if (access.role !== "owner" && !access.perms.includes("mensajes")) {
     throw new WorkspaceAccessError("No tienes permiso para escribir.");
@@ -920,7 +911,7 @@ export async function readChatVaultView(userId: string, input: { creatorId: stri
   const ran = await sessions.runQueued(account.id, async (context) => {
     const page = await openWorkPage(context);
     try {
-      const fromPage = await readVaultFromPage(page);
+      const fromPage = await readVaultFromPage(page, input.listId || "all", input.offset ?? 0);
       return fromPage;
     } finally {
       await page.close().catch(() => undefined);

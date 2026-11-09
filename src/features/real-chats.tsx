@@ -170,6 +170,7 @@ export function RealChatsPage() {
   const [ofVault, setOfVault] = useState<Array<{ id: string; title: string; kind: "foto" | "video" | "audio" | null }>>([]);
   const [vaultReload, setVaultReload] = useState(0);
   const [vaultReading, setVaultReading] = useState(false);
+  const vaultPage = useRef({ listId: "all", offset: 0, busy: false });
 
   async function refresh() {
     try {
@@ -429,17 +430,20 @@ export function RealChatsPage() {
     await refresh();
   }
 
-  async function loadOfVault() {
-    if (!selected) return;
+  async function loadOfVault(listId = "all", offset = 0) {
+    if (!selected || vaultPage.current.busy) return;
+    vaultPage.current = { listId, offset, busy: true };
     setPanel("vault");
-    setVaultReading(true);
+    if (offset === 0) setVaultReading(true);
     try {
-      const result = await readChatVault({ data: { creatorId: selected.creatorId, threadKey: selected.threadKey } });
+      const result = await readChatVault({ data: { creatorId: selected.creatorId, threadKey: selected.threadKey, listId, offset } });
       setOfVault(result.items);
       setVaultReload((value) => value + 1);
-      if (result.items.length === 0) setError(result.reason ?? "La bóveda de OnlyFans ha llegado vacía.");
+      vaultPage.current = { listId, offset: offset + 40, busy: false };
+      if (offset === 0 && result.items.length === 0) setError(result.reason ?? "La bóveda de OnlyFans ha llegado vacía.");
     } catch (err) {
-      setOfVault([]);
+      vaultPage.current = { listId, offset, busy: false };
+      if (offset === 0) setOfVault([]);
       setError(sessionErrorText(err));
     } finally {
       setVaultReading(false);
@@ -886,6 +890,8 @@ export function RealChatsPage() {
                 onEmoji={insertAtCursor}
                 onClose={() => setPanel(null)}
                 reading={vaultReading}
+                onVaultMore={() => void loadOfVault(vaultPage.current.listId, vaultPage.current.offset)}
+                onOpenFolder={(listId) => void loadOfVault(listId ?? "all", 0)}
               />
           </div>
         </div>,
@@ -1040,6 +1046,8 @@ function ComposerPanelBody({
   onEmoji,
   onClose,
   reading = false,
+  onVaultMore,
+  onOpenFolder,
 }: {
   panel: Exclude<ComposerPanel, "guiones" | null>;
   vaultItems: VaultItem[];
@@ -1061,6 +1069,8 @@ function ComposerPanelBody({
   onEmoji: (emoji: string) => void;
   onClose?: () => void;
   reading?: boolean;
+  onVaultMore?: () => void;
+  onOpenFolder?: (listId: string | null) => void;
 }) {
   switch (panel) {
     case "vault": {
@@ -1068,7 +1078,7 @@ function ComposerPanelBody({
         <div role="region" aria-label="Panel Add from media vault" className="flex h-[72vh] min-h-0 flex-col">
           {reading ? <p className="px-4 py-2 text-sm text-[#8a96a3]">Leyendo la bóveda de OnlyFans…</p> : null}
           {creatorId && creatorId !== "all" ? (
-            <VaultBrowser layout="of" creatorId={creatorId} fanKey={fanKey} reloadToken={vaultReload} onAttach={onVault} onClose={onClose} />
+            <VaultBrowser layout="of" creatorId={creatorId} fanKey={fanKey} reloadToken={vaultReload} onAttach={onVault} onClose={onClose} onMore={onVaultMore} onOpenFolder={onOpenFolder} />
           ) : <p className="p-4 text-sm text-[#8a96a3]">Sin datos</p>}
         </div>
       );

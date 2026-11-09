@@ -30,10 +30,12 @@ export function parseVaultPayload(payload: unknown): VaultFile[] {
   return out;
 }
 
-/** Pide todas las carpetas y, en cada una, todos los medios. No se queda en la primera página. */
-export async function readVaultFromPage(page: Page): Promise<unknown[]> {
-  await page.goto("https://onlyfans.com/my/chats", { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
-  const pulled = await page.evaluate(async () => {
+/** Una página de OnlyFans: las carpetas y 40 medios de la carpeta abierta. No recorre el resto. */
+export async function readVaultFromPage(page: Page, listId = "all", offset = 0): Promise<unknown[]> {
+  if (!page.url().includes("onlyfans.com/")) {
+    await page.goto("https://onlyfans.com/my/chats", { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
+  }
+  const pulled = await page.evaluate(async ({ listId, offset }) => {
     async function pull(path: string): Promise<unknown | null> {
       try {
         const response = await fetch(path, { credentials: "include", headers: { accept: "application/json" } });
@@ -43,45 +45,21 @@ export async function readVaultFromPage(page: Page): Promise<unknown[]> {
         return null;
       }
     }
-    function rows(payload: unknown): Array<Record<string, unknown>> {
-      if (!payload || typeof payload !== "object") return [];
-      const list = (payload as { list?: unknown }).list;
-      if (!Array.isArray(list)) return [];
-      return list.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object");
-    }
     const out: unknown[] = [];
-    const folderIds: string[] = [];
-    for (let offset = 0; offset < 1000; offset += 10) {
-      const payload = await pull(`/api2/v2/vault/lists?view=main&offset=${offset}&limit=10`);
-      if (!payload) break;
-      out.push(payload);
-      const list = rows(payload);
-      for (const entry of list) {
-        const id = entry.id == null ? "" : String(entry.id);
-        if (id && !folderIds.includes(id)) folderIds.push(id);
-      }
-      const hasMore = (payload as { hasMore?: boolean }).hasMore === true;
-      if (!hasMore || list.length < 10) break;
+    if (offset === 0) {
+      const lists = await pull("/api2/v2/vault/lists?view=main&offset=0&limit=100");
+      if (lists) out.push(lists);
     }
-    async function pullMedia(listId: string): Promise<void> {
-      for (let offset = 0; offset < 4000; offset += 40) {
-        const payload = await pull(`/api2/v2/vault/media?limit=40&offset=${offset}&field=recent&sort=desc&list=${encodeURIComponent(listId)}`);
-        if (!payload) break;
-        out.push(payload);
-        const media = rows(payload);
-        const hasMore = (payload as { hasMore?: boolean }).hasMore === true;
-        if (!hasMore || media.length < 40) break;
-      }
-    }
-    await pullMedia("all");
-    for (const id of folderIds) await pullMedia(id);
+    const media = await pull(`/api2/v2/vault/media?limit=40&offset=${offset}&field=recent&sort=desc&list=${encodeURIComponent(listId)}`);
+    if (media) out.push(media);
     return out;
-  }).catch(() => [] as unknown[]);
+  }, { listId, offset }).catch(() => [] as unknown[]);
   const parsed = pulled.map((payload) => parseVaultBundle(payload));
   const folders = new Set(parsed.flatMap((bundle) => bundle.lists.map((list) => list.id)));
   const files = new Set(parsed.flatMap((bundle) => bundle.items.map((item) => item.id)));
-  console.info(`[fanlink:vault] carpetas=${folders.size} medios=${files.size}`);
+  console.info(`[fanlink:vault] pagina lista=${listId} offset=${offset} carpetas=${folders.size} medios=${files.size}`);
   if (folders.size > 0 || files.size > 0) return pulled;
+  if (offset > 0) return [];
   return captureVaultAt(page, "https://onlyfans.com/my/vault");
 }
 

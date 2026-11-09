@@ -332,7 +332,7 @@ export const loadMoreChats = createServerFn({ method: "POST" })
 
 export const readChatVault = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { creatorId: string; threadKey: string }) => input)
+  .validator((input: { creatorId: string; threadKey: string; listId?: string; offset?: number }) => input)
   .handler(async ({ context, data }) => {
     const { readChatVaultView } = await import("./of-sessions-runtime.server");
     return readChatVaultView(context.userId, data);
