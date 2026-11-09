@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { AtSign, Clock, DollarSign, FolderOpen, ImagePlus, Languages, ScrollText, Send, Type } from "lucide-react";
+import { AtSign, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, ScrollText, Send, Type } from "lucide-react";
 import { chatSendAccess, discardChatOutbound, listCreatorChats, loadMoreChats, loadOlderMessages, readChatVault, recordChatOutbound, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
 import { useCrm, type VaultItem } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
@@ -65,20 +65,30 @@ function ThreadMessage({ message }: { message: {
 } }) {
   const slides = message.media ?? [];
   const hasMedia = (message.mediaCount ?? 0) > 0 || slides.length > 0;
-  const locked = message.priceCents != null && message.priceCents > 0 && message.purchased === false;
+  const messageLocked = message.priceCents != null && message.priceCents > 0 && message.purchased === false;
+  const openSlides = slides.length === 0
+    ? (hasMedia && !messageLocked ? [{ kind: "video" as const, index: 0 }] : [])
+    : slides.flatMap((slide, index) => (messageLocked || slide.locked === true ? [] : [{ kind: slide.kind, index }]));
+  const lockedCount = slides.length === 0
+    ? (hasMedia && messageLocked ? 1 : 0)
+    : slides.filter((slide) => messageLocked || slide.locked === true).length;
   const who = message.fromFan ? "" : message.authorName ? authorLabel(message.authorName, false) : authorLabel(null, message.automatic);
   const pay = paymentLabel(message);
   return (
     <li className={message.fromFan ? "" : "text-right"}>
+      {(openSlides.length > 0 || message.body) ? (
       <div className={`inline-block max-w-[70%] rounded-2xl px-3 py-2 text-left text-sm ${message.fromFan ? "bg-[#f4f6fb]" : "bg-[#e7f0ff]"}`}>
-        {hasMedia && slides.length === 0 ? (
-          <ChatMediaPlayer creatorId={message.creatorId} threadKey={message.threadKey} messageKey={message.messageKey} index={0} kind="video" locked={locked} />
-        ) : null}
-        {slides.map((slide, index) => (
-          <ChatMediaPlayer key={`${message.messageKey}-${index}`} creatorId={message.creatorId} threadKey={message.threadKey} messageKey={message.messageKey} index={index} kind={slide.kind} locked={locked || slide.locked === true} />
+        {openSlides.map((slide) => (
+          <ChatMediaPlayer key={`${message.messageKey}-${slide.index}`} creatorId={message.creatorId} threadKey={message.threadKey} messageKey={message.messageKey} index={slide.index} kind={slide.kind} />
         ))}
         {message.body ? <p>{message.body}</p> : null}
       </div>
+      ) : null}
+      {lockedCount > 0 ? (
+        <p className={`mt-1 flex items-center gap-1 text-[#8a96a3] ${message.fromFan ? "" : "justify-end"}`} aria-label="Medios bloqueados">
+          {Array.from({ length: lockedCount }, (_, index) => <Lock key={index} className="h-3.5 w-3.5" aria-hidden />)}
+        </p>
+      ) : null}
       {who || pay ? <p className="mt-1 text-[10px] text-[#6d7585]">{[who, pay].filter(Boolean).join(" · ")}</p> : null}
     </li>
   );

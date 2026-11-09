@@ -7,14 +7,12 @@ export function ChatMediaPlayer({
   messageKey,
   index,
   kind,
-  locked = false,
 }: {
   creatorId: string;
   threadKey: string;
   messageKey: string;
   index: number;
   kind: "foto" | "video" | "audio" | null;
-  locked?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -22,22 +20,21 @@ export function ChatMediaPlayer({
   const full = chatMediaSrc({ creatorId, threadKey, messageKey, index, variant: "full" });
   const thumb = kind === "foto" ? full : preview;
   if (kind === "audio") {
-    return <audio controls preload="metadata" src={locked ? preview : full} className="mb-1 w-full max-w-xs" />;
+    return <audio controls preload="metadata" src={full} className="mb-1 w-full max-w-xs" />;
   }
-  const label = locked ? "Contenido bloqueado" : kind === "foto" ? "Ver foto" : "Reproducir";
+  const label = kind === "foto" ? "Ver foto" : "Reproducir";
   return (
     <div className="mb-1">
       <button
         type="button"
         aria-label={label}
         className="relative block h-40 w-full max-w-xs overflow-hidden rounded-lg bg-[#dfe3ea]"
-        onClick={() => { if (!locked) setOpen(true); }}
+        onClick={() => setOpen(true)}
       >
         {failed ? <span className="grid h-full place-items-center px-2 text-xs text-[#6d7585]">{label}</span> : (
-          <img src={thumb} alt="" className={`h-full w-full object-cover ${locked ? "scale-105 blur-md" : ""}`} onError={() => setFailed(true)} />
+          <img src={thumb} alt="" className="h-full w-full object-cover" onError={() => setFailed(true)} />
         )}
         {kind === "video" && !failed ? <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1 text-[11px] text-white">Vídeo</span> : null}
-        {locked ? <span className="absolute inset-0 grid place-items-center text-xs font-semibold text-white">Bloqueado</span> : null}
       </button>
       {open ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/80 p-4" role="dialog" aria-label="Reproducir">
