@@ -48,7 +48,8 @@ export async function captureVaultAt(page: Page, vaultUrl: string, waitMs = 15_0
   page.on("response", onResponse);
   try {
     await page.goto(vaultUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
-    await clickVaultButton(page);
+    const clicked = await clickVaultButton(page);
+    console.info(`[fanlink:vault] url=${page.url()} boton=${clicked ? "si" : "no"}`);
     const deadline = Date.now() + waitMs;
     while (Date.now() < deadline) {
       if (found.some((payload) => parseVaultBundle(payload).items.length > 0)) break;
@@ -61,8 +62,8 @@ export async function captureVaultAt(page: Page, vaultUrl: string, waitMs = 15_0
   }
 }
 
-async function clickVaultButton(page: Page): Promise<void> {
-  const selectors = [
+async function clickVaultButton(page: Page): Promise<boolean> {
+  const selector = [
     "[at-attr='attach_vault']",
     "[at-attr='add_vault_media']",
     "[at-attr='vault_btn']",
@@ -71,14 +72,16 @@ async function clickVaultButton(page: Page): Promise<void> {
     "button[aria-label*='bóveda' i]",
     "button[aria-label*='boveda' i]",
     "button[aria-label*='media vault' i]",
-  ];
-  for (const selector of selectors) {
-    const button = page.locator(selector).first();
-    if (await button.count()) {
-      await button.click({ timeout: 2_000 }).catch(() => undefined);
-      return;
-    }
+  ].join(", ");
+  const button = page.locator(selector).first();
+  const visible = await button.waitFor({ state: "visible", timeout: 8_000 }).then(() => true).catch(() => false);
+  if (!visible) {
+    const attrs = await page.locator("[at-attr]").evaluateAll((nodes) => nodes.slice(0, 20).map((node) => node.getAttribute("at-attr") ?? "")).catch(() => []);
+    console.info(`[fanlink:vault] sin boton attrs=${attrs.join(",")}`);
+    return false;
   }
+  await button.click({ timeout: 2_000 }).catch(() => undefined);
+  return true;
 }
 
 export async function captureVaultPayloads(page: Page, waitMs = 2_500): Promise<unknown[]> {

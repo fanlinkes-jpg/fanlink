@@ -924,7 +924,11 @@ export async function readChatVaultView(userId: string, input: { creatorId: stri
   if (!ran.ok || ran.value.length === 0) return { items: [], reason: "Sin datos" };
   const { persistVaultRead } = await import("../../server/of-sessions/sync/vault-store.ts");
   const saved = await persistVaultRead(await getSql(), input.creatorId, ran.value);
-  if (saved.length === 0) return { items: [], reason: "Sin datos" };
+  if (saved.length === 0) {
+    console.info(`[fanlink:vault] vacia chat=${input.threadKey} json=${ran.ok ? ran.value.length : 0}`);
+    return { items: [], reason: "Sin datos" };
+  }
+  console.info(`[fanlink:vault] piezas=${saved.length} chat=${input.threadKey}`);
   return {
     items: saved.map((item) => ({ id: item.id, title: item.title, kind: item.kind })),
     reason: null,
