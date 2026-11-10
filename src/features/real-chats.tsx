@@ -52,6 +52,7 @@ const NOTE_FILTERS = [
   ["compras", "Compras"],
   ["etiquetas", "Etiquetas"],
   ["comentarios", "Comentarios"],
+  ["onlyfans", "OnlyFans"],
 ] as const;
 
 type NoteFilter = "todas" | (typeof NOTE_FILTERS)[number][0];
@@ -62,7 +63,8 @@ function noteMatches(kind: string, filter: NoteFilter): boolean {
   if (filter === "propinas") return kind === "tip";
   if (filter === "compras") return kind === "ppv";
   if (filter === "etiquetas") return kind === "tag";
-  return kind === "comment" || kind === "mention";
+  if (filter === "comentarios") return kind === "comment" || kind === "mention";
+  return kind === "like" || kind === "promotion" || kind === "system" || kind === "message" || kind === "other";
 }
 
 function noteWhen(value: string | null): string {
@@ -846,9 +848,6 @@ export function RealChatsPage() {
                         </button>
                       );
                     })}
-                    <button type="button" onClick={() => window.open("https://onlyfans.com/my/notifications", "_blank", "noopener,noreferrer")} className="shrink-0 rounded-full bg-[#f2f3f5] px-3 py-1.5 text-sm text-[#3c4456]">
-                      OnlyFans
-                    </button>
                   </div>
                   <ul className="min-h-0 flex-1 overflow-y-auto">
                     {notes == null ? <li className="px-4 py-6 text-sm text-[#6d7585]">Sin datos</li> : null}
