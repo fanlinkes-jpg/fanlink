@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { AtSign, Bell, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, RefreshCw, ScrollText, Send, Type } from "lucide-react";
+import { AtSign, Bell, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, MessageCircle, RefreshCw, ScrollText, Send, Type } from "lucide-react";
 import { chatSendAccess, discardChatOutbound, listCreatorChats, loadMoreChats, loadOlderMessages, readChatVault, recordChatOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
 import { listCreatorNotifications, markCreatorNotificationsRead, type NotificationListItem } from "@/lib/of-notifications";
 import { kindLabel } from "@/lib/notifications";
@@ -228,7 +228,6 @@ export function RealChatsPage() {
   const [noteFilter, setNoteFilter] = useState<NoteFilter>("todas");
   const [notes, setNotes] = useState<NoteRow[] | null>(null);
   const notesButton = useRef<HTMLButtonElement>(null);
-  const notesMarked = useRef(false);
   const [notesPos, setNotesPos] = useState({ top: 0, left: 0 });
   const [discountPercent, setDiscountPercent] = useState("10");
   const [reportText, setReportText] = useState("");
@@ -319,17 +318,11 @@ export function RealChatsPage() {
     return () => clearInterval(timer);
   }, [creatorId, creators.length]);
 
-  useEffect(() => {
-    if (!notesOpen) {
-      notesMarked.current = false;
-      return;
-    }
-    if (!notes || notesMarked.current) return;
-    const unread = notes.filter((item) => !item.seen);
-    notesMarked.current = true;
+  function markNotes(rows: NoteRow[]) {
+    const unread = rows.filter((item) => !item.seen);
     if (unread.length === 0) return;
     const chosen = new Set(unread.map((item) => `${item.creatorId}:${item.key}`));
-    setNotes(notes.map((item) => (chosen.has(`${item.creatorId}:${item.key}`) ? { ...item, seen: true } : item)));
+    setNotes((current) => current?.map((item) => (chosen.has(`${item.creatorId}:${item.key}`) ? { ...item, seen: true } : item)) ?? current);
     const groups = new Map<string, string[]>();
     for (const item of unread) {
       const list = groups.get(item.creatorId) ?? [];
@@ -337,7 +330,7 @@ export function RealChatsPage() {
       groups.set(item.creatorId, list);
     }
     for (const [id, keys] of groups) void markCreatorNotificationsRead({ data: { creatorId: id, keys } }).catch(() => undefined);
-  }, [notesOpen, notes]);
+  }
 
   function placeNotes() {
     const rect = notesButton.current?.getBoundingClientRect();
@@ -348,7 +341,7 @@ export function RealChatsPage() {
   }
 
   function openNote(item: NoteRow) {
-    if (!item.seen) void markCreatorNotificationsRead({ data: { creatorId: item.creatorId, keys: [item.key] } }).catch(() => undefined);
+    markNotes([item]);
     const pool = data?.threads ?? [];
     const thread = pool.find((row) => row.creatorId === item.creatorId && (
       (item.threadKey != null && row.threadKey === item.threadKey)
@@ -844,10 +837,12 @@ export function RealChatsPage() {
                   </div>
                   <div className="flex gap-2 overflow-x-auto px-4 pb-3">
                     {NOTE_FILTERS.map(([id, label]) => {
+                      const count = (notes ?? []).filter((item) => !item.seen && noteMatches(item.kind, id)).length;
                       const on = noteFilter === id;
                       return (
-                        <button key={id} type="button" onClick={() => setNoteFilter(on ? "todas" : id)} className={`shrink-0 rounded-full px-3 py-1.5 text-sm ${on ? "bg-[#e7f3ff] text-[#1890d4]" : "bg-[#f2f3f5] text-[#3c4456]"}`}>
+                        <button key={id} type="button" onClick={() => { setNoteFilter(on ? "todas" : id); if (!on) markNotes((notes ?? []).filter((item) => noteMatches(item.kind, id))); }} className={`relative shrink-0 rounded-full px-3 py-1.5 text-sm ${on ? "bg-[#e7f3ff] text-[#1890d4]" : "bg-[#f2f3f5] text-[#3c4456]"}`}>
                           {label}
+                          {count > 0 ? <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-[#3b6cff] px-1 text-[10px] font-semibold text-white">{count}</span> : null}
                         </button>
                       );
                     })}
@@ -869,26 +864,32 @@ export function RealChatsPage() {
                       const reply = thread && thread.lastFromFan === false && (!item.occurredAt || !thread.lastMessageAt || thread.lastMessageAt >= item.occurredAt)
                         ? (data?.messages ?? []).filter((message) => message.creatorId === item.creatorId && message.threadKey === thread.threadKey && !message.fromFan && (!item.occurredAt || message.sentAt >= item.occurredAt)).sort((left, right) => right.sentAt.localeCompare(left.sentAt))[0]
                         : undefined;
+                      const bought = item.kind === "ppv";
                       const fact = item.body?.trim() || item.labels.body;
                       return (
                         <li key={`${item.creatorId}:${item.key}`} className="border-b border-[#eef0f3]">
-                          <button type="button" disabled={thread == null} onClick={() => openNote(item)} className="flex w-full items-start gap-3 px-4 py-3 text-left hover:bg-[#f7f9fb] disabled:cursor-default">
-                            {thread?.avatarUrl ? (
-                              <img src={thread.avatarUrl} alt="" className="h-11 w-11 shrink-0 rounded-full object-cover" />
-                            ) : (
-                              <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#eef2ff] text-sm font-semibold text-[#2456c7]">{name.slice(0, 1)}</span>
-                            )}
-                            <span className="min-w-0 flex-1">
-                              <span className="block truncate text-sm">
-                                <span className="font-semibold">{name}</span>
-                                {handle ? <span className="ml-1 text-[#8b909a]">@{handle}</span> : null}
+                          <div className="flex w-full items-start gap-3 px-4 py-3">
+                            <button type="button" disabled={thread == null} onClick={() => openNote(item)} className="flex min-w-0 flex-1 items-start gap-3 text-left disabled:cursor-default">
+                              {thread?.avatarUrl ? (
+                                <img src={thread.avatarUrl} alt="" className="h-11 w-11 shrink-0 rounded-full object-cover" />
+                              ) : (
+                                <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#eef2ff] text-sm font-semibold text-[#2456c7]">{name.slice(0, 1)}</span>
+                              )}
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-sm">
+                                  <span className="font-semibold">{bought ? `Compró ${name}` : name}</span>
+                                  {handle ? <span className="ml-1 text-[#8b909a]">@{handle}</span> : null}
+                                </span>
+                                {lists.length > 0 ? <span className="mt-1 flex flex-wrap gap-1">{lists.map((list) => <span key={list} className="rounded-full bg-[#f2f3f5] px-2 py-0.5 text-[10px] text-[#3c4456]">{list}</span>)}</span> : null}
+                                <span className="mt-0.5 block text-sm text-[#1c2333]">{kindLabel(item.kind)} · {fact}</span>
+                                {item.occurredAt ? <span className="mt-1 block text-xs text-[#8b909a]">{noteWhen(item.occurredAt)}</span> : null}
+                                {thread && thread.lastFromFan === false && (!item.occurredAt || !thread.lastMessageAt || thread.lastMessageAt >= item.occurredAt) ? <span className="mt-1 block text-xs font-medium text-[#1f9d55]">{reply?.authorName ? `Respondido · ${reply.authorName}` : "Respondido"}</span> : null}
                               </span>
-                              {lists.length > 0 ? <span className="mt-1 flex flex-wrap gap-1">{lists.map((list) => <span key={list} className="rounded-full bg-[#f2f3f5] px-2 py-0.5 text-[10px] text-[#3c4456]">{list}</span>)}</span> : null}
-                              <span className="mt-0.5 block text-sm text-[#1c2333]">{kindLabel(item.kind)} · {fact}</span>
-                              {item.occurredAt ? <span className="mt-1 block text-xs text-[#8b909a]">{noteWhen(item.occurredAt)}</span> : null}
-                              {thread && thread.lastFromFan === false && (!item.occurredAt || !thread.lastMessageAt || thread.lastMessageAt >= item.occurredAt) ? <span className="mt-1 block text-xs font-medium text-[#1f9d55]">{reply?.authorName ? `Respondido · ${reply.authorName}` : "Respondido"}</span> : null}
-                            </span>
-                          </button>
+                            </button>
+                            <button type="button" aria-label={`Abrir chat de ${name}`} disabled={thread == null} onClick={() => openNote(item)} className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-[#2456c7] hover:bg-[#eef2ff] disabled:text-[#c5cad6]">
+                              <MessageCircle className="h-4 w-4" />
+                            </button>
+                          </div>
                         </li>
                       );
                     })}
