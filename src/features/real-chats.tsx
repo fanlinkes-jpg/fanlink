@@ -212,7 +212,8 @@ export function RealChatsPage() {
   const [error, setError] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const [filter, setFilter] = useState<"todos" | "propinas" | "online">("todos");
+  const [filter, setFilter] = useState<"todos" | "propinas">("todos");
+  const [onlineOpen, setOnlineOpen] = useState(false);
   const [insightsOpen, setInsightsOpen] = useState(false);
   const [tagHandle, setTagHandle] = useState<string | null>(null);
   const [menu, setMenu] = useState(false);
@@ -358,9 +359,9 @@ export function RealChatsPage() {
     (thread) => creatorId === "all" || thread.creatorId === creatorId,
   );
   const knowsOnline = threads.some((thread) => thread.online != null);
+  const onlineFans = threads.filter((thread) => thread.online === true);
   const ordered = [...threads]
     .filter((thread) => filter !== "propinas" || (thread.tipsCents != null && thread.tipsCents > 0))
-    .filter((thread) => filter !== "online" || thread.online === true)
     .sort((left, right) => (right.lastMessageAt ?? "").localeCompare(left.lastMessageAt ?? ""));
   const selected =
     ordered.find((thread) => `${thread.creatorId}:${thread.threadKey}` === selectedKey)
@@ -437,7 +438,6 @@ export function RealChatsPage() {
   const creatorName = creatorId === "all"
     ? "Todas las cuentas"
     : creators.find((creator) => creator.id === creatorId)?.name ?? "Cuenta";
-  const unread = threads.reduce((sum, thread) => sum + (marks.muted.includes(threadMark(thread.creatorId, thread.threadKey)) ? 0 : thread.unread), 0);
   const slash = slashQuery(draft);
   const scriptHits = matchScripts(scripts, slash != null ? slash : libraryQuery);
   const showScripts = panel === "guiones" || slash != null;
@@ -810,11 +810,24 @@ export function RealChatsPage() {
         <div className="shrink-0 space-y-3 border-b border-[#e6e8ee] px-3 py-3">
           <h1 className="truncate text-sm font-semibold uppercase tracking-wide">{creatorName}</h1>
           <div className="flex gap-2">
-            {knowsOnline ? (
-              <button type="button" onClick={() => setFilter(filter === "online" ? "todos" : "online")} className={`rounded-lg px-3 py-1.5 text-xs font-medium ${filter === "online" ? "bg-[#3b6cff] text-white" : "bg-[#eef2ff] text-[#2456c7]"}`}>Fans en línea</button>
-            ) : (
-              <span className="rounded-lg bg-[#f3f4f6] px-3 py-1.5 text-xs text-[#6d7585]">Fans en línea: Sin datos</span>
-            )}
+            <div className="relative">
+              <button type="button" onClick={() => setOnlineOpen((open) => !open)} className={`rounded-lg px-3 py-1.5 text-xs font-medium ${onlineOpen ? "bg-[#3b6cff] text-white" : "bg-[#eef2ff] text-[#2456c7]"}`}>Fans en línea</button>
+              {onlineOpen ? (
+                <div className="absolute left-0 top-full z-30 mt-1 max-h-72 w-64 overflow-y-auto rounded-xl border border-[#e6e8ee] bg-white py-1 shadow-lg">
+                  {!knowsOnline ? <p className="px-3 py-3 text-xs text-[#6d7585]">Sin datos</p> : null}
+                  {knowsOnline && onlineFans.length === 0 ? <p className="px-3 py-3 text-xs text-[#6d7585]">Nadie en línea</p> : null}
+                  {onlineFans.map((thread) => (
+                    <button key={`${thread.creatorId}:${thread.threadKey}`} type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-[#f4f7ff]" onClick={() => { setSelectedKey(`${thread.creatorId}:${thread.threadKey}`); setOnlineOpen(false); }}>
+                      <span className="h-2 w-2 shrink-0 rounded-full bg-[#1f9d55]" />
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-medium">{fanTitle(thread)}</span>
+                        <span className="block truncate text-[11px] text-[#6d7585]">{thread.fanHandle ? `@${thread.fanHandle.replace(/^@/, "")}` : "Sin usuario"}</span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
             <button
               ref={notesButton}
               type="button"
@@ -823,11 +836,6 @@ export function RealChatsPage() {
             >
               <Bell className="h-3.5 w-3.5" />
               Notificaciones
-              {(notes ? notes.filter((item) => !item.seen).length : unread) > 0 ? (
-                <span className="absolute -right-1.5 -top-1.5 grid h-4 min-w-4 place-items-center rounded-full bg-[#3b6cff] px-1 text-[10px] font-semibold text-white">
-                  {notes ? notes.filter((item) => !item.seen).length : unread}
-                </span>
-              ) : null}
             </button>
             {notesOpen ? createPortal(
               <>
@@ -839,12 +847,10 @@ export function RealChatsPage() {
                   </div>
                   <div className="flex gap-2 overflow-x-auto px-4 pb-3">
                     {NOTE_FILTERS.map(([id, label]) => {
-                      const count = (notes ?? []).filter((item) => !item.seen && noteMatches(item.kind, id)).length;
                       const on = noteFilter === id;
                       return (
-                        <button key={id} type="button" onClick={() => { setNoteFilter(on ? "todas" : id); if (!on) markNotes((notes ?? []).filter((item) => noteMatches(item.kind, id))); }} className={`relative shrink-0 rounded-full px-3 py-1.5 text-sm ${on ? "bg-[#e7f3ff] text-[#1890d4]" : "bg-[#f2f3f5] text-[#3c4456]"}`}>
+                        <button key={id} type="button" onClick={() => { setNoteFilter(on ? "todas" : id); if (!on) markNotes((notes ?? []).filter((item) => noteMatches(item.kind, id))); }} className={`shrink-0 rounded-full px-3 py-1.5 text-sm ${on ? "bg-[#e7f3ff] text-[#1890d4]" : "bg-[#f2f3f5] text-[#3c4456]"}`}>
                           {label}
-                          {count > 0 ? <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-[#3b6cff] px-1 text-[10px] font-semibold text-white">{count}</span> : null}
                         </button>
                       );
                     })}

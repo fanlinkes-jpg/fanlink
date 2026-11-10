@@ -677,7 +677,7 @@ function readFanSpend(
   const parts = [subscribesCents, tipsCents, postsCents, messagesCents].filter((value): value is number => value != null);
   const spentCents = money(source.totalSumm ?? source.spent ?? source.totalSpent) ?? (parts.length ? parts.reduce((sum, value) => sum + value, 0) : null);
   const avatarUrl = clean(record.avatar, 400);
-  const online = typeof record.isOnline === "boolean" ? record.isOnline : typeof record.online === "boolean" ? record.online : null;
+  const online = onlineFlag(record.isOnline) ?? onlineFlag(record.online);
   const subPriceCents = money(source.price ?? source.subscribePrice ?? source.regularPrice);
   const subExpiresAt = iso(source.expiredAt ?? source.expireDate);
   const renewRaw = source.autoRenew ?? source.renewedAuto ?? record.autoRenew;
@@ -685,6 +685,13 @@ function readFanSpend(
   const card = { spentCents, subscribesCents, tipsCents, postsCents, messagesCents, avatarUrl, online, subPriceCents, subExpiresAt, renewAuto };
   if (spentCents == null && parts.length === 0 && !avatarUrl && online == null && subPriceCents == null && !subExpiresAt && renewAuto == null) return null;
   return card;
+}
+
+function onlineFlag(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  if (value === 1 || value === "1" || value === "true") return true;
+  if (value === 0 || value === "0" || value === "false") return false;
+  return null;
 }
 
 function money(value: unknown): number | null {
