@@ -338,6 +338,14 @@ export const readChatVault = createServerFn({ method: "POST" })
     return readChatVaultView(context.userId, data);
   });
 
+export const listOnlineFans = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string }) => input)
+  .handler(async ({ context, data }) => {
+    const { listOnlineFansView } = await import("./of-sessions-runtime.server");
+    return listOnlineFansView(context.userId, data);
+  });
+
 export const runFanChatMenu = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((input: { creatorId: string; fanKey: string; request: unknown }) => input)

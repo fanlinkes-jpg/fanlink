@@ -34,6 +34,7 @@ import { historyPerMinute, listPageDone, nextHistoryThread, oldestCursor, pageFi
 import { captureChatListPage, captureOlderMessages } from "../../server/of-sessions/sync/history-scroll.ts";
 import { openWorkPage } from "../../server/of-sessions/sessions/work-page.ts";
 import { readVaultFromPage, type VaultFile } from "../../server/of-sessions/sync/vault-listen.ts";
+import { readOnlineSubscribers, type OnlineFan } from "../../server/of-sessions/sync/online-fans.ts";
 import { normalizeFanMenuRequest, runFanMenuOnPage, type FanMenuResult } from "../../server/of-sessions/sync/fan-menu.ts";
 import { chatPageUrl } from "../../server/of-sessions/sync/chats.ts";
 import { sendPace } from "../../server/of-sessions/send/gate.ts";
@@ -950,6 +951,27 @@ export async function readChatVaultView(userId: string, input: { creatorId: stri
     items: saved.map((item) => ({ id: item.id, title: item.title, kind: item.kind })),
     reason: null,
   };
+}
+
+export async function listOnlineFansView(userId: string, input: { creatorId: string }): Promise<{ fans: OnlineFan[]; reason: string | null }> {
+  const access = await accessFor(userId);
+  if (access.role !== "owner" && !access.perms.includes("mensajes")) {
+    throw new WorkspaceAccessError("No tienes permiso para escribir.");
+  }
+  const sessions = await getOfSessionManager();
+  const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
+  if (!account) return { fans: [], reason: "Sin datos" };
+  const ran = await sessions.runQueued(account.id, async (context) => {
+    const page = await openWorkPage(context);
+    try {
+      return await readOnlineSubscribers(page);
+    } finally {
+      await page.close().catch(() => undefined);
+    }
+  }, { wait: true });
+  if (!ran.ok) return { fans: [], reason: "OnlyFans está ocupado con otra lectura." };
+  console.info(`[fanlink:online] cuenta=${input.creatorId} fans=${ran.value.length}`);
+  return { fans: ran.value, reason: ran.value.length === 0 ? "Nadie en línea" : null };
 }
 
 export async function runFanChatMenuView(userId: string, input: { creatorId: string; fanKey: string; request: unknown }): Promise<FanMenuResult> {
