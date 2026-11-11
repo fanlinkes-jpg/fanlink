@@ -225,6 +225,7 @@ function bootHistoryLoop(sessions: SessionManager): void {
   if (process.env.FANLINK_HISTORY_ENABLED === "false") return;
   if (process.execArgv.includes("--test")) return;
   const recent: number[] = [];
+  const skipUntil = new Map<string, number>();
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
   void (async () => {
     await sleep(20_000);
@@ -235,11 +236,12 @@ function bootHistoryLoop(sessions: SessionManager): void {
         for (const account of accounts) {
           if (!account.creatorId || account.identityState === "mismatch") continue;
           const open = await listOpenHistory(await getSql(), account.creatorId);
-          const next = nextHistoryThread(open);
+          const next = nextHistoryThread(open.filter((item) => (skipUntil.get(`${account.creatorId}:${item.threadKey}`) ?? 0) <= Date.now()));
           if (!next) continue;
           const pace = sendPace(recent, Date.now(), historyPerMinute(process.env.FANLINK_HISTORY_PER_MINUTE));
           if (pace.waitMs > 0) await sleep(Math.min(pace.waitMs, 60_000));
-          await pullOlder(sessions, account.id, account.creatorId, next.threadKey, account.identityUserId);
+          const got = await pullOlder(sessions, account.id, account.creatorId, next.threadKey, account.identityUserId);
+          if (got === "empty") skipUntil.set(`${account.creatorId}:${next.threadKey}`, Date.now() + 10 * 60_000);
           recent.push(Date.now());
           stepped = true;
           await sleep(2_000 + Math.floor(Math.random() * 3_000));
@@ -253,26 +255,26 @@ function bootHistoryLoop(sessions: SessionManager): void {
   })();
 }
 
-async function pullOlder(sessions: SessionManager, accountId: string, creatorId: string, threadKey: string, accountUserId: string | null): Promise<void> {
+async function pullOlder(sessions: SessionManager, accountId: string, creatorId: string, threadKey: string, accountUserId: string | null): Promise<"saved" | "empty" | "busy" | "done"> {
   const sql = await getSql();
   const open = await listOpenHistory(sql, creatorId);
   const row = open.find((item) => item.threadKey === threadKey);
-  if (row?.done) return;
+  if (row?.done) return "done";
   const ran = await sessions.runQueued(accountId, async (context) => {
     const page = await context.newPage();
     try {
-      await page.goto(chatPageUrl(onlyFansSite.chatsUrl ?? "https://onlyfans.com/my/chats", threadKey, onlyFansSite.id), { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
-      return await captureOlderMessages(page, { threadKey, fanKey: null, accountUserId, waitMs: 6_000 });
+      await page.goto(chatPageUrl(onlyFansSite.chatsUrl ?? "https://onlyfans.com/my/chats", threadKey, onlyFansSite.id), { waitUntil: "domcontentloaded", timeout: 20_000 }).catch(() => undefined);
+      return await captureOlderMessages(page, { threadKey, fanKey: null, accountUserId, waitMs: 4_000 });
     } finally {
       await page.close().catch(() => undefined);
     }
   });
-  if (!ran.ok) return;
+  if (!ran.ok) return "busy";
+  if (ran.value.length === 0) return "empty";
   const done = pageFinished(row?.cursor ?? null, ran.value);
-  if (ran.value.length > 0) {
-    await saveChatRead(sql, creatorId, { threads: [], messages: ran.value, reason: null, jsonPaths: [] });
-  }
+  await saveChatRead(sql, creatorId, { threads: [], messages: ran.value, reason: null, jsonPaths: [] });
   await markHistory(sql, creatorId, threadKey, oldestCursor(ran.value) ?? row?.cursor ?? null, done);
+  return "saved";
 }
 
 function bootChatLoop(sessions: SessionManager): void {
