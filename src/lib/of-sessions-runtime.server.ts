@@ -179,9 +179,11 @@ export function kickInboxWatch(): void {
     },
     save: async (creatorId, messages) => {
       await saveChatRead(await getSql(), creatorId, { threads: [], messages, reason: null, jsonPaths: [] });
+      console.info(`[fanlink:chat] mensajes creator=${creatorId} nuevos=${messages.length}`);
     },
     saveThreads: async (creatorId, threads) => {
       await saveChatRead(await getSql(), creatorId, { threads, messages: [], reason: null, jsonPaths: [] });
+      console.info(`[fanlink:chat] lista creator=${creatorId} hilos=${threads.length}`);
     },
     saveUsers: async (creatorId, users) => {
       await saveFanCards(await getSql(), creatorId, users);

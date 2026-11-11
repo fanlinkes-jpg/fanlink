@@ -93,7 +93,8 @@ export async function runInboxWatch(input: {
       await shut();
       try {
         session = await input.open(target.accountId);
-      } catch {
+      } catch (error) {
+        console.info(`[fanlink:chat] escucha no abre: ${error instanceof Error ? error.message.slice(0, 80) : "error"}`);
         await input.sleep(2_000);
         continue;
       }
