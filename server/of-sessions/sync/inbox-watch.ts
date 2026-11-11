@@ -42,6 +42,7 @@ export async function runInboxWatch(input: {
   saveUsers?: (creatorId: string, users: ChatUser[]) => Promise<void>;
   /** Devuelve los milisegundos de la pausa de la cuenta. La pestaña espera eso, no un fijo de 15 s. */
   onBlock: (accountId: string, reason: string) => number;
+  pullList?: (accountId: string) => Promise<boolean>;
   onNavigate?: (threadKey: string | null) => void;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
@@ -139,6 +140,15 @@ export async function runInboxWatch(input: {
       : null;
     const listAge = lastListReloadAt == null ? 0 : now - lastListReloadAt;
     const listDue = session != null && lastListReloadAt != null && listAge >= LIST_RELOAD_MS;
+    if (listDue && input.pullList) {
+      const ok = await input.pullList(accountId ?? target.accountId).catch(() => false);
+      if (ok) {
+        lastListReloadAt = input.now();
+        lastUsefulAt = input.now();
+        await input.sleep(200);
+        continue;
+      }
+    }
     if (listDue && session) {
       input.onNavigate?.(null);
       const status = await session.goto(target.chatsUrl);

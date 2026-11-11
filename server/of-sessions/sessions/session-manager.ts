@@ -46,6 +46,7 @@ import type { SiteAdapter } from "./site.ts";
 import { hasLiveCookies } from "./site.ts";
 import { collectCreatorRead, type CollectedRead } from "../sync/collect.ts";
 import type { TxCursor } from "../sync/parse.ts";
+import { fetchSignedChats } from "../sync/of-chat-api.ts";
 import { collectChats, type CollectedChats } from "../sync/collect-chats.ts";
 import { collectNotifications, type CollectedNotifications } from "../sync/collect-notifications.ts";
 import { NOTIFICATION_PACE_MS, notificationReadBusy } from "../../../src/lib/notifications.ts";
@@ -53,6 +54,7 @@ import {
   judgeStorageState,
   parseStorageState,
   type StorageCookie,
+  type StorageStateFile,
 } from "./storage-state.ts";
 
 export interface SessionFetchResult {
@@ -470,6 +472,18 @@ export class SessionManager {
     }
   }
 
+  /** Lee la lista de chats por HTTP con la sesión guardada. No abre Chromium. */
+  async readChatsDirect(accountId: string): Promise<CollectedChats> {
+    const empty: CollectedChats = { threads: [], messages: [], reason: null, jsonPaths: ["api2/v2/chats"] };
+    try {
+      const state = await this.readStorageState(accountId);
+      const read = await fetchSignedChats(state, { fetch, now: () => this.now().getTime() });
+      return { ...empty, threads: read.threads, messages: read.messages, reason: read.reason };
+    } catch (error) {
+      return { ...empty, reason: publicErrorMessage(error, "no se pudo leer la sesión") };
+    }
+  }
+
   private async readChatsNow(accountId: string): Promise<CollectedChats> {
     const empty: CollectedChats = { threads: [], messages: [], reason: null, jsonPaths: [] };
     const account = await this.options.store.get(accountId);
@@ -477,6 +491,8 @@ export class SessionManager {
       return { ...empty, reason: "Lecturas bloqueadas: la sesión guardada es de otra cuenta." };
     }
     try {
+      const direct = await this.readChatsDirect(accountId);
+      if (direct.threads.length > 0) return direct;
       return await this.withSession(accountId, (context) =>
         collectChats(context, this.options.site, {
           paceMs: this.options.config.syncPaceMs,
@@ -1133,6 +1149,11 @@ export class SessionManager {
       }
     }
     return this.background;
+  }
+
+  async readStorageState(accountId: string): Promise<StorageStateFile> {
+    const raw = await readFile(this.storagePath(accountId));
+    return parseStorageState(JSON.parse(decryptBytes(raw, this.requireSessionKey()).toString("utf8")) as unknown);
   }
 
   private async localVerdict(

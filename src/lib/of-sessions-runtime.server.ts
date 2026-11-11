@@ -196,6 +196,18 @@ export function kickInboxWatch(): void {
       console.info(`[fanlink:chat] escucha pausada cuenta=${accountId} motivo=${reason} espera=${delay}`);
       return delay;
     },
+    pullList: async (accountId) => {
+      const sessions = await getOfSessionManager();
+      const read = await sessions.readChatsDirect(accountId);
+      const account = (await sessions.listAccounts()).find((item) => item.id === accountId);
+      if (!account?.creatorId || read.threads.length === 0) {
+        if (read.reason) console.info(`[fanlink:chat] api lista: ${read.reason}`);
+        return false;
+      }
+      await saveChatRead(await getSql(), account.creatorId, read);
+      console.info(`[fanlink:chat] api lista creator=${account.creatorId} hilos=${read.threads.length} mensajes=${read.messages.length}`);
+      return true;
+    },
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   }).finally(() => {
