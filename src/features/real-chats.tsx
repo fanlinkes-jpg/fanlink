@@ -297,7 +297,7 @@ export function RealChatsPage() {
     void refresh();
     void chatSendAccess().then((access) => setSendCreators(access.creatorIds)).catch(() => setSendCreators([]));
     setMarks(readChatMarks());
-    const timer = setInterval(() => { void refresh(); }, 15_000);
+    const timer = setInterval(() => { void refresh(); }, 5_000);
     return () => clearInterval(timer);
   }, []);
 

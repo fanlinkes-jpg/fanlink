@@ -6,7 +6,7 @@ import { parseLivePayload } from "./live-frames.ts";
 import { FALLBACK_RELOAD_MS, nextFallbackThread, WATCH_IDLE_MS, type WatchedThread } from "./watch-plan.ts";
 
 /** La lista se vuelve a pedir. Si no, un chat nuevo no entra en la bandeja. */
-export const LIST_RELOAD_MS = 60_000;
+export const LIST_RELOAD_MS = 15_000;
 
 export type WatchTarget = {
   accountId: string;
@@ -133,7 +133,12 @@ export async function runInboxWatch(input: {
       }
     }
     const quiet = lastUsefulAt == null || now - lastUsefulAt >= fallbackMs;
-    if (session && lastListReloadAt != null && now - lastListReloadAt >= LIST_RELOAD_MS) {
+    const next = quiet
+      ? nextFallbackThread(target.threads, reloadedAt, openedAt, lastGlobalReloadAt, now, fallbackMs)
+      : null;
+    const listAge = lastListReloadAt == null ? 0 : now - lastListReloadAt;
+    const listDue = session != null && lastListReloadAt != null && listAge >= LIST_RELOAD_MS && (!next || listAge >= LIST_RELOAD_MS * 2);
+    if (listDue && session && !next) {
       input.onNavigate?.(null);
       const status = await session.goto(target.chatsUrl);
       lastListReloadAt = input.now();
@@ -146,9 +151,6 @@ export async function runInboxWatch(input: {
       await input.sleep(200);
       continue;
     }
-    const next = quiet
-      ? nextFallbackThread(target.threads, reloadedAt, openedAt, lastGlobalReloadAt, now, fallbackMs)
-      : null;
     if (next && session) {
       input.onNavigate?.(next);
       const status = await session.goto(chatPageUrl(target.chatsUrl, next, target.siteId));
