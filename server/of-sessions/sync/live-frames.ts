@@ -7,12 +7,12 @@ export type LiveFrame = {
 };
 
 /** Escucha un frame ya recibido. No fabrica mensajes si el JSON no se reconoce. */
-export function parseLivePayload(text: string, threadKey: string, fanKey: string | null): LiveFrame {
+export function parseLivePayload(text: string, threadKey: string, fanKey: string | null, accountId: string | null = null): LiveFrame {
   const parsed = extractJson(text);
   if (parsed == null) return { messages: [], typing: false, read: false };
   const chunks = Array.isArray(parsed) ? parsed : [parsed];
   const messages = chunks.flatMap((chunk) => [
-    ...parseChatMessages(chunk, threadKey, fanKey, null, "socket"),
+    ...parseChatMessages(chunk, threadKey, fanKey, accountId, "socket"),
     ...parsePreviewMessages(chunk),
   ]);
   return {

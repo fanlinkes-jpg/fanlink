@@ -496,10 +496,12 @@ function messageFrom(
   const ownThread = clean(record.chatId, 40) ?? clean(record.chat_id, 40) ?? clean(chat?.id, 40);
   const fromId = clean(nested(record.fromUser)?.id, 40);
   const withId = clean(nested(record.withUser)?.id, 40);
+  const toId = clean(nested(record.toUser)?.id, 40);
   const verified = threadKey && (fromId === threadKey || withId === threadKey) ? threadKey : null;
-  const thread = ownThread ?? (source === "socket" ? verified : threadKey);
+  const other = [withId, fromId, toId].find((id) => id != null && id !== accountId) ?? null;
+  const thread = ownThread ?? (source === "socket" ? verified ?? (accountId ? other : null) : threadKey);
   if (!thread) return null;
-  const fan = ownThread ?? fanKey;
+  const fan = ownThread ?? (source === "socket" && thread !== threadKey ? thread : fanKey);
   const fromUserId = fromId;
   const flag = fromFanFlag(fromUserId, fan, accountId);
   return {

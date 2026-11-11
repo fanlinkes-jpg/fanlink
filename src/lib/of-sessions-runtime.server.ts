@@ -132,6 +132,7 @@ function bootSyncLoop(sessions: SessionManager): void {
 }
 
 const threadRef = { key: "chat" };
+const userRef = { id: null as string | null };
 let watchLoop: Promise<void> | null = null;
 
 export function kickInboxWatch(): void {
@@ -143,6 +144,7 @@ export function kickInboxWatch(): void {
       if (!picked) return null;
       const accountId = accountForCreator(picked.creatorId);
       if (!accountId) return null;
+      userRef.id = creatorUsers.get(picked.creatorId) ?? null;
       return {
         accountId,
         creatorId: picked.creatorId,
@@ -160,7 +162,7 @@ export function kickInboxWatch(): void {
           finish = done;
         });
         void sessions.holdWatch(accountId, async (context) => {
-          const session = await openWatchContext(context, () => threadRef.key);
+          const session = await openWatchContext(context, () => threadRef.key, () => userRef.id);
           resolve({
             goto: (url) => session.goto(url),
             listen: (handlers) => session.listen(handlers),
@@ -205,12 +207,17 @@ function accountForCreator(creatorId: string): string | null {
 }
 
 const creatorAccounts = new Map<string, string>();
+const creatorUsers = new Map<string, string | null>();
 
 export async function rememberCreatorAccounts(): Promise<void> {
   const accounts = await (await getOfSessionManager()).listAccounts();
   creatorAccounts.clear();
+  creatorUsers.clear();
   for (const account of accounts) {
-    if (account.creatorId) creatorAccounts.set(account.creatorId, account.id);
+    if (account.creatorId) {
+      creatorAccounts.set(account.creatorId, account.id);
+      creatorUsers.set(account.creatorId, account.identityUserId);
+    }
   }
 }
 

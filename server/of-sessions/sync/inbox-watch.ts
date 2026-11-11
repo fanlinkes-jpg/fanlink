@@ -167,10 +167,18 @@ export async function runInboxWatch(input: {
   await shut();
 }
 
-export function watchPage(page: Page, threadKey: () => string): WatchSession {
+export function watchPage(page: Page, threadKey: () => string, accountUserId: () => string | null = () => null): WatchSession {
   return {
     async goto(url: string) {
-      const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => null);
+      const same = page.url().split("?")[0] === url.split("?")[0];
+      const pending = page.waitForResponse(
+        (response) => classifyChatPath(response.url()) !== "other" && response.status() < 400,
+        { timeout: 8_000 },
+      ).catch(() => null);
+      const response = same
+        ? await page.reload({ waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => null)
+        : await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => null);
+      await pending;
       return response?.status() ?? 0;
     },
     listen({ onMessages, onThreads, onUsers, onBlock }) {
@@ -178,7 +186,7 @@ export function watchPage(page: Page, threadKey: () => string): WatchSession {
         socket.on("framereceived", (frame) => {
           const text = typeof frame.payload === "string" ? frame.payload : frame.payload.toString("utf8");
           const key = threadKey();
-          const parsed = parseLivePayload(text, key, key);
+          const parsed = parseLivePayload(text, key, key, accountUserId());
           if (parsed.messages.length) onMessages(parsed.messages);
         });
       });
@@ -212,7 +220,7 @@ export function watchPage(page: Page, threadKey: () => string): WatchSession {
   };
 }
 
-export async function openWatchContext(context: BrowserContext, threadKey: () => string): Promise<WatchSession> {
+export async function openWatchContext(context: BrowserContext, threadKey: () => string, accountUserId: () => string | null = () => null): Promise<WatchSession> {
   const page = await openWorkPage(context);
-  return watchPage(page, threadKey);
+  return watchPage(page, threadKey, accountUserId);
 }

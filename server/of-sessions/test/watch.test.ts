@@ -62,6 +62,17 @@ test("un frame sin chatId no se asigna al hilo de la pestaña si el usuario no c
     "7",
   );
   assert.equal(foreign.messages.length, 0);
+  const filed = parseLivePayload(
+    JSON.stringify({
+      list: [{ id: 3, text: "ajeno", createdAt: "2026-11-06T10:00:00.000Z", fromUser: { id: "9" } }],
+    }),
+    "",
+    "",
+    "cuenta",
+  );
+  assert.equal(filed.messages.length, 1);
+  assert.equal(filed.messages[0]?.threadKey, "9");
+  assert.equal(filed.messages[0]?.fromFan, true);
   const checked = parseLivePayload(
     JSON.stringify({
       list: [{
