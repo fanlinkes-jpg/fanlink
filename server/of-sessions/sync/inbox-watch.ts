@@ -137,12 +137,11 @@ export async function runInboxWatch(input: {
       ? nextFallbackThread(target.threads, reloadedAt, openedAt, lastGlobalReloadAt, now, fallbackMs)
       : null;
     const listAge = lastListReloadAt == null ? 0 : now - lastListReloadAt;
-    const listDue = session != null && lastListReloadAt != null && listAge >= LIST_RELOAD_MS && (!next || listAge >= LIST_RELOAD_MS * 2);
-    if (listDue && session && !next) {
+    const listDue = session != null && lastListReloadAt != null && listAge >= LIST_RELOAD_MS;
+    if (listDue && session) {
       input.onNavigate?.(null);
       const status = await session.goto(target.chatsUrl);
       lastListReloadAt = input.now();
-      lastGlobalReloadAt = input.now();
       pageThread = null;
       if (status === 403 || status === 429) {
         blockedUntil = input.now() + input.onBlock(target.accountId, String(status));

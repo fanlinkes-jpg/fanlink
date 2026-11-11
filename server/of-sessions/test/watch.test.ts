@@ -35,8 +35,9 @@ test("sin socket solo se recarga el hilo pasado el mínimo de 15 s", async () =>
   });
   await task;
   assert.equal(gotos[0]?.url, "https://onlyfans.com/my/chats");
-  assert.equal(gotos[1]?.url, "https://onlyfans.com/my/chats/chat/7");
-  assert.ok((gotos[1]?.at ?? 0) >= FALLBACK_RELOAD_MS);
+  assert.equal(gotos[1]?.url, "https://onlyfans.com/my/chats");
+  assert.ok((gotos[1]?.at ?? 0) >= 15_000);
+  assert.equal(gotos[2]?.url, "https://onlyfans.com/my/chats/chat/7");
   const early = planWatch({
     watchers: 1,
     wantedThread: "7",
