@@ -1,4 +1,6 @@
 import { mediaHostAllowed, nextMediaUrl } from "./history.ts";
+import { sessionForApi } from "./of-chat-api.ts";
+import { BROWSER_FINGERPRINT } from "../sessions/browser-factory.ts";
 
 export type MediaBytes = {
   status: number;
@@ -53,39 +55,35 @@ export async function readSessionMediaBytes(
     const sessions = await getOfSessionManager();
     const account = (await sessions.listAccounts()).find((item) => item.creatorId === creatorId);
     if (!account || account.status !== "active" || !account.hasStorageState) return null;
-    return await sessions.withSession(account.id, async (context) => {
-      if (!header) {
-        const response = await context.request.get(target, {
-          headers: { referer: "https://onlyfans.com/" },
-          timeout: 20_000,
-          maxRedirects: 3,
-        });
-        if (!response.ok()) return null;
-        const raw = await response.body();
-        if (raw.byteLength > 8_000_000) return null;
-        const type = (response.headers()["content-type"] ?? "application/octet-stream").split(";")[0] ?? "application/octet-stream";
-        return {
-          status: response.status(),
-          body: new Uint8Array(raw),
-          contentType: type,
-          contentLength: raw.byteLength,
-        };
-      }
-      const cookies = await context.cookies(target);
-      const headers: Record<string, string> = { referer: "https://onlyfans.com/" };
-      if (cookies.length > 0) headers.cookie = cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
-      headers.range = header;
-      let response = await fetch(target, { headers, redirect: "manual" });
-      if (response.status >= 300 && response.status < 400) {
-        const next = nextMediaUrl(target, response.headers.get("location"));
-        await response.body?.cancel().catch(() => undefined);
-        if (!next) return null;
-        response = await fetch(next, { headers, redirect: "manual" });
-      }
+    const state = await sessions.readStorageState(account.id);
+    const auth = sessionForApi(state, Date.now());
+    if ("reason" in auth) return null;
+    const headers: Record<string, string> = {
+      referer: "https://onlyfans.com/",
+      cookie: auth.cookie,
+      "user-agent": BROWSER_FINGERPRINT.userAgent,
+    };
+    if (header) headers.range = header;
+    let response = await fetch(target, { headers, redirect: "manual" });
+    if (response.status >= 300 && response.status < 400) {
+      const next = nextMediaUrl(target, response.headers.get("location"));
+      await response.body?.cancel().catch(() => undefined);
+      if (!next) return null;
+      response = await fetch(next, { headers, redirect: "manual" });
+    }
+    if (header) {
       const media = mediaFromFetchResponse(response);
       if (!media) await response.body?.cancel().catch(() => undefined);
       return media;
-    });
+    }
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    const raw = new Uint8Array(await response.arrayBuffer());
+    if (raw.byteLength > 8_000_000) return null;
+    const type = (response.headers.get("content-type") ?? "application/octet-stream").split(";")[0] ?? "application/octet-stream";
+    return { status: response.status, body: raw, contentType: type, contentLength: raw.byteLength };
   } catch {
     return null;
   }

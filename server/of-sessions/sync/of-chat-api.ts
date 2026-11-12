@@ -60,6 +60,26 @@ export async function fetchSignedChats(state: StorageStateFile, deps: {
   return { threads, messages: [...messages, ...extra], reason: null };
 }
 
+/** Listas y medios de la bóveda, con la misma firma que los chats. No abre el navegador. */
+export async function fetchSignedVault(state: StorageStateFile, deps: {
+  fetch: typeof fetch;
+  now: () => number;
+}): Promise<unknown[]> {
+  const auth = sessionForApi(state, deps.now());
+  if ("reason" in auth) return [];
+  const rules = await loadSignRules(deps.fetch, deps.now());
+  const paths = [
+    "/api2/v2/vault/lists?view=main&offset=0&limit=100",
+    "/api2/v2/vault/media?limit=40&offset=0&field=recent&sort=desc&list=all",
+  ];
+  const payloads: unknown[] = [];
+  for (const path of paths) {
+    const read = await getJson(deps.fetch, path, signedHeaders(rules, path, auth, deps.now()));
+    if (read.ok) payloads.push(read.body);
+  }
+  return payloads;
+}
+
 async function getJson(fetchImpl: typeof fetch, pathWithQuery: string, headers: Record<string, string>): Promise<{ ok: true; body: unknown } | { ok: false; reason: string }> {
   const response = await fetchImpl(`https://onlyfans.com${pathWithQuery}`, { headers });
   if (response.status === 401 || response.status === 400) return { ok: false, reason: `OnlyFans ha rechazado la firma (${response.status})` };
