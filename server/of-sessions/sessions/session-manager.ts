@@ -518,10 +518,23 @@ export class SessionManager {
         };
         page.on("response", onResponse);
         try {
-          await page.goto("https://onlyfans.com/my/chats", { waitUntil: "domcontentloaded", timeout: 25_000 }).catch(() => undefined);
+          await page.goto("https://onlyfans.com/", { waitUntil: "domcontentloaded", timeout: 25_000 }).catch(() => undefined);
+          const boot = Date.now() + 15_000;
+          while (!seen.some((line) => line.includes("/users/me")) && Date.now() < boot) {
+            await new Promise((resolve) => setTimeout(resolve, 250));
+          }
+          const link = page.locator('a[href="/my/chats"], a[href*="/my/chats"]').first();
+          const opened = await link.click({ timeout: 8_000 }).then(() => true).catch(() => false);
+          if (!opened) await page.goto("https://onlyfans.com/my/chats", { waitUntil: "domcontentloaded", timeout: 20_000 }).catch(() => undefined);
           const deadline = Date.now() + 20_000;
           while (found.length === 0 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 250));
-          console.info(`[fanlink:chat] api lista pagina vistos=${seen.join(" | ") || "ninguno"}`);
+          let where = "ninguna";
+          try {
+            where = new URL(page.url()).pathname;
+          } catch {
+            where = "ninguna";
+          }
+          console.info(`[fanlink:chat] api lista pagina url=${where} vistos=${seen.join(" | ") || "ninguno"}`);
           const text = found[0];
           if (!text) return { ...empty, reason: "la página no ha pedido /chats" };
           const body = JSON.parse(text) as unknown;
