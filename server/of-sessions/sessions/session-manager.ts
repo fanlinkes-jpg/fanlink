@@ -494,7 +494,7 @@ export class SessionManager {
     }
     try {
       const direct = await this.readChatsDirect(accountId);
-      if (direct.threads.length > 0 || direct.reason) return direct;
+      if (direct.threads.length > 0 || keepsBrowserClosed(direct.reason)) return direct;
       return await this.withSession(accountId, (context) =>
         collectChats(context, this.options.site, {
           paceMs: this.options.config.syncPaceMs,
@@ -1236,6 +1236,13 @@ function mapCookies(
     secure: cookie.secure,
     sameSite: cookie.sameSite,
   }));
+}
+
+/** Un 401 no abre el navegador. Sin cookies, el simulador sigue por la página. */
+function keepsBrowserClosed(reason: string | null): boolean {
+  if (!reason) return false;
+  if (reason.includes("auth_id") || reason.includes("huella") || reason.includes("sin sesión guardada")) return false;
+  return true;
 }
 
 function delay(ms: number): Promise<void> {
