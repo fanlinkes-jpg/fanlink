@@ -3,7 +3,7 @@ import { authConfigured, DEV_USER_ID, requireUserId, UnauthorizedError } from "@
 import { getSql } from "@/lib/db";
 import { ensureStaff } from "@/lib/workspace-store";
 import { handleVaultMedia } from "../../../server/of-sessions/http/vault-http.ts";
-import { readSessionMediaBytes } from "../../../server/of-sessions/sync/media-bytes.ts";
+import { getVaultThumb, readSessionMediaBytes } from "../../../server/of-sessions/sync/media-bytes.ts";
 import { accountCreatorIds } from "../../../server/of-sessions/http/vault-accounts.ts";
 
 export const Route = createFileRoute("/api/vault-media")({
@@ -16,6 +16,13 @@ export const Route = createFileRoute("/api/vault-media")({
           const access = await ensureStaff(sql, userId, !authConfigured && userId === DEV_USER_ID);
           const creatorIds = await accountCreatorIds(sql);
           const creatorId = new URL(request.url).searchParams.get("creatorId") ?? "";
+          const mediaId = new URL(request.url).searchParams.get("mediaId") ?? "";
+          const cached = getVaultThumb(creatorId, mediaId);
+          if (cached && creatorIds.includes(creatorId)) {
+            return new Response(cached.body.buffer.slice(cached.body.byteOffset, cached.body.byteOffset + cached.body.byteLength) as ArrayBuffer, {
+              headers: { "content-type": cached.contentType, "cache-control": "private, max-age=300", "x-content-type-options": "nosniff" },
+            });
+          }
           return handleVaultMedia(request, {
             session: async () => ({ userId: access.userId, role: access.role, perms: access.perms, creatorIds }),
             findPreview: async (creator, mediaId, variant) => {

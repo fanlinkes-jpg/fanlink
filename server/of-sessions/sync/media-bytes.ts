@@ -1,5 +1,16 @@
-import { mediaHostAllowed, nextMediaUrl } from "./history.ts";
+const thumbCache = new Map<string, { body: Uint8Array; contentType: string; at: number }>();
+
+export function putVaultThumb(creatorId: string, mediaId: string, body: Uint8Array, contentType: string): void {
+  thumbCache.set(`${creatorId}\n${mediaId}`, { body, contentType, at: Date.now() });
+}
+
+export function getVaultThumb(creatorId: string, mediaId: string): { body: Uint8Array; contentType: string } | null {
+  const hit = thumbCache.get(`${creatorId}\n${mediaId}`);
+  if (!hit || Date.now() - hit.at > 10 * 60_000) return null;
+  return { body: hit.body, contentType: hit.contentType };
+}
 import { sessionForApi } from "./of-chat-api.ts";
+import { mediaHostAllowed, nextMediaUrl } from "./history.ts";
 import { BROWSER_FINGERPRINT } from "../sessions/browser-factory.ts";
 
 export type MediaBytes = {

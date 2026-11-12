@@ -69,40 +69,14 @@ function trimVaultPayloads(payloads: readonly unknown[]): unknown[] {
   return out;
 }
 
-/** Una página por clic. Si el fetch no trae medios, se queda con lo que pide la página /my/vault. No pulsa el compositor. */
+/** Una página por clic. Copia el JSON que OnlyFans pide al abrir /my/vault. No hace un fetch sin firma. */
 export async function readVaultFromPage(page: Page, listId = "all", offset = 0): Promise<unknown[]> {
   const cleanOffset = Number.isFinite(offset) && offset > 0 ? Math.min(VAULT_OFFSET_CAP, Math.floor(offset)) : 0;
   const cleanList = listId.trim().slice(0, 80) || "all";
-  const direct = await pullVaultApi(page, cleanList, cleanOffset);
-  const fromPage = countVault(direct).files > 0 ? [] : await readOpenedVault(page, cleanList, cleanOffset);
-  const after = countVault(fromPage).files > 0 ? [] : await pullVaultApi(page, cleanList, cleanOffset);
-  const chosen = chooseVaultPayloads(countVault(direct).files > 0 ? direct : after, fromPage);
-  const counts = countVault(chosen);
-  console.info(`[fanlink:vault] pagina lista=${cleanList} offset=${cleanOffset} carpetas=${counts.folders} medios=${counts.files}`);
-  return chosen;
-}
-
-async function pullVaultApi(page: Page, listId: string, offset: number): Promise<unknown[]> {
-  if (!page.url().includes("onlyfans.com/")) return [];
-  return page.evaluate(async ({ listId, offset, listCap, mediaCap }) => {
-    async function pull(path: string): Promise<unknown | null> {
-      try {
-        const response = await fetch(path, { credentials: "include", headers: { accept: "application/json" } });
-        if (!response.ok) return null;
-        return await response.json();
-      } catch {
-        return null;
-      }
-    }
-    const out: unknown[] = [];
-    if (offset === 0) {
-      const lists = await pull(`/api2/v2/vault/lists?view=main&offset=0&limit=${listCap}`);
-      if (lists) out.push(lists);
-    }
-    const media = await pull(`/api2/v2/vault/media?limit=${mediaCap}&offset=${offset}&field=recent&sort=desc&list=${encodeURIComponent(listId)}`);
-    if (media) out.push(media);
-    return out;
-  }, { listId, offset, listCap: VAULT_LIST_CAP, mediaCap: VAULT_MEDIA_CAP }).catch(() => [] as unknown[]);
+  const fromPage = await readOpenedVault(page, cleanList, cleanOffset);
+  const counts = countVault(fromPage);
+  console.info(`[fanlink:vault] pagina una vez lista=${cleanList} offset=${cleanOffset} carpetas=${counts.folders} medios=${counts.files}`);
+  return fromPage;
 }
 
 /** Abre la bóveda de OnlyFans y copia el JSON que ella misma pide. Sin clics al compositor. */
