@@ -65,6 +65,7 @@ const globalRef = globalThis as typeof globalThis & {
   __ofSyncLoop__?: { stop: () => void };
   __ofChatLoop__?: { stop: () => void };
   __ofNotificationLoop__?: { stop: () => void };
+  __ofApiList__?: boolean;
 };
 
 export function ensureSyncScheduler(): void {
@@ -100,6 +101,7 @@ async function createManager(): Promise<SessionManager> {
   await runtime.sessions.recoverInterruptedLogins();
   bootSyncLoop(runtime.sessions);
   bootChatLoop(runtime.sessions);
+  bootApiListLoop(runtime.sessions);
   bootHistoryLoop(runtime.sessions);
   bootNotificationLoop(runtime.sessions);
   return runtime.sessions;
@@ -289,6 +291,34 @@ async function pullOlder(sessions: SessionManager, accountId: string, creatorId:
   await saveChatRead(sql, creatorId, { threads: [], messages: ran.value, reason: null, jsonPaths: [] });
   await markHistory(sql, creatorId, threadKey, oldestCursor(ran.value) ?? row?.cursor ?? null, done);
   return "saved";
+}
+
+function bootApiListLoop(sessions: SessionManager): void {
+  if (process.env.FANLINK_SYNC_ENABLED === "false") return;
+  if (process.execArgv.includes("--test")) return;
+  if (globalRef.__ofApiList__) return;
+  globalRef.__ofApiList__ = true;
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  void (async () => {
+    await sleep(5_000);
+    while (true) {
+      try {
+        for (const account of await sessions.listAccounts()) {
+          if (!account.creatorId || account.identityState === "mismatch") continue;
+          const read = await sessions.readChatsDirect(account.id);
+          if (read.threads.length === 0) {
+            console.info(`[fanlink:chat] api lista: ${read.reason ?? "sin hilos"}`);
+            continue;
+          }
+          await saveChatRead(await getSql(), account.creatorId, read);
+          console.info(`[fanlink:chat] api lista creator=${account.creatorId} hilos=${read.threads.length} mensajes=${read.messages.length}`);
+        }
+      } catch (error) {
+        console.info(`[fanlink:chat] api lista: ${error instanceof Error ? error.message.slice(0, 120) : "error"}`);
+      }
+      await sleep(15_000);
+    }
+  })();
 }
 
 function bootChatLoop(sessions: SessionManager): void {
