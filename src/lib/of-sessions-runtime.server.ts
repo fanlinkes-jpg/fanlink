@@ -33,7 +33,7 @@ import { listChatMeta, listChats, listOpenHistory, listPendingOutbounds, markCha
 import { historyPerMinute, listPageDone, nextHistoryThread, oldestCursor, pageFinished } from "../../server/of-sessions/sync/history.ts";
 import { captureChatListPage, captureOlderMessages } from "../../server/of-sessions/sync/history-scroll.ts";
 import { openWorkPage } from "../../server/of-sessions/sessions/work-page.ts";
-import { readVaultFromPage, type VaultFile } from "../../server/of-sessions/sync/vault-listen.ts";
+import { type VaultFile } from "../../server/of-sessions/sync/vault-listen.ts";
 import { readOnlineSubscribers, type OnlineFan } from "../../server/of-sessions/sync/online-fans.ts";
 import { normalizeFanMenuRequest, runFanMenuOnPage, type FanMenuResult } from "../../server/of-sessions/sync/fan-menu.ts";
 import { chatPageUrl } from "../../server/of-sessions/sync/chats.ts";
@@ -982,24 +982,13 @@ export async function readChatVaultView(userId: string, input: { creatorId: stri
   }
   const sessions = await getOfSessionManager();
   const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
-  if (!account) return { items: [], reason: "Sin datos" };
-  const ran = await sessions.runQueued(account.id, async (context) => {
-    const page = await openWorkPage(context);
-    try {
-      const fromPage = await readVaultFromPage(page, input.listId || "all", input.offset ?? 0);
-      return fromPage;
-    } finally {
-      await page.close().catch(() => undefined);
-    }
-  }, { wait: true });
-  if (!ran.ok) return { items: [], reason: "OnlyFans está ocupado con otra lectura." };
+  if (!account || !account.hasStorageState) return { items: [], reason: "Sin datos" };
+  const { fetchSignedVault } = await import("../../server/of-sessions/sync/of-chat-api.ts");
   const { persistVaultRead } = await import("../../server/of-sessions/sync/vault-store.ts");
-  const saved = await persistVaultRead(await getSql(), input.creatorId, ran.value);
-  if (saved.length === 0) {
-    console.info(`[fanlink:vault] vacia chat=${input.threadKey} json=${ran.ok ? ran.value.length : 0}`);
-    return { items: [], reason: "No se ha podido leer la bóveda." };
-  }
-  console.info(`[fanlink:vault] piezas=${saved.length} chat=${input.threadKey}`);
+  const payloads = await fetchSignedVault(await sessions.readStorageState(account.id), { fetch, now: () => Date.now() }, input.listId || "all", input.offset ?? 0);
+  const saved = await persistVaultRead(await getSql(), input.creatorId, payloads);
+  console.info(`[fanlink:vault] api lista=${input.listId || "all"} offset=${input.offset ?? 0} medios=${saved.length}`);
+  if (saved.length === 0) return { items: [], reason: "No se ha podido leer la bóveda." };
   return {
     items: saved.map((item) => ({ id: item.id, title: item.title, kind: item.kind })),
     reason: null,

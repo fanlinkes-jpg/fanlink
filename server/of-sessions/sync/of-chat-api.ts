@@ -64,13 +64,15 @@ export async function fetchSignedChats(state: StorageStateFile, deps: {
 export async function fetchSignedVault(state: StorageStateFile, deps: {
   fetch: typeof fetch;
   now: () => number;
-}): Promise<unknown[]> {
+}, listId = "all", offset = 0): Promise<unknown[]> {
   const auth = sessionForApi(state, deps.now());
   if ("reason" in auth) return [];
   const rules = await loadSignRules(deps.fetch, deps.now());
+  const list = listId.trim().slice(0, 80) || "all";
+  const skip = Number.isFinite(offset) && offset > 0 ? Math.min(2_000, Math.floor(offset)) : 0;
   const paths = [
-    "/api2/v2/vault/lists?view=main&offset=0&limit=100",
-    "/api2/v2/vault/media?limit=40&offset=0&field=recent&sort=desc&list=all",
+    ...(skip === 0 ? ["/api2/v2/vault/lists?view=main&offset=0&limit=100"] : []),
+    `/api2/v2/vault/media?limit=40&offset=${skip}&field=recent&sort=desc&list=${encodeURIComponent(list)}`,
   ];
   const payloads: unknown[] = [];
   for (const path of paths) {
