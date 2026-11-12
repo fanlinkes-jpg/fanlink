@@ -40,6 +40,14 @@ test("el JSON de la bóveda de OnlyFans trae carpetas y medios", () => {
   assert.equal(parsedMedia.items[0]?.preview, "https://cdn2.onlyfans.com/files/a/thumb.jpg");
   assert.equal(parsedMedia.items[1]?.kind, "video");
   assert.equal(parsedMedia.items[1]?.seconds, 12);
+  const nested = parseVaultBundle({
+    list: [{
+      id: 9003,
+      type: "photo",
+      files: { thumb: { url: null, sources: [{ url: "https://cdn3.onlyfans.com/files/c/thumb.jpg" }] } },
+    }],
+  });
+  assert.equal(nested.items[0]?.preview, "https://cdn3.onlyfans.com/files/c/thumb.jpg");
 });
 
 test("si el fetch no trae medios, se usan los de la página", () => {

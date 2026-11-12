@@ -300,21 +300,14 @@ function tagsOf(row: Record<string, unknown>): string[] {
 
 function previewOf(row: Record<string, unknown>): string | null {
   const files = nested(row.files);
-  const candidates = [
-    nested(files?.thumb)?.url,
-    nested(files?.preview)?.url,
-    nested(files?.squarePreview)?.url,
-    files?.squarePreview,
-    nested(row.thumb)?.url,
-    nested(row.preview)?.url,
-    row.previewUrl,
-    row.src,
-  ];
-  for (const value of candidates) {
-    const text = textOf(value);
-    if (text && /^https?:\/\//.test(text)) return text;
-  }
-  return null;
+  return firstFileUrl(files?.thumb)
+    ?? firstFileUrl(files?.squarePreview)
+    ?? firstFileUrl(files?.preview)
+    ?? firstFileUrl(row.thumb)
+    ?? firstFileUrl(row.preview)
+    ?? firstFileUrl(files?.full)
+    ?? firstFileUrl(row.src)
+    ?? firstFileUrl(row.previewUrl);
 }
 
 function vaultLists(payload: unknown): VaultList[] {
@@ -357,8 +350,29 @@ function nested(value: unknown): Record<string, unknown> | null {
 
 function fullOf(row: Record<string, unknown>): string | null {
   const files = nested(row.files);
-  const source = nested(files?.source) ?? nested(files?.full) ?? nested(row.source);
-  return textOf(source?.url ?? row.fullUrl ?? row.src);
+  return firstFileUrl(files?.full) ?? firstFileUrl(files?.source) ?? firstFileUrl(row.source) ?? firstFileUrl(row.fullUrl) ?? firstFileUrl(row.src);
+}
+
+function firstFileUrl(value: unknown, depth = 0): string | null {
+  if (depth > 4) return null;
+  const direct = textOf(value);
+  if (direct && /^https?:\/\//.test(direct)) return direct;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = firstFileUrl(item, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+  const row = nested(value);
+  if (!row) return null;
+  const own = textOf(row.url);
+  if (own && /^https?:\/\//.test(own)) return own;
+  for (const key of ["sources", "source", "thumb", "preview", "squarePreview", "full"]) {
+    const found = firstFileUrl(row[key], depth + 1);
+    if (found) return found;
+  }
+  return null;
 }
 
 function countOrNull(value: unknown): number | null {

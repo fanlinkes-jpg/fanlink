@@ -99,8 +99,12 @@ export function mediaHostAllowed(raw: string): boolean {
 export function nextMediaUrl(current: string, location: string | null): string | null {
   if (!location) return null;
   try {
-    const next = new URL(location, current).toString();
-    return mediaHostAllowed(next) ? next : null;
+    const next = new URL(location, current);
+    const href = next.toString();
+    if (mediaHostAllowed(href)) return href;
+    const host = next.hostname.toLowerCase();
+    if (host.endsWith(".amazonaws.com") || host.endsWith(".cloudfront.net")) return href;
+    return null;
   } catch {
     return null;
   }

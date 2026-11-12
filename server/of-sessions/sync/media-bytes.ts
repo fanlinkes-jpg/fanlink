@@ -57,34 +57,52 @@ export async function readSessionMediaBytes(
     if (!account || account.status !== "active" || !account.hasStorageState) return null;
     const state = await sessions.readStorageState(account.id);
     const auth = sessionForApi(state, Date.now());
-    if ("reason" in auth) return null;
+    const cookie = "cookie" in auth ? auth.cookie : "";
     const headers: Record<string, string> = {
+      accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
       referer: "https://onlyfans.com/",
-      cookie: auth.cookie,
       "user-agent": BROWSER_FINGERPRINT.userAgent,
     };
+    if (cookie) headers.cookie = cookie;
     if (header) headers.range = header;
-    let response = await fetch(target, { headers, redirect: "manual" });
-    if (response.status >= 300 && response.status < 400) {
-      const next = nextMediaUrl(target, response.headers.get("location"));
-      await response.body?.cancel().catch(() => undefined);
-      if (!next) return null;
-      response = await fetch(next, { headers, redirect: "manual" });
-    }
-    if (header) {
-      const media = mediaFromFetchResponse(response);
-      if (!media) await response.body?.cancel().catch(() => undefined);
-      return media;
-    }
-    if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
-      return null;
-    }
-    const raw = new Uint8Array(await response.arrayBuffer());
-    if (raw.byteLength > 8_000_000) return null;
-    const type = (response.headers.get("content-type") ?? "application/octet-stream").split(";")[0] ?? "application/octet-stream";
-    return { status: response.status, body: raw, contentType: type, contentLength: raw.byteLength };
+    const loaded = await loadMedia(target, headers, Boolean(header));
+    if (loaded || !cookie) return loaded;
+    delete headers.cookie;
+    return loadMedia(target, headers, Boolean(header));
   } catch {
     return null;
   }
+}
+
+async function loadMedia(target: string, headers: Record<string, string>, ranged: boolean): Promise<MediaBytes | null> {
+  let response = await fetch(target, { headers, redirect: "manual" });
+  if (response.status >= 300 && response.status < 400) {
+    const next = nextMediaUrl(target, response.headers.get("location"));
+    await response.body?.cancel().catch(() => undefined);
+    if (!next) return null;
+    response = await fetch(next, { headers, redirect: "manual" });
+  }
+  if (!response.ok && response.status !== 206) {
+    noteThumb(response.status);
+    await response.body?.cancel().catch(() => undefined);
+    return null;
+  }
+  if (ranged) {
+    const media = mediaFromFetchResponse(response);
+    if (!media) await response.body?.cancel().catch(() => undefined);
+    return media;
+  }
+  const raw = new Uint8Array(await response.arrayBuffer());
+  if (raw.byteLength === 0 || raw.byteLength > 8_000_000) return null;
+  const type = (response.headers.get("content-type") ?? "application/octet-stream").split(";")[0] ?? "application/octet-stream";
+  if (type.startsWith("text/")) return null;
+  return { status: response.status, body: raw, contentType: type, contentLength: raw.byteLength };
+}
+
+let thumbsNoted = 0;
+
+function noteThumb(status: number): void {
+  if (thumbsNoted >= 3) return;
+  thumbsNoted += 1;
+  console.info(`[fanlink:vault] miniatura status=${status}`);
 }

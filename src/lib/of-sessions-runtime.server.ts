@@ -987,7 +987,7 @@ export async function readChatVaultView(userId: string, input: { creatorId: stri
   const { persistVaultRead } = await import("../../server/of-sessions/sync/vault-store.ts");
   const payloads = await fetchSignedVault(await sessions.readStorageState(account.id), { fetch, now: () => Date.now() }, input.listId || "all", input.offset ?? 0);
   const saved = await persistVaultRead(await getSql(), input.creatorId, payloads);
-  console.info(`[fanlink:vault] api lista=${input.listId || "all"} offset=${input.offset ?? 0} medios=${saved.length}`);
+  console.info(`[fanlink:vault] api lista=${input.listId || "all"} offset=${input.offset ?? 0} medios=${saved.length} fotos=${saved.filter((item) => item.preview).length}`);
   if (saved.length === 0) return { items: [], reason: "No se ha podido leer la bóveda." };
   return {
     items: saved.map((item) => ({ id: item.id, title: item.title, kind: item.kind })),
