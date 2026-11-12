@@ -33,7 +33,7 @@ import { listChatMeta, listChats, listOpenHistory, listPendingOutbounds, markCha
 import { historyPerMinute, listPageDone, nextHistoryThread, oldestCursor, pageFinished } from "../../server/of-sessions/sync/history.ts";
 import { captureChatListPage, captureOlderMessages } from "../../server/of-sessions/sync/history-scroll.ts";
 import { openWorkPage } from "../../server/of-sessions/sessions/work-page.ts";
-import { readVaultFromPage, countVault, type VaultFile } from "../../server/of-sessions/sync/vault-listen.ts";
+import { type VaultFile } from "../../server/of-sessions/sync/vault-listen.ts";
 import { readOnlineSubscribers, type OnlineFan } from "../../server/of-sessions/sync/online-fans.ts";
 import { normalizeFanMenuRequest, runFanMenuOnPage, type FanMenuResult } from "../../server/of-sessions/sync/fan-menu.ts";
 import { chatPageUrl } from "../../server/of-sessions/sync/chats.ts";
@@ -238,7 +238,7 @@ export async function rememberCreatorAccounts(): Promise<void> {
 }
 
 function bootHistoryLoop(sessions: SessionManager): void {
-  if (process.env.FANLINK_HISTORY_ENABLED === "false") return;
+  if (process.env.FANLINK_HISTORY_ENABLED !== "true") return;
   if (process.execArgv.includes("--test")) return;
   const recent: number[] = [];
   const skipUntil = new Map<string, number>();
@@ -983,48 +983,11 @@ export async function readChatVaultView(userId: string, input: { creatorId: stri
   const sessions = await getOfSessionManager();
   const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
   if (!account || !account.hasStorageState) return { items: [], reason: "Sin datos" };
-  const { parseVaultBundle } = await import("../../server/of-sessions/sync/vault-model.ts");
+  const { fetchSignedVault } = await import("../../server/of-sessions/sync/of-chat-api.ts");
   const { persistVaultRead } = await import("../../server/of-sessions/sync/vault-store.ts");
-  const { putVaultThumb } = await import("../../server/of-sessions/sync/media-bytes.ts");
-  const ran = await sessions.runQueued(account.id, async (context) => {
-    const page = await openWorkPage(context);
-    try {
-      const payloads = await readVaultFromPage(page, input.listId || "all", input.offset ?? 0);
-      const items = payloads.flatMap((payload) => parseVaultBundle(payload).items);
-      let fotos = 0;
-      for (const item of items) {
-        if (!item.preview || fotos >= 12) continue;
-        try {
-          const response = await context.request.get(item.preview, {
-            headers: { referer: "https://onlyfans.com/", accept: "image/avif,image/webp,image/*,*/*" },
-            timeout: 15_000,
-            maxRedirects: 3,
-          });
-          if (!response.ok()) continue;
-          const raw = await response.body();
-          if (raw.byteLength === 0 || raw.byteLength > 1_500_000) continue;
-          const type = (response.headers()["content-type"] ?? "image/jpeg").split(";")[0] ?? "image/jpeg";
-          if (type.startsWith("text/")) continue;
-          putVaultThumb(input.creatorId, item.id, new Uint8Array(raw), type);
-          fotos += 1;
-        } catch {
-          // Esta foto se queda sin miniatura.
-        }
-      }
-      console.info(`[fanlink:vault] pagina miniaturas=${fotos}`);
-      return payloads;
-    } finally {
-      await page.close().catch(() => undefined);
-    }
-  }, { wait: true });
-  if (!ran.ok) return { items: [], reason: "OnlyFans está ocupado con otra lectura." };
-  let payloads = ran.value;
-  if (countVault(payloads).files === 0) {
-    const { fetchSignedVault } = await import("../../server/of-sessions/sync/of-chat-api.ts");
-    payloads = await fetchSignedVault(await sessions.readStorageState(account.id), { fetch, now: () => Date.now() }, input.listId || "all", input.offset ?? 0);
-  }
+  const payloads = await fetchSignedVault(await sessions.readStorageState(account.id), { fetch, now: () => Date.now() }, input.listId || "all", input.offset ?? 0);
   const saved = await persistVaultRead(await getSql(), input.creatorId, payloads);
-  console.info(`[fanlink:vault] guardados=${saved.length} fotos=${saved.filter((item) => item.preview).length}`);
+  console.info(`[fanlink:vault] api medios=${saved.length} fotos=${saved.filter((item) => item.preview).length}`);
   if (saved.length === 0) return { items: [], reason: "No se ha podido leer la bóveda." };
   return {
     items: saved.map((item) => ({ id: item.id, title: item.title, kind: item.kind })),

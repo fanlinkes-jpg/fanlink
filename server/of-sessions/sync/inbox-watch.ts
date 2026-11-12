@@ -91,6 +91,12 @@ export async function runInboxWatch(input: {
       continue;
     }
     if (!session || accountId !== target.accountId) {
+      if (input.pullList) {
+        const ok = await input.pullList(target.accountId).catch(() => false);
+        if (ok) lastUsefulAt = input.now();
+        await input.sleep(ok ? 5_000 : 15_000);
+        continue;
+      }
       await shut();
       try {
         session = await input.open(target.accountId);
