@@ -47,7 +47,6 @@ import { hasLiveCookies } from "./site.ts";
 import { collectCreatorRead, type CollectedRead } from "../sync/collect.ts";
 import type { TxCursor } from "../sync/parse.ts";
 import { fetchSignedChats } from "../sync/of-chat-api.ts";
-import { parseChatList, parsePreviewMessages } from "../sync/chats.ts";
 import { collectChats, type CollectedChats } from "../sync/collect-chats.ts";
 import { collectNotifications, type CollectedNotifications } from "../sync/collect-notifications.ts";
 import { NOTIFICATION_PACE_MS, notificationReadBusy } from "../../../src/lib/notifications.ts";
@@ -480,76 +479,10 @@ export class SessionManager {
       const state = await this.readStorageState(accountId);
       const read = await fetchSignedChats(state, { fetch, now: () => this.now().getTime() });
       if (read.threads.length > 0) return { ...empty, threads: read.threads, messages: read.messages, reason: null };
-      if (read.reason?.includes("401")) {
-        const viaPage = await this.readChatsThroughPage(accountId);
-        if (viaPage.threads.length > 0) return viaPage;
-        return { ...empty, reason: viaPage.reason ?? read.reason };
-      }
       return { ...empty, threads: read.threads, messages: read.messages, reason: read.reason };
     } catch (error) {
       const missing = error instanceof Error && "code" in error && error.code === "ENOENT";
       return { ...empty, reason: missing ? "sin sesión guardada" : publicErrorMessage(error, "no se pudo leer la sesión") };
-    }
-  }
-
-  /** La página firma la petición. Se usa cuando la firma calculada aquí recibe 401. */
-  private async readChatsThroughPage(accountId: string): Promise<CollectedChats> {
-    const empty: CollectedChats = { threads: [], messages: [], reason: null, jsonPaths: ["api2/v2/chats"] };
-    const account = await this.options.store.get(accountId);
-    try {
-      return await this.withSession(accountId, async (context) => {
-        const page = await context.newPage();
-        const found: string[] = [];
-        const seen: string[] = [];
-        const onResponse = (response: { url(): string; status(): number; request(): { method(): string }; text(): Promise<string> }) => {
-          const url = response.url();
-          if (!url.includes("/api2/")) return;
-          try {
-            const path = new URL(url).pathname;
-            if (seen.length < 8 && !seen.includes(path)) seen.push(`${response.status()} ${path}`);
-          } catch {
-            // La URL no se usa.
-          }
-          if (response.request().method() !== "GET" || response.status() !== 200) return;
-          if (!url.includes("/api2/v2/chats") || url.includes("/messages")) return;
-          void response.text().then((text) => {
-            if (text.length > 0 && text.length <= 1_500_000) found.push(text);
-          }).catch(() => undefined);
-        };
-        page.on("response", onResponse);
-        try {
-          await page.goto("https://onlyfans.com/", { waitUntil: "domcontentloaded", timeout: 25_000 }).catch(() => undefined);
-          const boot = Date.now() + 15_000;
-          while (!seen.some((line) => line.includes("/users/me")) && Date.now() < boot) {
-            await new Promise((resolve) => setTimeout(resolve, 250));
-          }
-          const link = page.locator('a[href="/my/chats"], a[href*="/my/chats"]').first();
-          const opened = await link.click({ timeout: 8_000 }).then(() => true).catch(() => false);
-          if (!opened) await page.goto("https://onlyfans.com/my/chats", { waitUntil: "domcontentloaded", timeout: 20_000 }).catch(() => undefined);
-          const deadline = Date.now() + 20_000;
-          while (found.length === 0 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 250));
-          let where = "ninguna";
-          try {
-            where = new URL(page.url()).pathname;
-          } catch {
-            where = "ninguna";
-          }
-          console.info(`[fanlink:chat] api lista pagina url=${where} vistos=${seen.join(" | ") || "ninguno"}`);
-          const text = found[0];
-          if (!text) return { ...empty, reason: "la página no ha pedido /chats" };
-          const body = JSON.parse(text) as unknown;
-          return {
-            ...empty,
-            threads: parseChatList(body, account.identityUserId),
-            messages: parsePreviewMessages(body),
-          };
-        } finally {
-          page.off("response", onResponse);
-          await page.close().catch(() => undefined);
-        }
-      });
-    } catch (error) {
-      return { ...empty, reason: publicErrorMessage(error, "no se pudo abrir la página") };
     }
   }
 
@@ -561,7 +494,7 @@ export class SessionManager {
     }
     try {
       const direct = await this.readChatsDirect(accountId);
-      if (direct.threads.length > 0) return direct;
+      if (direct.threads.length > 0 || direct.reason) return direct;
       return await this.withSession(accountId, (context) =>
         collectChats(context, this.options.site, {
           paceMs: this.options.config.syncPaceMs,
