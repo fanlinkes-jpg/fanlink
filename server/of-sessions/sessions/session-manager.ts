@@ -486,7 +486,8 @@ export class SessionManager {
       }
       return { ...empty, threads: read.threads, messages: read.messages, reason: read.reason };
     } catch (error) {
-      return { ...empty, reason: publicErrorMessage(error, "no se pudo leer la sesión") };
+      const missing = error instanceof Error && "code" in error && error.code === "ENOENT";
+      return { ...empty, reason: missing ? "sin sesión guardada" : publicErrorMessage(error, "no se pudo leer la sesión") };
     }
   }
 
@@ -497,23 +498,30 @@ export class SessionManager {
     try {
       return await this.withSession(accountId, async (context) => {
         const page = await context.newPage();
+        const payloads: string[] = [];
+        const onResponse = (response: { url(): string; status(): number; request(): { method(): string }; text(): Promise<string> }) => {
+          const url = response.url();
+          if (response.request().method() !== "GET" || response.status() !== 200) return;
+          if (!url.includes("/api2/v2/chats") || url.includes("/messages")) return;
+          void response.text().then((text) => {
+            if (text.length > 0 && text.length <= 1_500_000) payloads.push(text);
+          }).catch(() => undefined);
+        };
+        page.on("response", onResponse);
         try {
           await page.goto("https://onlyfans.com/my/chats", { waitUntil: "domcontentloaded", timeout: 20_000 }).catch(() => undefined);
-          const text = await page.evaluate(async () => {
-            const response = await fetch("/api2/v2/chats?limit=20&offset=0&skip_users=none&order=recent", { credentials: "include" });
-            return `${response.status}\n${await response.text()}`;
-          });
-          const split = text.indexOf("\n");
-          const status = Number(text.slice(0, split));
-          if (status !== 200) return { ...empty, reason: `la página respondió ${status}` };
-          const body = JSON.parse(text.slice(split + 1)) as unknown;
-          const userId = account.identityUserId;
+          const deadline = Date.now() + 8_000;
+          while (payloads.length === 0 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 200));
+          const text = payloads[0];
+          if (!text) return { ...empty, reason: "la página no ha pedido la lista" };
+          const body = JSON.parse(text) as unknown;
           return {
             ...empty,
-            threads: parseChatList(body, userId),
+            threads: parseChatList(body, account.identityUserId),
             messages: parsePreviewMessages(body),
           };
         } finally {
+          page.off("response", onResponse);
           await page.close().catch(() => undefined);
         }
       });
