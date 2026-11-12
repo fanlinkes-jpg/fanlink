@@ -34,8 +34,8 @@ export function signedHeaders(rules: SignRules, pathWithQuery: string, auth: { c
     "user-agent": BROWSER_FINGERPRINT.userAgent,
     "x-bc": auth.xBc,
     referer: "https://onlyfans.com/",
+    "user-id": auth.userId,
   };
-  if (!rules.removeHeaders.includes("user-id")) headers["user-id"] = auth.userId;
   return headers;
 }
 

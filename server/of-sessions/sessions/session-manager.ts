@@ -47,6 +47,7 @@ import { hasLiveCookies } from "./site.ts";
 import { collectCreatorRead, type CollectedRead } from "../sync/collect.ts";
 import type { TxCursor } from "../sync/parse.ts";
 import { fetchSignedChats } from "../sync/of-chat-api.ts";
+import { parseChatList, parsePreviewMessages } from "../sync/chats.ts";
 import { collectChats, type CollectedChats } from "../sync/collect-chats.ts";
 import { collectNotifications, type CollectedNotifications } from "../sync/collect-notifications.ts";
 import { NOTIFICATION_PACE_MS, notificationReadBusy } from "../../../src/lib/notifications.ts";
@@ -478,9 +479,46 @@ export class SessionManager {
     try {
       const state = await this.readStorageState(accountId);
       const read = await fetchSignedChats(state, { fetch, now: () => this.now().getTime() });
+      if (read.threads.length > 0) return { ...empty, threads: read.threads, messages: read.messages, reason: null };
+      if (read.reason?.includes("401")) {
+        const viaPage = await this.readChatsThroughPage(accountId);
+        if (viaPage.threads.length > 0) return viaPage;
+      }
       return { ...empty, threads: read.threads, messages: read.messages, reason: read.reason };
     } catch (error) {
       return { ...empty, reason: publicErrorMessage(error, "no se pudo leer la sesión") };
+    }
+  }
+
+  /** La página firma la petición. Se usa cuando la firma calculada aquí recibe 401. */
+  private async readChatsThroughPage(accountId: string): Promise<CollectedChats> {
+    const empty: CollectedChats = { threads: [], messages: [], reason: null, jsonPaths: ["api2/v2/chats"] };
+    const account = await this.options.store.get(accountId);
+    try {
+      return await this.withSession(accountId, async (context) => {
+        const page = await context.newPage();
+        try {
+          await page.goto("https://onlyfans.com/my/chats", { waitUntil: "domcontentloaded", timeout: 20_000 }).catch(() => undefined);
+          const text = await page.evaluate(async () => {
+            const response = await fetch("/api2/v2/chats?limit=20&offset=0&skip_users=none&order=recent", { credentials: "include" });
+            return `${response.status}\n${await response.text()}`;
+          });
+          const split = text.indexOf("\n");
+          const status = Number(text.slice(0, split));
+          if (status !== 200) return { ...empty, reason: `la página respondió ${status}` };
+          const body = JSON.parse(text.slice(split + 1)) as unknown;
+          const userId = account.identityUserId;
+          return {
+            ...empty,
+            threads: parseChatList(body, userId),
+            messages: parsePreviewMessages(body),
+          };
+        } finally {
+          await page.close().catch(() => undefined);
+        }
+      });
+    } catch (error) {
+      return { ...empty, reason: publicErrorMessage(error, "no se pudo abrir la página") };
     }
   }
 
