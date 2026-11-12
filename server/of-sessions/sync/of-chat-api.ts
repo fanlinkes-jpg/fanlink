@@ -23,9 +23,9 @@ export function sessionForApi(state: StorageStateFile, nowMs: number): { cookie:
   return { cookie: cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join("; "), userId, xBc };
 }
 
-export function signedHeaders(rules: SignRules, pathWithQuery: string, auth: { cookie: string; userId: string; xBc: string }, timeSeconds: number): Record<string, string> {
-  const signed = signOnlyfans(rules, pathWithQuery, auth.userId, timeSeconds);
-  const headers: Record<string, string> = {
+export function signedHeaders(rules: SignRules, pathWithQuery: string, auth: { cookie: string; userId: string; xBc: string }, timeMs: number): Record<string, string> {
+  const signed = signOnlyfans(rules, pathWithQuery, auth.userId, timeMs);
+  return {
     accept: "application/json, text/plain, */*",
     "app-token": rules.appToken,
     cookie: auth.cookie,
@@ -34,9 +34,8 @@ export function signedHeaders(rules: SignRules, pathWithQuery: string, auth: { c
     "user-agent": BROWSER_FINGERPRINT.userAgent,
     "x-bc": auth.xBc,
     referer: "https://onlyfans.com/",
+    "user-id": auth.userId,
   };
-  if (!rules.removeHeaders.includes("user-id")) headers["user-id"] = auth.userId;
-  return headers;
 }
 
 export async function fetchSignedChats(state: StorageStateFile, deps: {
@@ -47,14 +46,14 @@ export async function fetchSignedChats(state: StorageStateFile, deps: {
   if ("reason" in auth) return { threads: [], messages: [], reason: auth.reason };
   const rules = await loadSignRules(deps.fetch, deps.now());
   const listPath = "/api2/v2/chats?limit=20&offset=0&skip_users=none&order=recent";
-  const list = await getJson(deps.fetch, listPath, signedHeaders(rules, listPath, auth, Math.floor(deps.now() / 1000)));
+  const list = await getJson(deps.fetch, listPath, signedHeaders(rules, listPath, auth, deps.now()));
   if (!list.ok) return { threads: [], messages: [], reason: list.reason };
   const threads = parseChatList(list.body, auth.userId);
   const messages = parsePreviewMessages(list.body);
   const extra: ChatMessage[] = [];
   for (const thread of threads.slice(0, 5)) {
     const path = `/api2/v2/chats/${encodeURIComponent(thread.threadKey)}/messages?limit=10&order=desc&skip_users=all`;
-    const page = await getJson(deps.fetch, path, signedHeaders(rules, path, auth, Math.floor(deps.now() / 1000)));
+    const page = await getJson(deps.fetch, path, signedHeaders(rules, path, auth, deps.now()));
     if (!page.ok) continue;
     extra.push(...parseChatMessages(page.body, thread.threadKey, thread.fanKey, auth.userId));
   }

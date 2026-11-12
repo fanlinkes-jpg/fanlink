@@ -49,14 +49,11 @@ export async function loadSignRules(fetchImpl: typeof fetch, now: number): Promi
   return rules;
 }
 
-/** Firma una ruta. Si la regla quita user-id, el cuarto campo es 0. El tiempo es segundos unix. */
-export function signOnlyfans(rules: SignRules, pathWithQuery: string, userId: string, timeSeconds: number): { sign: string; time: string } {
-  const time = String(timeSeconds);
-  const signedUser = rules.removeHeaders.includes("user-id") ? "0" : userId;
-  const hash = createHash("sha1").update([rules.staticParam, time, pathWithQuery, signedUser].join("\n")).digest("hex");
-  const checksum = rules.checksumIndexes.reduce((sum, index, position) => {
-    return sum + hash.charCodeAt(index) + (rules.checksumConstants[position] ?? 0);
-  }, rules.checksumConstant);
+/** Firma una ruta. El tiempo va en milisegundos y el id es el de la cuenta. */
+export function signOnlyfans(rules: SignRules, pathWithQuery: string, userId: string, timeMs: number): { sign: string; time: string } {
+  const time = String(timeMs);
+  const hash = createHash("sha1").update([rules.staticParam, time, pathWithQuery, userId].join("\n")).digest("hex");
+  const checksum = rules.checksumIndexes.reduce((sum, index) => sum + hash.charCodeAt(index), rules.checksumConstant);
   const sign = rules.format.replace("{}", hash).replace("{:x}", Math.abs(checksum).toString(16));
   return { sign, time };
 }
