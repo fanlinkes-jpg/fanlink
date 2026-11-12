@@ -483,6 +483,7 @@ export class SessionManager {
       if (read.reason?.includes("401")) {
         const viaPage = await this.readChatsThroughPage(accountId);
         if (viaPage.threads.length > 0) return viaPage;
+        return { ...empty, reason: viaPage.reason ?? read.reason };
       }
       return { ...empty, threads: read.threads, messages: read.messages, reason: read.reason };
     } catch (error) {
@@ -498,30 +499,25 @@ export class SessionManager {
     try {
       return await this.withSession(accountId, async (context) => {
         const page = await context.newPage();
-        const payloads: string[] = [];
-        const onResponse = (response: { url(): string; status(): number; request(): { method(): string }; text(): Promise<string> }) => {
-          const url = response.url();
-          if (response.request().method() !== "GET" || response.status() !== 200) return;
-          if (!url.includes("/api2/v2/chats") || url.includes("/messages")) return;
-          void response.text().then((text) => {
-            if (text.length > 0 && text.length <= 1_500_000) payloads.push(text);
-          }).catch(() => undefined);
-        };
-        page.on("response", onResponse);
         try {
           await page.goto("https://onlyfans.com/my/chats", { waitUntil: "domcontentloaded", timeout: 20_000 }).catch(() => undefined);
-          const deadline = Date.now() + 8_000;
-          while (payloads.length === 0 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 200));
-          const text = payloads[0];
-          if (!text) return { ...empty, reason: "la página no ha pedido la lista" };
-          const body = JSON.parse(text) as unknown;
+          await new Promise((resolve) => setTimeout(resolve, 2_000));
+          const text = await page.evaluate(async () => {
+            const path = "/api2/v2/chats?limit=20&offset=0&skip_users=none&order=recent";
+            const response = await fetch(path, { credentials: "include", headers: { accept: "application/json, text/plain, */*" } });
+            return `${response.status}\n${(await response.text()).slice(0, 1_500_000)}`;
+          });
+          const split = text.indexOf("\n");
+          const status = Number(text.slice(0, split));
+          console.info(`[fanlink:chat] api lista pagina status=${status}`);
+          if (status !== 200) return { ...empty, reason: `la página respondió ${status}` };
+          const body = JSON.parse(text.slice(split + 1)) as unknown;
           return {
             ...empty,
             threads: parseChatList(body, account.identityUserId),
             messages: parsePreviewMessages(body),
           };
         } finally {
-          page.off("response", onResponse);
           await page.close().catch(() => undefined);
         }
       });
