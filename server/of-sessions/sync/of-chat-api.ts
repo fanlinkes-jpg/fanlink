@@ -1,8 +1,9 @@
-import { BROWSER_FINGERPRINT, type BrowserFactory } from "../sessions/browser-factory.ts";
+import { BROWSER_FINGERPRINT } from "../sessions/browser-factory.ts";
 import { domainMatches, isCookieUnexpired, type StorageCookie, type StorageStateFile } from "../sessions/storage-state.ts";
 import { backoffDelayMs } from "./backoff.ts";
 import { mergeMessages, mergeThreads, parseChatList, parseChatMessages, parsePreviewMessages, type ChatMessage, type ChatThread } from "./chats.ts";
-import { headerRemoved, loadSignRules, normalizeHeaderName, signOnlyfans, type SignRules } from "./of-sign.ts";
+import { REQUEST_GAP_MS } from "./api-list-pace.ts";
+import { headerRemoved, loadSignRules, normalizeHeaderName, pathHasQuery, signOnlyfans, type SignRules } from "./of-sign.ts";
 
 const HOST = "onlyfans.com";
 
@@ -10,7 +11,6 @@ export const CHAT_LIST_PAGE = 20;
 export const DEFAULT_CHAT_LIST_CAP = 60;
 export const DEFAULT_MESSAGE_PAGE_CAP = 1;
 const MESSAGE_PAGE = 10;
-const RECENT_MESSAGE_THREADS = 5;
 const MAX_OPEN_THREADS = 20;
 const MAX_LIST_CAP = 500;
 const MAX_MESSAGE_PAGES = 3;
@@ -24,6 +24,8 @@ export type SignedChats = {
   sessionRejected: boolean;
   /** 429. Cero si no hay que esperar. */
   retryAfterMs: number;
+  /** 400. La fila muestra el motivo y el ciclo espera el backoff. */
+  signatureRejected: boolean;
   /**
    * Cookies de Set-Cookie. No se escriben aquí.
    * El encargo 1-1 (rama grok/fase1-perfil-chromium, un Chromium por perfil
@@ -34,11 +36,15 @@ export type SignedChats = {
 };
 
 export type SignedChatOptions = {
-  /** Hilos que el chatter tiene abiertos. Se piden antes que la lista, aunque no estén entre los 5 primeros. */
+  /** Hilos que el chatter tiene abiertos. Solo la primera página de mensajes. */
   openThreadKeys?: readonly string[];
+  /** full pagina hasta el tope; head es solo offset 0; none no pide la lista. */
+  list?: "full" | "head" | "none";
+  /** open pide la primera página de los hilos abiertos. */
+  messages?: "open" | "none";
   /** Tope de hilos de la lista. También vale FANLINK_CHAT_LIST_CAP. */
   listCap?: number;
-  /** Páginas de mensajes por hilo y ciclo. También vale FANLINK_CHAT_MESSAGE_PAGES. Tope 3. */
+  /** Páginas de mensajes por hilo. Tope 3. El ritmo normal usa 1. */
   messagePageCap?: number;
 };
 
@@ -47,11 +53,9 @@ export type SignedChatDeps = {
   now: () => number;
   /** Reglas ya leídas. Si no vienen, se piden a DATAHOARDERS. */
   rules?: SignRules;
-  /**
-   * No se llama. El test de un 401 lo pasa para demostrar que esta lectura
-   * no abre Chromium. Un navegador de más tumba la sesión.
-   */
-  browsers?: BrowserFactory;
+  /** Si viene, separa las peticiones de esta cuenta. */
+  sleep?: (ms: number) => Promise<void>;
+  minGapMs?: number;
 };
 
 export function sessionForApi(state: StorageStateFile, nowMs: number): { cookie: string; userId: string; xBc: string } | { reason: string } {
@@ -80,10 +84,12 @@ export function signedHeaders(rules: SignRules, pathWithQuery: string, auth: { c
     referer: "https://onlyfans.com/",
     "user-id": auth.userId,
   };
-  for (const name of rules.removeHeaders) {
-    delete headers[normalizeHeaderName(name)];
+  if (!pathHasQuery(pathWithQuery)) {
+    for (const name of rules.removeHeaders) {
+      delete headers[normalizeHeaderName(name)];
+    }
+    if (headerRemoved(rules, "user-id")) delete headers["user-id"];
   }
-  if (headerRemoved(rules, "user-id")) delete headers["user-id"];
   return headers;
 }
 
@@ -94,10 +100,12 @@ export async function fetchSignedChats(state: StorageStateFile, deps: SignedChat
   const cap = listCapOf(options);
   const pageCap = messagePageCapOf(options);
   const opened = openThreadKeys(options);
-  const seen = new Set<string>();
+  const listMode = options.list ?? "full";
+  const messageMode = options.messages ?? (opened.length > 0 ? "open" : "none");
   let threads: ChatThread[] = [];
   let messages: ChatMessage[] = [];
   const rotatedCookies: StorageCookie[] = [];
+  let lastRequestAt = 0;
 
   let failure: string | null = null;
   const take = (page: JsonPage): SignedChats | null => {
@@ -108,50 +116,59 @@ export async function fetchSignedChats(state: StorageStateFile, deps: SignedChat
       messages,
       reason: page.reason,
       sessionRejected: page.sessionRejected,
+      signatureRejected: page.signatureRejected,
       retryAfterMs: page.retryAfterMs,
       rotatedCookies,
     };
   };
 
-  for (const threadKey of opened) {
-    const read = await readMessagePages(deps, rules, auth, threadKey, threadKey, pageCap);
-    messages = mergeMessages(messages, read.messages);
-    const stopped = take(read.page);
-    if (stopped) return stopped;
-    seen.add(threadKey);
-  }
-
-  let offset = 0;
-  while (threads.length < cap) {
-    const listPath = `/api2/v2/chats?limit=${CHAT_LIST_PAGE}&offset=${offset}&skip_users=none&order=recent`;
-    const list = await getJson(deps.fetch, listPath, signedHeaders(rules, listPath, auth, deps.now()), deps.now());
-    const stopped = take(list);
-    if (stopped) return stopped;
-    if (!list.ok) {
-      failure = list.reason;
-      break;
+  const request = async (path: string): Promise<JsonPage> => {
+    const gap = deps.sleep ? (deps.minGapMs ?? REQUEST_GAP_MS) : 0;
+    if (gap > 0 && lastRequestAt > 0 && deps.sleep) {
+      const wait = gap - (deps.now() - lastRequestAt);
+      if (wait > 0) await deps.sleep(wait);
     }
-    const pageThreads = parseChatList(list.body, auth.userId);
-    if (pageThreads.length === 0) break;
-    threads = mergeThreads(threads, pageThreads);
-    messages = mergeMessages(messages, parsePreviewMessages(list.body, auth.userId));
-    if (threads.length >= cap) break;
-    if (!listHasMore(list.body, pageThreads.length)) break;
-    const next = nextListOffset(list.body, offset);
-    if (next <= offset) break;
-    offset = next;
+    const page = await getJson(deps.fetch, path, signedHeaders(rules, path, auth, deps.now()), deps.now());
+    lastRequestAt = deps.now();
+    return page;
+  };
+
+  if (messageMode === "open") {
+    for (const threadKey of opened) {
+      const read = await readMessagePages(request, threadKey, threadKey, auth.userId, pageCap);
+      messages = mergeMessages(messages, read.messages);
+      const stopped = take(read.page);
+      if (stopped) return stopped;
+    }
   }
 
-  let extras = 0;
-  for (const thread of threads) {
-    if (extras >= RECENT_MESSAGE_THREADS) break;
-    if (seen.has(thread.threadKey)) continue;
-    const read = await readMessagePages(deps, rules, auth, thread.threadKey, thread.fanKey, pageCap);
-    messages = mergeMessages(messages, read.messages);
-    const stopped = take(read.page);
-    if (stopped) return stopped;
-    seen.add(thread.threadKey);
-    extras += 1;
+  if (listMode !== "none") {
+    const maxPages = listMode === "head" ? 1 : Math.ceil(cap / CHAT_LIST_PAGE);
+    let offset = 0;
+    let pages = 0;
+    const known = new Set<string>();
+    while (pages < maxPages && threads.length < cap) {
+      pages += 1;
+      const listPath = `/api2/v2/chats?limit=${CHAT_LIST_PAGE}&offset=${offset}&skip_users=none&order=recent`;
+      const list = await request(listPath);
+      const stopped = take(list);
+      if (stopped) return stopped;
+      if (!list.ok) {
+        failure = list.reason;
+        break;
+      }
+      const pageThreads = parseChatList(list.body, auth.userId);
+      const fresh = pageThreads.filter((thread) => !known.has(thread.threadKey));
+      if (fresh.length === 0) break;
+      for (const thread of fresh) known.add(thread.threadKey);
+      threads = mergeThreads(threads, fresh);
+      messages = mergeMessages(messages, parsePreviewMessages(list.body, auth.userId));
+      if (threads.length >= cap) break;
+      if (!listHasMore(list.body, pageThreads.length)) break;
+      const next = nextListOffset(list.body, offset);
+      if (next <= offset) break;
+      offset = next;
+    }
   }
 
   const nothing = threads.length === 0 && messages.length === 0;
@@ -160,12 +177,16 @@ export async function fetchSignedChats(state: StorageStateFile, deps: SignedChat
     messages,
     reason: nothing ? failure : null,
     sessionRejected: false,
+    signatureRejected: false,
     retryAfterMs: 0,
     rotatedCookies,
   };
 }
 
-/** Listas y medios de la bóveda, con la misma firma que los chats. No abre el navegador. */
+/**
+ * Las mismas dos rutas de siempre, una vez cada una. No relee miniaturas:
+ * eso es el encargo de la bóveda, no el de la lista de chats.
+ */
 export async function fetchSignedVault(state: StorageStateFile, deps: {
   fetch: typeof fetch;
   now: () => number;
@@ -193,16 +214,16 @@ type JsonPage = {
   reason: string;
   status: number;
   sessionRejected: boolean;
+  signatureRejected: boolean;
   retryAfterMs: number;
   rotatedCookies: StorageCookie[];
 };
 
 async function readMessagePages(
-  deps: SignedChatDeps,
-  rules: SignRules,
-  auth: { cookie: string; userId: string; xBc: string },
+  request: (path: string) => Promise<JsonPage>,
   threadKey: string,
   fanKey: string | null,
+  accountUserId: string,
   pageCap: number,
 ): Promise<{ page: JsonPage; messages: ChatMessage[] }> {
   const messages: ChatMessage[] = [];
@@ -213,14 +234,14 @@ async function readMessagePages(
     reason: "",
     status: 200,
     sessionRejected: false,
+    signatureRejected: false,
     retryAfterMs: 0,
     rotatedCookies: [],
   };
   for (let index = 0; index < pageCap; index += 1) {
-    const path = messagesPath(threadKey, cursor);
-    page = await getJson(deps.fetch, path, signedHeaders(rules, path, auth, deps.now()), deps.now());
+    page = await request(messagesPath(threadKey, cursor));
     if (!page.ok) return { page, messages };
-    messages.push(...parseChatMessages(page.body, threadKey, fanKey, auth.userId));
+    messages.push(...parseChatMessages(page.body, threadKey, fanKey, accountUserId));
     if (!messageHasMore(page.body)) break;
     const next = messageCursor(page.body);
     if (!next || next === cursor) break;
@@ -236,30 +257,30 @@ async function getJson(fetchImpl: typeof fetch, pathWithQuery: string, headers: 
     return cookie ? [cookie] : [];
   });
   if (response.status === 401) {
-    return { ok: false, body: null, reason: "OnlyFans ha rechazado la sesión (401). Pulsa Reconectar.", status: 401, sessionRejected: true, retryAfterMs: 0, rotatedCookies };
+    return { ok: false, body: null, reason: "OnlyFans ha rechazado la sesión (401). Pulsa Reconectar.", status: 401, sessionRejected: true, signatureRejected: false, retryAfterMs: 0, rotatedCookies };
   }
   if (response.status === 400) {
-    return { ok: false, body: null, reason: "OnlyFans ha rechazado la firma (400)", status: 400, sessionRejected: false, retryAfterMs: 0, rotatedCookies };
+    return { ok: false, body: null, reason: "OnlyFans rechazó la firma", status: 400, sessionRejected: false, signatureRejected: true, retryAfterMs: 0, rotatedCookies };
   }
   if (response.status === 429) {
-    return { ok: false, body: null, reason: "OnlyFans respondió 429", status: 429, sessionRejected: false, retryAfterMs: retryAfterMs(response, nowMs), rotatedCookies };
+    return { ok: false, body: null, reason: "OnlyFans respondió 429", status: 429, sessionRejected: false, signatureRejected: false, retryAfterMs: retryAfterMs(response, nowMs), rotatedCookies };
   }
   if (!response.ok) {
-    return { ok: false, body: null, reason: `OnlyFans respondió ${response.status}`, status: response.status, sessionRejected: false, retryAfterMs: 0, rotatedCookies };
+    return { ok: false, body: null, reason: `OnlyFans respondió ${response.status}`, status: response.status, sessionRejected: false, signatureRejected: false, retryAfterMs: 0, rotatedCookies };
   }
   try {
-    return { ok: true, body: await response.json(), reason: "", status: response.status, sessionRejected: false, retryAfterMs: 0, rotatedCookies };
+    return { ok: true, body: await response.json(), reason: "", status: response.status, sessionRejected: false, signatureRejected: false, retryAfterMs: 0, rotatedCookies };
   } catch {
-    return { ok: false, body: null, reason: "OnlyFans no devolvió JSON", status: response.status, sessionRejected: false, retryAfterMs: 0, rotatedCookies };
+    return { ok: false, body: null, reason: "OnlyFans no devolvió JSON", status: response.status, sessionRejected: false, signatureRejected: false, retryAfterMs: 0, rotatedCookies };
   }
 }
 
 function fatalPage(page: JsonPage): boolean {
-  return !page.ok && (page.sessionRejected || page.retryAfterMs > 0 || page.status === 400);
+  return !page.ok && (page.sessionRejected || page.signatureRejected || page.retryAfterMs > 0);
 }
 
 function emptySigned(reason: string | null): SignedChats {
-  return { threads: [], messages: [], reason, sessionRejected: false, retryAfterMs: 0, rotatedCookies: [] };
+  return { threads: [], messages: [], reason, sessionRejected: false, signatureRejected: false, retryAfterMs: 0, rotatedCookies: [] };
 }
 
 function listCapOf(options: SignedChatOptions): number {

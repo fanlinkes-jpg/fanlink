@@ -37,6 +37,8 @@ export type CollectedChats = {
   alreadyRunning?: boolean;
   /** 401 de la API firmada. No abre Chromium. */
   sessionRejected?: boolean;
+  /** 400 de la firma. La fila muestra el motivo y no se reintenta en cada ciclo. */
+  signatureRejected?: boolean;
   /** Espera de un 429. */
   retryAfterMs?: number;
   /** Set-Cookie parseadas. Persistirlas es el encargo 1-1; aquí no se escriben. */

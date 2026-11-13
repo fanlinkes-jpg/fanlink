@@ -7,6 +7,9 @@ import { createSessionRuntime } from "../runtime.ts";
 import { messages } from "../messages.ts";
 import { parseStorageState } from "../sessions/storage-state.ts";
 import { InvalidArgumentError, SessionInvalidError } from "../types.ts";
+import { onlyFansSite } from "../sessions/onlyfans.ts";
+import type { BrowserFactory } from "../sessions/browser-factory.ts";
+import { clearSignRulesCache } from "../sync/of-sign.ts";
 import { startFixture } from "./fixture-site.ts";
 import {
   PASSWORD,
@@ -479,3 +482,82 @@ test(
     }
   },
 );
+
+test("un 401 en la lista firmada no abre Chromium y deja el motivo en la fila", async () => {
+  clearSignRulesCache();
+  const dataDir = await tempDataDir();
+  let launches = 0;
+  const browsers: BrowserFactory = {
+    async launchPersistentContext() {
+      launches += 1;
+      throw new Error("chromium");
+    },
+    async launch() {
+      launches += 1;
+      throw new Error("chromium");
+    },
+  };
+  const signedFetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("dynamic-rules")) {
+      return new Response(JSON.stringify({
+        static_param: "param",
+        format: "1:{}:{:x}:2",
+        checksum_indexes: [0, 1],
+        checksum_constants: [4, 6],
+        checksum_constant: 10,
+        app_token: "token",
+        remove_headers: ["user-id"],
+      }), { status: 200 });
+    }
+    return new Response("{}", { status: 401, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  const created = await createSessionRuntime({
+    config: testConfig(dataDir, { openLoginOnInvalidate: false }),
+    site: onlyFansSite,
+    browserFactory: browsers,
+    displayEnv: testDisplay,
+    fetch: signedFetch,
+  });
+  try {
+    const account = await created.store.create("Conectada");
+    await writeEncryptedSession(
+      path.join(dataDir, "sessions", `${account.id}.json`),
+      {
+        cookies: [
+          cookieRow("auth_id", "42"),
+          cookieRow("sess", "ok"),
+        ],
+        origins: [{ origin: "https://onlyfans.com", localStorage: [{ name: "bcTokenSha", value: "huella" }] }],
+      },
+      TEST_SESSION_KEY,
+    );
+    await created.store.update(account.id, { hasStorageState: true, status: "active" });
+    const direct = await created.sessions.readChatsDirect(account.id);
+    assert.equal(direct.sessionRejected, true);
+    assert.equal(direct.threads.length, 0);
+    const queued = await created.sessions.readCreatorChats(account.id);
+    assert.equal(queued.sessionRejected, true);
+    assert.equal(launches, 0);
+    const stored = await created.sessions.getAccount(account.id);
+    assert.equal(stored.status === "expired" || stored.status === "pending_login", true);
+    assert.match(stored.lastError ?? "", /401|Reconectar|sesión/);
+  } finally {
+    clearSignRulesCache();
+    await created.close();
+    await removeDir(dataDir);
+  }
+});
+
+function cookieRow(name: string, value: string) {
+  return {
+    name,
+    value,
+    domain: ".onlyfans.com",
+    path: "/",
+    expires: -1,
+    httpOnly: true,
+    secure: true,
+    sameSite: "Lax" as const,
+  };
+}

@@ -46,7 +46,7 @@ import type { SiteAdapter } from "./site.ts";
 import { hasLiveCookies } from "./site.ts";
 import { collectCreatorRead, type CollectedRead } from "../sync/collect.ts";
 import type { TxCursor } from "../sync/parse.ts";
-import { fetchSignedChats } from "../sync/of-chat-api.ts";
+import { fetchSignedChats, type SignedChatOptions } from "../sync/of-chat-api.ts";
 import { collectChats, type CollectedChats } from "../sync/collect-chats.ts";
 import { collectNotifications, type CollectedNotifications } from "../sync/collect-notifications.ts";
 import { NOTIFICATION_PACE_MS, notificationReadBusy } from "../../../src/lib/notifications.ts";
@@ -70,6 +70,8 @@ export interface SessionManagerOptions {
   browsers: BrowserFactory;
   displayEnv: DisplayEnv;
   now?: () => Date;
+  /** Pruebas. En producción es el fetch global. */
+  fetch?: typeof fetch;
   /**
    * Gancho de pruebas. En la app real no se usa: la persona escribe
    * usuario y contraseña en la ventana de OnlyFans.
@@ -473,13 +475,21 @@ export class SessionManager {
   }
 
   /** Lee la lista de chats por HTTP con la sesión guardada. No abre Chromium. */
-  async readChatsDirect(accountId: string, openThreadKeys: readonly string[] = []): Promise<CollectedChats> {
+  async readChatsDirect(accountId: string, openThreadKeys: readonly string[] = [], pull?: SignedChatOptions): Promise<CollectedChats> {
     const empty: CollectedChats = { threads: [], messages: [], reason: null, jsonPaths: ["api2/v2/chats"] };
     try {
       const state = await this.readStorageState(accountId);
-      const read = await fetchSignedChats(state, { fetch, now: () => this.now().getTime() }, { openThreadKeys });
+      const read = await fetchSignedChats(state, {
+        fetch: this.options.fetch ?? fetch,
+        now: () => this.now().getTime(),
+        sleep: (ms) => delay(ms),
+        minGapMs: 300,
+      }, { openThreadKeys, ...pull });
       if (read.sessionRejected) {
         await this.markApiSessionRejected(accountId, read.reason ?? messages.loginRequired).catch(() => undefined);
+      }
+      if (read.signatureRejected) {
+        await this.noteSignatureRejected(accountId).catch(() => undefined);
       }
       return {
         ...empty,
@@ -487,6 +497,7 @@ export class SessionManager {
         messages: read.messages,
         reason: read.reason,
         sessionRejected: read.sessionRejected,
+        signatureRejected: read.signatureRejected,
         retryAfterMs: read.retryAfterMs,
         rotatedCookies: read.rotatedCookies,
       };
@@ -500,6 +511,13 @@ export class SessionManager {
    * Un 401 de la API firmada. Expirada, o Pendiente de login si la ventana
    * ya está abierta. No llama a Chromium.
    */
+  private async noteSignatureRejected(accountId: string): Promise<void> {
+    await this.options.store.update(accountId, {
+      lastError: "OnlyFans rechazó la firma",
+      lastCheckedAt: this.now().toISOString(),
+    });
+  }
+
   private async markApiSessionRejected(accountId: string, reason: string): Promise<void> {
     const loginAlreadyOpen = this.loginTasks.has(accountId);
     const visible = reason.replace(/cookie|set-cookie|authorization|sess=/gi, "[omitido]").slice(0, 180);

@@ -14,6 +14,7 @@ export type ApiListRead = {
   messageCount: number;
   reason: string | null;
   sessionRejected: boolean;
+  signatureRejected: boolean;
   retryAfterMs: number;
 };
 
@@ -30,6 +31,9 @@ export function shouldReadApiList(account: ApiListAccount, paused: boolean): boo
 
 export function apiListStep(account: ApiListAccount, read: ApiListRead): ApiListStep {
   const who = account.creatorId ?? account.id;
+  if (read.signatureRejected) {
+    return { save: false, backoff: true, line: `[fanlink:chat] api lista cuenta=${who}: OnlyFans rechazó la firma` };
+  }
   if (read.sessionRejected) {
     return {
       save: false,

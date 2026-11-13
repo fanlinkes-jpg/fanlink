@@ -9,9 +9,9 @@ import { FALLBACK_RELOAD_MS, nextFallbackThread, WATCH_IDLE_MS, type WatchedThre
 export const LIST_RELOAD_MS = 15_000;
 
 /**
- * Con la API firmada, el ciclo de los hilos abiertos. Junto al SSE de
- * `/api/chat-live` (LIVE_PUSH_MS, 2 s) un mensaje nuevo cabe en ≤5 s.
- * Bajar de aquí es el mismo SSE, sin cambiar la pantalla.
+ * Cada cuánto se mira si toca pedir la primera página de los hilos abiertos.
+ * La lista no se pagina en este tick: la primera página va cada 15 s y la
+ * completa cada 2 min, en api-list-pace.ts.
  */
 export const OPEN_CYCLE_MS = 2_000;
 

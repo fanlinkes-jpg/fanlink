@@ -21,6 +21,7 @@ export interface CreateRuntimeOptions {
   afterLoginPageOpen?: (page: Page, accountId: string) => Promise<void> | void;
   logger?: { info(message: string): void; warn(message: string): void };
   store?: AccountRepository;
+  fetch?: typeof fetch;
 }
 
 export async function createSessionRuntime(options: CreateRuntimeOptions) {
@@ -44,6 +45,7 @@ export async function createSessionRuntime(options: CreateRuntimeOptions) {
     now: options.now,
     afterLoginPageOpen: options.afterLoginPageOpen,
     logger: options.logger,
+    fetch: options.fetch,
   });
 
   return {

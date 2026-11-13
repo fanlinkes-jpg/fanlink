@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { BrowserFactory } from "../sessions/browser-factory.ts";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
 import { fetchSignedChats, parseSetCookieLine, type SignedChatDeps } from "../sync/of-chat-api.ts";
 import type { SignRules } from "../sync/of-sign.ts";
@@ -73,51 +72,24 @@ test("el cursor de mensajes pide otra página y no el chat entero", async () => 
   assert.equal(urls.some((url) => url.includes("id=80")), false);
 });
 
-test("un 401 devuelve un motivo y no llama a ningún BrowserFactory", async () => {
-  let launches = 0;
-  const browsers: BrowserFactory = {
-    async launchPersistentContext() {
-      launches += 1;
-      throw new Error("chromium");
-    },
-    async launch() {
-      launches += 1;
-      throw new Error("chromium");
-    },
-  };
+test("la misma página con hasMore y sin nextOffset no se pide en bucle", async () => {
   const urls: string[] = [];
-  const read = await fetchSignedChats(state(), {
-    ...deps(urls, () => json(401, { error: "unauthorized" })),
-    browsers,
-  });
-  assert.equal(launches, 0);
-  assert.equal(read.sessionRejected, true);
-  assert.match(read.reason ?? "", /401/);
-  assert.match(read.reason ?? "", /Reconectar/);
-  assert.equal(read.threads.length, 0);
-  assert.equal(urls.length, 1);
-  assert.equal(urls.every((url) => url.startsWith("https://onlyfans.com/")), true);
+  const same = {
+    list: Array.from({ length: 20 }, (_, index) => thread(String(index + 1))),
+    hasMore: true,
+  };
+  const read = await fetchSignedChats(state(), deps(urls, () => json(200, same)), { listCap: 60, messages: "none" });
+  const lists = urls.filter((url) => url.includes("/api2/v2/chats?"));
+  assert.equal(lists.length, 2);
+  assert.equal(read.threads.length, 20);
+  assert.equal(lists.some((url) => new URL(url).searchParams.get("offset") === "40"), false);
 });
 
 test("un 429 dice cuánto esperar y no marca la sesión", async () => {
-  let launches = 0;
-  const browsers: BrowserFactory = {
-    async launchPersistentContext() {
-      launches += 1;
-      throw new Error("chromium");
-    },
-    async launch() {
-      launches += 1;
-      throw new Error("chromium");
-    },
-  };
   const urls: string[] = [];
-  const read = await fetchSignedChats(state(), {
-    ...deps(urls, () => json(429, { error: "slow" }, { retryAfter: "3" })),
-    browsers,
-  });
-  assert.equal(launches, 0);
+  const read = await fetchSignedChats(state(), deps(urls, () => json(429, { error: "slow" }, { retryAfter: "3" })));
   assert.equal(read.sessionRejected, false);
+  assert.equal(read.signatureRejected, false);
   assert.equal(read.retryAfterMs, 3_000);
   assert.match(read.reason ?? "", /429/);
 });

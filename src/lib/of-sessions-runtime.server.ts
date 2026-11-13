@@ -16,11 +16,13 @@ import { AccountStore } from "../../server/of-sessions/store/account-store.ts";
 import { DbAccountStore } from "../../server/of-sessions/store/db-account-store.ts";
 import { createMirroringStore } from "../../server/of-sessions/store/mirroring-store.ts";
 import type { Account } from "../../server/of-sessions/types.ts";
+import type { CollectedChats } from "../../server/of-sessions/sync/collect-chats.ts";
 import type { CreatorChatList, CreatorReadList, CreatorReadView, CreatorSessionView } from "./of-sessions.ts";
 import { parseAccountProxy, proxyLabel, readAccountProxy, removeAccountProxy, writeAccountProxy } from "../../server/of-sessions/proxy.ts";
 import { syncAssignments } from "../../server/of-sessions/metrics/assignments.ts";
 import { dashboardViewFor } from "../../server/of-sessions/metrics/dashboard.ts";
 import { apiListStep, shouldReadApiList } from "../../server/of-sessions/sync/api-list-cycle.ts";
+import { planChatPull, withAccountChatReader, type ChatPace } from "../../server/of-sessions/sync/api-list-pace.ts";
 import { accountPause, blockKind, listAccountPauses, noteAccountBlock } from "../../server/of-sessions/sync/backoff.ts";
 import { presentTeamMetrics } from "../../server/of-sessions/metrics/present-team.ts";
 import { creatorIdsForReads } from "@/lib/dashboard-config";
@@ -199,30 +201,23 @@ export function kickInboxWatch(): void {
       console.info(`[fanlink:chat] escucha pausada cuenta=${accountId} motivo=${reason} espera=${delay}`);
       return delay;
     },
-    pullList: async (accountId, openThreadKeys) => {
+    pullList: async (accountId, openThreadKeys) => withAccountChatReader(accountId, async () => {
       const sessions = await getOfSessionManager();
       const account = (await sessions.listAccounts()).find((item) => item.id === accountId);
       if (!account || !shouldReadApiList(account, false)) return false;
       const pause = accountPause(accountId);
       if (pause) return { ok: false, waitMs: Math.max(200, pause.until - Date.now()) };
-      const read = await sessions.readChatsDirect(accountId, openThreadKeys);
-      // rotatedCookies espera al encargo 1-1. No se escriben en el JSON cifrado.
-      const step = apiListStep(account, {
-        threadCount: read.threads.length,
-        messageCount: read.messages.length,
-        reason: read.reason,
-        sessionRejected: read.sessionRejected === true,
-        retryAfterMs: read.retryAfterMs ?? 0,
+      const now = Date.now();
+      const plan = planChatPull(chatPace.get(accountId), now, "all");
+      if (!plan.open && plan.list === "none") return true;
+      chatPace.set(accountId, plan.next);
+      const read = await sessions.readChatsDirect(accountId, plan.open ? openThreadKeys : [], {
+        list: plan.list,
+        messages: plan.open ? "open" : "none",
+        messagePageCap: 1,
       });
-      if (step.save && account.creatorId) await saveChatRead(await getSql(), account.creatorId, read);
-      if (step.backoff) {
-        const delay = noteAccountBlock(accountId, "429");
-        console.info(`${step.line} espera=${delay}`);
-        return { ok: false, waitMs: delay };
-      }
-      console.info(step.line);
-      return step.save;
-    },
+      return finishApiRead(account, read);
+    }),
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   }).finally(() => {
@@ -236,6 +231,7 @@ function accountForCreator(creatorId: string): string | null {
 }
 
 const creatorAccounts = new Map<string, string>();
+const chatPace = new Map<string, ChatPace>();
 const creatorUsers = new Map<string, string | null>();
 
 export async function rememberCreatorAccounts(): Promise<void> {
@@ -306,6 +302,25 @@ async function pullOlder(sessions: SessionManager, accountId: string, creatorId:
   return "saved";
 }
 
+async function finishApiRead(account: Account, read: CollectedChats): Promise<boolean | { ok: false; waitMs: number }> {
+  const step = apiListStep(account, {
+    threadCount: read.threads.length,
+    messageCount: read.messages.length,
+    reason: read.reason,
+    sessionRejected: read.sessionRejected === true,
+    signatureRejected: read.signatureRejected === true,
+    retryAfterMs: read.retryAfterMs ?? 0,
+  });
+  if (step.save && account.creatorId) await saveChatRead(await getSql(), account.creatorId, read);
+  if (step.backoff) {
+    const delay = noteAccountBlock(account.id, read.signatureRejected ? "400" : "429");
+    console.info(`${step.line} espera=${delay}`);
+    return { ok: false, waitMs: delay };
+  }
+  console.info(step.line);
+  return step.save;
+}
+
 function bootApiListLoop(sessions: SessionManager): void {
   if (process.env.FANLINK_SYNC_ENABLED === "false") return;
   if (process.execArgv.includes("--test")) return;
@@ -318,21 +333,14 @@ function bootApiListLoop(sessions: SessionManager): void {
       try {
         for (const account of await sessions.listAccounts()) {
           if (!shouldReadApiList(account, accountPause(account.id) != null)) continue;
-          const read = await sessions.readChatsDirect(account.id);
-          const step = apiListStep(account, {
-            threadCount: read.threads.length,
-            messageCount: read.messages.length,
-            reason: read.reason,
-            sessionRejected: read.sessionRejected === true,
-            retryAfterMs: read.retryAfterMs ?? 0,
+          await withAccountChatReader(account.id, async () => {
+            const now = Date.now();
+            const plan = planChatPull(chatPace.get(account.id), now, "list");
+            if (plan.list === "none") return;
+            chatPace.set(account.id, plan.next);
+            const read = await sessions.readChatsDirect(account.id, [], { list: plan.list, messages: "none" });
+            await finishApiRead(account, read);
           });
-          if (step.backoff) {
-            const delay = noteAccountBlock(account.id, "429");
-            console.info(`${step.line} espera=${delay}`);
-            continue;
-          }
-          if (step.save && account.creatorId) await saveChatRead(await getSql(), account.creatorId, read);
-          console.info(step.line);
         }
       } catch (error) {
         console.info(`[fanlink:chat] api lista: ${error instanceof Error ? error.message.slice(0, 120) : "error"}`);
