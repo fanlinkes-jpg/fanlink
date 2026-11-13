@@ -611,7 +611,12 @@ export class SessionManager {
         return { ...empty, reason: "OnlyFans rechazó la firma", signatureRejected: true };
       }
       const now = this.now().getTime();
-      const plan = planChatPull(chatPaceOf(accountId), now, part);
+      const planned = planChatPull(chatPaceOf(accountId), now, part);
+      // La bandeja y el bucle esperan el ritmo. Una sincronización pedida a mano
+      // lee al menos la primera página, para no tragarse un mensaje recién llegado.
+      const plan = openBrowser && !planned.open && planned.list === "none"
+        ? { open: false, list: "head" as const, next: { ...planned.next, headAt: now } }
+        : planned;
       const keys = plan.open ? openThreadKeys : [];
       if (plan.list === "none" && keys.length === 0) {
         return { ...empty, reason: "la lista firmada espera el ritmo" };
