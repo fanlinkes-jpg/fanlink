@@ -50,6 +50,7 @@ import type { TxCursor } from "../sync/parse.ts";
 import { fetchSignedChats } from "../sync/of-chat-api.ts";
 import { collectChats, type CollectedChats } from "../sync/collect-chats.ts";
 import { collectNotifications, type CollectedNotifications } from "../sync/collect-notifications.ts";
+import { readOnlineSubscribers, type OnlineFan } from "../sync/online-fans.ts";
 import { NOTIFICATION_PACE_MS, notificationReadBusy } from "../../../src/lib/notifications.ts";
 import {
   judgeStorageState,
@@ -88,6 +89,7 @@ export class SessionManager {
   private background: ManagedBrowser | null = null;
   private readTail: Promise<void> = Promise.resolve();
   private readonly reading = new Set<string>();
+  private readonly watches = new Set<string>();
   private closed = false;
   private started = false;
   private readonly options: SessionManagerOptions;
@@ -404,13 +406,55 @@ export class SessionManager {
     return this.readTail.then(async () => {
       if (this.reading.size > 0) return false;
       this.reading.add(accountId);
+      this.watches.add(accountId);
       try {
         await this.withSession(accountId, run);
         return true;
       } finally {
+        this.watches.delete(accountId);
         this.reading.delete(accountId);
       }
     });
+  }
+
+  /**
+   * Fans en línea. No espera a Conectar ni abre la página de la escucha.
+   * Si no responde en 25 s, devuelve un motivo en vez de quedarse colgado.
+   */
+  async readOnlineFans(accountId: string): Promise<{ fans: OnlineFan[]; reason: string | null }> {
+    assertAccountId(accountId);
+    if (this.loginTasks.has(accountId)) {
+      return { fans: [], reason: "Esperando a que termine Conectar." };
+    }
+    if (this.watches.has(accountId)) {
+      return { fans: [], reason: "Ocupado." };
+    }
+    const budgetMs = 25_000;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<{ fans: OnlineFan[]; reason: string }>((resolve) => {
+      timer = setTimeout(() => resolve({ fans: [], reason: "No se pudo leer." }), budgetMs);
+    });
+    try {
+      const read = this.runQueued(accountId, async (context) => {
+        const page = await context.newPage();
+        try {
+          return await readOnlineSubscribers(page);
+        } finally {
+          await page.close().catch(() => undefined);
+        }
+      }).then((ran) => {
+        if (!ran.ok) return { fans: [] as OnlineFan[], reason: "Ocupado." };
+        return { fans: ran.value, reason: ran.value.length === 0 ? "Nadie en línea" : null };
+      }).catch((error: unknown) => {
+        if (error instanceof SessionPendingError) {
+          return { fans: [] as OnlineFan[], reason: "Esperando a que termine Conectar." };
+        }
+        return { fans: [] as OnlineFan[], reason: "No se pudo leer." };
+      });
+      return await Promise.race([read, timedOut]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   private async readNotificationsNow(accountId: string): Promise<CollectedNotifications> {

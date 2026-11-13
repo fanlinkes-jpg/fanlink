@@ -1,5 +1,6 @@
 import type { BrowserContext } from "playwright";
 import { messages } from "../messages.ts";
+import { SessionPendingError } from "../types.ts";
 
 /**
  * Un solo Chromium por cuenta. Login, sala, escucha, sincronización, bóveda,
@@ -12,6 +13,8 @@ type Slot = {
   token: symbol;
   /** La ventana de Conectar no se comparte con una lectura. */
   exclusive: boolean;
+  /** Hay un login esperando a que las lecturas suelten el perfil. No se cierra todavía. */
+  yielding: boolean;
 };
 
 export type ProfileLease = {
@@ -32,68 +35,85 @@ export class ProfileOwner {
   private readonly chains = new Map<string, Promise<void>>();
   private readonly loginGates = new Map<string, Promise<void>>();
   private readonly loginRelease = new Map<string, () => void>();
+  private readonly idle = new Map<string, () => void>();
   private readonly hooks: ProfileHooks;
 
   constructor(hooks: ProfileHooks) {
     this.hooks = hooks;
   }
 
-  /** El mismo contexto si la cuenta ya lo tiene abierto. Si no, lo lanza. */
+  /**
+   * El mismo contexto si la cuenta ya lo tiene abierto. Si Conectar lo tiene,
+   * o está esperando a las lecturas, no se queda esperando: la lectura recibe
+   * un error y puede decirlo.
+   */
   async lease(accountId: string): Promise<ProfileLease> {
-    for (;;) {
-      if (this.hooks.isStopped()) throw new Error(messages.loginCancelled);
-      const slot = await this.withLock(accountId, async () => {
-        const current = this.slots.get(accountId);
-        if (current?.exclusive) return null;
-        if (current) {
-          current.users += 1;
-          return current;
-        }
-        const context = await this.hooks.openShared(accountId);
-        if (this.hooks.isStopped()) {
-          await this.hooks.closeContext(context);
-          throw new Error(messages.loginCancelled);
-        }
-        const created: Slot = {
-          context,
-          users: 1,
-          token: Symbol(accountId),
-          exclusive: false,
-        };
-        this.slots.set(accountId, created);
-        return created;
-      });
-      if (slot) return this.hand(accountId, slot);
-      await (this.loginGates.get(accountId) ?? Promise.resolve());
-    }
+    if (this.hooks.isStopped()) throw new Error(messages.loginCancelled);
+    const slot = await this.withLock(accountId, async () => {
+      const current = this.slots.get(accountId);
+      if (current?.exclusive || current?.yielding) {
+        throw new SessionPendingError(messages.loginInProgress);
+      }
+      if (current) {
+        current.users += 1;
+        return current;
+      }
+      const context = await this.hooks.openShared(accountId);
+      if (this.hooks.isStopped()) {
+        await this.hooks.closeContext(context);
+        throw new Error(messages.loginCancelled);
+      }
+      const created: Slot = {
+        context,
+        users: 1,
+        token: Symbol(accountId),
+        exclusive: false,
+        yielding: false,
+      };
+      this.slots.set(accountId, created);
+      return created;
+    });
+    return this.hand(accountId, slot);
   }
 
   /**
-   * Conectar / Reconectar. Cierra limpio quien tuviera el perfil (la sala
-   * ya se soltó antes) y abre la ventana de login. El cierre y el lanzamiento
-   * van dentro del cerrojo, así que no coinciden dos Chromium.
+   * Conectar / Reconectar. No cierra el navegador mientras haya lecturas:
+   * espera a que suelten el perfil y, hasta entonces, las nuevas reciben
+   * un error. El cierre y el lanzamiento van dentro del cerrojo.
    */
   async login(accountId: string): Promise<ProfileLease> {
     this.armLoginGate(accountId);
     try {
-      const slot = await this.withLock(accountId, async () => {
-        await this.dropSlot(accountId);
-        const context = await this.hooks.openExclusive(accountId);
-        if (this.hooks.isStopped()) {
-          await this.hooks.closeContext(context);
-          throw new Error(messages.loginCancelled);
-        }
-        const created: Slot = {
-          context,
-          users: 1,
-          token: Symbol(accountId),
-          exclusive: true,
-        };
-        this.slots.set(accountId, created);
-        return created;
-      });
-      return this.hand(accountId, slot);
+      for (;;) {
+        if (this.hooks.isStopped()) throw new Error(messages.loginCancelled);
+        await this.withLock(accountId, async () => {
+          const current = this.slots.get(accountId);
+          if (current && !current.exclusive) current.yielding = true;
+        });
+        await this.waitUntilIdle(accountId);
+        const opened = await this.withLock(accountId, async () => {
+          const current = this.slots.get(accountId);
+          if (current && current.users > 0) return null;
+          await this.dropSlot(accountId);
+          const context = await this.hooks.openExclusive(accountId);
+          if (this.hooks.isStopped()) {
+            await this.hooks.closeContext(context);
+            throw new Error(messages.loginCancelled);
+          }
+          const created: Slot = {
+            context,
+            users: 1,
+            token: Symbol(accountId),
+            exclusive: true,
+            yielding: false,
+          };
+          this.slots.set(accountId, created);
+          return created;
+        });
+        if (opened) return this.hand(accountId, opened);
+      }
     } catch (error) {
+      await this.clearYield(accountId);
       this.finishLoginGate(accountId);
       throw error;
     }
@@ -106,6 +126,8 @@ export class ProfileOwner {
   async closeAll(): Promise<void> {
     for (const accountId of [...this.slots.keys()]) {
       await this.withLock(accountId, async () => {
+        const current = this.slots.get(accountId);
+        if (current) current.users = 0;
         await this.dropSlot(accountId);
       });
       this.finishLoginGate(accountId);
@@ -130,25 +152,75 @@ export class ProfileOwner {
     await this.withLock(accountId, async () => {
       const current = this.slots.get(accountId);
       if (!current || current.token !== token) return;
-      await this.hooks.persist(accountId, current.context).catch(() => undefined);
+      await this.saveProfile(accountId, current.context);
       const again = this.slots.get(accountId);
       if (!again || again.token !== token) return;
       again.users -= 1;
       if (again.users > 0) return;
+      if (again.yielding && !again.exclusive) {
+        this.notifyIdle(accountId);
+        return;
+      }
       exclusive = again.exclusive;
       this.slots.delete(accountId);
+      this.notifyIdle(accountId);
       await this.hooks.closeContext(again.context);
     });
     if (exclusive) this.finishLoginGate(accountId);
   }
 
-  /** Suelta el contexto actual y guarda sus cookies antes de cerrarlo. */
+  /**
+   * Cierra el contexto solo cuando ya no hay lecturas. Quien llama
+   * (el login) espera antes a `users === 0`.
+   */
   private async dropSlot(accountId: string): Promise<void> {
     const current = this.slots.get(accountId);
     if (!current) return;
+    if (current.users > 0) {
+      throw new SessionPendingError(messages.loginInProgress);
+    }
     this.slots.delete(accountId);
-    await this.hooks.persist(accountId, current.context).catch(() => undefined);
+    this.notifyIdle(accountId);
+    await this.saveProfile(accountId, current.context);
     await this.hooks.closeContext(current.context);
+  }
+
+  private async saveProfile(accountId: string, context: BrowserContext): Promise<void> {
+    try {
+      await this.hooks.persist(accountId, context);
+    } catch (error) {
+      const kind = error instanceof Error ? error.name : "error";
+      console.warn(`[fanlink:perfil] no se pudo guardar la sesión cuenta=${accountId} tipo=${kind}`);
+    }
+  }
+
+  private async waitUntilIdle(accountId: string): Promise<void> {
+    const boxed = await this.withLock(accountId, async () => {
+      const slot = this.slots.get(accountId);
+      if (!slot || slot.users === 0) return null;
+      let resolve: () => void = () => undefined;
+      const gate = new Promise<void>((done) => {
+        resolve = done;
+      });
+      this.idle.set(accountId, resolve);
+      return { gate };
+    });
+    if (boxed) await boxed.gate;
+  }
+
+  private notifyIdle(accountId: string): void {
+    const notify = this.idle.get(accountId);
+    this.idle.delete(accountId);
+    notify?.();
+  }
+
+  private async clearYield(accountId: string): Promise<void> {
+    await this.withLock(accountId, async () => {
+      const current = this.slots.get(accountId);
+      if (!current?.yielding || current.exclusive) return;
+      current.yielding = false;
+      if (current.users === 0) await this.dropSlot(accountId);
+    }).catch(() => undefined);
   }
 
   private armLoginGate(accountId: string): void {

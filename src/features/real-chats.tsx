@@ -370,14 +370,21 @@ export function RealChatsPage() {
     }
     setOnlineBusy(true);
     setOnlineNote(null);
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const result = await listOnlineFans({ data: { creatorId: creator } });
+      const result = await Promise.race([
+        listOnlineFans({ data: { creatorId: creator } }),
+        new Promise<{ fans: []; reason: string }>((resolve) => {
+          timer = setTimeout(() => resolve({ fans: [], reason: "No se pudo leer." }), 25_000);
+        }),
+      ]);
       setOnlineFans(result.fans);
       setOnlineNote(result.fans.length === 0 ? result.reason ?? "Nadie en línea" : null);
     } catch (err) {
       setOnlineFans([]);
       setOnlineNote(sessionErrorText(err));
     } finally {
+      if (timer) clearTimeout(timer);
       setOnlineBusy(false);
     }
   }
