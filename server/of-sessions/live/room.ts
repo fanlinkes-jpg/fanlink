@@ -18,7 +18,7 @@ import {
   type LiveRole,
 } from "./desk.ts";
 import { startLiveCast, type LiveCast } from "./session.ts";
-import { noteLiveHold, releaseLiveHold } from "./hold.ts";
+import { noteLiveHold, registerLiveStopper, releaseLiveHold } from "./hold.ts";
 import { takeLiveTicket, type LiveTicket } from "./tickets.ts";
 
 type Viewer = { socket: WebSocket; userId: string; role: LiveRole; stamps: number[] };
@@ -45,13 +45,23 @@ const opening = new Map<string, Promise<Room>>();
 /** Cierra la sala de esa cuenta antes de abrir el Chromium de Conectar. */
 export async function interruptLiveAccount(accountId: string): Promise<void> {
   const mine = [...rooms.values()].filter((room) => room.accountId === accountId);
-  await Promise.all(mine.map((room) => stopRoom(room)));
+  await Promise.all(mine.map((room) => stopRoom(room, "La cuenta se está conectando de nuevo.")));
 }
 
+registerLiveStopper((accountId) => interruptLiveAccount(accountId));
+
 function liveRoomGraceMs(): number {
-  const value = Number(process.env.FANLINK_LIVE_ROOM_GRACE_MS);
-  if (Number.isInteger(value) && value >= 0 && value <= 120_000) return value;
+  const fromGrace = liveGraceFrom(process.env.FANLINK_LIVE_GRACE_MS, 30 * 60_000);
+  if (fromGrace != null) return fromGrace;
+  const fromRoom = liveGraceFrom(process.env.FANLINK_LIVE_ROOM_GRACE_MS, 120_000);
+  if (fromRoom != null) return fromRoom;
   return 60_000;
+}
+
+function liveGraceFrom(raw: string | undefined, max: number): number | null {
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0 || value > max) return null;
+  return value;
 }
 
 type LiveOpener = {
@@ -371,19 +381,25 @@ function scheduleStop(room: Room): void {
   room.idle.unref?.();
 }
 
-async function stopRoom(room: Room): Promise<void> {
+async function stopRoom(room: Room, reason?: string): Promise<void> {
   if (rooms.get(room.key) !== room) return;
   rooms.delete(room.key);
   releaseLiveHold(room.accountId);
   if (room.idle) clearTimeout(room.idle);
   if (room.controlTimer) clearTimeout(room.controlTimer);
+  room.idle = null;
+  room.controlTimer = null;
   const cast = room.cast;
   const release = room.release;
   room.cast = null;
   room.release = null;
   await cast?.stop().catch(() => undefined);
   await release?.().catch(() => undefined);
-  for (const viewer of room.viewers) viewer.socket.close();
+  for (const viewer of room.viewers) {
+    if (reason) sendJson(viewer.socket, { type: "bye", reason });
+    viewer.socket.close();
+  }
+  room.viewers = [];
 }
 
 function idleLimit(): number {

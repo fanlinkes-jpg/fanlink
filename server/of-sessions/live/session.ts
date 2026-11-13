@@ -1,4 +1,4 @@
-import type { BrowserContext, CDPSession, FileChooser, Page } from "playwright";
+import type { BrowserContext, CDPSession, FileChooser, Frame, Page, Response, Route } from "playwright";
 import { chatPageUrl } from "../sync/chats.ts";
 import { parseChatMessages } from "../sync/chats.ts";
 import { openWorkPage } from "../sessions/work-page.ts";
@@ -46,10 +46,11 @@ export async function startLiveCast(input: {
   cdp = await input.context.newCDPSession(page);
   await cdp.send("Network.enable").catch(() => undefined);
   await cdp.send("Network.setBypassServiceWorker", { bypass: true }).catch(() => undefined);
-  await page.route("**/*", (route) => {
+  const guardRoute = (route: Route) => {
     if (liveRequestAllowed(route.request().url(), route.request().method(), typing)) return route.continue();
     return route.abort();
-  });
+  };
+  await page.route("**/*", guardRoute);
   page.on("popup", (popup) => {
     void popup.route("**/*", (inner) => inner.abort()).finally(() => {
       void popup.close().catch(() => undefined);
@@ -59,7 +60,7 @@ export async function startLiveCast(input: {
     void download.cancel().catch(() => undefined);
   });
   let goingHome = false;
-  page.on("framenavigated", (frame) => {
+  const onNavigated = (frame: Frame) => {
     if (frame !== page.mainFrame() || goingHome) return;
     const url = frame.url();
     if (!url || url === "about:blank" || url.startsWith("chrome-error:")) return;
@@ -68,7 +69,8 @@ export async function startLiveCast(input: {
     void page.goto(chatUrl, { waitUntil: "domcontentloaded" }).catch(() => undefined).finally(() => {
       goingHome = false;
     });
-  });
+  };
+  page.on("framenavigated", onNavigated);
   page.on("filechooser", (chooser: FileChooser) => {
     if (!typing) {
       void chooser.setFiles([]).catch(() => undefined);
@@ -87,7 +89,7 @@ export async function startLiveCast(input: {
       return chooser.setFiles([]);
     }).catch(() => undefined);
   });
-  page.on("response", (response) => {
+  const onResponse = (response: Response) => {
     if (response.status() < 200 || response.status() >= 300) return;
     const path = pathOf(response.url());
     if (!path.includes("message") && !path.includes("chat")) return;
@@ -98,7 +100,8 @@ export async function startLiveCast(input: {
         input.onOwnMessage({ messageId: message.messageKey, body: message.body, priceCents: message.priceCents, sentAt: message.sentAt });
       }
     }).catch(() => undefined);
-  });
+  };
+  page.on("response", onResponse);
   await page.setViewportSize(viewport);
   await page.goto(chatUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
   let lastFrame = 0;
@@ -154,6 +157,12 @@ export async function startLiveCast(input: {
       stopped = true;
       console.info(liveLog("fin", { accountId: input.accountId }));
       await cdp?.send("Page.stopScreencast").catch(() => undefined);
+      // La siguiente sala reutiliza esta página: no se apilan guardias ni escuchas de la anterior.
+      page.off("framenavigated", onNavigated);
+      page.off("response", onResponse);
+      await page.unroute("**/*", guardRoute).catch(() => undefined);
+      await cdp?.detach().catch(() => undefined);
+      cdp = null;
     },
   };
 }
