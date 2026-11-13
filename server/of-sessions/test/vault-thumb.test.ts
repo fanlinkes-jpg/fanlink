@@ -26,7 +26,7 @@ const RULES = {
   static_param: "param",
   format: "1:{}:{:x}:2",
   checksum_indexes: [0, 1],
-  checksum_constants: [50, 50],
+  checksum_constants: [5, 5],
   checksum_constant: 10,
   app_token: "token",
   remove_headers: [] as string[],
@@ -363,6 +363,9 @@ describe("miniaturas de la bóveda", { concurrency: 1 }, () => {
     putVaultThumb("c-bytes", "grande", new Uint8Array(VAULT_THUMB_CACHE_BYTES), "image/jpeg");
     putVaultThumb("c-bytes", "pequeña", jpeg, "image/jpeg");
     assert.equal(getVaultThumb("c-bytes", "grande"), null);
+    assert.ok(getVaultThumb("c-bytes", "pequeña"));
+    putVaultThumb("c-bytes", "demasiado", new Uint8Array(VAULT_THUMB_CACHE_BYTES + 1), "image/jpeg");
+    assert.equal(getVaultThumb("c-bytes", "demasiado"), null);
     assert.ok(getVaultThumb("c-bytes", "pequeña"));
     clearVaultThumbs();
   });
