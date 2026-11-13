@@ -1,4 +1,5 @@
 import type { BrowserContext, Page } from "playwright";
+import { closeIfIdle } from "../live/pages.ts";
 import { isCurrentUserResponseUrl, isLoginChallengeUrl, jsonUrlWithoutSecrets, usersMeVerdict } from "../identity.ts";
 import { messages } from "../messages.ts";
 import type { SiteAdapter } from "../sessions/site.ts";
@@ -147,7 +148,7 @@ export async function collectChats(
     };
   } finally {
     context.off("response", onResponse);
-    await page?.close().catch(() => undefined);
+    if (page) await closeIfIdle(page);
   }
 }
 

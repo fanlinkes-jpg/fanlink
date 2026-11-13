@@ -144,7 +144,7 @@ async function streamMedia(
   const length = bytes.contentLength ?? bytes.body?.byteLength ?? null;
   const headers = new Headers({
     "content-type": bytes.contentType || "application/octet-stream",
-    "cache-control": "private, no-store",
+    "cache-control": !range && bytes.status === 200 ? "private, max-age=300" : "private, no-store",
     "x-content-type-options": "nosniff",
     "accept-ranges": "bytes",
   });

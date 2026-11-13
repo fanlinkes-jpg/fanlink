@@ -1,9 +1,10 @@
 import { normalizeOutboundText, outboundTextDelta, OUTBOUND_TIE_MS, type OutboundDraft } from "./author-match.ts";
-import { newFanEvents, type ChatMessage, type ChatThread, type FanMessageEvent } from "./chats.ts";
+import { newFanEvents, collapseFans, type ChatMessage, type ChatThread, type ChatUser, type FanMessageEvent } from "./chats.ts";
 import { decodeMedia, encodeMedia, oldestCursor } from "./history.ts";
 import type { ReadSql } from "./store.ts";
 
 const ORIGIN = "onlyfans";
+const RECENT_MESSAGES = 60;
 
 export type StoredThread = ChatThread & { creatorId: string; syncedAt: string };
 export type StoredChatMessage = ChatMessage & {
@@ -50,25 +51,37 @@ export async function saveChatRead(
            avatar_url, is_online, sub_price_cents, sub_expires_at, renew_auto, fan_lists
          ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
          on conflict (creator_id, thread_key) do update set
-           fan_key = excluded.fan_key,
-           fan_handle = excluded.fan_handle,
-           fan_name = excluded.fan_name,
-           last_message_at = excluded.last_message_at,
-           excerpt = excluded.excerpt,
+           fan_key = coalesce(excluded.fan_key, of_chat_thread.fan_key),
+           fan_handle = coalesce(excluded.fan_handle, of_chat_thread.fan_handle),
+           fan_name = coalesce(excluded.fan_name, of_chat_thread.fan_name),
+           last_message_at = case
+             when excluded.last_message_at is null then of_chat_thread.last_message_at
+             when of_chat_thread.last_message_at is null or excluded.last_message_at > of_chat_thread.last_message_at then excluded.last_message_at
+             else of_chat_thread.last_message_at
+           end,
+           excerpt = case
+             when excluded.last_message_at is null then of_chat_thread.excerpt
+             when of_chat_thread.last_message_at is null or excluded.last_message_at >= of_chat_thread.last_message_at then excluded.excerpt
+             else of_chat_thread.excerpt
+           end,
            unread = excluded.unread,
            synced_at = excluded.synced_at,
-           last_from_fan = excluded.last_from_fan,
-           spent_cents = excluded.spent_cents,
-           subscribes_cents = excluded.subscribes_cents,
-           tips_cents = excluded.tips_cents,
-           posts_cents = excluded.posts_cents,
-           messages_cents = excluded.messages_cents,
-           avatar_url = excluded.avatar_url,
-           is_online = excluded.is_online,
-           sub_price_cents = excluded.sub_price_cents,
-           sub_expires_at = excluded.sub_expires_at,
-           renew_auto = excluded.renew_auto,
-           fan_lists = excluded.fan_lists`,
+           last_from_fan = case
+             when excluded.last_message_at is null then of_chat_thread.last_from_fan
+             when of_chat_thread.last_message_at is null or excluded.last_message_at >= of_chat_thread.last_message_at then excluded.last_from_fan
+             else of_chat_thread.last_from_fan
+           end,
+           spent_cents = coalesce(excluded.spent_cents, of_chat_thread.spent_cents),
+           subscribes_cents = coalesce(excluded.subscribes_cents, of_chat_thread.subscribes_cents),
+           tips_cents = coalesce(excluded.tips_cents, of_chat_thread.tips_cents),
+           posts_cents = coalesce(excluded.posts_cents, of_chat_thread.posts_cents),
+           messages_cents = coalesce(excluded.messages_cents, of_chat_thread.messages_cents),
+           avatar_url = coalesce(excluded.avatar_url, of_chat_thread.avatar_url),
+           is_online = coalesce(excluded.is_online, of_chat_thread.is_online),
+           sub_price_cents = coalesce(excluded.sub_price_cents, of_chat_thread.sub_price_cents),
+           sub_expires_at = coalesce(excluded.sub_expires_at, of_chat_thread.sub_expires_at),
+           renew_auto = coalesce(excluded.renew_auto, of_chat_thread.renew_auto),
+           fan_lists = coalesce(excluded.fan_lists, of_chat_thread.fan_lists)`,
         [
           creatorId,
           thread.threadKey,
@@ -146,6 +159,44 @@ export async function saveChatRead(
     }
     await attachOutboundAuthors(sql, creatorId, read.messages, await outboundSendStateReady(sql));
     await noteHistoryCursor(sql, creatorId);
+    const newest = new Map<string, ChatMessage>();
+    for (const message of read.messages) {
+      const current = newest.get(message.threadKey);
+      if (!current || message.sentAt > current.sentAt) newest.set(message.threadKey, message);
+    }
+    for (const message of newest.values()) {
+      await sql.query(
+        `insert into of_chat_thread (
+           creator_id, thread_key, fan_key, last_message_at, excerpt, unread, synced_at, origin, last_from_fan
+         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         on conflict (creator_id, thread_key) do update set
+           fan_key = coalesce(of_chat_thread.fan_key, excluded.fan_key),
+           last_message_at = case
+             when of_chat_thread.last_message_at is null or excluded.last_message_at > of_chat_thread.last_message_at then excluded.last_message_at
+             else of_chat_thread.last_message_at
+           end,
+           excerpt = case
+             when of_chat_thread.last_message_at is null or excluded.last_message_at >= of_chat_thread.last_message_at then excluded.excerpt
+             else of_chat_thread.excerpt
+           end,
+           last_from_fan = case
+             when of_chat_thread.last_message_at is null or excluded.last_message_at >= of_chat_thread.last_message_at then excluded.last_from_fan
+             else of_chat_thread.last_from_fan
+           end,
+           synced_at = excluded.synced_at`,
+        [
+          creatorId,
+          message.threadKey,
+          message.fanKey,
+          message.sentAt,
+          (message.body || "").replace(/\s+/g, " ").trim().slice(0, 180),
+          message.fromFan ? 1 : 0,
+          syncedAt,
+          ORIGIN,
+          message.fromFan,
+        ],
+      );
+    }
     for (const event of events) {
       await sql.query(
         `insert into of_fan_message_event (id, creator_id, fan_key, fan_name, excerpt, sent_at)
@@ -179,6 +230,45 @@ export async function saveChatRead(
   return events;
 }
 
+/** Rellena nombre, foto y gasto cuando la lista de chats venía sin la ficha. No pisa un dato que ya existe. */
+export async function saveFanCards(sql: ReadSql, creatorId: string, users: ChatUser[]): Promise<void> {
+  for (const user of users) {
+    if (!user.id) continue;
+    await sql.query(
+      `update of_chat_thread set
+         fan_name = coalesce(fan_name, $3),
+         fan_handle = coalesce(fan_handle, $4),
+         avatar_url = coalesce(avatar_url, $5),
+         spent_cents = coalesce(spent_cents, $6),
+         subscribes_cents = coalesce(subscribes_cents, $7),
+         tips_cents = coalesce(tips_cents, $8),
+         posts_cents = coalesce(posts_cents, $9),
+         messages_cents = coalesce(messages_cents, $10),
+         is_online = coalesce(is_online, $11),
+         sub_price_cents = coalesce(sub_price_cents, $12),
+         sub_expires_at = coalesce(sub_expires_at, $13),
+         renew_auto = coalesce(renew_auto, $14)
+       where creator_id = $1 and (fan_key = $2 or thread_key = $2)`,
+      [
+        creatorId,
+        user.id,
+        user.name,
+        user.username,
+        user.avatarUrl,
+        user.spentCents,
+        user.subscribesCents,
+        user.tipsCents,
+        user.postsCents,
+        user.messagesCents,
+        user.online,
+        user.subPriceCents,
+        user.subExpiresAt,
+        user.renewAuto,
+      ],
+    );
+  }
+}
+
 export async function listChats(
   sql: ReadSql,
   creatorIds: string[],
@@ -194,12 +284,19 @@ export async function listChats(
     creatorIds,
   );
   const messages = await sql.query<MessageRow>(
-    `select m.creator_id, m.message_key, m.thread_key, m.fan_key, m.from_fan, m.body, m.sent_at, m.price_cents, m.purchased, m.synced_at,
-            m.author_id, p.display_name as author_name, m.seen, m.automatic, m.media_count, m.media_seconds, m.media_preview,
-            m.media_json, m.liked, m.reply_body, m.event_kind, m.event_cents
-     from of_chat_message m
-     left join staff_profile p on p.user_id = m.author_id
-     where m.creator_id in (${filter})
+    `select creator_id, message_key, thread_key, fan_key, from_fan, body, sent_at, price_cents, purchased, synced_at,
+            author_id, author_name, seen, automatic, media_count, media_seconds, media_preview,
+            media_json, liked, reply_body, event_kind, event_cents
+     from (
+       select m.creator_id, m.message_key, m.thread_key, m.fan_key, m.from_fan, m.body, m.sent_at, m.price_cents, m.purchased, m.synced_at,
+              m.author_id, p.display_name as author_name, m.seen, m.automatic, m.media_count, m.media_seconds, m.media_preview,
+              m.media_json, m.liked, m.reply_body, m.event_kind, m.event_cents,
+              row_number() over (partition by m.creator_id, m.thread_key order by m.sent_at desc) as recent_rank
+       from of_chat_message m
+       left join staff_profile p on p.user_id = m.author_id
+       where m.creator_id in (${filter})
+     ) recent
+     where recent_rank <= ${RECENT_MESSAGES}
      order by sent_at`,
     creatorIds,
   );
@@ -209,7 +306,7 @@ export async function listChats(
     creatorIds,
   );
   return {
-    threads: threads.map((row) => ({
+    threads: collapseFans(threads.map((row) => ({
       creatorId: row.creator_id,
       threadKey: row.thread_key,
       fanKey: row.fan_key,
@@ -232,7 +329,7 @@ export async function listChats(
       renewAuto: flagOrNull(row.renew_auto),
       lists: row.fan_lists ? row.fan_lists.split("\n").filter(Boolean) : null,
       syncedAt: iso(row.synced_at) ?? "",
-    })),
+    }))),
     messages: messages.map((row) => ({
       creatorId: row.creator_id,
       messageKey: row.message_key,
@@ -618,20 +715,124 @@ export async function outboundSendStateReady(sql: ReadSql): Promise<boolean> {
   return ready;
 }
 
+export const SEND_LEASE_MS = 20_000;
+
+const outboundLeaseReady = new WeakMap<object, boolean>();
+
+/** La 0043 añade claimed_at. Sin esa columna no hay lease y no se caduca por reloj. */
+async function leaseColumnsReady(sql: ReadSql): Promise<boolean> {
+  if (outboundLeaseReady.get(sql) === true) return true;
+  const columns = await sql.query<{ column_name: string }>(
+    "select column_name from information_schema.columns where table_name = 'of_chat_outbound' and column_name = 'claimed_at'",
+  );
+  const ready = columns.length > 0;
+  if (ready) outboundLeaseReady.set(sql, true);
+  return ready;
+}
+
+/**
+ * El proceso que envía renueva claimed_at y la clave de 30 s mientras sigue vivo,
+ * también si está esperando el cupo de 4 por minuto. Otro proceso no pisa el owner.
+ */
+export async function pulseOutboundLease(
+  sql: ReadSql,
+  id: string,
+  owner: string,
+  claimKey: string | null,
+  now = new Date(),
+): Promise<void> {
+  if (!(await leaseColumnsReady(sql))) return;
+  await sql.query(
+    `update of_chat_outbound
+     set claimed_at = $3, claim_owner = $2
+     where id = $1
+       and coalesce(status, 'pending') = 'pending'
+       and coalesce(error_reason, '') <> 'Pendiente de confirmar'
+       and (claim_owner is null or claim_owner = $2)`,
+    [id, owner, now.toISOString()],
+  );
+  if (!claimKey) return;
+  await sql.query(
+    `update of_chat_send_claim set created_at = $3
+     where claim_key = $1 and outbound_id = $2`,
+    [claimKey, id, now.toISOString()],
+  );
+}
+
+/**
+ * Si nadie late, el pending pasa a «Pendiente de confirmar». Nunca a un error
+ * reintentable: el mensaje puede haber salido. Un envío con claimed_at fresco
+ * no caduca aunque created_at tenga más de 3 minutos.
+ */
+export async function expireStuckPending(sql: ReadSql, now = new Date()): Promise<void> {
+  const table = await sql.query<{ name: string | null }>("select to_regclass('public.of_chat_outbound')::text as name");
+  if (!table[0]?.name) return;
+  if (!(await leaseColumnsReady(sql))) return;
+  const cutoff = new Date(now.getTime() - SEND_LEASE_MS).toISOString();
+  const expired = await sql.query<{ id: string }>(
+    `update of_chat_outbound
+     set status = 'pending', error_reason = 'Pendiente de confirmar', claimed_at = null
+     where coalesce(status, 'pending') = 'pending'
+       and scheduled_at is null
+       and of_message_key is null
+       and matched_message_key is null
+       and coalesce(error_reason, '') <> 'Pendiente de confirmar'
+       and created_at < $1
+       and (claimed_at is null or claimed_at < $1)
+     returning id`,
+    [cutoff],
+  );
+  if (expired.length === 0) return;
+  const claimTable = await sql.query<{ name: string | null }>("select to_regclass('public.of_chat_send_claim')::text as name");
+  if (!claimTable[0]?.name) return;
+  const slots = expired.map((_, index) => `$${index + 2}`).join(", ");
+  await sql.query(
+    `update of_chat_send_claim set created_at = $1 where outbound_id in (${slots})`,
+    [now.toISOString(), ...expired.map((row) => row.id)],
+  );
+}
+
 export async function listPendingOutbounds(
   sql: ReadSql,
   creatorIds: string[],
-): Promise<Array<{ id: string; creatorId: string; threadKey: string | null; body: string; scheduledAt: string | null; authorName: string | null; status: "pending" | "error"; errorReason: string | null }>> {
+): Promise<Array<{
+  id: string;
+  creatorId: string;
+  threadKey: string | null;
+  body: string;
+  scheduledAt: string | null;
+  authorName: string | null;
+  authorId: string | null;
+  priceCents: number | null;
+  vault: Array<{ id: string; name: string }>;
+  status: "pending" | "error";
+  errorReason: string | null;
+}>> {
   if (!creatorIds.length) return [];
+  await expireStuckPending(sql);
   const filter = creatorIds.map((_, index) => `$${index + 1}`).join(", ");
-  const rows = await sql.query<{ id: string; creator_id: string; thread_key: string | null; body: string; scheduled_at: Date | string | null; author_name: string | null; status: string | null; error_reason: string | null }>(
-    `select o.id, o.creator_id, o.thread_key, o.body, o.scheduled_at, p.display_name as author_name, o.status, o.error_reason
+  const rows = await sql.query<{
+    id: string;
+    creator_id: string;
+    thread_key: string | null;
+    body: string;
+    scheduled_at: Date | string | null;
+    author_name: string | null;
+    author_id: string | null;
+    price_cents: number | string | null;
+    status: string | null;
+    error_reason: string | null;
+  }>(
+    `select o.id, o.creator_id, o.thread_key, o.body, o.scheduled_at, p.display_name as author_name,
+            o.author_id, o.price_cents, o.status, o.error_reason
      from of_chat_outbound o
      left join staff_profile p on p.user_id = o.author_id
-     where o.creator_id in (${filter}) and o.matched_message_key is null and coalesce(o.status, 'pending') <> 'sent'
+     where o.creator_id in (${filter}) and o.matched_message_key is null
+       and coalesce(o.status, 'pending') not in ('sent', 'discarded')
      order by o.created_at`,
     creatorIds,
   );
+  const vault = await pendingVaultPieces(sql, rows);
   return rows.map((row) => ({
     id: row.id,
     creatorId: row.creator_id,
@@ -639,6 +840,9 @@ export async function listPendingOutbounds(
     body: row.body,
     scheduledAt: row.scheduled_at == null ? null : row.scheduled_at instanceof Date ? row.scheduled_at.toISOString() : String(row.scheduled_at),
     authorName: row.author_name,
+    authorId: row.author_id,
+    priceCents: centsOrNull(row.price_cents),
+    vault: vault.get(row.id) ?? [],
     status: row.status === "error" ? "error" : "pending",
     errorReason: row.error_reason,
   }));
@@ -831,6 +1035,166 @@ export async function recordOutbound(sql: ReadSql, draft: OutboundDraft & { crea
      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
     [draft.id, draft.creatorId, draft.threadKey, draft.fanKey, draft.authorId, draft.body, draft.priceCents, draft.createdAt, draft.ofMessageKey, draft.scheduledAt ?? null],
   );
+}
+
+export type OutboundClaimRow = {
+  id: string;
+  creatorId: string;
+  threadKey: string | null;
+  fanKey: string | null;
+  authorId: string;
+  body: string;
+  priceCents: number | null;
+  status: string;
+  errorReason: string | null;
+  ofMessageKey: string | null;
+  matchedMessageKey: string | null;
+};
+
+/** La fila del clientId, si existe. No inventa un autor. */
+export async function readOutboundClaim(sql: ReadSql, id: string): Promise<OutboundClaimRow | null> {
+  const rows = await sql.query<{
+    id: string;
+    creator_id: string;
+    thread_key: string | null;
+    fan_key: string | null;
+    author_id: string;
+    body: string;
+    price_cents: number | string | null;
+    status: string | null;
+    error_reason: string | null;
+    of_message_key: string | null;
+    matched_message_key: string | null;
+  }>(
+    `select id, creator_id, thread_key, fan_key, author_id, body, price_cents, status, error_reason, of_message_key, matched_message_key
+     from of_chat_outbound where id = $1`,
+    [id],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    id: row.id,
+    creatorId: row.creator_id,
+    threadKey: row.thread_key,
+    fanKey: row.fan_key,
+    authorId: row.author_id,
+    body: row.body,
+    priceCents: centsOrNull(row.price_cents),
+    status: row.status ?? "pending",
+    errorReason: row.error_reason,
+    ofMessageKey: row.of_message_key,
+    matchedMessageKey: row.matched_message_key,
+  };
+}
+
+/** Inserta una sola vez. Si el id ya existe, no pisa la fila. */
+export async function insertOutboundOnce(sql: ReadSql, draft: OutboundDraft & { creatorId: string }): Promise<boolean> {
+  const rows = await sql.query<{ id: string }>(
+    `insert into of_chat_outbound (id, creator_id, thread_key, fan_key, author_id, body, price_cents, created_at, of_message_key, scheduled_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     on conflict (id) do nothing
+     returning id`,
+    [draft.id, draft.creatorId, draft.threadKey, draft.fanKey, draft.authorId, draft.body, draft.priceCents, draft.createdAt, draft.ofMessageKey, draft.scheduledAt ?? null],
+  );
+  return rows.length > 0;
+}
+
+/** Solo un error propio vuelve a pending. Enviado o pendiente de confirmar no. */
+export async function reopenOutboundError(
+  sql: ReadSql,
+  id: string,
+  authorId: string,
+  creatorId: string,
+  threadKey: string,
+): Promise<boolean> {
+  const rows = await sql.query<{ id: string }>(
+    `update of_chat_outbound
+     set status = 'pending', error_reason = null
+     where id = $1 and author_id = $2 and creator_id = $3 and thread_key = $4
+       and status = 'error'
+       and coalesce(error_reason, '') <> 'Pendiente de confirmar'
+       and of_message_key is null
+       and matched_message_key is null
+     returning id`,
+    [id, authorId, creatorId, threadKey],
+  );
+  return rows.length > 0;
+}
+
+/** Solo un error propio se descarta. No borra la fila. */
+export async function discardOutboundError(sql: ReadSql, id: string, authorId: string): Promise<boolean> {
+  const rows = await sql.query<{ id: string }>(
+    `update of_chat_outbound
+     set status = 'discarded'
+     where id = $1 and author_id = $2 and status = 'error'
+       and coalesce(error_reason, '') <> 'Pendiente de confirmar'
+       and of_message_key is null
+       and matched_message_key is null
+     returning id`,
+    [id, authorId],
+  );
+  return rows.length > 0;
+}
+
+/** La dueña cierra un pendiente de confirmar. No lo reenvía y no borra la fila. */
+export async function reviewAwaitingOutbound(sql: ReadSql, id: string): Promise<boolean> {
+  const rows = await sql.query<{ id: string }>(
+    `update of_chat_outbound
+     set status = 'discarded', error_reason = 'Revisado'
+     where id = $1
+       and error_reason = 'Pendiente de confirmar'
+       and coalesce(status, 'pending') not in ('sent', 'discarded')
+       and of_message_key is null
+       and matched_message_key is null
+     returning id`,
+    [id],
+  );
+  return rows.length > 0;
+}
+
+/** Piezas del borrador. Si la tabla aún no existe (bases viejas de test), no hay piezas. */
+async function pendingVaultPieces(
+  sql: ReadSql,
+  rows: ReadonlyArray<{ id: string; creator_id: string }>,
+): Promise<Map<string, Array<{ id: string; name: string }>>> {
+  const map = new Map<string, Array<{ id: string; name: string }>>();
+  if (rows.length === 0) return map;
+  const mediaTable = await sql.query<{ name: string | null }>("select to_regclass('public.of_outbound_media')::text as name");
+  if (!mediaTable[0]?.name) return map;
+  const ids = rows.map((row) => row.id);
+  const slots = ids.map((_, index) => `$${index + 1}`).join(", ");
+  const media = await sql.query<{ outbound_id: string; media_id: string | null }>(
+    `select outbound_id, media_id, position from of_outbound_media
+     where outbound_id in (${slots})
+     order by position nulls last, media_id`,
+    ids,
+  );
+  const titles = new Map<string, string>();
+  const vaultTable = await sql.query<{ name: string | null }>("select to_regclass('public.of_vault_item')::text as name");
+  if (vaultTable[0]?.name) {
+    const creatorIds = [...new Set(rows.map((row) => row.creator_id))];
+    const creatorSlots = creatorIds.map((_, index) => `$${index + 1}`).join(", ");
+    const named = await sql.query<{ creator_id: string; item_key: string | null; title: string | null }>(
+      `select creator_id, item_key, title from of_vault_item
+       where creator_id in (${creatorSlots}) and item_key is not null`,
+      creatorIds,
+    );
+    for (const row of named) {
+      if (!row.item_key) continue;
+      const title = row.title?.replace(/\s+/g, " ").trim();
+      titles.set(`${row.creator_id}\0${row.item_key}`, title || row.item_key);
+    }
+  }
+  const creatorOf = new Map(rows.map((row) => [row.id, row.creator_id]));
+  for (const piece of media) {
+    if (!piece.media_id) continue;
+    const creatorId = creatorOf.get(piece.outbound_id) ?? "";
+    const name = titles.get(`${creatorId}\0${piece.media_id}`) ?? piece.media_id;
+    const list = map.get(piece.outbound_id) ?? [];
+    list.push({ id: piece.media_id, name });
+    map.set(piece.outbound_id, list);
+  }
+  return map;
 }
 
 function flagOrNull(value: boolean | string | null): boolean | null {

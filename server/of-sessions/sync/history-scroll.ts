@@ -19,9 +19,12 @@ export async function captureOlderMessages(
   };
   page.on("response", onResponse);
   try {
-    await page.locator("[data-fanlink-history], .b-chat__messages").first().evaluate((node) => {
+    const box = page.locator("[data-fanlink-history], .b-chat__messages, .b-chat__messages-list").first();
+    const found = await box.waitFor({ timeout: 1_500 }).then(() => true).catch(() => false);
+    if (!found) return [];
+    await box.evaluate((node) => {
       if (node instanceof HTMLElement) node.scrollTop = 0;
-    });
+    }).catch(() => undefined);
     const deadline = Date.now() + (input.waitMs ?? 4_000);
     while (Date.now() <= deadline) {
       const parsed = payloads.flatMap((payload) => parsePayload(payload, input));

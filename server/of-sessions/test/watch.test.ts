@@ -35,8 +35,9 @@ test("sin socket solo se recarga el hilo pasado el mínimo de 15 s", async () =>
   });
   await task;
   assert.equal(gotos[0]?.url, "https://onlyfans.com/my/chats");
-  assert.equal(gotos[1]?.url, "https://onlyfans.com/my/chats/chat/7");
-  assert.ok((gotos[1]?.at ?? 0) >= FALLBACK_RELOAD_MS);
+  assert.equal(gotos[1]?.url, "https://onlyfans.com/my/chats");
+  assert.ok((gotos[1]?.at ?? 0) >= 15_000);
+  assert.equal(gotos[2]?.url, "https://onlyfans.com/my/chats/chat/7");
   const early = planWatch({
     watchers: 1,
     wantedThread: "7",
@@ -61,6 +62,17 @@ test("un frame sin chatId no se asigna al hilo de la pestaña si el usuario no c
     "7",
   );
   assert.equal(foreign.messages.length, 0);
+  const filed = parseLivePayload(
+    JSON.stringify({
+      list: [{ id: 3, text: "ajeno", createdAt: "2026-11-06T10:00:00.000Z", fromUser: { id: "9" } }],
+    }),
+    "",
+    "",
+    "cuenta",
+  );
+  assert.equal(filed.messages.length, 1);
+  assert.equal(filed.messages[0]?.threadKey, "9");
+  assert.equal(filed.messages[0]?.fromFan, true);
   const checked = parseLivePayload(
     JSON.stringify({
       list: [{

@@ -1,5 +1,6 @@
 import type { BrowserContext, Locator, Page } from "playwright";
 import { openWorkPage } from "../sessions/work-page.ts";
+import { closeIfIdle } from "../live/pages.ts";
 import { chatPageUrl, parseChatMessages } from "../sync/chats.ts";
 import { confirmedOwnMessage, humanTypeDelay, publicSendReason } from "./gate.ts";
 import { attachmentsConfirmed, vaultPieceMatch, type ShownVaultPiece, type VaultSendPiece } from "./vault-piece.ts";
@@ -271,7 +272,7 @@ export async function composeChat(context: BrowserContext, request: ComposeReque
     }
     result.attachedIds = confirmedIds;
     page.off("response", onResponse);
-    await page.close().catch(() => undefined);
+    await closeIfIdle(page);
   }
 
   async function giveUp(reason: string): Promise<ComposeResult> {

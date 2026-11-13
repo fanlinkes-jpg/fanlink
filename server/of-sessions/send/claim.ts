@@ -4,6 +4,7 @@ import type { ReadSql } from "../sync/store.ts";
 export const SEND_CLAIM_WINDOW_MS = 30_000;
 
 export function sendClaimKey(input: {
+  authorId: string;
   creatorId: string;
   threadKey: string;
   fanKey: string | null;
@@ -13,6 +14,7 @@ export function sendClaimKey(input: {
 }): string {
   const ids = input.vaultItemIds.map((id) => id.trim()).filter(Boolean).sort();
   return createHash("sha256").update([
+    input.authorId,
     input.creatorId,
     input.threadKey,
     input.fanKey ?? "",

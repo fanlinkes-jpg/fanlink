@@ -19,6 +19,8 @@ export const NOTIFICATION_KINDS = [
   "tip",
   "ppv",
   "message",
+  "mention",
+  "promotion",
   "system",
   "agency",
   "other",
@@ -47,6 +49,8 @@ const KIND_LABEL: Record<NotificationKind, string> = {
   tip: "Propina",
   ppv: "Compra PPV",
   message: "Mensaje",
+  mention: "Mención",
+  promotion: "Promoción",
   system: "Aviso",
   agency: "Aviso de la agencia",
   other: "Otro",
@@ -117,7 +121,9 @@ export function tabOf(kind: NotificationKind): NotificationTab {
       return "subscriptions";
     case "tag":
       return "tags";
+    case "mention":
     case "message":
+    case "promotion":
     case "system":
     case "agency":
     case "other":
@@ -143,6 +149,8 @@ export function kindLabel(kind: NotificationKind): string {
     case "tip":
     case "ppv":
     case "message":
+    case "mention":
+    case "promotion":
     case "system":
     case "agency":
     case "other":
@@ -234,6 +242,36 @@ export function isNotificationResponseUrl(url: string): boolean {
   } catch {
     return false;
   }
+}
+
+export const NOTIFICATION_TYPE_READS = [
+  ["subscribed", "subscription"],
+  ["purchases", "ppv"],
+  ["tip", "tip"],
+  ["tags", "tag"],
+  ["commented", "comment"],
+  ["mentioned", "mention"],
+  ["favorited", "like"],
+  ["promotions", "promotion"],
+  ["onlyfans", "system"],
+] as const;
+
+const NOTIFICATION_TYPE_KIND = new Map<string, NotificationKind>(NOTIFICATION_TYPE_READS);
+
+/** El tipo que OnlyFans pone en la URL de cada pestaña. */
+export function kindFromNotificationType(type: string | null): NotificationKind | null {
+  if (!type) return null;
+  const value = type.toLowerCase();
+  if (["subscribed", "subscriptions", "subscription"].includes(value)) return "subscription";
+  if (["purchases", "purchase", "ppv"].includes(value)) return "ppv";
+  if (["tip", "tips"].includes(value)) return "tip";
+  if (["tags", "tag"].includes(value)) return "tag";
+  if (["commented", "comments", "comment"].includes(value)) return "comment";
+  if (["mentioned", "mentions", "mention"].includes(value)) return "mention";
+  if (["favorited", "likes", "like"].includes(value)) return "like";
+  if (["promotions", "promotion"].includes(value)) return "promotion";
+  if (["onlyfans", "system", "deactivated_media"].includes(value)) return "system";
+  return NOTIFICATION_TYPE_KIND.get(value) ?? null;
 }
 
 export function notificationScrolls(requested: number): number {
@@ -367,7 +405,7 @@ function notificationFrom(record: Record<string, unknown>): ParsedNotification |
   const kind = kindOf(rawType);
   const fan = fanOf(record);
   const occurredAt = firstTime(record, ["createdAt", "created_at", "date", "publishedAt", "postedAt"]);
-  const body = firstString(record, ["text", "message", "body", "content", "excerpt"]);
+  const body = notificationText(record);
   const threadKey = firstString(record, ["chatId", "threadId", "threadKey", "relatedChatId"]);
   const key = notificationKey({
     id: firstString(record, ["id", "notificationId", "guid"]),
@@ -395,17 +433,33 @@ function notificationFrom(record: Record<string, unknown>): ParsedNotification |
 
 function kindOf(raw: string): NotificationKind {
   const value = raw.toLowerCase().replace(/[\s-]+/g, "_");
-  if (["like", "liked", "favorite", "favourite", "favorited"].includes(value)) return "like";
-  if (["comment", "commented", "reply"].includes(value)) return "comment";
-  if (["mention", "tag", "tagged", "label", "labels"].includes(value)) return "tag";
-  if (["subscribe", "subscribed", "subscription", "new_subscriber", "subscriber"].includes(value)) return "subscription";
+  if (["like", "liked", "likes", "favorite", "favourite", "favorited"].includes(value)) return "like";
+  if (["comment", "commented", "comments", "reply"].includes(value)) return "comment";
+  if (["mention", "mentioned", "mentions"].includes(value)) return "mention";
+  if (["tag", "tags", "tagged", "label", "labels"].includes(value)) return "tag";
+  if (["subscribe", "subscribed", "subscription", "subscriptions", "new_subscriber", "subscriber", "expired", "expire", "unsubscribed"].includes(value)) return "subscription";
   if (["renewal", "rebill", "recurring", "renewed"].includes(value)) return "renewal";
   if (["tip", "tips"].includes(value)) return "tip";
-  if (["ppv", "purchase", "paided_message", "paid_message", "unlock", "message_purchase"].includes(value)) return "ppv";
+  if (["ppv", "purchase", "purchases", "paided_message", "paid_message", "unlock", "message_purchase"].includes(value)) return "ppv";
+  if (["promotion", "promo", "promotional", "discount", "campaign"].includes(value)) return "promotion";
   if (["message", "chat", "new_message"].includes(value)) return "message";
-  if (["system", "announcement", "warning", "notice"].includes(value)) return "system";
+  if (["system", "announcement", "warning", "notice", "deactivated_media"].includes(value)) return "system";
   if (["payout", "payouts", "earning", "earnings", "balance", "balances", "gross", "revenue", "statement", "withdrawal"].includes(value)) return "agency";
   return "other";
+}
+
+function notificationText(record: Record<string, unknown>): string | null {
+  const raw = firstString(record, ["text", "message", "body", "content", "excerpt"]);
+  if (!raw) return null;
+  let text = raw;
+  const pairs = record.replacePairs;
+  if (pairs && typeof pairs === "object" && !Array.isArray(pairs)) {
+    for (const [key, value] of Object.entries(pairs as Record<string, unknown>)) {
+      if (typeof value === "string") text = text.split(key).join(value.replace(/<[^>]+>/g, ""));
+    }
+  }
+  const clean = text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  return clean || null;
 }
 
 function isPending(record: Record<string, unknown>, body: string | null): boolean {
@@ -418,7 +472,10 @@ function isPending(record: Record<string, unknown>, body: string | null): boolea
 function fanOf(record: Record<string, unknown>): { fanKey: string | null; fanName: string | null } {
   const user = nested(record, ["user", "fromUser", "relatedUser", "subscriber"]);
   const fanKey = firstString(record, ["userId", "fanId", "fanKey"]) ?? (user ? firstString(user, ["id", "userId"]) : null);
-  const fanName = firstString(record, ["username", "name", "fanName"]) ?? (user ? firstString(user, ["name", "username", "displayName"]) : null);
+  const fanName = (user ? firstString(user, ["name", "displayName"]) : null)
+    ?? firstString(record, ["name", "fanName"])
+    ?? (user ? firstString(user, ["username"]) : null)
+    ?? firstString(record, ["username"]);
   return { fanKey, fanName };
 }
 

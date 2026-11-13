@@ -5,13 +5,25 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { createSessionRuntime } from "../runtime.ts";
-import { applyAccountId, applyUserDirectory, chatFailureReason, chatIntervalMinFromEnv, chatPageUrl, classifyChatPath, mergeMessages, mergeThreads, newFanEvents, parseChatList, parseChatMessages, parsePreviewMessages, parseUsersDirectory, previewSender, threadsToOpen } from "../sync/chats.ts";
+import { applyAccountId, applyUserDirectory, chatFailureReason, chatIntervalMinFromEnv, chatPageUrl, classifyChatPath, collapseFans, mergeMessages, mergeThreads, newFanEvents, parseChatList, parseChatMessages, parsePreviewMessages, parseUsersDirectory, previewSender, threadsToOpen } from "../sync/chats.ts";
 import { preferOutcome } from "../sync/parse.ts";
 import { shapeSummary } from "../sync/shape.ts";
 import { saveChatRead } from "../sync/chat-store.ts";
 import type { ReadSql } from "../sync/store.ts";
 import { startFixture } from "./fixture-site.ts";
 import { completeFixtureLogin, recordingFactory, removeDir, tempDataDir, testConfig, testDisplay } from "./helpers.ts";
+
+test("el mismo fan con dos claves sale una vez y conserva el no leído", () => {
+  const rows = collapseFans([
+    { creatorId: "c", threadKey: "111", fanKey: "111", fanHandle: "angela_venus", fanName: "Angela", unread: 0, excerpt: "i don't chase", lastMessageAt: "2026-11-07T22:04:00.000Z" },
+    { creatorId: "c", threadKey: "999", fanKey: "999", fanHandle: "@angela_venus", fanName: "Angela", unread: 1, excerpt: "i don't chase", lastMessageAt: "2026-11-07T22:04:00.000Z" },
+    { creatorId: "c", threadKey: "3", fanKey: "3", fanHandle: "otra", fanName: "Otra", unread: 0, excerpt: "hola", lastMessageAt: "2026-11-07T22:00:00.000Z" },
+  ]);
+  assert.equal(rows.length, 2);
+  const angela = rows.find((row) => row.fanHandle?.replace(/^@/, "") === "angela_venus");
+  assert.equal(angela?.unread, 1);
+  assert.equal(angela?.threadKey, "999");
+});
 
 test("los chats se leen de rutas de conversación y el aviso no se repite", () => {
   assert.equal(chatIntervalMinFromEnv(undefined), 2);
@@ -86,6 +98,16 @@ test("suma todas las respuestas de chats y completa el nombre con users/list", (
   assert.equal(named.find((row) => row.threadKey === "7")?.fanName, "Fan Uno");
   assert.equal(named.find((row) => row.threadKey === "7")?.avatarUrl, "https://cdn.example/a.jpg");
   assert.equal(JSON.stringify(named).includes("no-guardar"), false);
+  const bare = parseChatList({
+    list: [{
+      withUser: 9,
+      unreadMessagesCount: 1,
+      lastMessage: { id: 1, text: "nuevo", createdAt: "2026-11-09T21:34:00.000Z", fromUser: { id: 9 } },
+    }],
+  });
+  assert.equal(bare[0]?.threadKey, "9");
+  assert.equal(bare[0]?.fanKey, "9");
+  assert.equal(bare[0]?.excerpt, "nuevo");
   const messages = mergeMessages(
     parseChatMessages({ list: [], hasMore: true }, "7", "7"),
     parseChatMessages({
@@ -172,6 +194,7 @@ test("el último mensaje abre el hilo y el gasto sale de la ficha, sin inventarl
   assert.equal(threadMessages.length, 2);
   assert.equal(threadMessages.find((row) => row.messageKey === "503")?.fromFan, false);
   assert.equal(chatPageUrl("https://onlyfans.com/my/chats", "9", "onlyfans"), "https://onlyfans.com/my/chats/chat/9");
+  assert.equal(chatPageUrl("https://onlyfans.com/my/chats", "inbox", "onlyfans"), "https://onlyfans.com/my/chats");
   const opened = threadsToOpen([
     { ...named[0]!, unread: 0, lastMessageAt: "2026-11-05T18:00:00.000Z" },
     { ...named[1]!, unread: 2, lastMessageAt: "2026-11-05T10:00:00.000Z" },

@@ -123,9 +123,10 @@ export function threadsToOpen(
     .slice(0, limit);
 }
 
-/** OnlyFans pide los mensajes al abrir /my/chats/chat/{id}, no /my/chats/{id}. */
+/** OnlyFans pide los mensajes al abrir /my/chats/chat/{id}, no /my/chats/{id}. `inbox` es la bandeja real. */
 export function chatPageUrl(chatsUrl: string, threadKey: string, siteId: string): string {
   const base = chatsUrl.replace(/\/+$/, "");
+  if (!threadKey || threadKey === "inbox") return base;
   const id = encodeURIComponent(threadKey);
   if (siteId === "onlyfans") return `${base}/chat/${id}`;
   return `${base}/${id}`;
@@ -254,6 +255,17 @@ export function mergeThreads(current: ChatThread[], incoming: ChatThread[]): Cha
     map.set(row.threadKey, prev ? combineThread(prev, row) : row);
   }
   return [...map.values()].slice(0, 200);
+}
+
+/** Una fila por fan. OnlyFans a veces manda la misma conversación con dos claves. */
+export function collapseFans<T extends FanRow>(threads: T[]): T[] {
+  const map = new Map<string, T>();
+  for (const thread of threads) {
+    const key = fanGroup(thread);
+    const prev = map.get(key);
+    map.set(key, prev ? preferFanRow(prev, thread) : thread);
+  }
+  return [...map.values()];
 }
 
 export function mergeMessages(current: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
@@ -385,7 +397,7 @@ export function chatFailureReason(input: { redirected: boolean; outcome: Section
 function threadFrom(record: Record<string, unknown>, accountId: string | null): ChatThread | null {
   const user = nested(record.withUser) ?? nested(record.user) ?? nested(record.fan);
   const last = nested(record.lastMessage) ?? nested(record.last_message);
-  const fanKey = clean(user?.id, 40);
+  const fanKey = personId(record.withUser) ?? personId(record.user) ?? personId(record.fan);
   const threadKey = fanKey ?? clean(record.id, 40) ?? clean(record.threadId, 40);
   const fanHandle = handle(user?.username ?? user?.handle);
   const fanName = clean(user?.name ?? user?.displayName, 80);
@@ -426,6 +438,38 @@ export function readFanLists(user: Record<string, unknown> | null): string[] | n
   return [...new Set(names)];
 }
 
+function fanGroup(thread: FanRow): string {
+  const creator = thread.creatorId ?? "";
+  const handle = thread.fanHandle?.replace(/^@/, "").trim().toLowerCase();
+  if (handle) return `${creator}:h:${handle}`;
+  if (thread.fanKey) return `${creator}:k:${thread.fanKey}`;
+  return `${creator}:t:${thread.threadKey}`;
+}
+
+function preferFanRow<T extends FanRow>(left: T, right: T): T {
+  const rank = (row: FanRow) => (row.threadKey === row.fanKey ? 4 : 0) + (row.unread > 0 ? 2 : 0) + (row.excerpt ? 1 : 0);
+  const primary = rank(right) > rank(left) ? right : left;
+  const other = primary === left ? right : left;
+  const lastMessageAt = (right.lastMessageAt ?? "") > (left.lastMessageAt ?? "") ? right.lastMessageAt : left.lastMessageAt;
+  return {
+    ...primary,
+    unread: Math.max(left.unread, right.unread),
+    excerpt: primary.excerpt ?? other.excerpt,
+    lastMessageAt,
+  };
+}
+
+type FanRow = {
+  creatorId?: string;
+  threadKey: string;
+  fanKey: string | null;
+  fanHandle: string | null;
+  fanName: string | null;
+  unread: number;
+  excerpt: string | null;
+  lastMessageAt: string | null;
+};
+
 function previewMessage(record: Record<string, unknown>, accountId: string | null): ChatMessage | null {
   const user = nested(record.withUser) ?? nested(record.user) ?? nested(record.fan);
   const fanKey = clean(user?.id, 40);
@@ -452,10 +496,12 @@ function messageFrom(
   const ownThread = clean(record.chatId, 40) ?? clean(record.chat_id, 40) ?? clean(chat?.id, 40);
   const fromId = clean(nested(record.fromUser)?.id, 40);
   const withId = clean(nested(record.withUser)?.id, 40);
+  const toId = clean(nested(record.toUser)?.id, 40);
   const verified = threadKey && (fromId === threadKey || withId === threadKey) ? threadKey : null;
-  const thread = ownThread ?? (source === "socket" ? verified : threadKey);
+  const other = [withId, fromId, toId].find((id) => id != null && id !== accountId) ?? null;
+  const thread = ownThread ?? (source === "socket" ? verified ?? (accountId ? other : null) : threadKey);
   if (!thread) return null;
-  const fan = ownThread ?? fanKey;
+  const fan = ownThread ?? (source === "socket" && thread !== threadKey ? thread : fanKey);
   const fromUserId = fromId;
   const flag = fromFanFlag(fromUserId, fan, accountId);
   return {
@@ -633,7 +679,7 @@ function readFanSpend(
   const parts = [subscribesCents, tipsCents, postsCents, messagesCents].filter((value): value is number => value != null);
   const spentCents = money(source.totalSumm ?? source.spent ?? source.totalSpent) ?? (parts.length ? parts.reduce((sum, value) => sum + value, 0) : null);
   const avatarUrl = clean(record.avatar, 400);
-  const online = typeof record.isOnline === "boolean" ? record.isOnline : typeof record.online === "boolean" ? record.online : null;
+  const online = onlineFlag(record.isOnline) ?? onlineFlag(record.online);
   const subPriceCents = money(source.price ?? source.subscribePrice ?? source.regularPrice);
   const subExpiresAt = iso(source.expiredAt ?? source.expireDate);
   const renewRaw = source.autoRenew ?? source.renewedAuto ?? record.autoRenew;
@@ -641,6 +687,13 @@ function readFanSpend(
   const card = { spentCents, subscribesCents, tipsCents, postsCents, messagesCents, avatarUrl, online, subPriceCents, subExpiresAt, renewAuto };
   if (spentCents == null && parts.length === 0 && !avatarUrl && online == null && subPriceCents == null && !subExpiresAt && renewAuto == null) return null;
   return card;
+}
+
+function onlineFlag(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  if (value === 1 || value === "1" || value === "true") return true;
+  if (value === 0 || value === "0" || value === "false") return false;
+  return null;
 }
 
 function money(value: unknown): number | null {
@@ -678,6 +731,11 @@ function excerptOf(value: string | null): string | null {
   const text = value.replace(/\s+/g, " ").trim();
   if (!text || SECRET.test(text)) return null;
   return text.slice(0, 140);
+}
+
+function personId(value: unknown): string | null {
+  if (typeof value === "number" || typeof value === "string") return clean(value, 40);
+  return clean(nested(value)?.id, 40);
 }
 
 function nested(value: unknown): Record<string, unknown> | null {

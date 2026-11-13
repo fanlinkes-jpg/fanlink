@@ -225,6 +225,14 @@ export async function recordOutboundMedia(sql: ReadSql, outboundId: string, crea
   }
 }
 
+export async function listOutboundMediaIds(sql: ReadSql, outboundId: string): Promise<string[]> {
+  const rows = await sql.query<{ media_id: string | null }>(
+    "select media_id from of_outbound_media where outbound_id = $1 order by position, media_id",
+    [outboundId],
+  );
+  return rows.flatMap((row) => row.media_id ? [row.media_id] : []);
+}
+
 export async function fanVaultUses(sql: ReadSql, creatorId: string, fanKey: string): Promise<FanVaultUse[]> {
   const sends = await sql.query<{
     fan_key: string; item_key: string; sent_at: Date | string | null; price_cents: number | null;

@@ -1,4 +1,5 @@
 import type { Page } from "playwright";
+import { parseVaultBundle } from "./vault-model.ts";
 
 export type VaultFile = {
   id: string;
@@ -27,6 +28,181 @@ export function parseVaultPayload(payload: unknown): VaultFile[] {
     out.push({ id, title, kind });
   }
   return out;
+}
+
+const VAULT_LIST_CAP = 100;
+const VAULT_MEDIA_CAP = 40;
+const VAULT_OFFSET_CAP = 2_000;
+
+/** El fetch suelto no firma la petición: OnlyFans la rechaza y el panel queda vacío. */
+export function chooseVaultPayloads(direct: readonly unknown[], fromPage: readonly unknown[]): unknown[] {
+  if (countVault(direct).files > 0) return trimVaultPayloads(direct);
+  if (countVault(fromPage).files > 0 || countVault(fromPage).folders > 0) return trimVaultPayloads(fromPage);
+  if (countVault(direct).folders > 0) return trimVaultPayloads(direct);
+  return [];
+}
+
+export function countVault(payloads: readonly unknown[]): { files: number; folders: number } {
+  const files = new Set<string>();
+  const folders = new Set<string>();
+  for (const payload of payloads) {
+    const bundle = parseVaultBundle(payload);
+    for (const list of bundle.lists) folders.add(list.id);
+    for (const item of bundle.items) files.add(item.id);
+  }
+  return { files: files.size, folders: folders.size };
+}
+
+function trimVaultPayloads(payloads: readonly unknown[]): unknown[] {
+  const out: unknown[] = [];
+  let folders = 0;
+  let files = 0;
+  for (const payload of payloads) {
+    const bundle = parseVaultBundle(payload);
+    if (bundle.lists.length === 0 && bundle.items.length === 0) continue;
+    out.push(payload);
+    folders += bundle.lists.length;
+    files += bundle.items.length;
+    if (files >= VAULT_MEDIA_CAP && folders > 0) break;
+    if (files >= VAULT_MEDIA_CAP && folders >= VAULT_LIST_CAP) break;
+  }
+  return out;
+}
+
+/** Una página por clic. Copia el JSON que OnlyFans pide al abrir /my/vault. No hace un fetch sin firma. */
+export async function readVaultFromPage(page: Page, listId = "all", offset = 0): Promise<unknown[]> {
+  const cleanOffset = Number.isFinite(offset) && offset > 0 ? Math.min(VAULT_OFFSET_CAP, Math.floor(offset)) : 0;
+  const cleanList = listId.trim().slice(0, 80) || "all";
+  const fromPage = await readOpenedVault(page, cleanList, cleanOffset);
+  const counts = countVault(fromPage);
+  console.info(`[fanlink:vault] pagina una vez lista=${cleanList} offset=${cleanOffset} carpetas=${counts.folders} medios=${counts.files}`);
+  return fromPage;
+}
+
+/** Abre la bóveda de OnlyFans y copia el JSON que ella misma pide. Sin clics al compositor. */
+async function readOpenedVault(page: Page, listId: string, offset: number): Promise<unknown[]> {
+  const found: unknown[] = [];
+  const pending: Array<Promise<void>> = [];
+  const onResponse = (response: { url(): string; status(): number; text(): Promise<string> }) => {
+    if (response.status() < 200 || response.status() >= 300) return;
+    if (!/\/api2\/v2\/vault\//.test(response.url())) return;
+    pending.push(response.text().then((raw) => {
+      try {
+        found.push(JSON.parse(raw) as unknown);
+      } catch {
+        // No es el listado.
+      }
+    }).catch(() => undefined));
+  };
+  const target = page.context();
+  target.on("response", onResponse);
+  try {
+    await page.goto("https://onlyfans.com/my/vault", { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
+    await waitForVault(found, pending, 12_000, () => countVault(found).files > 0);
+    if (listId !== "all") await openFolder(page, found, pending, listId);
+    if (offset > 0) await scrollForMore(page, found, pending, offset);
+    await Promise.all(pending);
+    return found;
+  } finally {
+    target.off("response", onResponse);
+  }
+}
+
+async function openFolder(page: Page, found: unknown[], pending: Array<Promise<void>>, listId: string): Promise<void> {
+  const name = found.flatMap((payload) => parseVaultBundle(payload).lists).find((list) => list.id === listId)?.name;
+  if (!name) return;
+  const before = countVault(found).files;
+  const clicked = await page.getByRole("button", { name, exact: true }).click({ timeout: 2_000 }).then(() => true).catch(async () => {
+    return page.getByText(name, { exact: true }).first().click({ timeout: 2_000 }).then(() => true).catch(() => false);
+  });
+  if (!clicked) return;
+  await waitForVault(found, pending, 6_000, () => countVault(found).files > before);
+}
+
+async function scrollForMore(page: Page, found: unknown[], pending: Array<Promise<void>>, offset: number): Promise<void> {
+  const target = Math.min(VAULT_OFFSET_CAP, offset + 1);
+  const deadline = Date.now() + 8_000;
+  while (Date.now() < deadline && countVault(found).files < target && countVault(found).files < VAULT_MEDIA_CAP) {
+    await page.mouse.wheel(0, 1_400).catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+  await Promise.all(pending);
+}
+
+async function waitForVault(found: unknown[], pending: Array<Promise<void>>, waitMs: number, done: () => boolean): Promise<void> {
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline && !done()) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  await Promise.all(pending);
+}
+
+/** Abre la página y espera el JSON de los medios. No vuelve antes de leer el cuerpo. */
+export async function captureVaultAt(page: Page, vaultUrl: string, waitMs = 15_000): Promise<unknown[]> {
+  const found: unknown[] = [];
+  const pending: Array<Promise<void>> = [];
+  const onResponse = (response: { url(): string; status(): number; text(): Promise<string> }) => {
+    if (response.status() < 200 || response.status() >= 300) return;
+    if (!/vault/i.test(response.url())) return;
+    pending.push(response.text().then((raw) => {
+      try {
+        found.push(JSON.parse(raw) as unknown);
+      } catch {
+        // La página puede pedir un HTML, no un listado.
+      }
+    }).catch(() => undefined));
+  };
+  page.on("response", onResponse);
+  try {
+    await page.goto(vaultUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
+    const clicked = await clickVaultButton(page) || await clickComposerMedia(page, () => found.some((payload) => parseVaultBundle(payload).items.length > 0));
+    console.info(`[fanlink:vault] url=${page.url()} boton=${clicked ? "si" : "no"}`);
+    const deadline = Date.now() + waitMs;
+    while (Date.now() < deadline) {
+      if (found.some((payload) => parseVaultBundle(payload).items.length > 0)) break;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    await Promise.all(pending);
+    return found;
+  } finally {
+    page.off("response", onResponse);
+  }
+}
+
+async function clickVaultButton(page: Page): Promise<boolean> {
+  const selector = [
+    "[at-attr='attach_vault']",
+    "[at-attr='add_vault_media']",
+    "[at-attr='vault_btn']",
+    "[data-fanlink-vault]",
+    "button[aria-label*='vault' i]",
+    "button[aria-label*='bóveda' i]",
+    "button[aria-label*='boveda' i]",
+    "button[aria-label*='media vault' i]",
+  ].join(", ");
+  const button = page.locator(selector).first();
+  const visible = await button.waitFor({ state: "visible", timeout: 8_000 }).then(() => true).catch(() => false);
+  if (!visible) {
+    const attrs = await page.locator("[at-attr]").evaluateAll((nodes) => nodes.slice(0, 20).map((node) => node.getAttribute("at-attr") ?? "")).catch(() => []);
+    console.info(`[fanlink:vault] sin boton attrs=${attrs.join(",")}`);
+    return false;
+  }
+  await button.click({ timeout: 2_000 }).catch(() => undefined);
+  return true;
+}
+
+async function clickComposerMedia(page: Page, hasMedia: () => boolean): Promise<boolean> {
+  const buttons = page.locator("form button, .b-chat__footer button, .b-make-post button");
+  const count = await buttons.count().catch(() => 0);
+  for (let index = 0; index < Math.min(count, 8); index += 1) {
+    const button = buttons.nth(index);
+    const name = await button.innerText().catch(() => "");
+    if (/send|enviar/i.test(name)) continue;
+    await button.click({ timeout: 1_000 }).catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    if (hasMedia()) return true;
+  }
+  return false;
 }
 
 export async function captureVaultPayloads(page: Page, waitMs = 2_500): Promise<unknown[]> {

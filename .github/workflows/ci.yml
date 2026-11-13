@@ -11,7 +11,6 @@ on:
       - cursor/chat-mirror-617f
       - cursor/of-live-view-617f
       - cursor/dashboard-617f
-      - grok/video-vault-v2
 
 concurrency:
   # El push y el pull request no comparten grupo: uno no cancela al otro.
@@ -20,8 +19,9 @@ concurrency:
 
 jobs:
   check:
-    # En esta rama el push ya cubre el pull request del mismo repositorio.
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
+    # El push de las ramas listadas ya cubre su pull request.
+    # Una rama fuera de esa lista (esta se quita antes de fusionar) corre solo en el pull request.
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || !contains(fromJSON('["main","cursor/of-session-crm-617f","cursor/mass-message-617f","cursor/chat-followups-617f","cursor/chat-mirror-617f","cursor/of-live-view-617f","cursor/dashboard-617f"]'), github.head_ref)))
     timeout-minutes: 30
     runs-on: ubuntu-latest
     services:

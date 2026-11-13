@@ -4,7 +4,7 @@ Esto no despliega nada por sí solo. Prepara Postgres, la app y Chromium, y deja
 
 ## 1. Máquina
 
-Hace falta Docker y un VPS con escritorio virtual solo si quieres ver la ventana de login. En un servidor sin pantalla, Conectar no puede abrir Chromium visible: el login de OnlyFans sigue pidiendo una persona delante. El resto de lecturas usa el perfil que ya guardaste.
+Hace falta Docker y un VPS con escritorio virtual solo si quieres ver la ventana de login. En un servidor sin pantalla, Conectar no puede abrir Chromium visible: el login de OnlyFans sigue pidiendo una persona delante. El resto de lecturas usa el perfil que ya guardaste. Ese directorio (`data/profiles/<cuenta>`) lo abre un solo Chromium por cuenta: Conectar cierra la sala y espera como mucho 25 s a que terminen las lecturas en curso. Si siguen, no abre la ventana. No cierra el navegador debajo de una lectura. Fans en línea no navega la página de la escucha. No arranques otro proceso sobre la misma carpeta. Al soltar el perfil, Fanlink reescribe la sesión cifrada para no guardar una `sess` vieja.
 
 No generes otra `FANLINK_SESSION_KEY` si ya tienes `data/sessions`. Esa clave descifra las sesiones y los proxies.
 
@@ -72,22 +72,13 @@ export FANLINK_SEND_ALLOW_ACCOUNTS=9ikis52,@bigpoppa1111
 export FANLINK_SEND_PER_MINUTE=4
 ```
 
-Solo esa cuenta (el id `9ikis52` o el handle `@bigpoppa1111`, el que tenga guardado la ficha o la comprobación) puede pulsar Enviar. El servidor rechaza cualquier otra aunque la petición llegue igual. Hace falta el perfil de Chromium de Conectar. El envío abre `/my/chats/chat/{id}`, escribe en la caja y pulsa Send; el precio pasa por el modal nativo. No llama `api2` firmado. Si OnlyFans no devuelve el mensaje propio, el borrador queda en error y no se reintenta.
+Solo esa cuenta (el id `9ikis52` o el handle `@bigpoppa1111`, el que tenga guardado la ficha o la comprobación) puede salir de verdad. El servidor rechaza cualquier otra aunque la petición llegue igual. Hace falta el perfil de Chromium de Conectar. El envío abre `/my/chats/chat/{id}`, escribe en la caja y pulsa Send; el precio pasa por el modal nativo. No llama `api2` firmado. En el CRM la burbuja sale al instante, antes de esa espera. Si OnlyFans no devuelve el mensaje propio, el borrador queda en error: se puede reintentar a mano con el mismo id. Un envío ya marcado como enviado no se reintenta aunque hayan pasado 30 segundos. «Pendiente de confirmar» se muestra y no se reintenta; la dueña puede marcarlo como revisado, sin volver a mandarlo. Si el navegador ya se abrió y algo falla antes de confirmar, queda «Pendiente de confirmar» para no mandarlo dos veces. La clave anti-duplicado incluye al autor. Con los flags apagados el botón no se pulsa, Enter no encola y no se abre el navegador. No hace falta ninguna variable nueva y no cambia `FANLINK_SESSION_KEY`. Mientras el navegador tenga envíos en cola que aún no están confirmados en el servidor, cerrar la pestaña avisa: no se crea la fila al encolar. Cambiar de sección no tira esa cola. Un usuario vacío mientras la sesión carga tampoco. `reset()` solo corre si el cierre de sesión ha salido bien. Un envío que sigue vivo renueva su lease (`claimed_at` y el id del proceso, migración `0043_outbound_lease.sql`) y no se da por fallido aunque tarde más de 3 minutos. Si el proceso deja de latir, pasa a «Pendiente de confirmar» y no se reintenta. `0043` solo añade esas dos columnas, se puede volver a aplicar y no borra filas. El error de otro chatter no frena el hilo. La bóveda, en cada clic, pide como mucho 100 carpetas y 40 medios (`/api2/v2/vault/lists` y `/api2/v2/vault/media`). Es lectura, no el camino de Send, que no llama a `api2`. Si falla, se muestra el error y no se pulsa el compositor. Un medio comprado no se candado.
 
-## 6. OnlyFans en directo
+## 6. Bandeja
 
-Sigue apagado si no pones el flag. Usa la misma allowlist que el envío, porque el teclado de esa pestaña escribe en OnlyFans de verdad. No cambia `FANLINK_SESSION_KEY`. No abre una ventana visible ni un segundo Chromium: reutiliza el perfil persistente de la cuenta.
+Mensajes es la bandeja del CRM. No se monta la página de OnlyFans dentro del chat. Con el directo apagado, o en este proceso de despliegue (el socket solo existe con `npm run dev`), esa bandeja sigue siendo la pantalla. No se borra hasta que el directo funcione aquí.
 
-```bash
-export FANLINK_LIVE_VIEW_ENABLED=true
-export FANLINK_SEND_ALLOW_ACCOUNTS=9ikis52,@bigpoppa1111
-```
-
-En el chat, la pestaña **OnlyFans** muestra `/my/chats/chat/{id}` del fan. **Equipo** sigue siendo el compositor de Fanlink. Solo un usuario tiene el control; el resto ve la imagen. **Ceder el control** lo suelta sin cerrar a quien mira. Si el controlador no toca la pestaña, también lo suelta y los demás siguen viendo. Como máximo hay 4 visores. Los fotogramas van de 1 a 8 (`FANLINK_LIVE_FPS`, por defecto 4).
-
-El WebSocket `/api/live-view` solo se engancha con `npm run dev` (el servidor de Vite). `vite preview` y el build de producción no lo abren: fuera del portátil hay que servir con el servidor de desarrollo. El ticket va en el primer mensaje del socket, no en la URL, y el origen tiene que ser el de esta app.
-
-Teclear, pulsar Enter y subir un archivo exigen además `FANLINK_ENABLE_SEND=true`. Si está apagado, la pestaña es solo lectura. La página no sale de `/my/chats` ni de la API de mensajes: `/my/statements`, `/my/statistics`, banca, pagos y ajustes quedan bloqueados, también si la página intenta cambiar la ruta por dentro. No se abren popups ni descargas. La sincronización y el envío del resto de la cuenta siguen usando el mismo perfil. Con `VITE_AUTH_ENABLED=false` en localhost funciona sin login. Con el acceso encendido hace falta una sesión con permiso de mensajes. El log es `[fanlink:live]` y no guarda lo que se escribe.
+Teclear, pulsar Enter y subir un archivo exigen además `FANLINK_ENABLE_SEND=true`. Si está apagado, la pestaña es solo lectura. La página no sale de `/my/chats` ni de la API de mensajes: `/my/statements`, `/my/statistics`, banca, pagos y ajustes quedan bloqueados, también si la página intenta cambiar la ruta por dentro. No se abren popups ni descargas. Al cerrar la sala se quitan esas guardias, para que la misma pestaña no las acumule si se vuelve a abrir. Una sala vacía se cierra a los 60 segundos (`FANLINK_LIVE_GRACE_MS`) y suelta el perfil. Una sala que no llegó a abrir no se queda en memoria. La sincronización y el envío del resto de la cuenta siguen usando el mismo perfil, el único Chromium de esa cuenta. Con `VITE_AUTH_ENABLED=false` en localhost funciona sin login. Con el acceso encendido hace falta una sesión con permiso de mensajes. El log es `[fanlink:live]` y no guarda lo que se escribe.
 
 ## 7. Tiempo real del chat
 
@@ -97,7 +88,7 @@ Teclear, pulsar Enter y subir un archivo exigen además `FANLINK_ENABLE_SEND=tru
 
 El espejo del hilo incluye el reproductor. Foto, vídeo y audio salen de `GET /api/chat-media`. La miniatura de la bóveda sale de `GET /api/vault-media`. Las dos exigen sesión: sin cookie responden 401, y un rol sin permiso 403. El cuerpo es el archivo, no una redirección al CDN. El log es `[fanlink:media]` con la cuenta y el id; no se escribe la URL firmada.
 
-`npm run db:migrate` aplica también `0037_vault_mirror.sql` (piezas, listas y el puente si ya existía la bóveda antigua), `0038_vault_fan_filter.sql` (envíos a un fan y los filtros guardados de cada chatter) y `0039_outbound_media.sql` (medios de un borrador). Se pueden volver a aplicar. No borran filas. La búsqueda y los filtros de la bóveda (`POST /api/vault-query`) corren en el servidor. Un chatter no puede pedir el filtro de otro. `POST /api/vault-send` rechaza `NO VENDER` en el chat y en el masivo antes de abrir el navegador. El envío real de medios sigue sin existir: si el borrador lleva una pieza, no se abre OnlyFans.
+`npm run db:migrate` aplica también `0037_vault_mirror.sql` (piezas, listas y el puente si ya existía la bóveda antigua), `0038_vault_fan_filter.sql` (envíos a un fan y los filtros guardados de cada chatter) y `0039_outbound_media.sql` (medios de un borrador). Se pueden volver a aplicar. No borran filas. La búsqueda y los filtros de la bóveda (`POST /api/vault-query`) corren en el servidor. Un chatter no puede pedir el filtro de otro. `POST /api/vault-send` rechaza `NO VENDER` en el chat y en el masivo antes de abrir el navegador. El envío real de medios sigue sin existir: si el borrador lleva una pieza, no se abre OnlyFans. La lectura del panel no firma `api2`: si ese fetch vuelve vacío, abre `https://onlyfans.com/my/vault` y se queda con el JSON que pide esa página. No pulsa el compositor.
 
 `0022_message_media.sql` y `0026_chat_history.sql` guardan los metadatos del mensaje. La reproducción pasa por el proxy autenticado, no por una URL suelta.
 

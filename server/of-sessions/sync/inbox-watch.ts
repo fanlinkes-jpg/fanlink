@@ -1,8 +1,12 @@
 import type { BrowserContext, Page } from "playwright";
 import { openWorkPage } from "../sessions/work-page.ts";
-import { chatPageUrl, classifyChatPath, parseChatMessages, parsePreviewMessages, type ChatMessage } from "./chats.ts";
+import { closeIfIdle } from "../live/pages.ts";
+import { chatPageUrl, classifyChatPath, isUsersDirectoryUrl, parseChatList, parseChatMessages, parsePreviewMessages, parseUsersDirectory, type ChatMessage, type ChatThread, type ChatUser } from "./chats.ts";
 import { parseLivePayload } from "./live-frames.ts";
 import { FALLBACK_RELOAD_MS, nextFallbackThread, WATCH_IDLE_MS, type WatchedThread } from "./watch-plan.ts";
+
+/** La lista se vuelve a pedir. Si no, un chat nuevo no entra en la bandeja. */
+export const LIST_RELOAD_MS = 15_000;
 
 export type WatchTarget = {
   accountId: string;
@@ -17,6 +21,8 @@ export type WatchSession = {
   goto(url: string): Promise<number>;
   listen(handlers: {
     onMessages: (messages: ChatMessage[]) => void;
+    onThreads?: (threads: ChatThread[]) => void;
+    onUsers?: (users: ChatUser[]) => void;
     onBlock: (reason: string) => void;
   }): void;
   close(): Promise<void>;
@@ -32,8 +38,11 @@ export async function runInboxWatch(input: {
   target: () => WatchTarget | null;
   open: (accountId: string) => Promise<WatchSession>;
   save: (creatorId: string, messages: ChatMessage[]) => Promise<void>;
+  saveThreads?: (creatorId: string, threads: ChatThread[]) => Promise<void>;
+  saveUsers?: (creatorId: string, users: ChatUser[]) => Promise<void>;
   /** Devuelve los milisegundos de la pausa de la cuenta. La pestaña espera eso, no un fijo de 15 s. */
   onBlock: (accountId: string, reason: string) => number;
+  pullList?: (accountId: string) => Promise<boolean>;
   onNavigate?: (threadKey: string | null) => void;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
@@ -49,6 +58,7 @@ export async function runInboxWatch(input: {
   let openedAt: number | null = null;
   let lastUsefulAt: number | null = null;
   let lastGlobalReloadAt: number | null = null;
+  let lastListReloadAt: number | null = null;
   let lastWatcherAt = input.now();
   let blockedUntil: number | null = null;
   const reloadedAt = new Map<string, number>();
@@ -81,10 +91,17 @@ export async function runInboxWatch(input: {
       continue;
     }
     if (!session || accountId !== target.accountId) {
+      if (input.pullList) {
+        const ok = await input.pullList(target.accountId).catch(() => false);
+        if (ok) lastUsefulAt = input.now();
+        await input.sleep(ok ? 5_000 : 15_000);
+        continue;
+      }
       await shut();
       try {
         session = await input.open(target.accountId);
-      } catch {
+      } catch (error) {
+        console.info(`[fanlink:chat] escucha no abre: ${error instanceof Error ? error.message.slice(0, 80) : "error"}`);
         await input.sleep(2_000);
         continue;
       }
@@ -99,6 +116,15 @@ export async function runInboxWatch(input: {
           const kept = messages.filter((message) => message.threadKey);
           if (id && kept.length) void input.save(id, kept);
         },
+        onThreads: (threads) => {
+          lastUsefulAt = input.now();
+          const id = current();
+          if (id && threads.length) void input.saveThreads?.(id, threads);
+        },
+        onUsers: (users) => {
+          const id = current();
+          if (id && users.length) void input.saveUsers?.(id, users);
+        },
         onBlock: (reason) => {
           if (!accountId) return;
           blockedUntil = input.now() + input.onBlock(accountId, reason);
@@ -106,6 +132,7 @@ export async function runInboxWatch(input: {
       });
       input.onNavigate?.(null);
       const status = await session.goto(target.chatsUrl);
+      lastListReloadAt = input.now();
       if (status === 403 || status === 429) {
         blockedUntil = input.now() + input.onBlock(target.accountId, String(status));
         await shut();
@@ -117,6 +144,29 @@ export async function runInboxWatch(input: {
     const next = quiet
       ? nextFallbackThread(target.threads, reloadedAt, openedAt, lastGlobalReloadAt, now, fallbackMs)
       : null;
+    const listAge = lastListReloadAt == null ? 0 : now - lastListReloadAt;
+    const listDue = session != null && lastListReloadAt != null && listAge >= LIST_RELOAD_MS;
+    if (listDue && input.pullList) {
+      const ok = await input.pullList(accountId ?? target.accountId).catch(() => false);
+      if (ok) {
+        lastListReloadAt = input.now();
+        lastUsefulAt = input.now();
+        await input.sleep(200);
+        continue;
+      }
+    }
+    if (listDue && session) {
+      input.onNavigate?.(null);
+      const status = await session.goto(target.chatsUrl);
+      lastListReloadAt = input.now();
+      pageThread = null;
+      if (status === 403 || status === 429) {
+        blockedUntil = input.now() + input.onBlock(target.accountId, String(status));
+        await shut();
+      }
+      await input.sleep(200);
+      continue;
+    }
     if (next && session) {
       input.onNavigate?.(next);
       const status = await session.goto(chatPageUrl(target.chatsUrl, next, target.siteId));
@@ -134,18 +184,26 @@ export async function runInboxWatch(input: {
   await shut();
 }
 
-export function watchPage(page: Page, threadKey: () => string): WatchSession {
+export function watchPage(page: Page, threadKey: () => string, accountUserId: () => string | null = () => null): WatchSession {
   return {
     async goto(url: string) {
-      const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => null);
+      const same = page.url().split("?")[0] === url.split("?")[0];
+      const pending = page.waitForResponse(
+        (response) => classifyChatPath(response.url()) !== "other" && response.status() < 400,
+        { timeout: 8_000 },
+      ).catch(() => null);
+      const response = same
+        ? await page.reload({ waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => null)
+        : await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => null);
+      await pending;
       return response?.status() ?? 0;
     },
-    listen({ onMessages, onBlock }) {
+    listen({ onMessages, onThreads, onUsers, onBlock }) {
       page.on("websocket", (socket) => {
         socket.on("framereceived", (frame) => {
           const text = typeof frame.payload === "string" ? frame.payload : frame.payload.toString("utf8");
           const key = threadKey();
-          const parsed = parseLivePayload(text, key, key);
+          const parsed = parseLivePayload(text, key, key, accountUserId());
           if (parsed.messages.length) onMessages(parsed.messages);
         });
       });
@@ -153,21 +211,33 @@ export function watchPage(page: Page, threadKey: () => string): WatchSession {
         const status = response.status();
         if (status === 403 || status === 429) onBlock(String(status));
         const kind = classifyChatPath(response.url());
+        if (isUsersDirectoryUrl(response.url())) {
+          void response.text().then((raw) => {
+            if (raw.length > 1_500_000) return;
+            const users = parseUsersDirectory(JSON.parse(raw) as unknown);
+            if (users.length) onUsers?.(users);
+          }).catch(() => undefined);
+          return;
+        }
         if (kind === "other") return;
         void response.text().then((raw) => {
           if (raw.length > 1_500_000) return;
           const body = JSON.parse(raw) as unknown;
           const key = threadKey();
+          if (kind === "list") {
+            const threads = parseChatList(body);
+            if (threads.length) onThreads?.(threads);
+          }
           const messages = kind === "list" ? parsePreviewMessages(body) : parseChatMessages(body, key, key);
           if (messages.length) onMessages(messages);
         }).catch(() => undefined);
       });
     },
-    close: () => page.close().catch(() => undefined),
+    close: () => closeIfIdle(page),
   };
 }
 
-export async function openWatchContext(context: BrowserContext, threadKey: () => string): Promise<WatchSession> {
+export async function openWatchContext(context: BrowserContext, threadKey: () => string, accountUserId: () => string | null = () => null): Promise<WatchSession> {
   const page = await openWorkPage(context);
-  return watchPage(page, threadKey);
+  return watchPage(page, threadKey, accountUserId);
 }

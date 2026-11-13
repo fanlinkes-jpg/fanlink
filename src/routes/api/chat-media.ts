@@ -17,6 +17,7 @@ export const Route = createFileRoute("/api/chat-media")({
           const access = await ensureStaff(sql, userId, !authConfigured && userId === DEV_USER_ID);
           const creatorIds = await accountCreatorIds(sql);
           const creatorId = new URL(request.url).searchParams.get("creatorId") ?? "";
+          const variant = new URL(request.url).searchParams.get("variant") === "preview" ? "preview" : "full";
           return handleChatMedia(request, {
             session: async () => ({ userId: access.userId, role: access.role, perms: access.perms, creatorIds }),
             findMedia: async (creator, threadKey, messageKey, index) => {
@@ -25,7 +26,8 @@ export const Route = createFileRoute("/api/chat-media")({
                 [creator, threadKey, messageKey],
               );
               const item = decodeMedia(rows[0]?.media_json ?? null)?.[index];
-              return { url: item?.full ?? item?.preview ?? null };
+              const url = variant === "preview" ? (item?.preview ?? item?.full ?? null) : (item?.full ?? item?.preview ?? null);
+              return { url };
             },
             fetchBytes: (target, range) => readSessionMediaBytes(creatorId, target, range),
             log: (line) => {

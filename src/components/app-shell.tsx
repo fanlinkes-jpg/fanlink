@@ -1,5 +1,5 @@
 import { ClientOnly, Link, useNavigate, useRouterState } from "@tanstack/react-router";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   BarChart3,
   CalendarClock,
@@ -30,6 +30,9 @@ import { useCrm, type Perm } from "@/lib/crm";
 import { hasPerm } from "@/lib/access-policy";
 import { SessionSync } from "@/components/session-sync";
 import { UserButton } from "@/lib/auth/gates";
+import { useCurrentUserState } from "@/lib/auth/use-current-user";
+import { installChatSendTransport } from "@/lib/chat-send-bind";
+import { chatSendSession } from "@/lib/chat-send-session";
 
 type Item = { href: string; label: string; icon: LucideIcon; perm?: Perm };
 
@@ -195,6 +198,13 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
   const workspaceReady = useCrm((s) => s.workspaceReady);
   const workspaceNotice = useCrm((s) => s.workspaceNotice);
   const teamAccess = useCrm((s) => s.teamAccess);
+  const { user, isPending } = useCurrentUserState();
+  useEffect(() => {
+    installChatSendTransport();
+  }, []);
+  useEffect(() => {
+    chatSendSession.bindUser(user?.id ?? null, { pending: isPending });
+  }, [user?.id, isPending]);
 
   const allowed = (items: Item[]) => items.filter((item) => hasPerm(teamAccess, item.perm ?? "mensajes") || !item.perm);
   const currentOk = MENUS.flatMap((m) => m.items).every((item) => {

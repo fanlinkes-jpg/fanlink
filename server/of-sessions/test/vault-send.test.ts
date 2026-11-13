@@ -144,7 +144,7 @@ test("el historial solo anota las piezas adjuntadas y dos envíos iguales no sal
     assert.equal(await count(db, "of_chat_outbound"), 1);
     const failed = await sendChatMessageView("chatter-a", {
       creatorId: "9ikis52", fanKey: "7", threadKey: "7", body: "reintento", priceCents: null, vaultItemIds: ["otra"],
-    }, hooks(sql, async () => ({ messageId: null, reason: "no enviado" })));
+    }, hooks(sql, async () => ({ messageId: null, reason: "no está el botón Send" })));
     assert.equal(failed.sent, false);
     const retry = await sendChatMessageView("chatter-a", {
       creatorId: "9ikis52", fanKey: "7", threadKey: "7", body: "reintento", priceCents: null, vaultItemIds: ["otra"],
@@ -155,7 +155,7 @@ test("el historial solo anota las piezas adjuntadas y dos envíos iguales no sal
     assert.equal(retry.sent, true);
     assert.equal(opened, 2);
     const at = new Date("2026-11-07T10:00:00.000Z");
-    const key = sendClaimKey({ creatorId: "c", threadKey: "1", fanKey: null, body: "x", priceCents: null, vaultItemIds: [] });
+    const key = sendClaimKey({ authorId: "a", creatorId: "c", threadKey: "1", fanKey: null, body: "x", priceCents: null, vaultItemIds: [] });
     assert.equal(await claimSend(sql, key, "a", at), true);
     assert.equal(await claimSend(sql, key, "b", new Date(at.getTime() + 10_000)), false);
     assert.equal(await claimSend(sql, key, "c", new Date(at.getTime() + 31_000)), true);

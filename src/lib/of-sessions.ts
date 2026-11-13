@@ -179,6 +179,9 @@ export type CreatorChatList = {
     body: string;
     scheduledAt: string | null;
     authorName: string | null;
+    authorId: string | null;
+    priceCents: number | null;
+    vault: Array<{ id: string; name: string }>;
     status: "pending" | "error";
     errorReason: string | null;
   }>;
@@ -329,10 +332,26 @@ export const loadMoreChats = createServerFn({ method: "POST" })
 
 export const readChatVault = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { creatorId: string; threadKey: string }) => input)
+  .validator((input: { creatorId: string; threadKey: string; listId?: string; offset?: number }) => input)
   .handler(async ({ context, data }) => {
     const { readChatVaultView } = await import("./of-sessions-runtime.server");
     return readChatVaultView(context.userId, data);
+  });
+
+export const listOnlineFans = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string }) => input)
+  .handler(async ({ context, data }) => {
+    const { listOnlineFansView } = await import("./of-sessions-runtime.server");
+    return listOnlineFansView(context.userId, data);
+  });
+
+export const runFanChatMenu = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string; fanKey: string; request: unknown }) => input)
+  .handler(async ({ context, data }) => {
+    const { runFanChatMenuView } = await import("./of-sessions-runtime.server");
+    return runFanChatMenuView(context.userId, data);
   });
 
 export const queryVaultMirror = createServerFn({ method: "POST" })
@@ -353,10 +372,35 @@ export const openLiveView = createServerFn({ method: "POST" })
 
 export const sendChatMessage = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; vaultItemIds?: string[] }) => input)
+  .validator((input: {
+    creatorId: string;
+    fanKey: string | null;
+    threadKey: string | null;
+    body: string;
+    priceCents: number | null;
+    vaultItemIds?: string[];
+    tagHandle?: string | null;
+    clientId?: string;
+  }) => input)
   .handler(async ({ context, data }) => {
     const { sendChatMessageView } = await import("./of-sessions-runtime.server");
     return sendChatMessageView(context.userId, data);
+  });
+
+export const discardChatOutbound = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { clientId: string }) => input)
+  .handler(async ({ context, data }) => {
+    const { discardChatOutboundView } = await import("./of-sessions-runtime.server");
+    return discardChatOutboundView(context.userId, data);
+  });
+
+export const reviewChatOutbound = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { clientId: string }) => input)
+  .handler(async ({ context, data }) => {
+    const { reviewChatOutboundView } = await import("./of-sessions-runtime.server");
+    return reviewChatOutboundView(context.userId, data);
   });
 
 export const recordChatOutbound = createServerFn({ method: "POST" })

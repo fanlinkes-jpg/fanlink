@@ -29,11 +29,13 @@ import { chatIntervalMinFromEnv } from "../../server/of-sessions/sync/chats.ts";
 import { chatIntervalMinutes, inboxIsOpen, activeThreadWatches } from "../../server/of-sessions/sync/live.ts";
 import { openWatchContext, runInboxWatch } from "../../server/of-sessions/sync/inbox-watch.ts";
 import { pickAccountWatch } from "../../server/of-sessions/sync/watch-plan.ts";
-import { listChatMeta, listChats, listOpenHistory, listPendingOutbounds, markChatList, markHistory, markOutboundAwaiting, markOutboundError, markOutboundSent, recordOutbound, saveChatRead } from "../../server/of-sessions/sync/chat-store.ts";
+import { listChatMeta, listChats, listOpenHistory, listPendingOutbounds, markChatList, markHistory, markOutboundAwaiting, markOutboundError, markOutboundSent, recordOutbound, saveChatRead, saveFanCards } from "../../server/of-sessions/sync/chat-store.ts";
 import { historyPerMinute, listPageDone, nextHistoryThread, oldestCursor, pageFinished } from "../../server/of-sessions/sync/history.ts";
 import { captureChatListPage, captureOlderMessages } from "../../server/of-sessions/sync/history-scroll.ts";
 import { openWorkPage } from "../../server/of-sessions/sessions/work-page.ts";
-import { captureVaultPayloads, type VaultFile } from "../../server/of-sessions/sync/vault-listen.ts";
+import { type VaultFile } from "../../server/of-sessions/sync/vault-listen.ts";
+import type { OnlineFan } from "../../server/of-sessions/sync/online-fans.ts";
+import { normalizeFanMenuRequest, runFanMenuOnPage, type FanMenuResult } from "../../server/of-sessions/sync/fan-menu.ts";
 import { chatPageUrl } from "../../server/of-sessions/sync/chats.ts";
 import { sendPace } from "../../server/of-sessions/send/gate.ts";
 import { chatSendGate, publicSendReason, type SendAccount } from "../../server/of-sessions/send/gate.ts";
@@ -63,6 +65,7 @@ const globalRef = globalThis as typeof globalThis & {
   __ofSyncLoop__?: { stop: () => void };
   __ofChatLoop__?: { stop: () => void };
   __ofNotificationLoop__?: { stop: () => void };
+  __ofApiList__?: boolean;
 };
 
 export function ensureSyncScheduler(): void {
@@ -98,6 +101,7 @@ async function createManager(): Promise<SessionManager> {
   await runtime.sessions.recoverInterruptedLogins();
   bootSyncLoop(runtime.sessions);
   bootChatLoop(runtime.sessions);
+  bootApiListLoop(runtime.sessions);
   bootHistoryLoop(runtime.sessions);
   bootNotificationLoop(runtime.sessions);
   return runtime.sessions;
@@ -130,6 +134,7 @@ function bootSyncLoop(sessions: SessionManager): void {
 }
 
 const threadRef = { key: "chat" };
+const userRef = { id: null as string | null };
 let watchLoop: Promise<void> | null = null;
 
 export function kickInboxWatch(): void {
@@ -141,6 +146,7 @@ export function kickInboxWatch(): void {
       if (!picked) return null;
       const accountId = accountForCreator(picked.creatorId);
       if (!accountId) return null;
+      userRef.id = creatorUsers.get(picked.creatorId) ?? null;
       return {
         accountId,
         creatorId: picked.creatorId,
@@ -158,7 +164,7 @@ export function kickInboxWatch(): void {
           finish = done;
         });
         void sessions.holdWatch(accountId, async (context) => {
-          const session = await openWatchContext(context, () => threadRef.key);
+          const session = await openWatchContext(context, () => threadRef.key, () => userRef.id);
           resolve({
             goto: (url) => session.goto(url),
             listen: (handlers) => session.listen(handlers),
@@ -175,6 +181,14 @@ export function kickInboxWatch(): void {
     },
     save: async (creatorId, messages) => {
       await saveChatRead(await getSql(), creatorId, { threads: [], messages, reason: null, jsonPaths: [] });
+      console.info(`[fanlink:chat] mensajes creator=${creatorId} nuevos=${messages.length}`);
+    },
+    saveThreads: async (creatorId, threads) => {
+      await saveChatRead(await getSql(), creatorId, { threads, messages: [], reason: null, jsonPaths: [] });
+      console.info(`[fanlink:chat] lista creator=${creatorId} hilos=${threads.length}`);
+    },
+    saveUsers: async (creatorId, users) => {
+      await saveFanCards(await getSql(), creatorId, users);
     },
     onNavigate: (threadKey) => {
       threadRef.key = threadKey ?? "";
@@ -183,6 +197,18 @@ export function kickInboxWatch(): void {
       const delay = noteAccountBlock(accountId, reason);
       console.info(`[fanlink:chat] escucha pausada cuenta=${accountId} motivo=${reason} espera=${delay}`);
       return delay;
+    },
+    pullList: async (accountId) => {
+      const sessions = await getOfSessionManager();
+      const read = await sessions.readChatsDirect(accountId);
+      const account = (await sessions.listAccounts()).find((item) => item.id === accountId);
+      if (!account?.creatorId || read.threads.length === 0) {
+        if (read.reason) console.info(`[fanlink:chat] api lista creator=${account?.creatorId?.trim() || "sin ficha"} ${read.reason}`);
+        return false;
+      }
+      await saveChatRead(await getSql(), account.creatorId, read);
+      console.info(`[fanlink:chat] api lista creator=${account.creatorId} hilos=${read.threads.length} mensajes=${read.messages.length}`);
+      return true;
     },
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -197,19 +223,25 @@ function accountForCreator(creatorId: string): string | null {
 }
 
 const creatorAccounts = new Map<string, string>();
+const creatorUsers = new Map<string, string | null>();
 
 export async function rememberCreatorAccounts(): Promise<void> {
   const accounts = await (await getOfSessionManager()).listAccounts();
   creatorAccounts.clear();
+  creatorUsers.clear();
   for (const account of accounts) {
-    if (account.creatorId) creatorAccounts.set(account.creatorId, account.id);
+    if (account.creatorId) {
+      creatorAccounts.set(account.creatorId, account.id);
+      creatorUsers.set(account.creatorId, account.identityUserId);
+    }
   }
 }
 
 function bootHistoryLoop(sessions: SessionManager): void {
-  if (process.env.FANLINK_HISTORY_ENABLED === "false") return;
+  if (process.env.FANLINK_HISTORY_ENABLED !== "true") return;
   if (process.execArgv.includes("--test")) return;
   const recent: number[] = [];
+  const skipUntil = new Map<string, number>();
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
   void (async () => {
     await sleep(20_000);
@@ -220,11 +252,12 @@ function bootHistoryLoop(sessions: SessionManager): void {
         for (const account of accounts) {
           if (!account.creatorId || account.identityState === "mismatch") continue;
           const open = await listOpenHistory(await getSql(), account.creatorId);
-          const next = nextHistoryThread(open);
+          const next = nextHistoryThread(open.filter((item) => (skipUntil.get(`${account.creatorId}:${item.threadKey}`) ?? 0) <= Date.now()));
           if (!next) continue;
           const pace = sendPace(recent, Date.now(), historyPerMinute(process.env.FANLINK_HISTORY_PER_MINUTE));
           if (pace.waitMs > 0) await sleep(Math.min(pace.waitMs, 60_000));
-          await pullOlder(sessions, account.id, account.creatorId, next.threadKey, account.identityUserId);
+          const got = await pullOlder(sessions, account.id, account.creatorId, next.threadKey, account.identityUserId);
+          if (got === "empty") skipUntil.set(`${account.creatorId}:${next.threadKey}`, Date.now() + 10 * 60_000);
           recent.push(Date.now());
           stepped = true;
           await sleep(2_000 + Math.floor(Math.random() * 3_000));
@@ -238,26 +271,54 @@ function bootHistoryLoop(sessions: SessionManager): void {
   })();
 }
 
-async function pullOlder(sessions: SessionManager, accountId: string, creatorId: string, threadKey: string, accountUserId: string | null): Promise<void> {
+async function pullOlder(sessions: SessionManager, accountId: string, creatorId: string, threadKey: string, accountUserId: string | null): Promise<"saved" | "empty" | "busy" | "done"> {
   const sql = await getSql();
   const open = await listOpenHistory(sql, creatorId);
   const row = open.find((item) => item.threadKey === threadKey);
-  if (row?.done) return;
+  if (row?.done) return "done";
   const ran = await sessions.runQueued(accountId, async (context) => {
     const page = await context.newPage();
     try {
-      await page.goto(chatPageUrl(onlyFansSite.chatsUrl ?? "https://onlyfans.com/my/chats", threadKey, onlyFansSite.id), { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
-      return await captureOlderMessages(page, { threadKey, fanKey: null, accountUserId, waitMs: 6_000 });
+      await page.goto(chatPageUrl(onlyFansSite.chatsUrl ?? "https://onlyfans.com/my/chats", threadKey, onlyFansSite.id), { waitUntil: "domcontentloaded", timeout: 20_000 }).catch(() => undefined);
+      return await captureOlderMessages(page, { threadKey, fanKey: null, accountUserId, waitMs: 4_000 });
     } finally {
       await page.close().catch(() => undefined);
     }
   });
-  if (!ran.ok) return;
+  if (!ran.ok) return "busy";
+  if (ran.value.length === 0) return "empty";
   const done = pageFinished(row?.cursor ?? null, ran.value);
-  if (ran.value.length > 0) {
-    await saveChatRead(sql, creatorId, { threads: [], messages: ran.value, reason: null, jsonPaths: [] });
-  }
+  await saveChatRead(sql, creatorId, { threads: [], messages: ran.value, reason: null, jsonPaths: [] });
   await markHistory(sql, creatorId, threadKey, oldestCursor(ran.value) ?? row?.cursor ?? null, done);
+  return "saved";
+}
+
+function bootApiListLoop(sessions: SessionManager): void {
+  if (process.env.FANLINK_SYNC_ENABLED === "false") return;
+  if (process.execArgv.includes("--test")) return;
+  if (globalRef.__ofApiList__) return;
+  globalRef.__ofApiList__ = true;
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  void (async () => {
+    await sleep(5_000);
+    while (true) {
+      try {
+        for (const account of await sessions.listAccounts()) {
+          if (!account.creatorId || account.identityState === "mismatch") continue;
+          const read = await sessions.readChatsDirect(account.id);
+          if (read.threads.length === 0) {
+            console.info(`[fanlink:chat] api lista creator=${account.creatorId} ${read.reason ?? "sin hilos"}`);
+            continue;
+          }
+          await saveChatRead(await getSql(), account.creatorId, read);
+          console.info(`[fanlink:chat] api lista creator=${account.creatorId} hilos=${read.threads.length} mensajes=${read.messages.length}`);
+        }
+      } catch (error) {
+        console.info(`[fanlink:chat] api lista: ${error instanceof Error ? error.message.slice(0, 120) : "error"}`);
+      }
+      await sleep(15_000);
+    }
+  })();
 }
 
 function bootChatLoop(sessions: SessionManager): void {
@@ -827,6 +888,39 @@ export async function recordChatOutboundView(
   return { ok: true, sent: false };
 }
 
+export async function discardChatOutboundView(userId: string, input: { clientId: string }): Promise<{ ok: true }> {
+  const access = await accessFor(userId);
+  const { discardOutboundView } = await import("../../server/of-sessions/send/chat-message.ts");
+  return discardOutboundView(input, {
+    sql: await getSql(),
+    access: {
+      userId: access.userId,
+      role: access.role,
+      perms: access.perms,
+      creatorIds: access.creatorIds,
+    },
+  });
+}
+
+export async function reviewChatOutboundView(userId: string, input: { clientId: string }): Promise<{ ok: true }> {
+  const access = await accessFor(userId);
+  const { reviewAwaitingView } = await import("../../server/of-sessions/send/chat-message.ts");
+  return reviewAwaitingView(input, {
+    sql: await getSql(),
+    access: {
+      userId: access.userId,
+      role: access.role,
+      perms: access.perms,
+      creatorIds: access.creatorIds,
+    },
+  });
+}
+
+function cleanTagHandle(value: string | null | undefined): string | null {
+  const handle = value?.replace(/^@/, "").trim() ?? "";
+  return /^[A-Za-z0-9._]{2,40}$/.test(handle) ? handle : null;
+}
+
 export async function chatSendAccessView(userId: string): Promise<{ creatorIds: string[] }> {
   const access = await accessFor(userId);
   if (access.role !== "owner" && !access.perms.includes("mensajes")) return { creatorIds: [] };
@@ -842,7 +936,7 @@ export async function chatSendAccessView(userId: string): Promise<{ creatorIds: 
 
 export async function resolveChatSendHooks(
   userId: string,
-  input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; vaultItemIds?: string[] },
+  input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; vaultItemIds?: string[]; tagHandle?: string | null },
 ): Promise<SendChatHooks> {
   const access = await accessFor(userId);
   const sessions = await getOfSessionManager();
@@ -874,40 +968,67 @@ export async function resolveChatSendHooks(
         body: input.body,
         priceCents: input.priceCents,
         vaultPieces,
+        tagHandle: cleanTagHandle(input.tagHandle),
         typeDelayMs: null,
       }));
     },
   };
 }
 
-export async function readChatVaultView(userId: string, input: { creatorId: string; threadKey: string }): Promise<{ items: VaultFile[]; reason: string | null }> {
+export async function readChatVaultView(userId: string, input: { creatorId: string; threadKey: string; listId?: string; offset?: number }): Promise<{ items: VaultFile[]; reason: string | null }> {
   const access = await accessFor(userId);
   if (access.role !== "owner" && !access.perms.includes("mensajes")) {
     throw new WorkspaceAccessError("No tienes permiso para escribir.");
   }
   const sessions = await getOfSessionManager();
   const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
-  if (!account) return { items: [], reason: "Sin datos" };
-  const ran = await sessions.runQueued(account.id, async (context) => {
-    const page = await openWorkPage(context);
-    try {
-      await page.goto(chatPageUrl(onlyFansSite.chatsUrl ?? "https://onlyfans.com/my/chats", input.threadKey, onlyFansSite.id), {
-        waitUntil: "domcontentloaded",
-        timeout: 30_000,
-      }).catch(() => undefined);
-      return await captureVaultPayloads(page);
-    } finally {
-      await page.close().catch(() => undefined);
-    }
-  });
-  if (!ran.ok || ran.value.length === 0) return { items: [], reason: "Sin datos" };
+  if (!account || !account.hasStorageState) return { items: [], reason: "Sin datos" };
+  const { fetchSignedVault } = await import("../../server/of-sessions/sync/of-chat-api.ts");
   const { persistVaultRead } = await import("../../server/of-sessions/sync/vault-store.ts");
-  const saved = await persistVaultRead(await getSql(), input.creatorId, ran.value);
-  if (saved.length === 0) return { items: [], reason: "Sin datos" };
+  const payloads = await fetchSignedVault(await sessions.readStorageState(account.id), { fetch, now: () => Date.now() }, input.listId || "all", input.offset ?? 0);
+  const saved = await persistVaultRead(await getSql(), input.creatorId, payloads);
+  console.info(`[fanlink:vault] api medios=${saved.length} fotos=${saved.filter((item) => item.preview).length}`);
+  if (saved.length === 0) return { items: [], reason: "No se ha podido leer la bóveda." };
   return {
     items: saved.map((item) => ({ id: item.id, title: item.title, kind: item.kind })),
     reason: null,
   };
+}
+
+export async function listOnlineFansView(userId: string, input: { creatorId: string }): Promise<{ fans: OnlineFan[]; reason: string | null }> {
+  const access = await accessFor(userId);
+  if (access.role !== "owner" && !access.perms.includes("mensajes")) {
+    throw new WorkspaceAccessError("No tienes permiso para escribir.");
+  }
+  const sessions = await getOfSessionManager();
+  const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
+  if (!account) return { fans: [], reason: "Sin datos" };
+  const read = await sessions.readOnlineFans(account.id);
+  console.info(`[fanlink:online] cuenta=${input.creatorId} fans=${read.fans.length} motivo=${read.reason ?? "ok"} status=${read.status ?? "sin"}`);
+  return { fans: read.fans, reason: read.reason };
+}
+
+export async function runFanChatMenuView(userId: string, input: { creatorId: string; fanKey: string; request: unknown }): Promise<FanMenuResult> {
+  const access = await accessFor(userId);
+  if (access.role !== "owner" && !access.perms.includes("mensajes")) {
+    throw new WorkspaceAccessError("No tienes permiso para escribir.");
+  }
+  const request = normalizeFanMenuRequest(input.request);
+  if (!request || !input.fanKey.trim()) return { ok: false, reason: "Sin datos", lists: [] };
+  const sessions = await getOfSessionManager();
+  const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
+  if (!account) return { ok: false, reason: "Sin datos", lists: [] };
+  const url = chatPageUrl(onlyFansSite.chatsUrl ?? "https://onlyfans.com/my/chats", input.fanKey, "onlyfans");
+  const ran = await sessions.runQueued(account.id, async (context) => {
+    const page = await openWorkPage(context);
+    try {
+      return await runFanMenuOnPage(page, url, request);
+    } finally {
+      await page.close().catch(() => undefined);
+    }
+  }, { wait: true });
+  if (!ran.ok) return { ok: false, reason: "OnlyFans está ocupado con otra lectura.", lists: [] };
+  return ran.value;
 }
 
 export async function loadOlderMessagesView(userId: string, input: { creatorId: string; threadKey: string }): Promise<{ ok: boolean }> {
@@ -958,7 +1079,7 @@ export async function openLiveViewTicket(
   if (access.role !== "owner" && !access.perms.includes("mensajes")) {
     throw new WorkspaceAccessError("No tienes permiso para escribir.");
   }
-  if (!input.threadKey) return { ok: false, ticket: null, reason: "Sin hilo" };
+  const threadKey = input.threadKey.trim() || "inbox";
   const sessions = await getOfSessionManager();
   const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
   if (!account) return { ok: false, ticket: null, reason: "Vista en directo desactivada" };
@@ -968,7 +1089,7 @@ export async function openLiveViewTicket(
     userId,
     accountId: account.id,
     creatorId: input.creatorId,
-    threadKey: input.threadKey,
+    threadKey,
     fanKey: input.fanKey,
     accountUserId: account.identityUserId,
   });

@@ -11,9 +11,14 @@ type VaultCard = {
   folder: string | null;
   tags: string[];
   salesCount: number | null;
+  sentCount?: number | null;
   ventasLabel: string;
   bestSellerLabel: string | null;
   suggestedLabel: string;
+  offerLabel?: string | null;
+  buyLabel?: string | null;
+  dateLabel?: string | null;
+  posted?: boolean;
   packageLabel: string;
   packageWithId: string | null;
   sentToFan: boolean | null;
@@ -60,26 +65,44 @@ export function VaultBrowser({
   fanKey,
   onAttach,
   reloadToken = 0,
+  layout = "full",
+  onClose,
+  onMore,
+  onOpenFolder,
 }: {
   creatorId: string;
   fanKey: string | null;
-  onAttach?: (item: { id: string; title: string; withId?: string | null; withTitle?: string | null }) => void;
+  onAttach?: (item: { id: string; title: string; withId?: string | null; withTitle?: string | null; seconds?: number | null; offerLabel?: string | null; dateLabel?: string | null }) => void;
   reloadToken?: number;
+  layout?: "full" | "of";
+  onClose?: () => void;
+  onMore?: () => void;
+  onOpenFolder?: (listId: string | null) => void;
 }) {
   const [listText, setListText] = useState("");
   const [query, setQuery] = useState(EMPTY_QUERY);
   const [items, setItems] = useState<VaultCard[]>([]);
+  const [library, setLibrary] = useState<VaultCard[]>([]);
   const [lists, setLists] = useState<VaultList[]>([]);
   const [notice, setNotice] = useState<string | null>("Sin datos");
+  const [picked, setPicked] = useState<string[]>([]);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
     let alive = true;
     setReady(false);
-    void queryVaultMirror({ data: { creatorId, fanKey, listText: "", remember: false } }).then((payload) => {
+    void queryVaultMirror({
+      data: {
+        creatorId,
+        fanKey,
+        listText: "",
+        remember: false,
+        ...(layout === "of" ? { query: { ...EMPTY_QUERY } } : {}),
+      },
+    }).then((payload) => {
       if (!alive) return;
       const view = payload as VaultPayload;
-      setQuery({ ...EMPTY_QUERY, ...(view.query ?? {}) });
+      if (layout !== "of") setQuery({ ...EMPTY_QUERY, ...(view.query ?? {}) });
       applyView(view);
       setReady(true);
     }).catch(() => {
@@ -94,16 +117,17 @@ export function VaultBrowser({
     };
     function applyView(view: VaultPayload) {
       setItems(view.items ?? []);
+      setLibrary(view.items ?? []);
       setLists(view.lists ?? []);
       setNotice(view.notice ?? (view.items && view.items.length > 0 ? null : "Sin datos"));
     }
-  }, [creatorId, fanKey, reloadToken]);
+  }, [creatorId, fanKey, reloadToken, layout]);
 
   useEffect(() => {
     if (!ready) return;
     let alive = true;
     const handle = setTimeout(() => {
-      void queryVaultMirror({ data: { creatorId, fanKey, query, listText, remember: true } }).then((payload) => {
+      void queryVaultMirror({ data: { creatorId, fanKey, query, listText, remember: layout !== "of" } }).then((payload) => {
         if (!alive) return;
         const view = payload as VaultPayload;
         setItems(view.items ?? []);
@@ -120,7 +144,137 @@ export function VaultBrowser({
       alive = false;
       clearTimeout(handle);
     };
-  }, [ready, creatorId, fanKey, query, listText]);
+  }, [ready, creatorId, fanKey, query, listText, layout]);
+
+  const kind = query.kinds[0] ?? "";
+  const folderName = lists.find((folder) => folder.id === query.folderId)?.name ?? "Todos los medios";
+  if (layout === "of") {
+    return (
+      <div className="flex h-full min-h-0 flex-col bg-white text-[#1c2333]">
+        <div className="flex min-h-0 flex-1">
+          <aside className="flex w-72 shrink-0 flex-col border-r border-[#eceff3]">
+            <div className="flex items-center gap-2 border-b border-[#eceff3] px-4 py-3">
+              <p className="text-sm font-semibold tracking-wide">BÓVEDA</p>
+              <input aria-label="Buscar listas" value={listText} placeholder="Buscar" onChange={(event) => setListText(event.target.value)} className="ml-auto h-8 w-28 rounded-full border border-[#e6e8ee] px-3 text-xs" />
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <p className="px-4 pb-1 pt-3 text-[11px] font-semibold tracking-wide text-[#8a96a3]">DEFAULT</p>
+              <VaultFolder
+                name="Todos los medios"
+                active={query.scope !== "carpeta"}
+                creatorId={creatorId}
+                items={library}
+                onClick={() => { onOpenFolder?.(null); setQuery({ ...query, folderId: null, scope: "todas" }); }}
+              />
+              {lists.map((folder) => (
+                <VaultFolder
+                  key={folder.id}
+                  name={folder.name}
+                  creatorId={creatorId}
+                  active={query.folderId === folder.id}
+                  items={library.filter((item) => item.folder === folder.name || item.folder === folder.id)}
+                  onClick={() => { onOpenFolder?.(folder.id); setQuery({ ...query, folderId: folder.id, scope: "carpeta" }); }}
+                />
+              ))}
+              {lists.length === 0 ? <p className="px-4 py-3 text-xs text-[#8a96a3]">Sin datos</p> : null}
+            </div>
+          </aside>
+          <section className="flex min-w-0 flex-1 flex-col">
+            <div className="border-b border-[#eceff3] px-4 py-3">
+              <p className="text-sm font-semibold uppercase tracking-wide">{folderName}</p>
+            </div>
+            <p className="px-4 pb-1 pt-3 text-[11px] font-semibold tracking-wide text-[#8a96a3]">RECIENTE</p>
+            <div className="flex flex-wrap gap-2 px-4 py-3">
+              {[
+                ["", "Todo"],
+                ["foto", "Foto"],
+                ["gif", "GIF"],
+                ["video", "Vídeo"],
+                ["audio", "Audio"],
+              ].map(([id, label]) => (
+                <button
+                  key={label}
+                  type="button"
+                  className={`rounded-full px-4 py-1.5 text-sm ${kind === id ? "bg-[#d7ebff] font-medium text-[#0091ea]" : "bg-[#f2f3f5] text-[#1c2333]"}`}
+                  onClick={() => setQuery({ ...query, kinds: id ? [id] : [] })}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div
+              className="grid min-h-0 flex-1 grid-cols-4 content-start gap-3 overflow-y-auto px-4 pb-4"
+              onScroll={(event) => {
+                const el = event.currentTarget;
+                if (el.scrollTop + el.clientHeight >= el.scrollHeight - 160) onMore?.();
+              }}
+            >
+              {items.length === 0 ? <p className="col-span-4 text-sm text-[#8a96a3]">Sin datos</p> : null}
+              {items.map((item) => {
+                const selected = picked.includes(item.id);
+                return (
+                <button
+                  key={item.id}
+                  type="button"
+                  aria-pressed={selected}
+                  disabled={item.blocked || !onAttach}
+                  className={`overflow-hidden rounded-xl bg-white text-left shadow-sm disabled:opacity-50 ${selected ? "ring-2 ring-[#00aff0]" : ""}`}
+                  onClick={() => setPicked((current) => current.includes(item.id) ? current.filter((id) => id !== item.id) : [...current, item.id])}
+                >
+                  <span className="relative block aspect-[3/4] bg-[#f2f3f5]">
+                    <VaultThumb creatorId={creatorId} itemId={item.id} title={item.title} />
+                    <span className={`absolute left-1.5 top-1.5 grid h-5 w-5 place-items-center rounded-full text-[11px] font-semibold ${selected ? "bg-[#00aff0] text-white" : "bg-white/80 text-transparent"}`}>{selected ? picked.indexOf(item.id) + 1 : ""}</span>
+                    {item.offerLabel ? (
+                      <span className="absolute right-1.5 top-1.5 rounded-full bg-[#ff5a7a] px-1.5 py-0.5 text-[10px] font-semibold text-white">{item.offerLabel}</span>
+                    ) : item.posted ? (
+                      <span className="absolute right-1.5 top-1.5 rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white">Publicado</span>
+                    ) : null}
+                    {item.dateLabel ? <span className="absolute bottom-1.5 left-1.5 rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white">{item.dateLabel}</span> : null}
+                    {item.kind === "video" && item.seconds != null ? (
+                      <span className="absolute bottom-1.5 right-1.5 rounded bg-black/70 px-1 py-0.5 text-[10px] text-white">{formatSeconds(item.seconds)}</span>
+                    ) : null}
+                  </span>
+                  {item.sentCount != null || item.buyLabel || item.salesCount != null ? (
+                    <span className="flex items-center gap-2 px-1.5 py-1 text-[10px] text-[#5c6570]">
+                      {item.sentCount != null ? <span>{item.sentCount} envíos</span> : null}
+                      {item.buyLabel ? <span>{item.buyLabel}</span> : null}
+                      {item.salesCount != null ? <span>{item.salesCount} ventas</span> : null}
+                    </span>
+                  ) : null}
+                </button>
+                );
+              })}
+            </div>
+          </section>
+        </div>
+        <div className="flex items-center justify-end gap-3 border-t border-[#eceff3] px-4 py-3">
+          <button type="button" className="text-sm font-semibold uppercase tracking-wide text-[#8a96a3]" onClick={onClose}>Cerrar</button>
+          <button
+            type="button"
+            disabled={picked.length === 0}
+            className="rounded-full bg-[#00aff0] px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
+            onClick={() => {
+              for (const id of picked) {
+                const item = items.find((row) => row.id === id);
+                if (!item || item.blocked) continue;
+                onAttach?.({
+                  id: item.id,
+                  title: item.title,
+                  seconds: item.seconds,
+                  offerLabel: item.offerLabel ?? null,
+                  dateLabel: item.dateLabel ?? null,
+                });
+              }
+              setPicked([]);
+              onClose?.();
+            }}
+          >
+            {picked.length === 0 ? "Añadir" : `Añadir ${picked.length}`}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-64 gap-3">
@@ -225,6 +379,49 @@ export function VaultBrowser({
         </div>
       </section>
     </div>
+  );
+}
+
+function VaultThumb({ creatorId, itemId, title }: { creatorId: string; itemId: string; title: string }) {
+  const preview = vaultMediaSrc(creatorId, itemId, "preview");
+  const full = vaultMediaSrc(creatorId, itemId, "full");
+  const [src, setSrc] = useState(preview);
+  return (
+    <img
+      src={src}
+      alt={title || ""}
+      className="absolute inset-0 h-full w-full object-cover"
+      onError={() => {
+        if (src !== full) setSrc(full);
+      }}
+    />
+  );
+}
+
+function VaultFolder({
+  name,
+  active,
+  items,
+  creatorId,
+  onClick,
+}: {
+  name: string;
+  active: boolean;
+  items: VaultCard[];
+  creatorId: string;
+  onClick: () => void;
+}) {
+  const photos = items.filter((item) => item.kind === "foto").length;
+  const videos = items.filter((item) => item.kind === "video").length;
+  const thumb = items.find((item) => item.kind !== "audio");
+  return (
+    <button type="button" onClick={onClick} className={`flex w-full items-center gap-3 px-4 py-3 text-left ${active ? "bg-[#f4f7fb]" : "hover:bg-[#fafbfc]"}`}>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-semibold">{name}</span>
+        <span className="text-xs text-[#8a96a3]">{items.length === 0 ? "vacío" : `${photos} fotos · ${videos} vídeos`}</span>
+      </span>
+      {thumb ? <img src={vaultMediaSrc(creatorId, thumb.id, "preview")} alt="" className="h-12 w-16 rounded object-cover" /> : null}
+    </button>
   );
 }
 

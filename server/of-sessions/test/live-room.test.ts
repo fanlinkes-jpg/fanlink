@@ -3,7 +3,8 @@ import { createServer } from "node:http";
 import { test } from "node:test";
 import { WebSocket } from "ws";
 import { attachLiveView } from "../live/attach.ts";
-import { stopLiveRooms, useLiveOpener } from "../live/room.ts";
+import { interruptLiveAccount, stopLiveRooms, useLiveOpener } from "../live/room.ts";
+import { liveHoldsAccount } from "../live/hold.ts";
 import { issueLiveTicket } from "../live/tickets.ts";
 
 test("el socket da el control al primero, rechaza el quinto y lo cede al soltar", async () => {
@@ -35,6 +36,7 @@ test("el socket da el control al primero, rechaza el quinto y lo cede al soltar"
     const handed = nextRole(second.socket);
     first.socket.send(JSON.stringify({ type: "release" }));
     assert.equal(await handed, "control");
+    await phaseFailureAndConnect(port, origin, open);
   } finally {
     for (const socket of open) socket.close();
     await stopLiveRooms();
@@ -43,10 +45,10 @@ test("el socket da el control al primero, rechaza el quinto y lo cede al soltar"
   }
 });
 
-function ticketFor(userId: string): string {
+function ticketFor(userId: string, accountId = "acc-sala"): string {
   return issueLiveTicket({
     userId,
-    accountId: "acc-sala",
+    accountId,
     creatorId: "c",
     threadKey: "7",
     fanKey: "7",
@@ -54,8 +56,8 @@ function ticketFor(userId: string): string {
   });
 }
 
-function join(port: number, origin: string, userId: string): Promise<{ socket: WebSocket; role: string }> {
-  const ticket = ticketFor(userId);
+function join(port: number, origin: string, userId: string, accountId = "acc-sala"): Promise<{ socket: WebSocket; role: string }> {
+  const ticket = ticketFor(userId, accountId);
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("la sala no contestó")), 2_000);
     const socket = new WebSocket(`ws://127.0.0.1:${port}/api/live-view`, { headers: { origin } });
@@ -87,8 +89,8 @@ function nextRole(socket: WebSocket): Promise<string> {
   });
 }
 
-function closed(port: number, origin: string, userId: string, path = "/api/live-view"): Promise<boolean> {
-  const ticket = ticketFor(userId);
+function closed(port: number, origin: string, userId: string, path = "/api/live-view", accountId = "acc-sala"): Promise<boolean> {
+  const ticket = ticketFor(userId, accountId);
   return new Promise((resolve) => {
     const timer = setTimeout(() => resolve(false), 2_000);
     const socket = new WebSocket(`ws://127.0.0.1:${port}${path}`, { headers: { origin } });
@@ -103,4 +105,81 @@ function closed(port: number, origin: string, userId: string, path = "/api/live-
       if (!path.includes("ticket=")) socket.send(JSON.stringify({ type: "auth", ticket }));
     });
   });
+}
+
+async function phaseFailureAndConnect(port: number, origin: string, open: WebSocket[]): Promise<void> {
+  useLiveOpener({
+    async borrow() {
+      throw new Error("no abre");
+    },
+    async open() {
+      return { async send() {}, acceptFile() {}, async stop() {} };
+    },
+  });
+  assert.equal(await closed(port, origin, "fallo", "/api/live-view", "acc-fallo"), true);
+  assert.equal(liveHoldsAccount("acc-fallo"), false);
+
+  let borrows = 0;
+  useLiveOpener({
+    async borrow() {
+      borrows += 1;
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      return { context: {} as never, release: async () => undefined };
+    },
+    async open() {
+      return { async send() {}, acceptFile() {}, async stop() {} };
+    },
+  });
+  const [one, two] = await Promise.all([
+    join(port, origin, "uno", "acc-dos"),
+    join(port, origin, "dos", "acc-dos"),
+  ]);
+  open.push(one.socket, two.socket);
+  assert.equal(borrows, 1);
+
+  let releaseBorrow: () => void = () => undefined;
+  let released = 0;
+  let stopped = 0;
+  useLiveOpener({
+    async borrow() {
+      await new Promise<void>((resolve) => {
+        releaseBorrow = resolve;
+      });
+      return { context: {} as never, release: async () => { released += 1; } };
+    },
+    async open() {
+      return { async send() {}, acceptFile() {}, async stop() { stopped += 1; } };
+    },
+  });
+  const pending = closed(port, origin, "conectar", "/api/live-view", "acc-carrera");
+  const held = Date.now() + 2_000;
+  while (!liveHoldsAccount("acc-carrera")) {
+    if (Date.now() > held) throw new Error("la sala no retuvo la cuenta");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  await interruptLiveAccount("acc-carrera");
+  assert.equal(liveHoldsAccount("acc-carrera"), false);
+  releaseBorrow();
+  assert.equal(await pending, true);
+  assert.equal(released, 1);
+  assert.equal(stopped, 0);
+  assert.equal(liveHoldsAccount("acc-carrera"), false);
+
+  process.env.FANLINK_LIVE_ROOM_GRACE_MS = "30";
+  try {
+    useLiveOpener({
+      async borrow() {
+        return { context: {} as never, release: async () => undefined };
+      },
+      async open() {
+        return { async send() {}, acceptFile() {}, async stop() {} };
+      },
+    });
+    const viewer = await join(port, origin, "gracia", "acc-gracia");
+    viewer.socket.close();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(liveHoldsAccount("acc-gracia"), false);
+  } finally {
+    delete process.env.FANLINK_LIVE_ROOM_GRACE_MS;
+  }
 }

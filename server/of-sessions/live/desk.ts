@@ -30,14 +30,15 @@ export function liveViewGate(
 }
 
 const LIVE_CHAT_PREFIXES = ["/my/chats", "/api2/v2/chats", "/api2/v2/messages"] as const;
+/** Sin esto la página se queda en el logo. Solo lectura. */
+const LIVE_BOOT_PREFIXES = ["/api2/v2/init", "/api2/v2/users/me", "/api2/v2/users/list"] as const;
 const LIVE_DENIED_SEGMENTS = [
   "statements", "statistics", "banking", "payouts", "payout", "settings",
   "payments", "billing", "wallet", "cards", "bank", "earnings", "invoices",
 ] as const;
 
-const LIVE_MEDIA_HOST = /^(cdn\d*|static|public|media|thumbs|assets|files|upload|stream)\.onlyfans\.com$/;
+const LIVE_MEDIA_HOST = /^(cdn\d*|static\d*|public|media|thumbs|assets|files|upload|stream|img)\.onlyfans\.com$/;
 const LIVE_API_HOST = /^(api\d*|ws\d*|socket)\.onlyfans\.com$/;
-const LIVE_STATIC = /\.(js|css|map|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|mp4|m4s|m3u8|ts|aac|mp3|webm)$/;
 const LIVE_WRITES = new Set(["POST", "PUT", "DELETE", "PATCH"]);
 
 /** Solo el chat y sus mensajes. En solo lectura no salen POST, PUT ni DELETE de mensajes, likes o PPV. */
@@ -51,6 +52,7 @@ export function liveRequestAllowed(raw: string, method = "GET", typing = false):
   }
   if (url.protocol !== "https:" && url.protocol !== "http:" && url.protocol !== "wss:" && url.protocol !== "ws:") return false;
   const host = url.hostname.toLowerCase();
+  if (liveChallengeHost(host)) return method.toUpperCase() === "GET" || method.toUpperCase() === "HEAD";
   if (host !== "onlyfans.com" && !host.endsWith(".onlyfans.com")) return false;
   let path = url.pathname.toLowerCase();
   try {
@@ -59,32 +61,32 @@ export function liveRequestAllowed(raw: string, method = "GET", typing = false):
     return false;
   }
   if (path.includes("..") || path.includes("\\")) return false;
+  if (liveBootPath(path)) return method.toUpperCase() === "GET" || method.toUpperCase() === "HEAD";
   if (!liveHostPathAllowed(host, path)) return false;
   return !liveWriteBlocked(method, path, typing);
 }
 
+function liveChallengeHost(host: string): boolean {
+  return host === "challenges.cloudflare.com" || host.endsWith(".challenges.cloudflare.com") || host === "cloudflare.com" || host.endsWith(".cloudflare.com");
+}
+
+function liveBootPath(path: string): boolean {
+  return LIVE_BOOT_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+}
+
 function liveHostPathAllowed(host: string, path: string): boolean {
   const segments = path.split("/").filter(Boolean);
-  if (host === "onlyfans.com" || host === "www.onlyfans.com") {
-    if (segments.some((part) => (LIVE_DENIED_SEGMENTS as readonly string[]).includes(part))) return false;
-    if (path === "/" || LIVE_CHAT_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`))) return true;
-    return LIVE_STATIC.test(path);
-  }
-  if (LIVE_MEDIA_HOST.test(host)) return LIVE_STATIC.test(path) || path.startsWith("/files/") || path.startsWith("/media/");
-  if (LIVE_API_HOST.test(host)) {
-    return LIVE_CHAT_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`))
-      || path.startsWith("/ws")
-      || path.startsWith("/socket");
-  }
+  if (segments.some((part) => (LIVE_DENIED_SEGMENTS as readonly string[]).includes(part))) return false;
+  if (host === "onlyfans.com" || host === "www.onlyfans.com") return true;
+  if (LIVE_MEDIA_HOST.test(host) || LIVE_API_HOST.test(host)) return true;
   return false;
 }
 
 function liveWriteBlocked(method: string, path: string, typing: boolean): boolean {
-  if (typing || !LIVE_WRITES.has(method.toUpperCase())) return false;
-  if (path.startsWith("/ws") || path.startsWith("/socket")) return true;
-  return path === "/my/chats" || path.startsWith("/my/chats/")
-    || path === "/api2/v2/chats" || path.startsWith("/api2/v2/chats/")
-    || path === "/api2/v2/messages" || path.startsWith("/api2/v2/messages/");
+  if (!LIVE_WRITES.has(method.toUpperCase())) return false;
+  if (!typing) return true;
+  if (path.startsWith("/ws") || path.startsWith("/socket")) return false;
+  return false;
 }
 
 /** En solo lectura no sale un frame por /ws ni /socket. La conexión sigue para poder recibir. */
@@ -176,8 +178,7 @@ export function liveHistoryGuardSource(chatUrl = ""): string {
           return false;
         }
         if (parts.some((part) => allow.denied.includes(part))) return false;
-        if (path === "/" || allow.prefixes.some((prefix) => path === prefix || path.startsWith(prefix + "/"))) return true;
-        return staticFile;
+        return true;
       } catch { return false; }
     };
     const push = history.pushState.bind(history);
@@ -374,10 +375,16 @@ export function liveOriginAllowed(origin: string | undefined, host: string | und
   try {
     const url = new URL(origin);
     const expected = host.split(",")[0]?.trim() ?? "";
-    return url.host === expected;
+    return sameLiveHost(url.host, expected);
   } catch {
     return false;
   }
+}
+
+function sameLiveHost(left: string, right: string): boolean {
+  if (left === right) return true;
+  const local = (value: string) => value.replace(/^localhost(?=:|$)/, "127.0.0.1").replace(/^\[::1\](?=:|$)/, "127.0.0.1");
+  return local(left) === local(right);
 }
 
 export function liveUpgradeAllowed(requestUrl: string, origin: string | undefined, host: string | undefined): boolean {

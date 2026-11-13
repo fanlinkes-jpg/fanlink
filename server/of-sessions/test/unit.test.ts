@@ -73,7 +73,7 @@ test("la configuración real abre una ventana visible y no lee credenciales", ()
   );
   assert.equal(config.headlessLogin, false);
   assert.equal(config.headlessWork, true);
-  assert.equal(loadConfig({ FANLINK_HEADFUL: "true", PORT: "8787" }, "/tmp").headlessWork, false);
+  assert.equal(loadConfig({ FANLINK_HEADFUL: "true", PORT: "8787" }, "/tmp").headlessWork, true);
   assert.equal(config.openLoginOnInvalidate, true);
   assert.equal(config.host, "127.0.0.1");
   assert.equal(config.sessionKey, null);

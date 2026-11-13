@@ -7,7 +7,15 @@ export type LiveTicket = {
   accountUserId: string | null;
 };
 
-const tickets = new Map<string, LiveTicket & { expires: number }>();
+const tickets = globalTickets();
+
+function globalTickets(): Map<string, LiveTicket & { expires: number }> {
+  const holder = globalThis as typeof globalThis & {
+    __fanlinkLiveTickets?: Map<string, LiveTicket & { expires: number }>;
+  };
+  holder.__fanlinkLiveTickets ??= new Map();
+  return holder.__fanlinkLiveTickets;
+}
 
 export function issueLiveTicket(ticket: LiveTicket, now = Date.now()): string {
   const id = crypto.randomUUID();

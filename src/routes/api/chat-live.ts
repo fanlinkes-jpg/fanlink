@@ -34,6 +34,7 @@ export const Route = createFileRoute("/api/chat-live")({
                 const rows = await sql.query<{ cursor: string | null }>(
                   `select greatest(
                      (select max(synced_at) from of_chat_message),
+                     (select max(synced_at) from of_chat_thread),
                      (select max(updated_at) from of_fan_note)
                    )::text as cursor`,
                 );

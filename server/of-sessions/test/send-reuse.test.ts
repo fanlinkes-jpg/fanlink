@@ -69,3 +69,42 @@ test("el envío reutiliza el contexto de la escucha y se confirma por JSON", asy
     await removeDir(dataDir);
   }
 });
+
+test("la escucha del chat no bloquea otra lectura", async () => {
+  const dataDir = await tempDataDir();
+  const fixture = await startFixture();
+  const runtime = await createSessionRuntime({
+    config: testConfig(dataDir),
+    site: fixture.site,
+    browserFactory: recordingFactory([]),
+    displayEnv: testDisplay,
+    afterLoginPageOpen: (page) => completeFixtureLogin(page),
+  });
+  const account = await runtime.sessions.addAccount("Principal");
+  await runtime.sessions.whenLoginSettled(account.id);
+  let release: () => void = () => undefined;
+  const stopped = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let ready: () => void = () => undefined;
+  const watching = new Promise<void>((resolve) => {
+    ready = resolve;
+  });
+  const held = runtime.sessions.holdWatch(account.id, async () => {
+    ready();
+    await stopped;
+  });
+  try {
+    await watching;
+    const started = Date.now();
+    const ran = await runtime.sessions.runQueued(account.id, async () => "vault", { wait: true });
+    assert.equal(ran.ok && ran.value, "vault");
+    assert.ok(Date.now() - started < 5_000);
+  } finally {
+    release();
+    await held;
+    await runtime.close();
+    await fixture.close();
+    await removeDir(dataDir);
+  }
+});
