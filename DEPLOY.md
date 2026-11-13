@@ -4,7 +4,7 @@ Esto no despliega nada por sí solo. Prepara Postgres, la app y Chromium, y deja
 
 ## 1. Máquina
 
-Hace falta Docker y un VPS con escritorio virtual solo si quieres ver la ventana de login. En un servidor sin pantalla, Conectar no puede abrir Chromium visible: el login de OnlyFans sigue pidiendo una persona delante. El resto de lecturas usa el perfil que ya guardaste. Ese directorio (`data/profiles/<cuenta>`) lo abre un solo Chromium por cuenta: Conectar cierra la sala y espera a que terminen las lecturas en curso antes de abrir la ventana. No cierra el navegador debajo de una lectura. Fans en línea no navega la página de la escucha. No arranques otro proceso sobre la misma carpeta. Al soltar el perfil, Fanlink reescribe la sesión cifrada para no guardar una `sess` vieja.
+Hace falta Docker y un VPS con escritorio virtual solo si quieres ver la ventana de login. En un servidor sin pantalla, Conectar no puede abrir Chromium visible: el login de OnlyFans sigue pidiendo una persona delante. El resto de lecturas usa el perfil que ya guardaste. Ese directorio (`data/profiles/<cuenta>`) lo abre un solo Chromium por cuenta: Conectar cierra la sala y espera como mucho 25 s a que terminen las lecturas en curso. Si siguen, no abre la ventana. No cierra el navegador debajo de una lectura. Fans en línea no navega la página de la escucha. No arranques otro proceso sobre la misma carpeta. Al soltar el perfil, Fanlink reescribe la sesión cifrada para no guardar una `sess` vieja.
 
 No generes otra `FANLINK_SESSION_KEY` si ya tienes `data/sessions`. Esa clave descifra las sesiones y los proxies.
 

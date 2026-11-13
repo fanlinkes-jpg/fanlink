@@ -419,9 +419,13 @@ export class SessionManager {
 
   /**
    * Fans en línea. No espera a Conectar ni abre la página de la escucha.
-   * Si no responde en 25 s, devuelve un motivo en vez de quedarse colgado.
+   * A los 25 s aborta la página nueva, suelta el perfil y devuelve un motivo.
+   * `budgetMs` y `read` son para la prueba: en la app el tope es 25 s.
    */
-  async readOnlineFans(accountId: string): Promise<{ fans: OnlineFan[]; reason: string | null }> {
+  async readOnlineFans(
+    accountId: string,
+    options?: { budgetMs?: number; read?: (page: Page, signal: AbortSignal) => Promise<OnlineFan[]> },
+  ): Promise<{ fans: OnlineFan[]; reason: string | null }> {
     assertAccountId(accountId);
     if (this.loginTasks.has(accountId)) {
       return { fans: [], reason: "Esperando a que termine Conectar." };
@@ -429,29 +433,50 @@ export class SessionManager {
     if (this.watches.has(accountId)) {
       return { fans: [], reason: "Ocupado." };
     }
-    const budgetMs = 25_000;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timedOut = new Promise<{ fans: OnlineFan[]; reason: string }>((resolve) => {
-      timer = setTimeout(() => resolve({ fans: [], reason: "No se pudo leer." }), budgetMs);
+    const budgetMs = options?.budgetMs ?? 25_000;
+    const readPage = options?.read ?? ((page: Page, signal: AbortSignal) => readOnlineSubscribers(page, signal));
+    const controller = new AbortController();
+    const job = this.runQueued(accountId, async (context) => {
+      if (controller.signal.aborted) return [] as OnlineFan[];
+      const page = await context.newPage();
+      const closePage = () => {
+        void page.close().catch(() => undefined);
+      };
+      controller.signal.addEventListener("abort", closePage, { once: true });
+      try {
+        return await readPage(page, controller.signal);
+      } finally {
+        controller.signal.removeEventListener("abort", closePage);
+        await page.close().catch(() => undefined);
+      }
     });
-    try {
-      const read = this.runQueued(accountId, async (context) => {
-        const page = await context.newPage();
-        try {
-          return await readOnlineSubscribers(page);
-        } finally {
-          await page.close().catch(() => undefined);
-        }
-      }).then((ran) => {
+    const settled = job.then(
+      (ran) => {
         if (!ran.ok) return { fans: [] as OnlineFan[], reason: "Ocupado." };
         return { fans: ran.value, reason: ran.value.length === 0 ? "Nadie en línea" : null };
-      }).catch((error: unknown) => {
+      },
+      (error: unknown) => {
         if (error instanceof SessionPendingError) {
           return { fans: [] as OnlineFan[], reason: "Esperando a que termine Conectar." };
         }
         return { fans: [] as OnlineFan[], reason: "No se pudo leer." };
-      });
-      return await Promise.race([read, timedOut]);
+      },
+    );
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timed = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), budgetMs);
+    });
+    try {
+      const outcome = await Promise.race([
+        settled.then((value) => ({ kind: "done" as const, value })),
+        timed.then(() => ({ kind: "timeout" as const })),
+      ]);
+      if (outcome.kind === "timeout") {
+        controller.abort();
+        await settled;
+        return { fans: [], reason: "No se pudo leer." };
+      }
+      return outcome.value;
     } finally {
       if (timer) clearTimeout(timer);
     }
@@ -1217,9 +1242,10 @@ export class SessionManager {
     let state: StorageStateFile;
     try {
       state = parseStorageState(await context.storageState());
-    } catch {
-      this.log.warn(`session export failed account=${accountId}`);
-      return;
+    } catch (error) {
+      const kind = error instanceof Error ? error.name : "error";
+      console.warn(`[fanlink:perfil] cuenta=${accountId} tipo=${kind}`);
+      throw error;
     }
     if (state.cookies.length === 0 && state.origins.length === 0) return;
     const storagePath = this.storagePath(accountId);

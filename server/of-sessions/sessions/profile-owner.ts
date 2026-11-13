@@ -90,7 +90,7 @@ export class ProfileOwner {
           const current = this.slots.get(accountId);
           if (current && !current.exclusive) current.yielding = true;
         });
-        await this.waitUntilIdle(accountId);
+        await this.waitUntilIdle(accountId, profileIdleMs());
         const opened = await this.withLock(accountId, async () => {
           const current = this.slots.get(accountId);
           if (current && current.users > 0) return null;
@@ -194,7 +194,7 @@ export class ProfileOwner {
     }
   }
 
-  private async waitUntilIdle(accountId: string): Promise<void> {
+  private async waitUntilIdle(accountId: string, timeoutMs: number): Promise<void> {
     const boxed = await this.withLock(accountId, async () => {
       const slot = this.slots.get(accountId);
       if (!slot || slot.users === 0) return null;
@@ -205,7 +205,16 @@ export class ProfileOwner {
       this.idle.set(accountId, resolve);
       return { gate };
     });
-    if (boxed) await boxed.gate;
+    if (!boxed) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timed = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), timeoutMs);
+    });
+    const outcome = await Promise.race([boxed.gate.then(() => "idle" as const), timed]);
+    if (timer) clearTimeout(timer);
+    if (outcome === "idle") return;
+    this.notifyIdle(accountId);
+    throw new SessionPendingError("El perfil sigue ocupado. No se ha abierto Conectar.");
   }
 
   private notifyIdle(accountId: string): void {
@@ -257,4 +266,11 @@ export class ProfileOwner {
       unlock();
     }
   }
+}
+
+/** Cuánto espera Reconectar a que las lecturas suelten el perfil. Por defecto 25 s. */
+function profileIdleMs(): number {
+  const value = Number(process.env.FANLINK_PROFILE_IDLE_MS);
+  if (Number.isInteger(value) && value >= 100 && value <= 60_000) return value;
+  return 25_000;
 }

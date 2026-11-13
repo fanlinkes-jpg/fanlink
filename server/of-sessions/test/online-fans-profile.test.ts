@@ -44,6 +44,83 @@ test("Fans en línea no se cuelga si Conectar tiene el perfil y dice que hay que
   }
 });
 
+test("si Fans en línea no termina, el tope suelta el perfil y el siguiente lease entra", { timeout: 90_000 }, async () => {
+  const dataDir = await tempDataDir();
+  const fixture = await startFixture();
+  const events: string[] = [];
+  const created = await createSessionRuntime({
+    config: testConfig(dataDir),
+    site: fixture.site,
+    browserFactory: recordingFactory(events),
+    displayEnv: testDisplay,
+    afterLoginPageOpen: (page) => completeFixtureLogin(page),
+  });
+  try {
+    const account = await created.sessions.addAccount("Tope");
+    await created.sessions.whenLoginSettled(account.id);
+    const launches = () => events.filter((event) => event.startsWith("persistent:")).length;
+    const before = launches();
+    const started = Date.now();
+    const read = await created.sessions.readOnlineFans(account.id, {
+      budgetMs: 400,
+      read: (_page, signal) => new Promise((_resolve, reject) => {
+        const fail = () => reject(new Error("abort"));
+        if (signal.aborted) fail();
+        else signal.addEventListener("abort", fail, { once: true });
+      }),
+    });
+    const elapsed = Date.now() - started;
+    assert.equal(read.reason, "No se pudo leer.");
+    assert.ok(elapsed < 3_000, `el tope tardó ${elapsed} ms`);
+    assert.equal(launches(), before + 1);
+    const next = await created.sessions.borrowProfile(account.id);
+    assert.equal(launches(), before + 2, "el lease anterior sigue bloqueando el perfil");
+    await next.release();
+  } finally {
+    await created.close();
+    await fixture.close();
+    await removeDir(dataDir);
+  }
+});
+
+test("Reconectar no espera más que el tope si una lectura no suelta el perfil", { timeout: 90_000 }, async () => {
+  const dataDir = await tempDataDir();
+  const fixture = await startFixture();
+  const created = await createSessionRuntime({
+    config: testConfig(dataDir),
+    site: fixture.site,
+    browserFactory: recordingFactory([]),
+    displayEnv: testDisplay,
+    afterLoginPageOpen: (page) => completeFixtureLogin(page),
+  });
+  const previous = process.env.FANLINK_PROFILE_IDLE_MS;
+  process.env.FANLINK_PROFILE_IDLE_MS = "400";
+  let releaseHold: () => void = () => undefined;
+  try {
+    const account = await created.sessions.addAccount("Retenido");
+    await created.sessions.whenLoginSettled(account.id);
+    const held = await created.sessions.borrowProfile(account.id);
+    releaseHold = () => {
+      void held.release();
+    };
+    const started = Date.now();
+    await created.sessions.beginInteractiveLogin(account.id);
+    await created.sessions.whenLoginSettled(account.id);
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed < 3_000, `Conectar esperó ${elapsed} ms`);
+    const stored = await created.sessions.getAccount(account.id);
+    assert.match(stored.lastError ?? "", /ocupado/);
+    assert.equal(stored.loginInProgress, false);
+  } finally {
+    releaseHold();
+    if (previous == null) delete process.env.FANLINK_PROFILE_IDLE_MS;
+    else process.env.FANLINK_PROFILE_IDLE_MS = previous;
+    await created.close();
+    await fixture.close();
+    await removeDir(dataDir);
+  }
+});
+
 test("Fans en línea no pisa la página de la escucha", { timeout: 90_000 }, async () => {
   const dataDir = await tempDataDir();
   const fixture = await startFixture();

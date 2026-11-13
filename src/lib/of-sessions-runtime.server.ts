@@ -203,7 +203,7 @@ export function kickInboxWatch(): void {
       const read = await sessions.readChatsDirect(accountId);
       const account = (await sessions.listAccounts()).find((item) => item.id === accountId);
       if (!account?.creatorId || read.threads.length === 0) {
-        if (read.reason) console.info(`[fanlink:chat] api lista: ${read.reason}`);
+        if (read.reason) console.info(`[fanlink:chat] api lista creator=${account?.creatorId ?? accountId} ${read.reason}`);
         return false;
       }
       await saveChatRead(await getSql(), account.creatorId, read);
@@ -307,7 +307,7 @@ function bootApiListLoop(sessions: SessionManager): void {
           if (!account.creatorId || account.identityState === "mismatch") continue;
           const read = await sessions.readChatsDirect(account.id);
           if (read.threads.length === 0) {
-            console.info(`[fanlink:chat] api lista: ${read.reason ?? "sin hilos"}`);
+            console.info(`[fanlink:chat] api lista creator=${account.creatorId} ${read.reason ?? "sin hilos"}`);
             continue;
           }
           await saveChatRead(await getSql(), account.creatorId, read);

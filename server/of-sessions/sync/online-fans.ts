@@ -39,7 +39,8 @@ export function subscribersResponse(url: string): "online" | "all" | null {
 }
 
 /** Abre Fans y se queda con quien OnlyFans marca en línea. No firma la API. */
-export async function readOnlineSubscribers(page: Page): Promise<OnlineFan[]> {
+export async function readOnlineSubscribers(page: Page, signal?: AbortSignal): Promise<OnlineFan[]> {
+  if (signal?.aborted) return [];
   const marked: OnlineFan[] = [];
   const filtered: OnlineFan[] = [];
   const pending: Array<Promise<void>> = [];
@@ -60,7 +61,9 @@ export async function readOnlineSubscribers(page: Page): Promise<OnlineFan[]> {
   page.on("response", onResponse);
   try {
     await page.goto(FANS_URL, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
-    await wait(pending, 6_000);
+    if (signal?.aborted || page.isClosed()) return [];
+    await wait(pending, 6_000, signal);
+    if (signal?.aborted || page.isClosed()) return [];
     await page.locator('[aria-label*="filter" i], [aria-label*="Filtrar" i]').first().click({ timeout: 2_500 }).catch(() => undefined);
     await page.getByText("En línea", { exact: true }).click({ timeout: 3_000 }).catch(() => undefined);
     const arrived = page.waitForResponse(
@@ -107,6 +110,13 @@ function dedupe(rows: OnlineFan[]): OnlineFan[] {
   return [...map.values()].slice(0, 100);
 }
 
-function wait(pending: Array<Promise<void>>, ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms)).then(() => Promise.all(pending.splice(0))).then(() => undefined);
+function wait(pending: Array<Promise<void>>, ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timer);
+      resolve();
+    }, { once: true });
+  }).then(() => Promise.all(pending.splice(0))).then(() => undefined);
 }
