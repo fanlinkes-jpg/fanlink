@@ -1,3 +1,6 @@
+/** Lo que se pinta cuando el CDN no deja la miniatura. Nunca es una URL. */
+export const VAULT_THUMB_MISSING = "Sin miniatura";
+
 /** URL del proxy autenticado. Nunca es una URL del CDN. */
 export function chatMediaSrc(input: { creatorId: string; threadKey: string; messageKey: string; index: number; variant?: "full" | "preview" }): string {
   const params = new URLSearchParams({

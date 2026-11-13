@@ -25,7 +25,7 @@ import {
 } from "@/lib/send-queue";
 import { spendTone } from "@/lib/spend-tiers";
 import { ChatMediaPlayer } from "@/features/chat-media-player";
-import { vaultMediaSrc } from "@/lib/chat-media";
+import { VAULT_THUMB_MISSING, vaultMediaSrc } from "@/lib/chat-media";
 import { VaultBrowser } from "@/features/vault-browser";
 
 function profileHref(handle: string | null): string | null {
@@ -1527,7 +1527,7 @@ function VaultOfferThumb({
   return (
     <figure className="relative h-28 w-24 shrink-0 overflow-hidden rounded-xl bg-[#d7dee8]">
       {broken || !creatorId ? (
-        <span className="grid h-full w-full place-items-center px-1 text-center text-[10px] text-[#5c6570]">{name}</span>
+        <span className="grid h-full w-full place-items-center px-1 text-center text-[10px] text-[#5c6570]">{broken ? VAULT_THUMB_MISSING : name}</span>
       ) : (
         <img src={vaultMediaSrc(creatorId, mediaId)} alt="" className="h-full w-full object-cover" onError={() => setBroken(true)} />
       )}
