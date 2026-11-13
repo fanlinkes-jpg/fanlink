@@ -82,7 +82,12 @@ export async function saveVaultMirror(sql: ReadSql, creatorId: string, items: re
 }
 
 /** Lo que la página de OnlyFans ya pidió al abrir la bóveda entra en el espejo. */
-export async function persistVaultRead(sql: ReadSql, creatorId: string, payloads: readonly unknown[]): Promise<VaultFile[]> {
+export async function persistVaultRead(
+  sql: ReadSql,
+  creatorId: string,
+  payloads: readonly unknown[],
+  page?: { listId?: string; offset?: number },
+): Promise<VaultFile[]> {
   const items = new Map<string, VaultFile>();
   const lists = new Map<string, VaultList>();
   for (const payload of payloads) {
@@ -93,7 +98,51 @@ export async function persistVaultRead(sql: ReadSql, creatorId: string, payloads
   const saved = [...items.values()];
   if (saved.length === 0 && lists.size === 0) return [];
   await saveVaultMirror(sql, creatorId, saved, [...lists.values()]);
+  if (saved.length > 0 && page) await rememberThumbPage(sql, creatorId, saved.map((item) => item.id), page);
   return saved;
+}
+
+export async function saveVaultPreview(
+  sql: ReadSql,
+  creatorId: string,
+  mediaId: string,
+  preview: string,
+  page?: { listId: string; offset: number },
+): Promise<void> {
+  await sql.query(
+    "update of_vault_item set preview = $3 where creator_id = $1 and item_key = $2",
+    [creatorId, mediaId, preview],
+  );
+  if (page) await rememberThumbPage(sql, creatorId, [mediaId], page);
+}
+
+/** Lista y offset de `vault/media` con los que se leyó el medio. Null si la columna aún no está. */
+export async function storedVaultPage(sql: ReadSql, creatorId: string, mediaId: string): Promise<{ listId: string; offset: number } | null> {
+  if (!(await hasColumn(sql, "of_vault_item", "thumb_offset"))) return null;
+  const rows = await sql.query<{ thumb_list: string | null; thumb_offset: number | null }>(
+    "select thumb_list, thumb_offset from of_vault_item where creator_id = $1 and item_key = $2",
+    [creatorId, mediaId],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  return { listId: row.thumb_list?.trim() || "all", offset: pageOffset(row.thumb_offset ?? 0) };
+}
+
+async function rememberThumbPage(sql: ReadSql, creatorId: string, ids: readonly string[], page: { listId?: string; offset?: number }): Promise<void> {
+  if (!(await hasColumn(sql, "of_vault_item", "thumb_offset"))) return;
+  const list = page.listId?.trim().slice(0, 80) || "all";
+  const offset = pageOffset(page.offset ?? 0);
+  for (const id of ids) {
+    await sql.query(
+      "update of_vault_item set thumb_list = $3, thumb_offset = $4 where creator_id = $1 and item_key = $2",
+      [creatorId, id, list, offset],
+    );
+  }
+}
+
+function pageOffset(offset: number): number {
+  if (!Number.isFinite(offset) || offset <= 0) return 0;
+  return Math.min(2_000, Math.floor(offset));
 }
 
 export async function loadVaultMirror(sql: ReadSql, creatorId: string): Promise<{ items: VaultFile[]; lists: VaultList[]; folders: SaleFolder[]; syncedAt: string | null }> {

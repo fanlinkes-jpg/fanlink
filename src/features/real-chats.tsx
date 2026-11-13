@@ -25,7 +25,7 @@ import {
 } from "@/lib/send-queue";
 import { spendTone } from "@/lib/spend-tiers";
 import { ChatMediaPlayer } from "@/features/chat-media-player";
-import { vaultMediaSrc } from "@/lib/chat-media";
+import { VAULT_THUMB_MISSING, vaultMediaSrc } from "@/lib/chat-media";
 import { VaultBrowser } from "@/features/vault-browser";
 
 function profileHref(handle: string | null): string | null {
@@ -264,6 +264,7 @@ export function RealChatsPage() {
   const [vaultReload, setVaultReload] = useState(0);
   const [vaultReading, setVaultReading] = useState(false);
   const vaultPage = useRef({ listId: "all", offset: 0, busy: false });
+  const [thumbPage, setThumbPage] = useState({ listId: "all", offset: 0 });
   const offerPriceId = useRef<string | null>(null);
 
   async function refresh() {
@@ -654,6 +655,7 @@ export function RealChatsPage() {
       const result = await readChatVault({ data: { creatorId: selected.creatorId, threadKey: selected.threadKey, listId, offset } });
       setOfVault(result.items);
       setVaultReload((value) => value + 1);
+      setThumbPage({ listId, offset });
       vaultPage.current = { listId, offset: offset + 40, busy: false };
       if (offset === 0 && result.items.length === 0) setError(result.reason ?? "La bóveda de OnlyFans ha llegado vacía.");
     } catch (err) {
@@ -1210,6 +1212,7 @@ export function RealChatsPage() {
                     onEmoji={insertAtCursor}
                     onClose={() => setPanel(null)}
                     reading={vaultReading}
+                    thumbPage={thumbPage}
                     onVaultMore={() => void loadOfVault(vaultPage.current.listId, vaultPage.current.offset)}
                     onOpenFolder={(listId) => void loadOfVault(listId ?? "all", 0)}
                   />
@@ -1527,7 +1530,7 @@ function VaultOfferThumb({
   return (
     <figure className="relative h-28 w-24 shrink-0 overflow-hidden rounded-xl bg-[#d7dee8]">
       {broken || !creatorId ? (
-        <span className="grid h-full w-full place-items-center px-1 text-center text-[10px] text-[#5c6570]">{name}</span>
+        <span className="grid h-full w-full place-items-center px-1 text-center text-[10px] text-[#5c6570]">{broken ? VAULT_THUMB_MISSING : name}</span>
       ) : (
         <img src={vaultMediaSrc(creatorId, mediaId)} alt="" className="h-full w-full object-cover" onError={() => setBroken(true)} />
       )}
@@ -1597,6 +1600,7 @@ function ComposerPanelBody({
   onEmoji,
   onClose,
   reading = false,
+  thumbPage = { listId: "all", offset: 0 },
   onVaultMore,
   onOpenFolder,
 }: {
@@ -1620,6 +1624,7 @@ function ComposerPanelBody({
   onEmoji: (emoji: string) => void;
   onClose?: () => void;
   reading?: boolean;
+  thumbPage?: { listId: string; offset: number };
   onVaultMore?: () => void;
   onOpenFolder?: (listId: string | null) => void;
 }) {
@@ -1629,7 +1634,7 @@ function ComposerPanelBody({
         <div role="region" aria-label="Panel Add from media vault" className="flex h-full min-h-0 flex-col">
           {reading ? <p className="px-4 py-2 text-sm text-[#8a96a3]">Leyendo la bóveda de OnlyFans…</p> : null}
           {creatorId && creatorId !== "all" ? (
-            <VaultBrowser layout="of" creatorId={creatorId} fanKey={fanKey} reloadToken={vaultReload} onAttach={onVault} onClose={onClose} onMore={onVaultMore} onOpenFolder={onOpenFolder} />
+            <VaultBrowser layout="of" creatorId={creatorId} fanKey={fanKey} reloadToken={vaultReload} thumbPage={thumbPage} onAttach={onVault} onClose={onClose} onMore={onVaultMore} onOpenFolder={onOpenFolder} />
           ) : <p className="p-4 text-sm text-[#8a96a3]">Sin datos</p>}
         </div>
       );
