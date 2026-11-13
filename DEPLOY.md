@@ -4,7 +4,7 @@ Esto no despliega nada por sí solo. Prepara Postgres, la app y Chromium, y deja
 
 ## 1. Máquina
 
-Hace falta Docker y un VPS con escritorio virtual solo si quieres ver la ventana de login. En un servidor sin pantalla, Conectar no puede abrir Chromium visible: el login de OnlyFans sigue pidiendo una persona delante. El resto de lecturas usa el perfil que ya guardaste.
+Hace falta Docker y un VPS con escritorio virtual solo si quieres ver la ventana de login. En un servidor sin pantalla, Conectar no puede abrir Chromium visible: el login de OnlyFans sigue pidiendo una persona delante. El resto de lecturas usa el perfil que ya guardaste. Ese directorio (`data/profiles/<cuenta>`) lo abre un solo Chromium por cuenta: Conectar cierra la sala y cualquier lectura que lo tenga antes de abrir la ventana. No arranques otro proceso sobre la misma carpeta. Al soltar el perfil, Fanlink reescribe la sesión cifrada para no guardar una `sess` vieja.
 
 No generes otra `FANLINK_SESSION_KEY` si ya tienes `data/sessions`. Esa clave descifra las sesiones y los proxies.
 
@@ -78,7 +78,7 @@ Solo esa cuenta (el id `9ikis52` o el handle `@bigpoppa1111`, el que tenga guard
 
 Mensajes es la bandeja del CRM. No se monta la página de OnlyFans dentro del chat. Con el directo apagado, o en este proceso de despliegue (el socket solo existe con `npm run dev`), esa bandeja sigue siendo la pantalla. No se borra hasta que el directo funcione aquí.
 
-Teclear, pulsar Enter y subir un archivo exigen además `FANLINK_ENABLE_SEND=true`. Si está apagado, la pestaña es solo lectura. La página no sale de `/my/chats` ni de la API de mensajes: `/my/statements`, `/my/statistics`, banca, pagos y ajustes quedan bloqueados, también si la página intenta cambiar la ruta por dentro. No se abren popups ni descargas. La sincronización y el envío del resto de la cuenta siguen usando el mismo perfil. Con `VITE_AUTH_ENABLED=false` en localhost funciona sin login. Con el acceso encendido hace falta una sesión con permiso de mensajes. El log es `[fanlink:live]` y no guarda lo que se escribe.
+Teclear, pulsar Enter y subir un archivo exigen además `FANLINK_ENABLE_SEND=true`. Si está apagado, la pestaña es solo lectura. La página no sale de `/my/chats` ni de la API de mensajes: `/my/statements`, `/my/statistics`, banca, pagos y ajustes quedan bloqueados, también si la página intenta cambiar la ruta por dentro. No se abren popups ni descargas. Al cerrar la sala se quitan esas guardias, para que la misma pestaña no las acumule si se vuelve a abrir. Una sala vacía se cierra a los 60 segundos (`FANLINK_LIVE_GRACE_MS`) y suelta el perfil. Una sala que no llegó a abrir no se queda en memoria. La sincronización y el envío del resto de la cuenta siguen usando el mismo perfil, el único Chromium de esa cuenta. Con `VITE_AUTH_ENABLED=false` en localhost funciona sin login. Con el acceso encendido hace falta una sesión con permiso de mensajes. El log es `[fanlink:live]` y no guarda lo que se escribe.
 
 ## 7. Tiempo real del chat
 
