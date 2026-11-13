@@ -49,11 +49,41 @@ export async function loadSignRules(fetchImpl: typeof fetch, now: number): Promi
   return rules;
 }
 
-/** Firma una ruta. El tiempo va en milisegundos y el id es el de la cuenta. */
+/**
+ * Firma una ruta. El tiempo va en milisegundos.
+ *
+ * Referencia comprobada el 2026-11-13, sin llamar a onlyfans.com:
+ * - Reglas: DATAHOARDERS/dynamic-rules `onlyfans.json` (trae `remove_headers`
+ *   y `checksum_constants` en paralelo a `checksum_indexes`).
+ * - Cabecera: UltimaScraperAPI `create_headers` quita cada nombre de
+ *   `remove_headers` (`user_id` y `user-id` son el mismo).
+ * - Cuarto campo: Hashirama/OFDL `create_sign` usa `"0"`; UltimaScraperAPI
+ *   `create_signed_headers` arranca en `auth_id = 0`. Si la regla quita
+ *   `user-id`, se firma con `0`. Si no, con el id de la cuenta.
+ * - Checksum: `checksum_constant` más, por cada índice, el byte ASCII del
+ *   hash y la constante de esa posición. OFDL suma las constantes aparte;
+ *   con un array paralelo el total es el mismo. UltimaScraperAPI aún no
+ *   las mete: sin ellas la firma actual devolvía 400.
+ * - Tiempo: OFDL y OF-Scraper `create_login_sign` usan milisegundos.
+ */
 export function signOnlyfans(rules: SignRules, pathWithQuery: string, userId: string, timeMs: number): { sign: string; time: string } {
   const time = String(timeMs);
-  const hash = createHash("sha1").update([rules.staticParam, time, pathWithQuery, userId].join("\n")).digest("hex");
-  const checksum = rules.checksumIndexes.reduce((sum, index) => sum + hash.charCodeAt(index), rules.checksumConstant);
+  const signedUser = headerRemoved(rules, "user-id") ? "0" : userId;
+  const hash = createHash("sha1").update([rules.staticParam, time, pathWithQuery, signedUser].join("\n")).digest("hex");
+  const checksum = rules.checksumIndexes.reduce((sum, index, position) => {
+    const code = hash.charCodeAt(index);
+    const piece = Number.isFinite(code) ? code : 0;
+    return sum + piece + (rules.checksumConstants[position] ?? 0);
+  }, rules.checksumConstant);
   const sign = rules.format.replace("{}", hash).replace("{:x}", Math.abs(checksum).toString(16));
   return { sign, time };
+}
+
+export function headerRemoved(rules: SignRules, name: string): boolean {
+  const needle = normalizeHeaderName(name);
+  return rules.removeHeaders.some((item) => normalizeHeaderName(item) === needle);
+}
+
+export function normalizeHeaderName(name: string): string {
+  return name.trim().toLowerCase().replaceAll("_", "-");
 }
