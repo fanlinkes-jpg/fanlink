@@ -7,6 +7,8 @@ export type ApiListAccount = {
   creatorId: string | null;
   status: "active" | "expired" | "pending_login";
   identityState: string;
+  /** False: no hay archivo de sesión. Undefined se trata como presente. */
+  hasStorageState?: boolean;
 };
 
 export type ApiListRead = {
@@ -26,30 +28,41 @@ export type ApiListStep = {
 
 export function shouldReadApiList(account: ApiListAccount, paused: boolean): boolean {
   if (!account.creatorId || account.identityState === "mismatch" || account.status !== "active") return false;
+  if (account.hasStorageState === false) return false;
   return !paused;
+}
+
+/** Aviso de una cuenta que no se lee. La segunda vez, null: no se repite cada ciclo. */
+export function skipApiListNotice(account: ApiListAccount, seen: Set<string>): string | null {
+  if (shouldReadApiList(account, false)) return null;
+  if (seen.has(account.id)) return null;
+  seen.add(account.id);
+  const why = account.hasStorageState === false
+    ? "sin sesión guardada"
+    : account.identityState === "mismatch"
+      ? "no coincide"
+      : account.status;
+  return `[fanlink:chat] api lista creator=${account.creatorId ?? "-"} account=${account.id}: se omite (${why})`;
+}
+
+function errorLine(account: ApiListAccount, detail: string): string {
+  const text = detail.replace(/\s+creator=\S+\s+account=\S+/g, "").trim();
+  return `[fanlink:chat] api lista creator=${account.creatorId ?? "-"} account=${account.id}: ${text}`;
 }
 
 export function apiListStep(account: ApiListAccount, read: ApiListRead): ApiListStep {
   const who = account.creatorId ?? account.id;
   if (read.signatureRejected) {
-    return { save: false, backoff: true, line: `[fanlink:chat] api lista cuenta=${who}: OnlyFans rechazó la firma` };
+    return { save: false, backoff: true, line: errorLine(account, "OnlyFans rechazó la firma") };
   }
   if (read.sessionRejected) {
-    return {
-      save: false,
-      backoff: false,
-      line: `[fanlink:chat] api lista cuenta=${who}: ${read.reason ?? "sesión rechazada"}`,
-    };
+    return { save: false, backoff: false, line: errorLine(account, read.reason ?? "sesión rechazada") };
   }
   if (read.retryAfterMs > 0) {
-    return { save: false, backoff: true, line: `[fanlink:chat] api lista cuenta=${who}: 429` };
+    return { save: false, backoff: true, line: errorLine(account, "429") };
   }
   if (read.threadCount === 0 && read.messageCount === 0) {
-    return {
-      save: false,
-      backoff: false,
-      line: `[fanlink:chat] api lista cuenta=${who}: ${read.reason ?? "sin hilos"}`,
-    };
+    return { save: false, backoff: false, line: errorLine(account, read.reason ?? "sin hilos") };
   }
   return {
     save: true,

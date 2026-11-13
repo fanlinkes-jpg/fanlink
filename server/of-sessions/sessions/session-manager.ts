@@ -477,6 +477,8 @@ export class SessionManager {
   /** Lee la lista de chats por HTTP con la sesión guardada. No abre Chromium. */
   async readChatsDirect(accountId: string, openThreadKeys: readonly string[] = [], pull?: SignedChatOptions): Promise<CollectedChats> {
     const empty: CollectedChats = { threads: [], messages: [], reason: null, jsonPaths: ["api2/v2/chats"] };
+    const tag = await this.accountLogTag(accountId);
+    const named = (reason: string) => `${reason} ${tag}`;
     try {
       const state = await this.readStorageState(accountId);
       const read = await fetchSignedChats(state, {
@@ -495,7 +497,7 @@ export class SessionManager {
         ...empty,
         threads: read.threads,
         messages: read.messages,
-        reason: read.reason,
+        reason: read.reason ? named(read.reason) : null,
         sessionRejected: read.sessionRejected,
         signatureRejected: read.signatureRejected,
         retryAfterMs: read.retryAfterMs,
@@ -503,8 +505,14 @@ export class SessionManager {
       };
     } catch (error) {
       const missing = error instanceof Error && "code" in error && error.code === "ENOENT";
-      return { ...empty, reason: missing ? "sin sesión guardada" : publicErrorMessage(error, "no se pudo leer la sesión") };
+      const reason = missing ? "sin sesión guardada" : publicErrorMessage(error, "no se pudo leer la sesión");
+      return { ...empty, reason: named(reason) };
     }
+  }
+
+  private async accountLogTag(accountId: string): Promise<string> {
+    const account = await this.options.store.get(accountId).catch(() => null);
+    return `creator=${account?.creatorId ?? "-"} account=${accountId}`;
   }
 
   /**
