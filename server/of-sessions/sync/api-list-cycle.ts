@@ -1,3 +1,6 @@
+import { accountPause } from "./backoff.ts";
+import type { CollectedChats } from "./collect-chats.ts";
+
 /**
  * Un paso de la lista firmada. Cada cuenta se lee sola: un 401 o una
  * sesión que no está en disco no cancela a las demás.
@@ -67,27 +70,41 @@ export function apiListStep(account: ApiListAccount, read: ApiListRead): ApiList
   return {
     save: true,
     backoff: false,
-    line: `[fanlink:chat] api lista creator=${who} hilos=${read.threadCount} mensajes=${read.messageCount}`,
+    line: `[fanlink:chat] api lista creator=${who} account=${account.id} hilos=${read.threadCount} mensajes=${read.messageCount}`,
   };
 }
 
-/** Recorre las cuentas en orden. Un fallo no corta el resto. */
-export function runApiListCycle(
-  accounts: readonly ApiListAccount[],
-  readOf: (account: ApiListAccount) => ApiListRead,
-  paused: (accountId: string) => boolean,
-): { saved: string[]; lines: string[]; backoff: string[]; read: string[] } {
-  const saved: string[] = [];
-  const lines: string[] = [];
-  const backoff: string[] = [];
-  const read: string[] = [];
+type PacedReader = {
+  readPacedChats(accountId: string, part: "list" | "all", openThreadKeys?: string[]): Promise<CollectedChats>;
+};
+
+/**
+ * Una pasada del bucle de fondo. La omisión se avisa una vez y se olvida
+ * cuando la cuenta vuelve a poder leerse. No hay una lista de ausentes:
+ * si `hasStorageState` pasa a true, el ciclo siguiente entra.
+ */
+export async function passApiListAccounts<T extends ApiListAccount>(
+  sessions: PacedReader,
+  accounts: readonly T[],
+  noted: Set<string>,
+  finish: (account: T, read: CollectedChats) => Promise<void>,
+  log: (line: string) => void = (line) => console.info(line),
+): Promise<void> {
   for (const account of accounts) {
-    if (!shouldReadApiList(account, paused(account.id))) continue;
-    read.push(account.creatorId ?? account.id);
-    const step = apiListStep(account, readOf(account));
-    lines.push(step.line);
-    if (step.save && account.creatorId) saved.push(account.creatorId);
-    if (step.backoff) backoff.push(account.id);
+    if (shouldReadApiList(account, false)) noted.delete(account.id);
+    if (!shouldReadApiList(account, accountPause(account.id) != null)) {
+      if (accountPause(account.id)) continue;
+      const notice = skipApiListNotice(account, noted);
+      if (notice) log(notice);
+      continue;
+    }
+    try {
+      const read = await sessions.readPacedChats(account.id, "list");
+      if (read.reason?.includes("espera el ritmo")) continue;
+      await finish(account, read);
+    } catch (error) {
+      const text = error instanceof Error ? error.message.slice(0, 120) : "error";
+      log(`[fanlink:chat] api lista creator=${account.creatorId ?? "-"} account=${account.id}: ${text}`);
+    }
   }
-  return { saved, lines, backoff, read };
 }

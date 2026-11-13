@@ -32,6 +32,33 @@ export function planChatPull(mark: ChatPace | undefined, now: number, part: "all
 }
 
 const tails = new Map<string, Promise<unknown>>();
+const paces = new Map<string, ChatPace>();
+const lastRequestAt = new Map<string, number>();
+
+export function chatPaceOf(accountId: string): ChatPace | undefined {
+  return paces.get(accountId);
+}
+
+export function rememberChatPace(accountId: string, pace: ChatPace): void {
+  paces.set(accountId, pace);
+}
+
+/** Separa las peticiones de una cuenta aunque vengan de llamadas distintas. */
+export async function awaitAccountGap(accountId: string, now: () => number, sleep: (ms: number) => Promise<void>, gapMs = REQUEST_GAP_MS): Promise<void> {
+  const prev = lastRequestAt.get(accountId);
+  const current = now();
+  if (prev != null) {
+    const wait = gapMs - (current - prev);
+    if (wait > 0) await sleep(wait);
+  }
+  lastRequestAt.set(accountId, now());
+}
+
+export function clearAccountChatPace(): void {
+  tails.clear();
+  paces.clear();
+  lastRequestAt.clear();
+}
 
 /** Una lectura firmada a la vez por cuenta. La siguiente espera a la anterior. */
 export function withAccountChatReader<T>(accountId: string, run: () => Promise<T>): Promise<T> {
@@ -39,57 +66,4 @@ export function withAccountChatReader<T>(accountId: string, run: () => Promise<T
   const next = prev.then(run, run);
   tails.set(accountId, next.then(() => undefined, () => undefined));
   return next;
-}
-
-/**
- * Cuenta las peticiones de un minuto con un solo lector y 300 ms entre medias.
- * La lista completa sale al empezar y no se repite hasta los 2 min.
- * Los hilos abiertos piden solo su primera página, nunca más de una vez cada 2 s,
- * y el hueco de 300 ms alarga el barrido si hay muchos.
- */
-export function simulateChatReads(input: { openThreads: number; fullPages: number; durationMs: number }): {
-  requests: number;
-  openSweeps: number;
-  headPages: number;
-  fullRuns: number;
-} {
-  let time = 0;
-  let nextOpen = 0;
-  let nextHead = LIST_HEAD_MS;
-  let nextFull = 0;
-  let requests = 0;
-  let openSweeps = 0;
-  let headPages = 0;
-  let fullRuns = 0;
-  const end = input.durationMs;
-  while (time < end) {
-    if (time >= nextFull) {
-      const pages = Math.max(1, input.fullPages);
-      requests += pages;
-      fullRuns += 1;
-      const start = time;
-      time += Math.max(0, pages - 1) * REQUEST_GAP_MS;
-      nextFull = start + FULL_LIST_MS;
-      nextHead = start + LIST_HEAD_MS;
-      continue;
-    }
-    if (time >= nextHead) {
-      requests += 1;
-      headPages += 1;
-      nextHead = time + LIST_HEAD_MS;
-      time += REQUEST_GAP_MS;
-      continue;
-    }
-    if (time >= nextOpen) {
-      const count = Math.max(0, input.openThreads);
-      requests += count;
-      openSweeps += 1;
-      const start = time;
-      time += Math.max(0, count - 1) * REQUEST_GAP_MS;
-      nextOpen = Math.max(time, start + OPEN_PULL_MS);
-      continue;
-    }
-    time = Math.min(nextFull, nextHead, nextOpen);
-  }
-  return { requests, openSweeps, headPages, fullRuns };
 }

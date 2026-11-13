@@ -2,7 +2,7 @@ import { BROWSER_FINGERPRINT } from "../sessions/browser-factory.ts";
 import { domainMatches, isCookieUnexpired, type StorageCookie, type StorageStateFile } from "../sessions/storage-state.ts";
 import { backoffDelayMs } from "./backoff.ts";
 import { mergeMessages, mergeThreads, parseChatList, parseChatMessages, parsePreviewMessages, type ChatMessage, type ChatThread } from "./chats.ts";
-import { REQUEST_GAP_MS } from "./api-list-pace.ts";
+import { awaitAccountGap, REQUEST_GAP_MS } from "./api-list-pace.ts";
 import { headerRemoved, loadSignRules, normalizeHeaderName, pathHasQuery, signOnlyfans, type SignRules } from "./of-sign.ts";
 
 const HOST = "onlyfans.com";
@@ -53,9 +53,10 @@ export type SignedChatDeps = {
   now: () => number;
   /** Reglas ya leídas. Si no vienen, se piden a DATAHOARDERS. */
   rules?: SignRules;
-  /** Si viene, separa las peticiones de esta cuenta. */
+  /** Si viene, separa las peticiones de esta cuenta, también entre llamadas. */
   sleep?: (ms: number) => Promise<void>;
   minGapMs?: number;
+  accountId?: string;
 };
 
 export function sessionForApi(state: StorageStateFile, nowMs: number): { cookie: string; userId: string; xBc: string } | { reason: string } {
@@ -124,9 +125,12 @@ export async function fetchSignedChats(state: StorageStateFile, deps: SignedChat
 
   const request = async (path: string): Promise<JsonPage> => {
     const gap = deps.sleep ? (deps.minGapMs ?? REQUEST_GAP_MS) : 0;
-    if (gap > 0 && lastRequestAt > 0 && deps.sleep) {
-      const wait = gap - (deps.now() - lastRequestAt);
-      if (wait > 0) await deps.sleep(wait);
+    if (gap > 0 && deps.sleep) {
+      if (deps.accountId) await awaitAccountGap(deps.accountId, deps.now, deps.sleep, gap);
+      else if (lastRequestAt > 0) {
+        const wait = gap - (deps.now() - lastRequestAt);
+        if (wait > 0) await deps.sleep(wait);
+      }
     }
     const page = await getJson(deps.fetch, path, signedHeaders(rules, path, auth, deps.now()), deps.now());
     lastRequestAt = deps.now();
@@ -289,6 +293,12 @@ function listCapOf(options: SignedChatOptions): number {
   return Math.min(MAX_LIST_CAP, Math.max(1, Math.floor(raw)));
 }
 
+/**
+ * Páginas de `/messages` por hilo cuando el llamador no fija `messagePageCap`.
+ * `FANLINK_CHAT_MESSAGE_PAGES` vale 1, 2 o 3. El ritmo de la bandeja pasa 1:
+ * solo la primera página de los hilos abiertos. De un hilo que nadie tiene
+ * abierto no se pide `/messages`: de la lista se guarda el último mensaje.
+ */
 function messagePageCapOf(options: SignedChatOptions): number {
   const fromEnv = Number(process.env.FANLINK_CHAT_MESSAGE_PAGES);
   const raw = options.messagePageCap ?? (Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : DEFAULT_MESSAGE_PAGE_CAP);

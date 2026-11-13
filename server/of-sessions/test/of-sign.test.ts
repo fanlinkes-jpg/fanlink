@@ -93,6 +93,26 @@ test("GitHub caído o un JSON mal formado no tiran la última regla válida", as
   await assert.rejects(() => loadSignRules(fetchImpl, 0));
 });
 
+test("si GitHub falla, la regla guardada no se reintenta antes de 5 min", async () => {
+  clearSignRulesCache();
+  let calls = 0;
+  const fetchImpl = (async () => {
+    calls += 1;
+    if (calls === 1) return new Response(JSON.stringify(rulesJson()), { status: 200 });
+    throw new Error("github caído");
+  }) as typeof fetch;
+  await loadSignRules(fetchImpl, 0);
+  const kept = await loadSignRules(fetchImpl, 31 * 60_000);
+  assert.equal(kept.appToken, "token");
+  assert.equal(calls, 2);
+  const quiet = await loadSignRules(fetchImpl, 31 * 60_000 + 60_000);
+  assert.equal(quiet.staticParam, kept.staticParam);
+  assert.equal(calls, 2);
+  await loadSignRules(fetchImpl, 31 * 60_000 + 5 * 60_000);
+  assert.equal(calls, 3);
+  clearSignRulesCache();
+});
+
 test("una sola descarga de reglas a la vez", async () => {
   clearSignRulesCache();
   let calls = 0;

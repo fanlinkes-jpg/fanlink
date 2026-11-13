@@ -21,8 +21,7 @@ import type { CreatorChatList, CreatorReadList, CreatorReadView, CreatorSessionV
 import { parseAccountProxy, proxyLabel, readAccountProxy, removeAccountProxy, writeAccountProxy } from "../../server/of-sessions/proxy.ts";
 import { syncAssignments } from "../../server/of-sessions/metrics/assignments.ts";
 import { dashboardViewFor } from "../../server/of-sessions/metrics/dashboard.ts";
-import { apiListStep, shouldReadApiList, skipApiListNotice } from "../../server/of-sessions/sync/api-list-cycle.ts";
-import { planChatPull, withAccountChatReader, type ChatPace } from "../../server/of-sessions/sync/api-list-pace.ts";
+import { apiListStep, passApiListAccounts, shouldReadApiList } from "../../server/of-sessions/sync/api-list-cycle.ts";
 import { accountPause, blockKind, listAccountPauses, noteAccountBlock } from "../../server/of-sessions/sync/backoff.ts";
 import { presentTeamMetrics } from "../../server/of-sessions/metrics/present-team.ts";
 import { creatorIdsForReads } from "@/lib/dashboard-config";
@@ -201,23 +200,16 @@ export function kickInboxWatch(): void {
       console.info(`[fanlink:chat] escucha pausada cuenta=${accountId} motivo=${reason} espera=${delay}`);
       return delay;
     },
-    pullList: async (accountId, openThreadKeys) => withAccountChatReader(accountId, async () => {
+    pullList: async (accountId, openThreadKeys) => {
       const sessions = await getOfSessionManager();
       const account = (await sessions.listAccounts()).find((item) => item.id === accountId);
       if (!account || !shouldReadApiList(account, false)) return false;
       const pause = accountPause(accountId);
       if (pause) return { ok: false, waitMs: Math.max(200, pause.until - Date.now()) };
-      const now = Date.now();
-      const plan = planChatPull(chatPace.get(accountId), now, "all");
-      if (!plan.open && plan.list === "none") return true;
-      chatPace.set(accountId, plan.next);
-      const read = await sessions.readChatsDirect(accountId, plan.open ? openThreadKeys : [], {
-        list: plan.list,
-        messages: plan.open ? "open" : "none",
-        messagePageCap: 1,
-      });
+      const read = await sessions.readPacedChats(accountId, "all", openThreadKeys);
+      if (read.reason?.includes("espera el ritmo")) return true;
       return finishApiRead(account, read);
-    }),
+    },
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   }).finally(() => {
@@ -231,7 +223,6 @@ function accountForCreator(creatorId: string): string | null {
 }
 
 const creatorAccounts = new Map<string, string>();
-const chatPace = new Map<string, ChatPace>();
 const creatorUsers = new Map<string, string | null>();
 
 export async function rememberCreatorAccounts(): Promise<void> {
@@ -313,7 +304,8 @@ async function finishApiRead(account: Account, read: CollectedChats): Promise<bo
   });
   if (step.save && account.creatorId) await saveChatRead(await getSql(), account.creatorId, read);
   if (step.backoff) {
-    const delay = noteAccountBlock(account.id, read.signatureRejected ? "400" : "429");
+    const existing = accountPause(account.id);
+    const delay = existing ? Math.max(200, existing.until - Date.now()) : noteAccountBlock(account.id, read.signatureRejected ? "400" : "429");
     console.info(`${step.line} espera=${delay}`);
     return { ok: false, waitMs: delay };
   }
@@ -328,36 +320,16 @@ function bootApiListLoop(sessions: SessionManager): void {
   globalRef.__ofApiList__ = true;
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
   const skipNoted = new Set<string>();
-  const missingFile = new Set<string>();
   void (async () => {
     await sleep(5_000);
     while (true) {
       try {
-        for (const account of await sessions.listAccounts()) {
-          if (missingFile.has(account.id)) continue;
-          if (!shouldReadApiList(account, accountPause(account.id) != null)) {
-            if (accountPause(account.id)) continue;
-            const notice = skipApiListNotice(account, skipNoted);
-            if (notice) console.info(notice);
-            continue;
-          }
-          try {
-            await withAccountChatReader(account.id, async () => {
-              const now = Date.now();
-              const plan = planChatPull(chatPace.get(account.id), now, "list");
-              if (plan.list === "none") return;
-              chatPace.set(account.id, plan.next);
-              const read = await sessions.readChatsDirect(account.id, [], { list: plan.list, messages: "none" });
-              if (read.reason?.includes("sin sesión guardada")) missingFile.add(account.id);
-              await finishApiRead(account, read);
-            });
-          } catch (error) {
-            const text = error instanceof Error ? error.message.slice(0, 120) : "error";
-            console.info(`[fanlink:chat] api lista creator=${account.creatorId ?? "-"} account=${account.id}: ${text}`);
-          }
-        }
+        await passApiListAccounts(sessions, await sessions.listAccounts(), skipNoted, async (account, read) => {
+          await finishApiRead(account, read);
+        });
       } catch (error) {
-        console.info(`[fanlink:chat] api lista: ${error instanceof Error ? error.message.slice(0, 120) : "error"}`);
+        const text = error instanceof Error ? error.message.slice(0, 120) : "error";
+        console.info(`[fanlink:chat] api lista creator=- account=-: ${text}`);
       }
       await sleep(15_000);
     }

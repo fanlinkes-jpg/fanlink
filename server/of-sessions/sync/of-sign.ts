@@ -13,12 +13,16 @@ export type SignRules = {
 const RULES_URL = "https://raw.githubusercontent.com/DATAHOARDERS/dynamic-rules/main/onlyfans.json";
 const RULES_TTL_MS = 30 * 60_000;
 export const RULES_TIMEOUT_MS = 5_000;
+/** Si la descarga falla y hay regla guardada, no se reintenta antes de esto. */
+export const RULES_RETRY_MS = 5 * 60_000;
 
 let cached: { rules: SignRules; at: number } | null = null;
+let failedAt: number | null = null;
 let inflight: Promise<SignRules> | null = null;
 
 export function clearSignRulesCache(): void {
   cached = null;
+  failedAt = null;
   inflight = null;
 }
 
@@ -54,6 +58,7 @@ export function parseSignRules(value: unknown): SignRules | null {
 
 export async function loadSignRules(fetchImpl: typeof fetch, now: number): Promise<SignRules> {
   if (cached && now - cached.at < RULES_TTL_MS) return cached.rules;
+  if (cached && failedAt != null && now - failedAt < RULES_RETRY_MS) return cached.rules;
   if (!inflight) {
     inflight = downloadSignRules(fetchImpl, now).finally(() => {
       inflight = null;
@@ -68,10 +73,14 @@ async function downloadSignRules(fetchImpl: typeof fetch, now: number): Promise<
     if (!response.ok) throw new Error("no hay reglas de firma");
     const rules = parseSignRules(await response.json());
     if (!rules) throw new Error("reglas de firma ilegibles");
+    failedAt = null;
     cached = { rules, at: now };
     return rules;
   } catch (error) {
-    if (cached) return cached.rules;
+    if (cached) {
+      failedAt = now;
+      return cached.rules;
+    }
     throw error instanceof Error ? error : new Error("no hay reglas de firma");
   }
 }

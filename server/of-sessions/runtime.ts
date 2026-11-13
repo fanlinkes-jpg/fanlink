@@ -22,6 +22,7 @@ export interface CreateRuntimeOptions {
   logger?: { info(message: string): void; warn(message: string): void };
   store?: AccountRepository;
   fetch?: typeof fetch;
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export async function createSessionRuntime(options: CreateRuntimeOptions) {
@@ -46,6 +47,7 @@ export async function createSessionRuntime(options: CreateRuntimeOptions) {
     afterLoginPageOpen: options.afterLoginPageOpen,
     logger: options.logger,
     fetch: options.fetch,
+    sleep: options.sleep,
   });
 
   return {

@@ -46,6 +46,8 @@ import type { SiteAdapter } from "./site.ts";
 import { hasLiveCookies } from "./site.ts";
 import { collectCreatorRead, type CollectedRead } from "../sync/collect.ts";
 import type { TxCursor } from "../sync/parse.ts";
+import { accountPause, noteAccountBlock } from "../sync/backoff.ts";
+import { chatPaceOf, planChatPull, rememberChatPace, withAccountChatReader } from "../sync/api-list-pace.ts";
 import { fetchSignedChats, type SignedChatOptions } from "../sync/of-chat-api.ts";
 import { collectChats, type CollectedChats } from "../sync/collect-chats.ts";
 import { collectNotifications, type CollectedNotifications } from "../sync/collect-notifications.ts";
@@ -72,6 +74,8 @@ export interface SessionManagerOptions {
   now?: () => Date;
   /** Pruebas. En producción es el fetch global. */
   fetch?: typeof fetch;
+  /** Pruebas. En producción espera de verdad. */
+  sleep?: (ms: number) => Promise<void>;
   /**
    * Gancho de pruebas. En la app real no se usa: la persona escribe
    * usuario y contraseña en la ventana de OnlyFans.
@@ -477,27 +481,31 @@ export class SessionManager {
   /** Lee la lista de chats por HTTP con la sesión guardada. No abre Chromium. */
   async readChatsDirect(accountId: string, openThreadKeys: readonly string[] = [], pull?: SignedChatOptions): Promise<CollectedChats> {
     const empty: CollectedChats = { threads: [], messages: [], reason: null, jsonPaths: ["api2/v2/chats"] };
-    const tag = await this.accountLogTag(accountId);
-    const named = (reason: string) => `${reason} ${tag}`;
     try {
       const state = await this.readStorageState(accountId);
       const read = await fetchSignedChats(state, {
         fetch: this.options.fetch ?? fetch,
         now: () => this.now().getTime(),
-        sleep: (ms) => delay(ms),
+        sleep: this.options.sleep ?? ((ms) => delay(ms)),
         minGapMs: 300,
+        accountId,
       }, { openThreadKeys, ...pull });
       if (read.sessionRejected) {
         await this.markApiSessionRejected(accountId, read.reason ?? messages.loginRequired).catch(() => undefined);
       }
+      if (read.signatureRejected || read.retryAfterMs > 0) {
+        noteAccountBlock(accountId, read.signatureRejected ? "400" : "429");
+      }
       if (read.signatureRejected) {
         await this.noteSignatureRejected(accountId).catch(() => undefined);
+      } else if (!read.sessionRejected && (read.threads.length > 0 || read.messages.length > 0)) {
+        await this.clearSignatureError(accountId).catch(() => undefined);
       }
       return {
         ...empty,
         threads: read.threads,
         messages: read.messages,
-        reason: read.reason ? named(read.reason) : null,
+        reason: read.reason,
         sessionRejected: read.sessionRejected,
         signatureRejected: read.signatureRejected,
         retryAfterMs: read.retryAfterMs,
@@ -506,19 +514,20 @@ export class SessionManager {
     } catch (error) {
       const missing = error instanceof Error && "code" in error && error.code === "ENOENT";
       const reason = missing ? "sin sesión guardada" : publicErrorMessage(error, "no se pudo leer la sesión");
-      return { ...empty, reason: named(reason) };
+      return { ...empty, reason };
     }
-  }
-
-  private async accountLogTag(accountId: string): Promise<string> {
-    const account = await this.options.store.get(accountId).catch(() => null);
-    return `creator=${account?.creatorId ?? "-"} account=${accountId}`;
   }
 
   /**
    * Un 401 de la API firmada. Expirada, o Pendiente de login si la ventana
    * ya está abierta. No llama a Chromium.
    */
+  private async clearSignatureError(accountId: string): Promise<void> {
+    const account = await this.options.store.get(accountId);
+    if (account.lastError !== "OnlyFans rechazó la firma") return;
+    await this.options.store.update(accountId, { lastError: null });
+  }
+
   private async noteSignatureRejected(accountId: string): Promise<void> {
     await this.options.store.update(accountId, {
       lastError: "OnlyFans rechazó la firma",
@@ -539,24 +548,53 @@ export class SessionManager {
     });
   }
 
-  private async readChatsNow(accountId: string): Promise<CollectedChats> {
+  /**
+   * La misma cola que la bandeja y el bucle de lista: un lector, el ritmo
+   * y la pausa del 400. No abre Chromium.
+   */
+  readPacedChats(accountId: string, part: "all" | "list", openThreadKeys: string[] = []): Promise<CollectedChats> {
+    return this.readThroughPace(accountId, part, openThreadKeys, false);
+  }
+
+  private readChatsNow(accountId: string): Promise<CollectedChats> {
+    return this.readThroughPace(accountId, "all", [], true);
+  }
+
+  private readThroughPace(accountId: string, part: "all" | "list", openThreadKeys: string[], openBrowser: boolean): Promise<CollectedChats> {
     const empty: CollectedChats = { threads: [], messages: [], reason: null, jsonPaths: [] };
-    const account = await this.options.store.get(accountId);
-    if (account.identityState === "mismatch") {
-      return { ...empty, reason: "Lecturas bloqueadas: la sesión guardada es de otra cuenta." };
-    }
-    try {
-      const direct = await this.readChatsDirect(accountId);
-      if (direct.sessionRejected || direct.threads.length > 0 || keepsBrowserClosed(direct.reason)) return direct;
-      return await this.withSession(accountId, (context) =>
-        collectChats(context, this.options.site, {
-          paceMs: this.options.config.syncPaceMs,
-          waitMs: this.options.config.identityWaitMs,
-        }),
-      );
-    } catch (error) {
-      return { ...empty, reason: publicErrorMessage(error, "no se pudo abrir la sesión") };
-    }
+    return withAccountChatReader(accountId, async () => {
+      const account = await this.options.store.get(accountId);
+      if (account.identityState === "mismatch") {
+        return { ...empty, reason: "Lecturas bloqueadas: la sesión guardada es de otra cuenta." };
+      }
+      if (accountPause(accountId)) {
+        return { ...empty, reason: "OnlyFans rechazó la firma", signatureRejected: true };
+      }
+      const now = this.now().getTime();
+      const plan = planChatPull(chatPaceOf(accountId), now, part);
+      const keys = plan.open ? openThreadKeys : [];
+      if (plan.list === "none" && keys.length === 0) {
+        return { ...empty, reason: "la lista firmada espera el ritmo" };
+      }
+      rememberChatPace(accountId, plan.next);
+      try {
+        const direct = await this.readChatsDirect(accountId, keys, {
+          list: plan.list,
+          messages: keys.length > 0 ? "open" : "none",
+          messagePageCap: 1,
+        });
+        const answered = direct.reason == null || direct.threads.length > 0 || direct.messages.length > 0;
+        if (!openBrowser || direct.sessionRejected || answered || keepsBrowserClosed(direct.reason)) return direct;
+        return await this.withSession(accountId, (context) =>
+          collectChats(context, this.options.site, {
+            paceMs: this.options.config.syncPaceMs,
+            waitMs: this.options.config.identityWaitMs,
+          }),
+        );
+      } catch (error) {
+        return { ...empty, reason: publicErrorMessage(error, "no se pudo abrir la sesión") };
+      }
+    });
   }
 
   private async readCreatorDataNow(accountId: string, includeEarnings: boolean, sinceTx?: TxCursor | null): Promise<CollectedRead> {
