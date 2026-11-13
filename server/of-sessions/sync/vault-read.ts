@@ -32,7 +32,7 @@ export async function readChatVaultView(
   const offset = input.offset ?? 0;
   const now = deps.now ?? (() => Date.now());
   const payloads = await fetchSignedVault(state, { fetch: deps.fetch, now }, list, offset);
-  const saved = await persistVaultRead(deps.sql, input.creatorId, payloads);
+  const saved = await persistVaultRead(deps.sql, input.creatorId, payloads, { listId: list, offset });
   console.info(`[fanlink:vault] api medios=${saved.length} fotos=${saved.filter((item) => item.preview).length}`);
   if (saved.length === 0) return { items: [], reason: "No se ha podido leer la bóveda." };
   await rememberPageThumbs({ ...deps, now }, account.id, input.creatorId, saved, state, list, offset);
@@ -59,7 +59,7 @@ async function rememberPageThumbs(
     now: deps.now(),
     refreshPage: async () => {
       const again = await fetchSignedVault(state, { fetch: deps.fetch, now: deps.now }, list, offset);
-      const next = await persistVaultRead(deps.sql, creatorId, again);
+      const next = await persistVaultRead(deps.sql, creatorId, again, { listId: list, offset });
       return next.length > 0 ? next : saved;
     },
     openBrowser: deps.openBrowser ?? (() => openProfileThumbs(deps.sessions, accountId)),

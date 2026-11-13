@@ -17,15 +17,49 @@ export type ThumbItem = { id: string; preview: string | null };
 
 const refreshInflight = new Map<string, Promise<readonly ThumbItem[]>>();
 
+export function normalizeVaultOffset(offset: number): number {
+  if (!Number.isFinite(offset) || offset <= 0) return 0;
+  return Math.min(2_000, Math.floor(offset));
+}
+
+/** Creadora, lista y offset: dos cuentas no comparten la relectura aunque el id coincida. */
+export function vaultThumbPageKey(creatorId: string, listId: string, offset: number): string {
+  const list = listId.trim().slice(0, 80) || "all";
+  return `${creatorId}\n${list}\n${normalizeVaultOffset(offset)}`;
+}
+
 /** Varias miniaturas de la misma página comparten una sola relectura de `vault/media`. */
-export function shareRefresh(creatorId: string, load: () => Promise<readonly ThumbItem[]>): Promise<readonly ThumbItem[]> {
-  const existing = refreshInflight.get(creatorId);
+export function shareRefresh(pageKey: string, load: () => Promise<readonly ThumbItem[]>): Promise<readonly ThumbItem[]> {
+  const existing = refreshInflight.get(pageKey);
   if (existing) return existing;
   const pending = load().finally(() => {
-    refreshInflight.delete(creatorId);
+    refreshInflight.delete(pageKey);
   });
-  refreshInflight.set(creatorId, pending);
+  refreshInflight.set(pageKey, pending);
   return pending;
+}
+
+/**
+ * Relee la página del medio, no la 0. Dos llamadas a la vez de la misma
+ * creadora, lista y offset disparan un solo `loadPage`.
+ */
+export async function reloadVaultPreview(input: {
+  creatorId: string;
+  mediaId: string;
+  listId: string;
+  offset: number;
+  now?: number;
+  loadPage: (listId: string, offset: number) => Promise<readonly ThumbItem[]>;
+  savePreview?: (url: string) => Promise<void>;
+}): Promise<string | null> {
+  const listId = input.listId.trim().slice(0, 80) || "all";
+  const offset = normalizeVaultOffset(input.offset);
+  const now = input.now ?? Date.now();
+  const items = await shareRefresh(vaultThumbPageKey(input.creatorId, listId, offset), () => input.loadPage(listId, offset));
+  const preview = items.find((item) => item.id === input.mediaId)?.preview ?? null;
+  if (!preview || !mediaHostAllowed(preview) || signedUrlExpired(preview, now)) return null;
+  await input.savePreview?.(preview);
+  return preview;
 }
 
 export function sessionThumbHeaders(state: StorageStateFile, nowMs: number): Record<string, string> | null {
@@ -71,6 +105,8 @@ export async function loadFreshPreview(input: {
   now?: number;
   read: (url: string) => Promise<{ status: number; media: MediaBytes | null }>;
   reload: () => Promise<string | null>;
+  /** Un solo lease del perfil si, tras releer, el CDN sigue en 403/410. */
+  openBrowser?: () => Promise<ThumbBrowser | null>;
 }): Promise<MediaBytes | null> {
   const now = input.now ?? Date.now();
   let url = input.url;
@@ -81,23 +117,59 @@ export async function loadFreshPreview(input: {
     if (!next) return null;
     url = next;
   }
-  const first = await input.read(url);
-  const stored = storeImage(input.creatorId, input.mediaId, first.media);
+  const first = await readImage(input, url);
+  if (first !== "rejected") return first;
+  if (!reloaded) {
+    const next = await reloadUsable(input.reload, url, now);
+    if (next) {
+      url = next;
+      const second = await readImage(input, url);
+      if (second !== "rejected") return second;
+    }
+  }
+  return borrowOnce(input, url, now);
+}
+
+async function readImage(
+  input: { creatorId: string; mediaId: string; read: (url: string) => Promise<{ status: number; media: MediaBytes | null }> },
+  url: string,
+): Promise<MediaBytes | "rejected" | null> {
+  const read = await input.read(url);
+  const stored = storeImage(input.creatorId, input.mediaId, read.media);
   if (stored) return stored;
-  if (first.media) return first.media;
-  if (first.status !== 403 && first.status !== 410) {
-    logThumbStatus(first.status);
+  if (read.media) return read.media;
+  if (read.status !== 403 && read.status !== 410) {
+    logThumbStatus(read.status);
     return null;
   }
-  logThumbStatus(first.status);
-  if (reloaded) return null;
-  const next = await reloadUsable(input.reload, url, now);
-  if (!next) return null;
-  const second = await input.read(next);
-  const again = storeImage(input.creatorId, input.mediaId, second.media);
-  if (again) return again;
-  if (!second.media) logThumbStatus(second.status);
-  return second.media;
+  logThumbStatus(read.status);
+  return "rejected";
+}
+
+async function borrowOnce(
+  input: { creatorId: string; mediaId: string; openBrowser?: () => Promise<ThumbBrowser | null> },
+  url: string,
+  now: number,
+): Promise<MediaBytes | null> {
+  if (!input.openBrowser || signedUrlExpired(url, now)) return null;
+  let browser: ThumbBrowser | null = null;
+  try {
+    browser = await input.openBrowser();
+  } catch {
+    return null;
+  }
+  if (!browser) return null;
+  try {
+    const got = await browser.get(url);
+    if (got.ok && imageBytes(got.body, got.contentType)) {
+      putVaultThumb(input.creatorId, input.mediaId, got.body, got.contentType);
+      return { status: got.status || 200, body: got.body, contentType: got.contentType, contentLength: got.body.byteLength };
+    }
+    logThumbStatus(got.status);
+    return null;
+  } finally {
+    await browser.release();
+  }
 }
 
 /** Miniaturas de la página visible. Como mucho un refresco de `vault/media` y un perfil. */

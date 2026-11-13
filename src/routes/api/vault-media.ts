@@ -7,9 +7,10 @@ import { handleVaultMedia } from "../../../server/of-sessions/http/vault-http.ts
 import { readSessionMediaBytes, readSessionMediaResult } from "../../../server/of-sessions/sync/media-bytes.ts";
 import { accountCreatorIds } from "../../../server/of-sessions/http/vault-accounts.ts";
 import { fetchSignedVault } from "../../../server/of-sessions/sync/of-chat-api.ts";
-import { mediaHostAllowed } from "../../../server/of-sessions/sync/history.ts";
 import { parseVaultBundle } from "../../../server/of-sessions/sync/vault-model.ts";
-import { loadFreshPreview, shareRefresh, signedUrlExpired } from "../../../server/of-sessions/sync/vault-thumbs.ts";
+import { loadFreshPreview, normalizeVaultOffset, reloadVaultPreview } from "../../../server/of-sessions/sync/vault-thumbs.ts";
+import { openProfileThumbs } from "../../../server/of-sessions/sync/vault-owner.ts";
+import { saveVaultPreview, storedVaultPage } from "../../../server/of-sessions/sync/vault-store.ts";
 
 export const Route = createFileRoute("/api/vault-media")({
   server: {
@@ -24,6 +25,7 @@ export const Route = createFileRoute("/api/vault-media")({
           const creatorId = url.searchParams.get("creatorId") ?? "";
           const mediaId = url.searchParams.get("mediaId") ?? "";
           const variant = url.searchParams.get("variant") === "full" ? "full" : "preview";
+          const page = await thumbPage(sql, creatorId, mediaId, url);
           return handleVaultMedia(request, {
             session: async () => ({ userId: access.userId, role: access.role, perms: access.perms, creatorIds }),
             findPreview: async (creator, id, wanted) => {
@@ -41,7 +43,8 @@ export const Route = createFileRoute("/api/vault-media")({
                 mediaId,
                 url: target,
                 read: (next) => readSessionMediaResult(creatorId, next),
-                reload: () => reloadPreview(sql, creatorId, mediaId),
+                reload: () => reloadPreview(sql, creatorId, mediaId, page.listId, page.offset),
+                openBrowser: () => profileThumbs(creatorId),
               });
             },
             log: (line) => {
@@ -57,23 +60,50 @@ export const Route = createFileRoute("/api/vault-media")({
   },
 });
 
+async function thumbPage(
+  sql: Awaited<ReturnType<typeof getSql>>,
+  creatorId: string,
+  mediaId: string,
+  url: URL,
+): Promise<{ listId: string; offset: number }> {
+  const requestedList = url.searchParams.get("list");
+  const requestedOffset = url.searchParams.get("offset");
+  if (requestedList != null || requestedOffset != null) {
+    return {
+      listId: requestedList?.trim() || "all",
+      offset: normalizeVaultOffset(Number(requestedOffset ?? "0")),
+    };
+  }
+  const stored = await storedVaultPage(sql, creatorId, mediaId);
+  return stored ?? { listId: "all", offset: 0 };
+}
+
 async function reloadPreview(
   sql: Awaited<ReturnType<typeof getSql>>,
   creatorId: string,
   mediaId: string,
+  listId: string,
+  offset: number,
 ): Promise<string | null> {
-  const items = await shareRefresh(creatorId, async () => {
-    const sessions = await getOfSessionManager();
-    const account = (await sessions.listAccounts()).find((item) => item.creatorId === creatorId && item.status === "active" && item.hasStorageState);
-    if (!account) return [];
-    const payloads = await fetchSignedVault(await sessions.readStorageState(account.id), { fetch, now: () => Date.now() });
-    return payloads.flatMap((payload) => parseVaultBundle(payload).items);
+  return reloadVaultPreview({
+    creatorId,
+    mediaId,
+    listId,
+    offset,
+    loadPage: async (list, skip) => {
+      const sessions = await getOfSessionManager();
+      const account = (await sessions.listAccounts()).find((item) => item.creatorId === creatorId && item.status === "active" && item.hasStorageState);
+      if (!account) return [];
+      const payloads = await fetchSignedVault(await sessions.readStorageState(account.id), { fetch, now: () => Date.now() }, list, skip);
+      return payloads.flatMap((payload) => parseVaultBundle(payload).items);
+    },
+    savePreview: (preview) => saveVaultPreview(sql, creatorId, mediaId, preview, { listId, offset }),
   });
-  const preview = items.find((item) => item.id === mediaId)?.preview ?? null;
-  if (!preview || !mediaHostAllowed(preview) || signedUrlExpired(preview, Date.now())) return null;
-  await sql.query(
-    "update of_vault_item set preview = $3 where creator_id = $1 and item_key = $2",
-    [creatorId, mediaId, preview],
-  );
-  return preview;
+}
+
+async function profileThumbs(creatorId: string) {
+  const sessions = await getOfSessionManager();
+  const account = (await sessions.listAccounts()).find((item) => item.creatorId === creatorId && item.status === "active" && item.hasStorageState);
+  if (!account) return null;
+  return openProfileThumbs(sessions, account.id);
 }

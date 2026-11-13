@@ -5,8 +5,11 @@ import { fileURLToPath } from "node:url";
 import { describe, test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { handleVaultMedia, handleVaultQuery } from "../http/vault-http.ts";
-import { clearVaultThumbs, getVaultThumb, putVaultThumb, setVaultThumbClock, VAULT_THUMB_CACHE_MAX } from "../sync/media-bytes.ts";
-import { loadFreshPreview, preloadVaultThumbs, shareRefresh, signedUrlExpired, VAULT_THUMB_PAGE } from "../sync/vault-thumbs.ts";
+import { clearVaultThumbs, getVaultThumb, putVaultThumb, setVaultThumbClock, VAULT_THUMB_CACHE_BYTES, VAULT_THUMB_CACHE_MAX } from "../sync/media-bytes.ts";
+import { loadFreshPreview, preloadVaultThumbs, reloadVaultPreview, shareRefresh, signedUrlExpired, VAULT_THUMB_PAGE } from "../sync/vault-thumbs.ts";
+import { fetchSignedVault } from "../sync/of-chat-api.ts";
+import { parseVaultBundle } from "../sync/vault-model.ts";
+import { persistVaultRead, storedVaultPage } from "../sync/vault-store.ts";
 import { presentCard } from "../sync/vault-query.ts";
 import type { ReadSql } from "../sync/store.ts";
 import type { SessionManager } from "../sessions/session-manager.ts";
@@ -240,6 +243,128 @@ describe("miniaturas de la bóveda", { concurrency: 1 }, () => {
       setVaultThumbClock(() => Date.now());
       clearVaultThumbs();
     }
+  });
+
+  test("un 403 de la página 2 relee ese offset", async () => {
+    clearVaultThumbs();
+    const seen: string[] = [];
+    const future = Math.floor(Date.now() / 1000) + 86_400;
+    const stale = thumbUrl(8, future);
+    const fresh = thumbUrl(9, future);
+    const fetchImpl: typeof fetch = async (target) => {
+      const href = String(target);
+      seen.push(href);
+      if (href.includes("dynamic-rules")) return Response.json(RULES);
+      if (href.includes("/vault/media")) return Response.json({ list: [mediaRow(9, fresh)] });
+      return new Response("no", { status: 404 });
+    };
+    const media = await loadFreshPreview({
+      creatorId: "c-page",
+      mediaId: "m9",
+      url: stale,
+      read: async (url) => url === fresh
+        ? { status: 200, media: { status: 200, body: jpeg, contentType: "image/jpeg" } }
+        : { status: 403, media: null },
+      reload: () => reloadVaultPreview({
+        creatorId: "c-page",
+        mediaId: "m9",
+        listId: "sets",
+        offset: 40,
+        loadPage: async (listId, offset) => {
+          const payloads = await fetchSignedVault(storageState(), { fetch: fetchImpl, now: () => Date.now() }, listId, offset);
+          return payloads.flatMap((payload) => parseVaultBundle(payload).items);
+        },
+      }),
+    });
+    assert.equal(media?.contentType, "image/jpeg");
+    assert.equal(seen.some((href) => href.includes("offset=40") && href.includes("list=sets")), true);
+    assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("offset=0")), false);
+    const db = new PGlite();
+    try {
+      await applyVault(db);
+      await persistVaultRead(asSql(db), "c-page", [{ list: [mediaRow(9, fresh)] }], { listId: "sets", offset: 40 });
+      const page = await storedVaultPage(asSql(db), "c-page", "m9");
+      assert.equal(page?.listId, "sets");
+      assert.equal(page?.offset, 40);
+    } finally {
+      await db.close();
+      clearVaultThumbs();
+    }
+  });
+
+  test("dos creadoras con el mismo mediaId no comparten la relectura", async () => {
+    const seen: string[] = [];
+    const future = Math.floor(Date.now() / 1000) + 86_400;
+    await Promise.all(["c-a", "c-b"].map((creatorId) => reloadVaultPreview({
+      creatorId,
+      mediaId: "mismo",
+      listId: "all",
+      offset: 40,
+      loadPage: async (listId, offset) => {
+        seen.push(`${creatorId}:${listId}:${offset}`);
+        await new Promise((resolve) => setTimeout(resolve, 15));
+        return [{ id: "mismo", preview: thumbUrl(creatorId === "c-a" ? 1 : 2, future) }];
+      },
+    })));
+    assert.deepEqual(seen.sort(), ["c-a:all:40", "c-b:all:40"]);
+  });
+
+  test("dos GET simultáneos del mismo medio piden vault/media una vez", async () => {
+    let loads = 0;
+    const future = Math.floor(Date.now() / 1000) + 86_400;
+    const preview = thumbUrl(3, future);
+    const loadPage = async () => {
+      loads += 1;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return [{ id: "mismo", preview }];
+    };
+    const [left, right] = await Promise.all([
+      reloadVaultPreview({ creatorId: "c-a", mediaId: "mismo", listId: "all", offset: 40, loadPage }),
+      reloadVaultPreview({ creatorId: "c-a", mediaId: "mismo", listId: "all", offset: 40, loadPage }),
+    ]);
+    assert.equal(loads, 1);
+    assert.equal(left, preview);
+    assert.equal(right, preview);
+  });
+
+  test("si la relectura sigue en 403 se pide el perfil una vez y se suelta", async () => {
+    clearVaultThumbs();
+    let opened = 0;
+    let released = 0;
+    const future = Math.floor(Date.now() / 1000) + 86_400;
+    const fresh = thumbUrl(5, future);
+    const media = await loadFreshPreview({
+      creatorId: "c-borrow",
+      mediaId: "m4",
+      url: thumbUrl(4, future),
+      read: async () => ({ status: 403, media: null }),
+      reload: async () => fresh,
+      openBrowser: async () => {
+        opened += 1;
+        return {
+          get: async (url) => {
+            assert.equal(url, fresh);
+            return { ok: true, status: 200, body: jpeg, contentType: "image/jpeg" };
+          },
+          release: async () => {
+            released += 1;
+          },
+        };
+      },
+    });
+    assert.equal(opened, 1);
+    assert.equal(released, 1);
+    assert.equal(media?.contentType, "image/jpeg");
+    clearVaultThumbs();
+  });
+
+  test("la caché no pasa del tope de bytes", () => {
+    clearVaultThumbs();
+    putVaultThumb("c-bytes", "grande", new Uint8Array(VAULT_THUMB_CACHE_BYTES), "image/jpeg");
+    putVaultThumb("c-bytes", "pequeña", jpeg, "image/jpeg");
+    assert.equal(getVaultThumb("c-bytes", "grande"), null);
+    assert.ok(getVaultThumb("c-bytes", "pequeña"));
+    clearVaultThumbs();
   });
 
   test("varias miniaturas comparten un solo refresco", async () => {
@@ -487,7 +612,7 @@ function asSql(db: PGlite): ReadSql {
 }
 
 async function applyVault(db: PGlite): Promise<void> {
-  for (const file of ["0037_vault_mirror.sql", "0038_vault_fan_filter.sql", "0040_vault_full_tags.sql", "0042_vault_paid_with.sql"]) {
+  for (const file of ["0037_vault_mirror.sql", "0038_vault_fan_filter.sql", "0040_vault_full_tags.sql", "0042_vault_paid_with.sql", "0044_vault_thumb_page.sql"]) {
     await db.exec(await readFile(path.join(root, "migrations", file), "utf8"));
   }
 }

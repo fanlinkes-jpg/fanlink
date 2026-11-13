@@ -49,7 +49,7 @@ async function refreshVault(sql: Awaited<ReturnType<typeof getSql>>, raw: string
     if (!account) return;
     const state = await sessions.readStorageState(account.id);
     const payloads = await fetchSignedVault(state, { fetch, now: () => Date.now() });
-    const saved = await persistVaultRead(sql, creatorId, payloads);
+    const saved = await persistVaultRead(sql, creatorId, payloads, { listId: "all", offset: 0 });
     console.info(`[fanlink:vault] api medios=${saved.length} fotos=${saved.filter((item) => item.preview).length}`);
     if (saved.length === 0) return;
     await rememberVaultThumbs({
@@ -60,7 +60,7 @@ async function refreshVault(sql: Awaited<ReturnType<typeof getSql>>, raw: string
       now: Date.now(),
       refreshPage: async () => {
         const again = await fetchSignedVault(state, { fetch, now: () => Date.now() });
-        const next = await persistVaultRead(sql, creatorId, again);
+        const next = await persistVaultRead(sql, creatorId, again, { listId: "all", offset: 0 });
         return next.length > 0 ? next : saved;
       },
       openBrowser: () => openProfileThumbs(sessions, account.id),

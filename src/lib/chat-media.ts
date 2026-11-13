@@ -13,7 +13,17 @@ export function chatMediaSrc(input: { creatorId: string; threadKey: string; mess
   return `/api/chat-media?${params.toString()}`;
 }
 
-export function vaultMediaSrc(creatorId: string, mediaId: string, variant: "full" | "preview" = "preview"): string {
+export function vaultMediaSrc(
+  creatorId: string,
+  mediaId: string,
+  variant: "full" | "preview" = "preview",
+  page?: { list?: string | null; offset?: number | null },
+): string {
   const params = new URLSearchParams({ creatorId, mediaId, variant });
+  const list = page?.list?.trim();
+  if (list) params.set("list", list.slice(0, 80));
+  if (page?.offset != null && Number.isFinite(page.offset) && page.offset > 0) {
+    params.set("offset", String(Math.min(2_000, Math.floor(page.offset))));
+  }
   return `/api/vault-media?${params.toString()}`;
 }

@@ -4,9 +4,12 @@ import { BROWSER_FINGERPRINT } from "../sessions/browser-factory.ts";
 
 /** Dos páginas de la bóveda (40 + 40) y un margen, para no perder la anterior al pasar de página. */
 export const VAULT_THUMB_CACHE_MAX = 160;
+/** Tope de bytes vivos. Una miniatura que no cabe no entra. */
+export const VAULT_THUMB_CACHE_BYTES = 24 * 1024 * 1024;
 const THUMB_TTL_MS = 10 * 60_000;
 
 const thumbCache = new Map<string, { body: Uint8Array; contentType: string; at: number }>();
+let thumbBytes = 0;
 let thumbNow = (): number => Date.now();
 
 export function setVaultThumbClock(clock: () => number): void {
@@ -15,20 +18,30 @@ export function setVaultThumbClock(clock: () => number): void {
 
 export function clearVaultThumbs(): void {
   thumbCache.clear();
+  thumbBytes = 0;
 }
 
 function thumbKey(creatorId: string, mediaId: string): string {
   return `${creatorId}\n${mediaId}`;
 }
 
+function forgetThumb(key: string): void {
+  const hit = thumbCache.get(key);
+  if (!hit) return;
+  thumbBytes -= hit.body.byteLength;
+  thumbCache.delete(key);
+}
+
 export function putVaultThumb(creatorId: string, mediaId: string, body: Uint8Array, contentType: string): void {
   const key = thumbKey(creatorId, mediaId);
-  thumbCache.delete(key);
+  forgetThumb(key);
+  if (body.byteLength > VAULT_THUMB_CACHE_BYTES) return;
   thumbCache.set(key, { body, contentType, at: thumbNow() });
-  while (thumbCache.size > VAULT_THUMB_CACHE_MAX) {
+  thumbBytes += body.byteLength;
+  while (thumbCache.size > VAULT_THUMB_CACHE_MAX || thumbBytes > VAULT_THUMB_CACHE_BYTES) {
     const oldest = thumbCache.keys().next().value;
     if (oldest === undefined) break;
-    thumbCache.delete(oldest);
+    forgetThumb(oldest);
   }
 }
 
@@ -37,7 +50,7 @@ export function getVaultThumb(creatorId: string, mediaId: string): { body: Uint8
   const hit = thumbCache.get(key);
   if (!hit) return null;
   if (thumbNow() - hit.at > THUMB_TTL_MS) {
-    thumbCache.delete(key);
+    forgetThumb(key);
     return null;
   }
   thumbCache.delete(key);
