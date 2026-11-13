@@ -4,6 +4,7 @@ import type { Page } from "playwright";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
 import { parseSignRules } from "../sync/of-sign.ts";
 import {
+  ONLINE_COLLECTION_URLS,
   ONLINE_SUBSCRIBERS_PATH,
   fetchSignedOnlineFans,
   onlineFansFromPayload,
@@ -97,6 +98,24 @@ test("api2 firmada deja solo al que está en línea, el 401 es la firma y el 200
   assert.equal(broken.reason, "No se pudo leer.");
 });
 
+test("el respaldo abre Colecciones en Todo y no la lista Fans", async () => {
+  assert.deepEqual([...ONLINE_COLLECTION_URLS], ["https://onlyfans.com/my/collections/subscribers/active"]);
+  assert.equal(ONLINE_COLLECTION_URLS.some((url) => url.includes("user-lists")), false);
+  const seen: string[] = [];
+  const read = await readOnlineSubscribers(collectionPage(seen), undefined, [
+    "https://onlyfans.com/my/collections/user-lists/subscribers/fans",
+    "https://onlyfans.com/my/collections/subscribers/active",
+  ]);
+  assert.deepEqual(seen.filter((item) => item.startsWith("goto:")), [
+    "goto:https://onlyfans.com/my/collections/subscribers/active",
+  ]);
+  assert.ok(seen.some((item) => item.startsWith("tab:")));
+  assert.ok(seen.some((item) => item.includes("filtros")));
+  assert.ok(seen.some((item) => item.includes("en línea")));
+  assert.equal(read.reason, null);
+  assert.deepEqual(read.fans.map((fan) => fan.fanHandle), ["duchampprivate"]);
+});
+
 test("si el goto o el filtro de la página fallan, no se dice que no hay nadie", async () => {
   const missed = await readOnlineSubscribers(failingPage(), undefined, ["http://127.0.0.1/fans"]);
   assert.equal(missed.reason, "No se pudo leer.");
@@ -112,6 +131,43 @@ function sessionState(): StorageStateFile {
 
 function cookie(name: string, value: string): StorageStateFile["cookies"][number] {
   return { name, value, domain: ".onlyfans.com", path: "/", expires: -1, httpOnly: true, secure: true, sameSite: "Lax" };
+}
+
+function collectionPage(seen: string[]): Page {
+  const handlers: Array<(response: { url(): string; status(): number; text(): Promise<string> }) => void> = [];
+  const clickable = (label: string) => ({
+    async click() {
+      seen.push(label);
+      if (!label.includes("aplicar") && !label.includes("apply")) return;
+      for (const handler of handlers) {
+        handler({
+          url: () => `https://onlyfans.com${ONLINE_SUBSCRIBERS_PATH}`,
+          status: () => 200,
+          text: async () => JSON.stringify({
+            data: {
+              list: [
+                { id: 7, username: "duchampprivate", isOnline: true },
+                { id: 8, username: "offline", isOnline: false },
+              ],
+            },
+          }),
+        });
+      }
+    },
+    first() { return this; },
+  });
+  return {
+    on(event: string, handler: (response: { url(): string; status(): number; text(): Promise<string> }) => void) {
+      if (event === "response") handlers.push(handler);
+    },
+    off() {},
+    isClosed() { return false; },
+    async goto(url: string) { seen.push(`goto:${url}`); },
+    locator() { return clickable("locator:filter"); },
+    getByText(name: RegExp) { return clickable(`text:${name}`); },
+    getByRole(role: string, options?: { name?: RegExp }) { return clickable(`${role}:${options?.name}`); },
+    waitForResponse() { return Promise.resolve(); },
+  } as unknown as Page;
 }
 
 function failingPage(): Page {

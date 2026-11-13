@@ -16,13 +16,13 @@ export type OnlineRead = {
   status: number | null;
 };
 
-/** La misma ruta que el filtro «En línea» de suscriptores activos. */
+/** La misma petición que Colecciones → Todo → Filtros → En línea. No es la lista «Fans». */
 export const ONLINE_SUBSCRIBERS_PATH = "/api2/v2/subscriptions/subscribers?type=active&filter[online]=1";
 
-const FAN_PAGE_URLS = [
+/** Colecciones, pestaña Todo. No abre Listas de usuarios ni la lista «Fans». */
+export const ONLINE_COLLECTION_URLS = [
   "https://onlyfans.com/my/collections/subscribers/active",
-  "https://onlyfans.com/my/subscribers/active",
-];
+] as const;
 
 /** El filtro «En línea» de Fans. Si la petición ya viene filtrada, todos cuentan. */
 export function onlineFansFromPayload(payload: unknown, onlyMarked = true): OnlineFan[] {
@@ -102,8 +102,11 @@ export async function fetchSignedOnlineFans(
   }
 }
 
-/** Respaldo de la página. Si el filtro no aparece, no devuelve una lista vacía. */
-export async function readOnlineSubscribers(page: Page, signal?: AbortSignal, urls: readonly string[] = FAN_PAGE_URLS): Promise<OnlineRead> {
+/**
+ * Respaldo de la página: Colecciones, pestaña Todo, Filtros, En línea.
+ * No abre la lista «Fans» de user-lists. Si el filtro no aparece, no devuelve una lista vacía.
+ */
+export async function readOnlineSubscribers(page: Page, signal?: AbortSignal, urls: readonly string[] = ONLINE_COLLECTION_URLS): Promise<OnlineRead> {
   if (signal?.aborted) return { fans: [], reason: "No se pudo leer.", status: null };
   const filtered: OnlineFan[] = [];
   let sawOnline = false;
@@ -127,19 +130,21 @@ export async function readOnlineSubscribers(page: Page, signal?: AbortSignal, ur
   page.on("response", onResponse);
   try {
     for (const url of urls) {
+      if (url.includes("/user-lists")) continue;
       if (signal?.aborted || page.isClosed()) break;
       const opened = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 15_000 }).then(() => true, () => false);
       if (!opened || signal?.aborted || page.isClosed()) continue;
-      const filter = page.locator('[aria-label*="filter" i], [aria-label*="Filtrar" i]').first();
-      if (!await click(filter)) continue;
+      await click(page.getByRole("tab", { name: /^(todo|all)$/i }));
+      const filters = await click(page.getByRole("button", { name: /filtros|filters/i }));
+      const filterLabel = await click(page.locator('[aria-label*="filter" i], [aria-label*="Filtrar" i], [aria-label*="Filtros" i]').first());
+      if (!filters && !filterLabel) continue;
       const online = page.getByText(/^(en línea|online)$/i).first();
       if (!await click(online)) continue;
       const arrived = page.waitForResponse(
         (response) => subscribersResponse(response.url()) === "online" && response.status() >= 200 && response.status() < 300,
         { timeout: 6_000 },
       ).then(() => true, () => false);
-      const apply = page.getByRole("button", { name: /^(aplicar|apply)$/i });
-      if (!await click(apply)) continue;
+      await click(page.getByRole("button", { name: /^(aplicar|apply)$/i }));
       await arrived;
       await wait(pending, 2_000, signal);
       if (!sawOnline) continue;
