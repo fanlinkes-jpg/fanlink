@@ -11,8 +11,14 @@ export type SignRules = {
 };
 
 const RULES_URL = "https://raw.githubusercontent.com/DATAHOARDERS/dynamic-rules/main/onlyfans.json";
+const RULES_TTL_MS = 30 * 60_000;
+export const RULES_TIMEOUT_MS = 5_000;
 
 let cached: { rules: SignRules; at: number } | null = null;
+
+export function clearSignRulesCache(): void {
+  cached = null;
+}
 
 export function parseSignRules(value: unknown): SignRules | null {
   if (!value || typeof value !== "object") return null;
@@ -40,13 +46,19 @@ export function parseSignRules(value: unknown): SignRules | null {
 }
 
 export async function loadSignRules(fetchImpl: typeof fetch, now: number): Promise<SignRules> {
-  if (cached && now - cached.at < 30 * 60_000) return cached.rules;
-  const response = await fetchImpl(RULES_URL);
-  if (!response.ok) throw new Error("no hay reglas de firma");
-  const rules = parseSignRules(await response.json());
-  if (!rules) throw new Error("reglas de firma ilegibles");
-  cached = { rules, at: now };
-  return rules;
+  if (cached && now - cached.at < RULES_TTL_MS) return cached.rules;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), RULES_TIMEOUT_MS);
+  try {
+    const response = await fetchImpl(RULES_URL, { signal: controller.signal });
+    if (!response.ok) throw new Error("no hay reglas de firma");
+    const rules = parseSignRules(await response.json());
+    if (!rules) throw new Error("reglas de firma ilegibles");
+    cached = { rules, at: now };
+    return rules;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Firma una ruta. El tiempo va en milisegundos y el id es el de la cuenta. */
