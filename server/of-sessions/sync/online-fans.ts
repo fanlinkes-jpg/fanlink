@@ -14,6 +14,8 @@ export type OnlineRead = {
   fans: OnlineFan[];
   reason: string | null;
   status: number | null;
+  /** false: la firma no pudo ni empezar. No se abre Chromium para taparlo. */
+  fallback?: boolean;
 };
 
 /** La misma petición que Colecciones → Todo → Filtros → En línea. No es la lista «Fans». */
@@ -61,7 +63,8 @@ export function onlineReadFromPayload(status: number, payload: unknown): OnlineR
   if (status !== 200) return { fans: [], reason: "No se pudo leer.", status };
   const rows = listOf(payload);
   if (!rows) return { fans: [], reason: "No se pudo leer.", status };
-  const fans = onlineFansFromPayload({ list: rows }, true);
+  // La petición ya lleva filter[online]=1. Si OnlyFans no manda isOnline, la fila cuenta igual.
+  const fans = onlineFansFromPayload({ list: rows }, false);
   return { fans, reason: fans.length === 0 ? "Nadie en línea" : null, status };
 }
 
@@ -79,7 +82,7 @@ export async function fetchSignedOnlineFans(
   try {
     rules = deps.rules ?? await loadSignRules(deps.fetch, deps.now());
   } catch {
-    return { fans: [], reason: "No se pudo leer.", status: null };
+    return { fans: [], reason: "No se pudo leer.", status: null, fallback: false };
   }
   const headers = signedHeaders(rules, ONLINE_SUBSCRIBERS_PATH, auth, deps.now());
   let response: Response;
