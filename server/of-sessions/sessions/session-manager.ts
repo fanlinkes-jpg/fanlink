@@ -51,9 +51,8 @@ import { accountPause, noteAccountBlock, pauseWaitReason } from "../sync/backoff
 import { chatPaceOf, planChatPull, rememberChatPace, withAccountApi } from "../sync/api-list-pace.ts";
 import { fetchSignedChats, type SignedChatOptions } from "../sync/of-chat-api.ts";
 import { collectChats, type CollectedChats } from "../sync/collect-chats.ts";
-import { collectNotifications, type CollectedNotifications } from "../sync/collect-notifications.ts";
+import { fetchSignedNotifications, markSignedNotificationsRead, type CollectedNotifications, type MarkNotificationsResult } from "../sync/of-notifications-api.ts";
 import { fetchSignedOnlineFans, readOnlineSubscribers, type OnlineFan, type OnlineRead } from "../sync/online-fans.ts";
-import { NOTIFICATION_PACE_MS, notificationReadBusy } from "../../../src/lib/notifications.ts";
 import {
   judgeStorageState,
   parseStorageState,
@@ -383,23 +382,61 @@ export class SessionManager {
   }
 
   readNotifications(accountId: string): Promise<CollectedNotifications> {
-    const busy: CollectedNotifications = {
+    return this.readNotificationsDirect(accountId);
+  }
+
+  /** Lee el centro por api2 firmada. No abre Chromium. /users/me solo aporta newTagsCount. */
+  async readNotificationsDirect(accountId: string): Promise<CollectedNotifications> {
+    const empty: CollectedNotifications = {
       items: [],
-      reason: "sincronización en curso",
+      counts: null,
+      reason: null,
+      motivo: "no se pudo leer",
+      countMotivo: "no se pudo leer",
+      routes: [],
       jsonPaths: [],
       captured: false,
-      alreadyRunning: true,
+      sessionRejected: false,
+      signatureRejected: false,
+      status: null,
+      retryAfterMs: 0,
     };
-    if (liveHoldsAccount(accountId) || notificationReadBusy([...this.reading], accountId)) return Promise.resolve(busy);
-    this.reading.add(accountId);
-    const job = this.readTail.then(() => this.readNotificationsNow(accountId)).finally(() => {
-      this.reading.delete(accountId);
+    try {
+      const state = await this.readStorageState(accountId);
+      const read = await fetchSignedNotifications(state, {
+        fetch: this.options.fetch ?? fetch,
+        now: () => this.now().getTime(),
+        sleep: this.options.sleep ?? ((ms) => delay(ms)),
+        minGapMs: 300,
+        accountId,
+      });
+      if (read.sessionRejected) {
+        await this.markApiSessionRejected(accountId, read.reason ?? messages.loginRequired).catch(() => undefined);
+      }
+      if (read.signatureRejected) {
+        await this.noteSignatureRejected(accountId).catch(() => undefined);
+      }
+      return read;
+    } catch (error) {
+      const missing = error instanceof Error && "code" in error && error.code === "ENOENT";
+      const motivo = "no se pudo leer";
+      const reason = missing ? "sin sesión guardada" : publicErrorMessage(error, "no se pudo leer la sesión");
+      return { ...empty, reason, motivo };
+    }
+  }
+
+  /** Marca en OnlyFans dentro del lector de la cuenta y relee el contador. */
+  markNotificationsOnOnlyfans(accountId: string, scope: { all: boolean; types: string[] }): Promise<MarkNotificationsResult> {
+    return withAccountChatReader(accountId, async () => {
+      const state = await this.readStorageState(accountId);
+      return markSignedNotificationsRead(state, {
+        fetch: this.options.fetch ?? fetch,
+        now: () => this.now().getTime(),
+        sleep: this.options.sleep ?? ((ms) => delay(ms)),
+        minGapMs: 300,
+        accountId,
+      }, scope);
     });
-    this.readTail = job.then(
-      () => undefined,
-      () => undefined,
-    );
-    return job;
   }
 
   /**
@@ -496,25 +533,6 @@ export class SessionManager {
       return outcome.value;
     } finally {
       if (timer) clearTimeout(timer);
-    }
-  }
-
-  private async readNotificationsNow(accountId: string): Promise<CollectedNotifications> {
-    const empty: CollectedNotifications = { items: [], reason: null, jsonPaths: [], captured: false };
-    const account = await this.options.store.get(accountId);
-    if (account.identityState === "mismatch") {
-      return { ...empty, reason: "Lecturas bloqueadas: la sesión guardada es de otra cuenta." };
-    }
-    try {
-      return await this.withSession(accountId, (context) =>
-        collectNotifications(context, this.options.site, {
-          paceMs: NOTIFICATION_PACE_MS,
-          waitMs: this.options.config.identityWaitMs,
-          scrolls: 1,
-        }),
-      );
-    } catch (error) {
-      return { ...empty, reason: publicErrorMessage(error, "no se pudo abrir la sesión") };
     }
   }
 

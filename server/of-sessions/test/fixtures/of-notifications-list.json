@@ -1,0 +1,64 @@
+{
+  "list": [
+    {
+      "id": 117301756206,
+      "type": "paided_message",
+      "subType": "subscriber_pay_for_chat_message",
+      "createdAt": "2026-07-21T15:26:00+00:00",
+      "isRead": false,
+      "text": "{NAME} paid {AMOUNT}",
+      "replacePairs": {
+        "{NAME}": "Daniel",
+        "{AMOUNT}": "$6.00",
+        "{MESSAGE_LINK}": "https://onlyfans.com/my/chats/chat/482191?firstId=10491720677794"
+      },
+      "user": { "id": 482191, "name": "Daniel", "username": "daniel", "subscribedOn": true }
+    },
+    {
+      "id": 200,
+      "type": "subscribed",
+      "subType": "new_subscriber",
+      "createdAt": "2026-07-20T10:00:00+00:00",
+      "isRead": false,
+      "text": "{NAME} subscribed to your profile",
+      "replacePairs": { "{NAME}": "Ana" },
+      "user": { "id": 7, "name": "Ana", "username": "ana", "subscribedOn": true }
+    },
+    {
+      "id": 201,
+      "type": "subscribed",
+      "createdAt": "2026-07-18T10:00:00+00:00",
+      "isRead": true,
+      "text": "Your subscription to {NAME} has expired",
+      "replacePairs": { "{NAME}": "OtraCreadora" },
+      "user": { "id": 99, "name": "OtraCreadora", "username": "otra", "subscribedBy": true, "subscribedOn": false }
+    },
+    {
+      "id": 202,
+      "type": "tip",
+      "createdAt": "2026-11-10T08:00:00+00:00",
+      "isRead": false,
+      "text": "{NAME} tipped {AMOUNT}",
+      "replacePairs": { "{NAME}": "Luis", "{AMOUNT}": "$5.00" },
+      "user": { "id": 8, "name": "Luis", "subscribedOn": true }
+    },
+    {
+      "id": 203,
+      "type": "favorited",
+      "createdAt": "2026-11-09T08:00:00+00:00",
+      "isRead": false,
+      "text": "{NAME} liked your post",
+      "replacePairs": { "{NAME}": "Paz" },
+      "user": { "id": 11, "name": "Paz" }
+    },
+    {
+      "id": 204,
+      "type": "deactivated_media",
+      "createdAt": "2026-11-08T08:00:00+00:00",
+      "isRead": false,
+      "text": "OnlyFans removed a file",
+      "user": { "id": 42, "name": "Creadora" }
+    }
+  ],
+  "hasMore": false
+}

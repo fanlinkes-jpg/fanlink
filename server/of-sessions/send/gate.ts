@@ -38,6 +38,15 @@ export function chatSendGate(
   return { allowed: true, reason: "" };
 }
 
+/** Mismo criterio que el envío: flag encendido y la cuenta en la allowlist. */
+export function notificationMarkReadGate(
+  flag: string | undefined,
+  allowlist: string | undefined,
+  account: SendAccount,
+): { allowed: boolean; reason: string } {
+  return chatSendGate(flag, allowlist, account);
+}
+
 export function sendPerMinute(raw: string | undefined): number {
   if (raw == null || raw.trim() === "") return 4;
   const value = Number(raw);

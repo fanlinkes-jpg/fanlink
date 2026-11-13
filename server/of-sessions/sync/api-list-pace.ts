@@ -6,6 +6,19 @@ export const LIST_HEAD_MS = 15_000;
 export const FULL_LIST_MS = 120_000;
 /** Mínimo entre dos peticiones de la misma cuenta. */
 export const REQUEST_GAP_MS = 300;
+/**
+ * Primera página de notificaciones. 45 s está entre 30 y 60:
+ * no se pide más de una vez por ese tramo.
+ */
+export const NOTIFICATION_HEAD_MS = 45_000;
+
+export type NotificationPace = { headAt: number };
+
+export function planNotificationPull(mark: NotificationPace | undefined, now: number): { head: boolean; next: NotificationPace } {
+  const prev = mark ?? { headAt: 0 };
+  const head = prev.headAt === 0 || now - prev.headAt >= NOTIFICATION_HEAD_MS;
+  return { head, next: { headAt: head ? now : prev.headAt } };
+}
 
 export type ChatPace = { openAt: number; headAt: number; fullAt: number };
 

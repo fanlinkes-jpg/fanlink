@@ -12,6 +12,7 @@ import {
   NOTIFICATION_PAGE_SIZE,
   NOTIFICATION_RETENTION_DAYS,
   type ParsedNotification,
+  type NotificationCounts,
   type NotificationRecord,
 } from "../../../src/lib/notifications.ts";
 
@@ -30,27 +31,38 @@ const ORIGIN = "onlyfans";
 export async function saveNotificationRead(
   sql: NotificationSql,
   creatorId: string,
-  read: { items: ParsedNotification[]; reason: string | null; captured: boolean },
+  read: {
+    items: ParsedNotification[];
+    reason: string | null;
+    captured: boolean;
+    counts?: NotificationCounts | null;
+    status?: number | null;
+    motivo?: string | null;
+  },
   now = new Date(),
 ): Promise<void> {
   const syncedAt = now.toISOString();
-  const failed = !read.captured && Boolean(read.reason);
+  const failed = !read.captured && Boolean(read.reason || read.motivo);
+  const motivo = read.motivo ?? read.reason;
   await sql.query(
-    `insert into of_notification_sync (creator_id, last_attempt_at, consecutive_failures, last_status, last_reason)
-     values ($1, $2, $3, $4, $5)
+    `insert into of_notification_sync (
+       creator_id, last_attempt_at, consecutive_failures, last_status, last_reason, unread_counts, last_http_status
+     ) values ($1, $2, $3, $4, $5, $6::jsonb, $7)
      on conflict (creator_id) do update set
        last_attempt_at = excluded.last_attempt_at,
        consecutive_failures = case when $4 = 'ok' then 0 else of_notification_sync.consecutive_failures + 1 end,
        last_status = excluded.last_status,
-       last_reason = excluded.last_reason`,
-    [creatorId, syncedAt, failed ? 1 : 0, failed ? "error" : "ok", read.reason],
+       last_reason = excluded.last_reason,
+       unread_counts = coalesce(excluded.unread_counts, of_notification_sync.unread_counts),
+       last_http_status = coalesce(excluded.last_http_status, of_notification_sync.last_http_status)`,
+    [creatorId, syncedAt, failed ? 1 : 0, failed ? "error" : "ok", motivo, read.counts ? JSON.stringify(read.counts) : null, read.status ?? null],
   );
   for (const item of read.items) {
     await sql.query(
       `insert into of_notification (
          creator_id, notification_key, kind, body, fan_key, fan_name, thread_key,
-         amount_cents, occurred_at, pending, first_seen_at, synced_at, origin
-       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+         amount_cents, occurred_at, pending, first_seen_at, synced_at, origin, of_unread
+       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
        on conflict (creator_id, notification_key) do update set
          kind = case
            when of_notification.kind in ('agency', 'other')
@@ -68,7 +80,8 @@ export async function saveNotificationRead(
          amount_cents = coalesce(excluded.amount_cents, of_notification.amount_cents),
          occurred_at = coalesce(excluded.occurred_at, of_notification.occurred_at),
          pending = of_notification.pending or excluded.pending,
-         synced_at = excluded.synced_at`,
+         synced_at = excluded.synced_at,
+         of_unread = coalesce(excluded.of_unread, of_notification.of_unread)`,
       [
         creatorId,
         item.key,
@@ -83,8 +96,12 @@ export async function saveNotificationRead(
         syncedAt,
         syncedAt,
         ORIGIN,
+        item.ofUnread ?? null,
       ],
     );
+  }
+  if (read.counts?.all === 0) {
+    await sql.query("update of_notification set of_unread = false where creator_id = $1", [creatorId]);
   }
   const cutoff = new Date(now.getTime() - NOTIFICATION_RETENTION_DAYS * 86_400_000).toISOString();
   await sql.query(
@@ -150,9 +167,10 @@ export async function listNotificationRows(
     occurred_at: Date | string | null;
     pending: boolean | string;
     seen_at: Date | string | null;
+    of_unread: boolean | string | null;
   }>(
     `select n.notification_key, n.kind, n.body, n.fan_key, n.fan_name, n.thread_key,
-            n.amount_cents, n.occurred_at, n.pending, s.seen_at
+            n.amount_cents, n.occurred_at, n.pending, s.seen_at, n.of_unread
      from of_notification n
      left join of_notification_seen s
        on s.creator_id = n.creator_id
@@ -181,6 +199,7 @@ export async function listNotificationRows(
         occurredAt: asIso(row.occurred_at),
         pending: row.pending === true || row.pending === "t" || row.pending === "true",
         seenAt: asIso(row.seen_at),
+        ofUnread: row.of_unread == null ? null : row.of_unread === true || row.of_unread === "t" || row.of_unread === "true",
       },
     ];
   });
@@ -190,14 +209,41 @@ export async function listNotificationRows(
   return { rows: page, nextCursor };
 }
 
-export async function notificationSyncedAt(sql: NotificationSql, creatorId: string): Promise<string | null> {
-  const rows = await sql.query<{ last_attempt_at: Date | string | null; last_status: string }>(
-    "select last_attempt_at, last_status from of_notification_sync where creator_id = $1",
+export type NotificationSyncState = {
+  syncedAt: string | null;
+  motivo: string | null;
+  status: number | null;
+  counts: NotificationCounts | null;
+  ok: boolean;
+};
+
+export async function notificationSyncState(sql: NotificationSql, creatorId: string): Promise<NotificationSyncState> {
+  const rows = await sql.query<{
+    last_attempt_at: Date | string | null;
+    last_status: string;
+    last_reason: string | null;
+    last_http_status: number | string | null;
+    unread_counts: NotificationCounts | string | null;
+  }>(
+    "select last_attempt_at, last_status, last_reason, last_http_status, unread_counts from of_notification_sync where creator_id = $1",
     [creatorId],
   );
   const row = rows[0];
-  if (!row || row.last_status !== "ok") return null;
-  return asIso(row.last_attempt_at);
+  if (!row) return { syncedAt: null, motivo: null, status: null, counts: null, ok: false };
+  const ok = row.last_status === "ok";
+  return {
+    syncedAt: asIso(row.last_attempt_at),
+    motivo: row.last_reason,
+    status: row.last_http_status == null ? null : Number(row.last_http_status),
+    counts: ok ? asCounts(row.unread_counts) : null,
+    ok,
+  };
+}
+
+export async function notificationSyncedAt(sql: NotificationSql, creatorId: string): Promise<string | null> {
+  const state = await notificationSyncState(sql, creatorId);
+  if (!state.ok) return null;
+  return state.syncedAt;
 }
 
 export async function listNotificationMeta(sql: NotificationSql): Promise<NotificationSyncMeta[]> {
@@ -218,15 +264,26 @@ export async function notificationPageFor(
   cursor?: string | null,
 ) {
   if (!canReadCreatorNotifications(access, creatorId)) {
-    return { role: access.role, syncedAt: null as string | null, items: [] as NotificationListRow[], nextCursor: null as string | null };
+    return {
+      role: access.role,
+      syncedAt: null as string | null,
+      items: [] as NotificationListRow[],
+      nextCursor: null as string | null,
+      counts: null as NotificationCounts | null,
+      motivo: null as string | null,
+      status: null as number | null,
+    };
   }
-  const [page, syncedAt] = await Promise.all([
+  const [page, sync] = await Promise.all([
     listNotificationRows(sql, creatorId, access.userId, { cursor, role: access.role }),
-    notificationSyncedAt(sql, creatorId),
+    notificationSyncState(sql, creatorId),
   ]);
   return {
     role: access.role,
-    syncedAt,
+    syncedAt: sync.ok ? sync.syncedAt : null,
+    counts: sync.counts,
+    motivo: sync.motivo,
+    status: sync.status,
     nextCursor: page.nextCursor,
     items: page.rows.flatMap((row) => {
       const labels = notificationLabels(row, access.role);
@@ -244,6 +301,7 @@ export async function notificationPageFor(
           occurredAt: row.occurredAt,
           pending: row.pending,
           seen: Boolean(row.seenAt),
+          ofUnread: row.ofUnread ?? null,
           labels,
         },
       ];
@@ -263,8 +321,62 @@ export type NotificationListRow = {
   occurredAt: string | null;
   pending: boolean;
   seen: boolean;
+  ofUnread: boolean | null;
   labels: NonNullable<ReturnType<typeof notificationLabels>>;
 };
+
+function asCounts(value: NotificationCounts | string | null): NotificationCounts | null {
+  if (!value) return null;
+  const parsed = typeof value === "string" ? safeJson(value) : value;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const raw = parsed as Partial<Record<keyof NotificationCounts, unknown>>;
+  const counts: NotificationCounts = {
+    all: countOrNull(raw.all),
+    subscriptions: countOrNull(raw.subscriptions),
+    purchases: countOrNull(raw.purchases),
+    tips: countOrNull(raw.tips),
+    tags: countOrNull(raw.tags),
+    comments: countOrNull(raw.comments),
+    mentions: countOrNull(raw.mentions),
+    likes: countOrNull(raw.likes),
+    promotions: countOrNull(raw.promotions),
+    onlyfans: countOrNull(raw.onlyfans),
+  };
+  return Object.values(counts).some((item) => item != null) ? counts : null;
+}
+
+function countOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : null;
+}
+
+function safeJson(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+export async function markableNotifications(
+  sql: NotificationSql,
+  access: { userId: string; role: "owner" | "member"; creatorIds: string[] },
+  creatorId: string,
+  keys: string[] | null,
+): Promise<Array<{ key: string; kind: NotificationRecord["kind"] }>> {
+  if (!canReadCreatorNotifications(access, creatorId)) {
+    throw new WorkspaceAccessError("No tienes esa cuenta.");
+  }
+  const rows = keys == null
+    ? await sql.query<{ notification_key: string; kind: string }>(
+      "select notification_key, kind from of_notification where creator_id = $1 limit 500",
+      [creatorId],
+    ).then((found) => found.flatMap((row) => {
+      const kind = asKind(row.kind);
+      return kind ? [{ key: row.notification_key, kind }] : [];
+    }))
+    : await notificationKinds(sql, creatorId, keys);
+  return rows.filter((row) => access.role === "owner" || !isOwnerOnlyKind(row.kind));
+}
 
 export async function markNotificationPage(
   sql: NotificationSql,
