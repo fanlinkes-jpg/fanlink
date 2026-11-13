@@ -1,4 +1,8 @@
-/** El navegador se entera de un mensaje ya guardado como mucho en este plazo. */
+/**
+ * El navegador se entera de un mensaje ya guardado como mucho en este plazo.
+ * La API firmada deja el hilo abierto en la base en cada ciclo de 2 s
+ * (`OPEN_CYCLE_MS`). Bajar de 2 s es acortar este intervalo, no la pantalla.
+ */
 export const LIVE_PUSH_MS = 2_000;
 
 let openInboxes = 0;

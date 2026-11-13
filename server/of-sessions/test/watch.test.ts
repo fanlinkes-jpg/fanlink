@@ -180,6 +180,38 @@ test("un 429 no reabre la pestaña antes de la pausa que devuelve el backoff", a
   assert.ok((gotos[1] ?? 0) >= 60_000);
 });
 
+test("el hilo abierto entra en el siguiente ciclo aunque no esté entre los 5 primeros", async () => {
+  let now = 0;
+  let opened = 0;
+  const pulls: string[][] = [];
+  const threads = [
+    ...Array.from({ length: 5 }, (_, index) => ({ threadKey: `top-${index}`, watchers: 1 })),
+    { threadKey: "lejano", watchers: 1 },
+  ];
+  await runInboxWatch({
+    stopped: () => now > 3_000,
+    target: () => accountTarget(threads),
+    open: async () => {
+      opened += 1;
+      throw new Error("no abre Chromium");
+    },
+    save: async () => undefined,
+    onBlock: () => 15_000,
+    pullList: async (_accountId, openThreadKeys) => {
+      pulls.push(openThreadKeys);
+      return true;
+    },
+    now: () => now,
+    sleep: async (ms) => {
+      now += ms;
+    },
+  });
+  assert.equal(opened, 0);
+  assert.ok(pulls.length >= 2);
+  assert.equal(pulls[1]?.includes("lejano"), true);
+  assert.equal(pulls[1]?.includes("top-0"), true);
+});
+
 function accountTarget(threads: WatchTarget["threads"]): WatchTarget {
   return {
     accountId: "a",

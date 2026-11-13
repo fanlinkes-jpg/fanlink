@@ -8,6 +8,13 @@ import { FALLBACK_RELOAD_MS, nextFallbackThread, WATCH_IDLE_MS, type WatchedThre
 /** La lista se vuelve a pedir. Si no, un chat nuevo no entra en la bandeja. */
 export const LIST_RELOAD_MS = 15_000;
 
+/**
+ * Con la API firmada, el ciclo de los hilos abiertos. Junto al SSE de
+ * `/api/chat-live` (LIVE_PUSH_MS, 2 s) un mensaje nuevo cabe en ≤5 s.
+ * Bajar de aquí es el mismo SSE, sin cambiar la pantalla.
+ */
+export const OPEN_CYCLE_MS = 2_000;
+
 export type WatchTarget = {
   accountId: string;
   creatorId: string;
@@ -42,7 +49,11 @@ export async function runInboxWatch(input: {
   saveUsers?: (creatorId: string, users: ChatUser[]) => Promise<void>;
   /** Devuelve los milisegundos de la pausa de la cuenta. La pestaña espera eso, no un fijo de 15 s. */
   onBlock: (accountId: string, reason: string) => number;
-  pullList?: (accountId: string) => Promise<boolean>;
+  /**
+   * Primero los hilos abiertos (`openThreadKeys`, aunque no estén entre los 5
+   * primeros) y después la lista. `waitMs` es la pausa de un 429.
+   */
+  pullList?: (accountId: string, openThreadKeys: string[]) => Promise<boolean | { ok: boolean; waitMs?: number }>;
   onNavigate?: (threadKey: string | null) => void;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
@@ -92,9 +103,14 @@ export async function runInboxWatch(input: {
     }
     if (!session || accountId !== target.accountId) {
       if (input.pullList) {
-        const ok = await input.pullList(target.accountId).catch(() => false);
-        if (ok) lastUsefulAt = input.now();
-        await input.sleep(ok ? 5_000 : 15_000);
+        const pulled = await pullSigned(input, target);
+        if (pulled.waitMs > 0) {
+          blockedUntil = input.now() + pulled.waitMs;
+          await input.sleep(200);
+          continue;
+        }
+        if (pulled.ok) lastUsefulAt = input.now();
+        await input.sleep(pulled.ok ? OPEN_CYCLE_MS : LIST_RELOAD_MS);
         continue;
       }
       await shut();
@@ -147,8 +163,13 @@ export async function runInboxWatch(input: {
     const listAge = lastListReloadAt == null ? 0 : now - lastListReloadAt;
     const listDue = session != null && lastListReloadAt != null && listAge >= LIST_RELOAD_MS;
     if (listDue && input.pullList) {
-      const ok = await input.pullList(accountId ?? target.accountId).catch(() => false);
-      if (ok) {
+      const pulled = await pullSigned(input, target);
+      if (pulled.waitMs > 0) {
+        blockedUntil = input.now() + pulled.waitMs;
+        await input.sleep(200);
+        continue;
+      }
+      if (pulled.ok) {
         lastListReloadAt = input.now();
         lastUsefulAt = input.now();
         await input.sleep(200);
@@ -182,6 +203,20 @@ export async function runInboxWatch(input: {
     await input.sleep(200);
   }
   await shut();
+}
+
+async function pullSigned(input: {
+  pullList?: (accountId: string, openThreadKeys: string[]) => Promise<boolean | { ok: boolean; waitMs?: number }>;
+}, target: WatchTarget): Promise<{ ok: boolean; waitMs: number }> {
+  if (!input.pullList) return { ok: false, waitMs: 0 };
+  const keys = target.threads.map((thread) => thread.threadKey).filter((key) => key.length > 0);
+  try {
+    const value = await input.pullList(target.accountId, keys);
+    if (typeof value === "boolean") return { ok: value, waitMs: 0 };
+    return { ok: value.ok, waitMs: Math.max(0, value.waitMs ?? 0) };
+  } catch {
+    return { ok: false, waitMs: 0 };
+  }
 }
 
 export function watchPage(page: Page, threadKey: () => string, accountUserId: () => string | null = () => null): WatchSession {

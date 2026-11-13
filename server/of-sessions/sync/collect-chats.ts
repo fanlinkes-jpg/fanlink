@@ -3,6 +3,7 @@ import { closeIfIdle } from "../live/pages.ts";
 import { isCurrentUserResponseUrl, isLoginChallengeUrl, jsonUrlWithoutSecrets, usersMeVerdict } from "../identity.ts";
 import { messages } from "../messages.ts";
 import type { SiteAdapter } from "../sessions/site.ts";
+import type { StorageCookie } from "../sessions/storage-state.ts";
 import {
   applyAccountId,
   applyUserDirectory,
@@ -34,6 +35,12 @@ export type CollectedChats = {
   jsonPaths: string[];
   loginRequired?: boolean;
   alreadyRunning?: boolean;
+  /** 401 de la API firmada. No abre Chromium. */
+  sessionRejected?: boolean;
+  /** Espera de un 429. */
+  retryAfterMs?: number;
+  /** Set-Cookie parseadas. Persistirlas es el encargo 1-1; aquí no se escriben. */
+  rotatedCookies?: StorageCookie[];
 };
 
 /**

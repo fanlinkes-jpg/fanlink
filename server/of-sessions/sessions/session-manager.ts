@@ -473,17 +473,44 @@ export class SessionManager {
   }
 
   /** Lee la lista de chats por HTTP con la sesión guardada. No abre Chromium. */
-  async readChatsDirect(accountId: string): Promise<CollectedChats> {
+  async readChatsDirect(accountId: string, openThreadKeys: readonly string[] = []): Promise<CollectedChats> {
     const empty: CollectedChats = { threads: [], messages: [], reason: null, jsonPaths: ["api2/v2/chats"] };
     try {
       const state = await this.readStorageState(accountId);
-      const read = await fetchSignedChats(state, { fetch, now: () => this.now().getTime() });
-      if (read.threads.length > 0) return { ...empty, threads: read.threads, messages: read.messages, reason: null };
-      return { ...empty, threads: read.threads, messages: read.messages, reason: read.reason };
+      const read = await fetchSignedChats(state, { fetch, now: () => this.now().getTime() }, { openThreadKeys });
+      if (read.sessionRejected) {
+        await this.markApiSessionRejected(accountId, read.reason ?? messages.loginRequired).catch(() => undefined);
+      }
+      return {
+        ...empty,
+        threads: read.threads,
+        messages: read.messages,
+        reason: read.reason,
+        sessionRejected: read.sessionRejected,
+        retryAfterMs: read.retryAfterMs,
+        rotatedCookies: read.rotatedCookies,
+      };
     } catch (error) {
       const missing = error instanceof Error && "code" in error && error.code === "ENOENT";
       return { ...empty, reason: missing ? "sin sesión guardada" : publicErrorMessage(error, "no se pudo leer la sesión") };
     }
+  }
+
+  /**
+   * Un 401 de la API firmada. Expirada, o Pendiente de login si la ventana
+   * ya está abierta. No llama a Chromium.
+   */
+  private async markApiSessionRejected(accountId: string, reason: string): Promise<void> {
+    const loginAlreadyOpen = this.loginTasks.has(accountId);
+    const visible = reason.replace(/cookie|set-cookie|authorization|sess=/gi, "[omitido]").slice(0, 180);
+    await this.options.store.update(accountId, {
+      status: loginAlreadyOpen ? "pending_login" : "expired",
+      connection: "login_required",
+      sessionRejected: true,
+      loginInProgress: loginAlreadyOpen,
+      lastError: visible,
+      lastCheckedAt: this.now().toISOString(),
+    });
   }
 
   private async readChatsNow(accountId: string): Promise<CollectedChats> {
@@ -494,7 +521,7 @@ export class SessionManager {
     }
     try {
       const direct = await this.readChatsDirect(accountId);
-      if (direct.threads.length > 0 || keepsBrowserClosed(direct.reason)) return direct;
+      if (direct.sessionRejected || direct.threads.length > 0 || keepsBrowserClosed(direct.reason)) return direct;
       return await this.withSession(accountId, (context) =>
         collectChats(context, this.options.site, {
           paceMs: this.options.config.syncPaceMs,
@@ -1238,7 +1265,7 @@ function mapCookies(
   }));
 }
 
-/** Un 401 no abre el navegador. Sin cookies, el simulador sigue por la página. */
+/** Un 401 no abre el navegador. Sin cookies o sin x-bc, el simulador sigue por la página. */
 function keepsBrowserClosed(reason: string | null): boolean {
   if (!reason) return false;
   if (reason.includes("auth_id") || reason.includes("huella") || reason.includes("sin sesión guardada")) return false;

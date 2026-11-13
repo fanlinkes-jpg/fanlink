@@ -198,16 +198,32 @@ export function kickInboxWatch(): void {
       console.info(`[fanlink:chat] escucha pausada cuenta=${accountId} motivo=${reason} espera=${delay}`);
       return delay;
     },
-    pullList: async (accountId) => {
+    pullList: async (accountId, openThreadKeys) => {
       const sessions = await getOfSessionManager();
-      const read = await sessions.readChatsDirect(accountId);
       const account = (await sessions.listAccounts()).find((item) => item.id === accountId);
-      if (!account?.creatorId || read.threads.length === 0) {
+      if (!account || account.status !== "active") return false;
+      const pause = accountPause(accountId);
+      if (pause) return { ok: false, waitMs: Math.max(200, pause.until - Date.now()) };
+      const read = await sessions.readChatsDirect(accountId, openThreadKeys);
+      // rotatedCookies espera al encargo 1-1. No se escriben en el JSON cifrado.
+      if (account.creatorId && (read.threads.length > 0 || read.messages.length > 0)) {
+        await saveChatRead(await getSql(), account.creatorId, read);
+        console.info(`[fanlink:chat] api lista creator=${account.creatorId} hilos=${read.threads.length} mensajes=${read.messages.length}`);
+      }
+      if (read.sessionRejected) {
+        console.info(`[fanlink:chat] api lista: ${read.reason ?? "sesión rechazada"}`);
+        return false;
+      }
+      if ((read.retryAfterMs ?? 0) > 0) {
+        const delay = noteAccountBlock(accountId, "429");
+        console.info(`[fanlink:chat] api lista: 429 espera=${delay}`);
+        return { ok: false, waitMs: delay };
+      }
+      if (!account.creatorId || (read.threads.length === 0 && read.messages.length === 0)) {
         if (read.reason) console.info(`[fanlink:chat] api lista: ${read.reason}`);
         return false;
       }
-      await saveChatRead(await getSql(), account.creatorId, read);
-      console.info(`[fanlink:chat] api lista creator=${account.creatorId} hilos=${read.threads.length} mensajes=${read.messages.length}`);
+      if (read.reason) console.info(`[fanlink:chat] api lista: ${read.reason}`);
       return true;
     },
     now: () => Date.now(),
@@ -304,9 +320,19 @@ function bootApiListLoop(sessions: SessionManager): void {
     while (true) {
       try {
         for (const account of await sessions.listAccounts()) {
-          if (!account.creatorId || account.identityState === "mismatch") continue;
+          if (!account.creatorId || account.identityState === "mismatch" || account.status !== "active") continue;
+          if (accountPause(account.id)) continue;
           const read = await sessions.readChatsDirect(account.id);
-          if (read.threads.length === 0) {
+          if (read.sessionRejected) {
+            console.info(`[fanlink:chat] api lista: ${read.reason ?? "sesión rechazada"}`);
+            continue;
+          }
+          if ((read.retryAfterMs ?? 0) > 0) {
+            const delay = noteAccountBlock(account.id, "429");
+            console.info(`[fanlink:chat] api lista: 429 espera=${delay}`);
+            continue;
+          }
+          if (read.threads.length === 0 && read.messages.length === 0) {
             console.info(`[fanlink:chat] api lista: ${read.reason ?? "sin hilos"}`);
             continue;
           }
