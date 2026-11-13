@@ -6,6 +6,7 @@
  * FANLINK_SEND_ALLOW_ACCOUNTS. Los masivos siguen apagados.
  */
 import { sectionFailure, type SectionOutcome } from "./parse.ts";
+import { higherUnread, unreadCountOf } from "./unread-chats.ts";
 
 export type ChatThread = {
   threadKey: string;
@@ -14,7 +15,8 @@ export type ChatThread = {
   fanName: string | null;
   lastMessageAt: string | null;
   excerpt: string | null;
-  unread: number;
+  /** Null si la lista firmada no trajo `unreadMessagesCount`. No es un cero. */
+  unread: number | null;
   /** Id de fromUser del último mensaje. No es un chatter del CRM. */
   lastFromUserId: string | null;
   /** True si lo escribió el fan, false si salió de la cuenta, null si no se sabe. */
@@ -115,7 +117,7 @@ export function threadsToOpen(
   return [...threads]
     .sort((left, right) => {
       if (unreadFirst) {
-        const unread = Number(right.unread > 0) - Number(left.unread > 0);
+        const unread = Number((right.unread ?? 0) > 0) - Number((left.unread ?? 0) > 0);
         if (unread !== 0) return unread;
       }
       return (right.lastMessageAt ?? "").localeCompare(left.lastMessageAt ?? "");
@@ -231,7 +233,7 @@ function combineThread(left: ChatThread, right: ChatThread): ChatThread {
     fanName: newer.fanName ?? older.fanName,
     lastMessageAt: newer.lastMessageAt ?? older.lastMessageAt,
     excerpt: newer.excerpt ?? older.excerpt,
-    unread: Math.max(left.unread, right.unread),
+    unread: higherUnread(left.unread, right.unread),
     lastFromUserId: newer.lastFromUserId ?? older.lastFromUserId,
     lastFromFan: newer.lastFromFan ?? older.lastFromFan,
     spentCents: newer.spentCents ?? older.spentCents,
@@ -414,7 +416,7 @@ function threadFrom(record: Record<string, unknown>, accountId: string | null): 
     fanName,
     lastMessageAt: iso(last?.createdAt ?? last?.created_at ?? record.lastMessageAt ?? record.at),
     excerpt,
-    unread: count(record.unreadMessagesCount ?? record.unread),
+    unread: unreadCountOf(record),
     lastFromUserId,
     lastFromFan: fromFanFlag(lastFromUserId, fanKey, accountId),
     ...spend,
@@ -447,13 +449,13 @@ function fanGroup(thread: FanRow): string {
 }
 
 function preferFanRow<T extends FanRow>(left: T, right: T): T {
-  const rank = (row: FanRow) => (row.threadKey === row.fanKey ? 4 : 0) + (row.unread > 0 ? 2 : 0) + (row.excerpt ? 1 : 0);
+  const rank = (row: FanRow) => (row.threadKey === row.fanKey ? 4 : 0) + ((row.unread ?? 0) > 0 ? 2 : 0) + (row.excerpt ? 1 : 0);
   const primary = rank(right) > rank(left) ? right : left;
   const other = primary === left ? right : left;
   const lastMessageAt = (right.lastMessageAt ?? "") > (left.lastMessageAt ?? "") ? right.lastMessageAt : left.lastMessageAt;
   return {
     ...primary,
-    unread: Math.max(left.unread, right.unread),
+    unread: higherUnread(left.unread, right.unread),
     excerpt: primary.excerpt ?? other.excerpt,
     lastMessageAt,
   };
@@ -465,7 +467,7 @@ type FanRow = {
   fanKey: string | null;
   fanHandle: string | null;
   fanName: string | null;
-  unread: number;
+  unread: number | null;
   excerpt: string | null;
   lastMessageAt: string | null;
 };

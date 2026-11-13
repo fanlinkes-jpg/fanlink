@@ -3,6 +3,7 @@ import { domainMatches, isCookieUnexpired, type StorageCookie, type StorageState
 import { backoffDelayMs } from "./backoff.ts";
 import { mergeMessages, mergeThreads, parseChatList, parseChatMessages, parsePreviewMessages, type ChatMessage, type ChatThread } from "./chats.ts";
 import { awaitAccountGap, REQUEST_GAP_MS } from "./api-list-pace.ts";
+import { noteMissingUnread } from "./unread-chats.ts";
 import { headerRemoved, loadSignRules, normalizeHeaderName, pathHasQuery, signOnlyfans, type SignRules } from "./of-sign.ts";
 
 const HOST = "onlyfans.com";
@@ -57,6 +58,8 @@ export type SignedChatDeps = {
   sleep?: (ms: number) => Promise<void>;
   minGapMs?: number;
   accountId?: string;
+  /** Solo para el log si falta unreadMessagesCount. No entra en el motivo. */
+  creatorId?: string | null;
 };
 
 export function sessionForApi(state: StorageStateFile, nowMs: number): { cookie: string; userId: string; xBc: string } | { reason: string } {
@@ -176,6 +179,7 @@ export async function fetchSignedChats(state: StorageStateFile, deps: SignedChat
   }
 
   const nothing = threads.length === 0 && messages.length === 0;
+  noteMissingUnread(deps.creatorId, threads.filter((thread) => thread.unread == null).length);
   return {
     threads,
     messages,

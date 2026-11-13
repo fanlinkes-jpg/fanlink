@@ -314,7 +314,7 @@ export async function listChats(
       fanName: row.fan_name,
       lastMessageAt: iso(row.last_message_at),
       excerpt: row.excerpt,
-      unread: Number(row.unread ?? 0),
+      unread: row.unread == null || row.unread === "" ? null : Number(row.unread),
       lastFromUserId: null,
       lastFromFan: flagOrNull(row.last_from_fan),
       spentCents: centsOrNull(row.spent_cents),

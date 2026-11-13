@@ -129,7 +129,7 @@ export type CreatorChatList = {
     fanName: string | null;
     lastMessageAt: string | null;
     excerpt: string | null;
-    unread: number;
+    unread: number | null;
     lastFromFan: boolean | null;
     spentCents: number | null;
     subscribesCents: number | null;

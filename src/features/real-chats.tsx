@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, typ
 import { createPortal } from "react-dom";
 import { AtSign, Bell, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, MessageCircle, RefreshCw, ScrollText, Send, Type } from "lucide-react";
 import { chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, readChatVault, recordChatOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
+import { unreadChatRow, unreadChatTotal } from "../../server/of-sessions/sync/unread-chats.ts";
 import { listCreatorNotifications, markCreatorNotificationsRead, type NotificationListItem } from "@/lib/of-notifications";
 import { kindLabel } from "@/lib/notifications";
 import { useCrm, type VaultItem } from "@/lib/crm";
@@ -950,6 +951,7 @@ export function RealChatsPage() {
               {creators.map((creator) => <option key={creator.id} value={creator.id}>{creator.name}</option>)}
             </select>
             <span className="shrink-0 text-[10px] text-[#6d7585]">Más recientes</span>
+            {unreadChatTotal(threads) > 0 ? <span className="shrink-0 rounded-full bg-[#3b6cff] px-1.5 text-[10px] font-semibold text-white" aria-label={`${unreadChatTotal(threads)} chats sin leer`}>{unreadChatTotal(threads)}</span> : null}
           </div>
           <div className="flex gap-2">
             <button type="button" onClick={() => setFilter("propinas")} className={`rounded-full px-3 py-1 text-xs ${filter === "propinas" ? "bg-[#3b6cff] text-white" : "bg-[#f3f4f6] text-[#6d7585]"}`}>Con propinas</button>
@@ -973,7 +975,9 @@ export function RealChatsPage() {
           <p className="px-4 py-8 text-sm text-[#6d7585]">{threads.length === 0 ? emptyChatsLabel(data) : "Sin datos"}</p>
         ) : (
           <ul>
-            {visible.map((thread) => (
+            {visible.map((thread) => {
+              const unread = unreadChatRow(thread.unread);
+              return (
               <li key={`${thread.creatorId}:${thread.threadKey}`}>
                 <button
                   type="button"
@@ -992,20 +996,21 @@ export function RealChatsPage() {
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-1">
-                      <span className="truncate text-sm font-medium">{fanTitle(thread)}</span>
+                      <span className={`truncate text-sm ${unread.bold ? "font-bold text-[#1d2433]" : "font-medium"}`}>{fanTitle(thread)}</span>
                       {creatorId === "all" ? <span className="shrink-0 rounded bg-[#f3f4f6] px-1 text-[10px] text-[#6d7585]">{creators.find((creator) => creator.id === thread.creatorId)?.name ?? "Cuenta"}</span> : null}
-                      {thread.unread > 0 && !marks.muted.includes(threadMark(thread.creatorId, thread.threadKey)) ? <span className="rounded bg-[#e7f0ff] px-1 text-[10px] font-semibold text-[#2456c7]">NEW</span> : null}
+                      {unread.badge != null ? <span className="shrink-0 rounded-full bg-[#3b6cff] px-1.5 text-[10px] font-semibold text-white" aria-label={`${unread.badge} sin leer`}>{unread.badge}</span> : null}
                       {thread.online === false ? <span className="rounded bg-[#f3f4f6] px-1 text-[10px] text-[#6d7585]">OFF</span> : null}
                     </span>
                     <span className="block truncate text-xs text-[#6d7585]">{thread.fanHandle ? `@${thread.fanHandle.replace(/^@/, "")}` : "Sin datos"}</span>
                     <span className="mt-1 flex items-baseline justify-between gap-2 text-xs text-[#6d7585]">
-                      <span className="truncate">{thread.excerpt ?? "Sin datos"}</span>
+                      <span className={`truncate ${unread.bold ? "font-bold text-[#1d2433]" : ""}`}>{thread.excerpt ?? "Sin datos"}</span>
                       <span className="shrink-0">{thread.lastMessageAt ? madridClock(thread.lastMessageAt) : "Sin datos"}</span>
                     </span>
                   </span>
                 </button>
               </li>
-            ))}
+              );
+            })}
           </ul>
         )}
         </div>

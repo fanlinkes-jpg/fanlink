@@ -519,7 +519,7 @@ export class SessionManager {
   }
 
   /** Lee la lista de chats por HTTP con la sesión guardada. No abre Chromium. */
-  async readChatsDirect(accountId: string, openThreadKeys: readonly string[] = [], pull?: SignedChatOptions): Promise<CollectedChats> {
+  async readChatsDirect(accountId: string, openThreadKeys: readonly string[] = [], pull?: SignedChatOptions, creatorId?: string | null): Promise<CollectedChats> {
     const empty: CollectedChats = { threads: [], messages: [], reason: null, jsonPaths: ["api2/v2/chats"] };
     try {
       const state = await this.readStorageState(accountId);
@@ -529,6 +529,7 @@ export class SessionManager {
         sleep: this.options.sleep ?? ((ms) => delay(ms)),
         minGapMs: 300,
         accountId,
+        creatorId,
       }, { openThreadKeys, ...pull });
       if (read.sessionRejected) {
         await this.markApiSessionRejected(accountId, read.reason ?? messages.loginRequired).catch(() => undefined);
@@ -627,7 +628,7 @@ export class SessionManager {
           list: plan.list,
           messages: keys.length > 0 ? "open" : "none",
           messagePageCap: 1,
-        });
+        }, account.creatorId);
         const answered = direct.reason == null || direct.threads.length > 0 || direct.messages.length > 0;
         if (!openBrowser || direct.sessionRejected || answered || keepsBrowserClosed(direct.reason)) return direct;
         return await this.withSession(accountId, (context) =>

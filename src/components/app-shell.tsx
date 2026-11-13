@@ -1,4 +1,6 @@
 import { ClientOnly, Link, useNavigate, useRouterState } from "@tanstack/react-router";
+import { listCreatorChats } from "@/lib/of-sessions";
+import { unreadChatTotal } from "../../server/of-sessions/sync/unread-chats.ts";
 import { useEffect, useState, type ReactNode } from "react";
 import {
   BarChart3,
@@ -206,6 +208,7 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
     chatSendSession.bindUser(user?.id ?? null, { pending: isPending });
   }, [user?.id, isPending]);
 
+  const unreadChats = useUnreadChats();
   const allowed = (items: Item[]) => items.filter((item) => hasPerm(teamAccess, item.perm ?? "mensajes") || !item.perm);
   const currentOk = MENUS.flatMap((m) => m.items).every((item) => {
     const active = item.href === "/" ? path === "/" : path.startsWith(item.href);
@@ -239,12 +242,32 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
           teamAccess={teamAccess}
           allowed={allowed}
           currentOk={currentOk}
+          unreadChats={unreadChats}
         >
           {children}
         </ShellFrame>
       )}
     </>
   );
+}
+
+function useUnreadChats(): number {
+  const [total, setTotal] = useState(0);
+  useEffect(() => {
+    let stop = false;
+    const pull = () => {
+      void listCreatorChats().then((list) => {
+        if (!stop) setTotal(unreadChatTotal(list.threads));
+      }).catch(() => undefined);
+    };
+    pull();
+    const timer = window.setInterval(pull, 15_000);
+    return () => {
+      stop = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+  return total;
 }
 
 function ShellFrame({
@@ -268,6 +291,7 @@ function ShellFrame({
   teamAccess,
   allowed,
   currentOk,
+  unreadChats,
 }: {
   children: ReactNode;
   bleed?: boolean;
@@ -289,21 +313,23 @@ function ShellFrame({
   teamAccess: { displayName: string; devMode: boolean };
   allowed: (items: Item[]) => Item[];
   currentOk: boolean;
+  unreadChats: number;
 }) {
 
   return (
     <div className="flex h-dvh max-h-dvh min-h-0 overflow-hidden bg-bg text-fg">
       <aside className="relative z-50 hidden w-14 shrink-0 flex-col items-center gap-1 border-r border-line bg-surface py-3 md:flex">
         <Logo className="mb-2" />
-        <Link
+          <Link
           to="/mensajes"
-          aria-label="Consola de mensajes"
+          aria-label={unreadChats > 0 ? `Consola de mensajes, ${unreadChats} chats sin leer` : "Consola de mensajes"}
           className={cn(
-            "grid h-10 w-10 place-items-center rounded-xl",
+            "relative grid h-10 w-10 place-items-center rounded-xl",
             path.startsWith("/mensajes") ? "bg-[#3b6cff] text-white" : "bg-[#eef2ff] text-[#3b6cff]",
           )}
         >
           <MessagesSquare className="h-5 w-5" />
+          {unreadChats > 0 ? <span className="absolute -top-1 -right-1 min-w-4 rounded-full bg-danger px-1 text-[10px] font-semibold text-white">{unreadChats}</span> : null}
         </Link>
         {MENUS.map((group) => {
           const Icon = group.icon;
@@ -355,8 +381,9 @@ function ShellFrame({
           <button className="rounded-md p-2 md:hidden" onClick={() => setMobile(true)} aria-label="Abrir menú">
             <Menu className="h-4 w-4" />
           </button>
-          <Link to="/mensajes" className={cn("shrink-0 rounded-lg px-3 py-1.5 text-xs font-medium", path.startsWith("/mensajes") ? "bg-[#3b6cff] text-white" : "bg-white text-[#1d2433]")}>
+          <Link to="/mensajes" aria-label={unreadChats > 0 ? `Mensajes, ${unreadChats} chats sin leer` : "Mensajes"} className={cn("flex shrink-0 items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium", path.startsWith("/mensajes") ? "bg-[#3b6cff] text-white" : "bg-white text-[#1d2433]")}>
             Mensajes
+            {unreadChats > 0 ? <span className="rounded-full bg-danger px-1 text-[10px] font-semibold text-white">{unreadChats}</span> : null}
           </Link>
           <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto">
             {creators.map((c) => {
