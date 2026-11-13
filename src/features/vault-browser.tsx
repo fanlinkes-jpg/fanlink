@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { queryVaultMirror } from "@/lib/of-sessions";
-import { vaultMediaSrc } from "@/lib/chat-media";
+import { VAULT_THUMB_MISSING, vaultMediaSrc } from "@/lib/chat-media";
 import { VAULT_FILTER_DEBOUNCE_MS } from "@/lib/vault-debounce";
 
 type VaultCard = {
@@ -69,6 +69,7 @@ export function VaultBrowser({
   onClose,
   onMore,
   onOpenFolder,
+  thumbPage = { listId: "all", offset: 0 },
 }: {
   creatorId: string;
   fanKey: string | null;
@@ -78,6 +79,7 @@ export function VaultBrowser({
   onClose?: () => void;
   onMore?: () => void;
   onOpenFolder?: (listId: string | null) => void;
+  thumbPage?: { listId: string; offset: number };
 }) {
   const [listText, setListText] = useState("");
   const [query, setQuery] = useState(EMPTY_QUERY);
@@ -163,6 +165,8 @@ export function VaultBrowser({
                 name="Todos los medios"
                 active={query.scope !== "carpeta"}
                 creatorId={creatorId}
+                listId={thumbPage.listId}
+                offset={thumbPage.offset}
                 items={library}
                 onClick={() => { onOpenFolder?.(null); setQuery({ ...query, folderId: null, scope: "todas" }); }}
               />
@@ -171,6 +175,8 @@ export function VaultBrowser({
                   key={folder.id}
                   name={folder.name}
                   creatorId={creatorId}
+                  listId={thumbPage.listId}
+                  offset={thumbPage.offset}
                   active={query.folderId === folder.id}
                   items={library.filter((item) => item.folder === folder.name || item.folder === folder.id)}
                   onClick={() => { onOpenFolder?.(folder.id); setQuery({ ...query, folderId: folder.id, scope: "carpeta" }); }}
@@ -222,7 +228,7 @@ export function VaultBrowser({
                   onClick={() => setPicked((current) => current.includes(item.id) ? current.filter((id) => id !== item.id) : [...current, item.id])}
                 >
                   <span className="relative block aspect-[3/4] bg-[#f2f3f5]">
-                    <VaultThumb creatorId={creatorId} itemId={item.id} title={item.title} />
+                    <VaultThumb creatorId={creatorId} itemId={item.id} title={item.title} listId={thumbPage.listId} offset={thumbPage.offset} />
                     <span className={`absolute left-1.5 top-1.5 grid h-5 w-5 place-items-center rounded-full text-[11px] font-semibold ${selected ? "bg-[#00aff0] text-white" : "bg-white/80 text-transparent"}`}>{selected ? picked.indexOf(item.id) + 1 : ""}</span>
                     {item.offerLabel ? (
                       <span className="absolute right-1.5 top-1.5 rounded-full bg-[#ff5a7a] px-1.5 py-0.5 text-[10px] font-semibold text-white">{item.offerLabel}</span>
@@ -351,7 +357,7 @@ export function VaultBrowser({
               {item.kind === "video" ? (
                 <video controls preload="none" src={vaultMediaSrc(creatorId, item.id, "full")} className="mb-1 h-24 w-full rounded bg-black" />
               ) : (
-                <img src={vaultMediaSrc(creatorId, item.id, "preview")} alt="" className="mb-1 h-16 w-full rounded object-cover" />
+                <VaultStill creatorId={creatorId} mediaId={item.id} className="mb-1 h-16 w-full rounded object-cover" listId={thumbPage.listId} offset={thumbPage.offset} />
               )}
               <p className="font-medium">{item.title || "Sin datos"}</p>
               <p>{item.seconds == null ? "Sin datos" : formatSeconds(item.seconds)} · {item.folder ?? "Sin datos"}</p>
@@ -382,18 +388,21 @@ export function VaultBrowser({
   );
 }
 
-function VaultThumb({ creatorId, itemId, title }: { creatorId: string; itemId: string; title: string }) {
-  const preview = vaultMediaSrc(creatorId, itemId, "preview");
-  const full = vaultMediaSrc(creatorId, itemId, "full");
-  const [src, setSrc] = useState(preview);
+function VaultThumb({ creatorId, itemId, title, listId, offset }: { creatorId: string; itemId: string; title: string; listId: string; offset: number }) {
+  return <VaultStill creatorId={creatorId} mediaId={itemId} title={title} className="absolute inset-0 h-full w-full object-cover" listId={listId} offset={offset} />;
+}
+
+function VaultStill({ creatorId, mediaId, className, title = "", listId, offset }: { creatorId: string; mediaId: string; className: string; title?: string; listId: string; offset: number }) {
+  const [missing, setMissing] = useState(false);
+  if (missing) {
+    return <span className={`grid place-items-center bg-[#f2f3f5] px-2 text-center text-[11px] text-[#5c6570] ${className}`}>{VAULT_THUMB_MISSING}</span>;
+  }
   return (
     <img
-      src={src}
-      alt={title || ""}
-      className="absolute inset-0 h-full w-full object-cover"
-      onError={() => {
-        if (src !== full) setSrc(full);
-      }}
+      src={vaultMediaSrc(creatorId, mediaId, "preview", { list: listId, offset })}
+      alt={title}
+      className={className}
+      onError={() => setMissing(true)}
     />
   );
 }
@@ -403,12 +412,16 @@ function VaultFolder({
   active,
   items,
   creatorId,
+  listId,
+  offset,
   onClick,
 }: {
   name: string;
   active: boolean;
   items: VaultCard[];
   creatorId: string;
+  listId: string;
+  offset: number;
   onClick: () => void;
 }) {
   const photos = items.filter((item) => item.kind === "foto").length;
@@ -420,7 +433,7 @@ function VaultFolder({
         <span className="block truncate text-sm font-semibold">{name}</span>
         <span className="text-xs text-[#8a96a3]">{items.length === 0 ? "vacío" : `${photos} fotos · ${videos} vídeos`}</span>
       </span>
-      {thumb ? <img src={vaultMediaSrc(creatorId, thumb.id, "preview")} alt="" className="h-12 w-16 rounded object-cover" /> : null}
+      {thumb ? <VaultStill creatorId={creatorId} mediaId={thumb.id} className="h-12 w-16 rounded object-cover" listId={listId} offset={offset} /> : null}
     </button>
   );
 }
