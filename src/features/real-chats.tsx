@@ -370,14 +370,21 @@ export function RealChatsPage() {
     }
     setOnlineBusy(true);
     setOnlineNote(null);
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const result = await listOnlineFans({ data: { creatorId: creator } });
+      const result = await Promise.race([
+        listOnlineFans({ data: { creatorId: creator } }),
+        new Promise<{ fans: []; reason: string }>((resolve) => {
+          timer = setTimeout(() => resolve({ fans: [], reason: "No se pudo leer." }), 25_000);
+        }),
+      ]);
       setOnlineFans(result.fans);
       setOnlineNote(result.fans.length === 0 ? result.reason ?? "Nadie en línea" : null);
     } catch (err) {
       setOnlineFans([]);
       setOnlineNote(sessionErrorText(err));
     } finally {
+      if (timer) clearTimeout(timer);
       setOnlineBusy(false);
     }
   }
@@ -846,7 +853,8 @@ export function RealChatsPage() {
               <button type="button" onClick={() => void toggleOnline()} className={`rounded-lg px-3 py-1.5 text-xs font-medium ${onlineOpen ? "bg-[#3b6cff] text-white" : "bg-[#eef2ff] text-[#2456c7]"}`}>Fans en línea</button>
               {onlineOpen ? (
                 <div className="absolute left-0 top-full z-30 mt-1 max-h-72 w-64 overflow-y-auto rounded-xl border border-[#e6e8ee] bg-white py-1 shadow-lg">
-                  {onlineBusy ? <p className="px-3 py-3 text-xs text-[#6d7585]">Leyendo el filtro En línea…</p> : null}
+                  <p className="px-3 pt-2 text-[11px] uppercase tracking-wide text-[#6d7585]">Colecciones · Todo · En línea</p>
+                  {onlineBusy ? <p className="px-3 py-3 text-xs text-[#6d7585]">Leyendo Colecciones, pestaña Todo, filtro En línea…</p> : null}
                   {!onlineBusy && onlineNote ? <p className="px-3 py-3 text-xs text-[#6d7585]">{onlineNote}</p> : null}
                   {onlineFans.map((fan) => (
                     <button key={fan.fanKey} type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-[#f4f7ff]" onClick={() => openOnlineFan(fan.fanKey)}>

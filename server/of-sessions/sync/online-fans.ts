@@ -1,4 +1,7 @@
 import type { Page } from "playwright";
+import type { StorageStateFile } from "../sessions/storage-state.ts";
+import { sessionForApi, signedHeaders } from "./of-chat-api.ts";
+import { loadSignRules, type SignRules } from "./of-sign.ts";
 
 export type OnlineFan = {
   fanKey: string;
@@ -7,11 +10,23 @@ export type OnlineFan = {
   avatarUrl: string | null;
 };
 
-const FANS_URL = "https://onlyfans.com/my/collections/user-lists/subscribers/active";
+export type OnlineRead = {
+  fans: OnlineFan[];
+  reason: string | null;
+  status: number | null;
+};
+
+/** La misma petición que Colecciones → Todo → Filtros → En línea. No es la lista «Fans». */
+export const ONLINE_SUBSCRIBERS_PATH = "/api2/v2/subscriptions/subscribers?type=active&filter[online]=1";
+
+/** Colecciones, pestaña Todo. No abre Listas de usuarios ni la lista «Fans». */
+export const ONLINE_COLLECTION_URLS = [
+  "https://onlyfans.com/my/collections/subscribers/active",
+] as const;
 
 /** El filtro «En línea» de Fans. Si la petición ya viene filtrada, todos cuentan. */
 export function onlineFansFromPayload(payload: unknown, onlyMarked = true): OnlineFan[] {
-  const rows = listOf(payload);
+  const rows = listOf(payload) ?? [];
   const out: OnlineFan[] = [];
   const seen = new Set<string>();
   for (const item of rows) {
@@ -38,14 +53,67 @@ export function subscribersResponse(url: string): "online" | "all" | null {
   return null;
 }
 
-/** Abre Fans y se queda con quien OnlyFans marca en línea. No firma la API. */
-export async function readOnlineSubscribers(page: Page): Promise<OnlineFan[]> {
-  const marked: OnlineFan[] = [];
+/** 200 con lista vacía es «Nadie en línea». Sin lista reconocible no es un cero. */
+export function onlineReadFromPayload(status: number, payload: unknown): OnlineRead {
+  if (status === 401 || status === 400) {
+    return { fans: [], reason: "OnlyFans ha rechazado la firma", status };
+  }
+  if (status !== 200) return { fans: [], reason: "No se pudo leer.", status };
+  const rows = listOf(payload);
+  if (!rows) return { fans: [], reason: "No se pudo leer.", status };
+  const fans = onlineFansFromPayload({ list: rows }, true);
+  return { fans, reason: fans.length === 0 ? "Nadie en línea" : null, status };
+}
+
+/**
+ * Suscriptores activos en línea, por la API firmada. No abre Chromium.
+ * La firma usa la ruta con la query, el id real y `time` en milisegundos.
+ */
+export async function fetchSignedOnlineFans(
+  state: StorageStateFile,
+  deps: { fetch: typeof fetch; now: () => number; rules?: SignRules },
+): Promise<OnlineRead> {
+  const auth = sessionForApi(state, deps.now());
+  if ("reason" in auth) return { fans: [], reason: "No se pudo leer.", status: null };
+  let rules: SignRules;
+  try {
+    rules = deps.rules ?? await loadSignRules(deps.fetch, deps.now());
+  } catch {
+    return { fans: [], reason: "No se pudo leer.", status: null };
+  }
+  const headers = signedHeaders(rules, ONLINE_SUBSCRIBERS_PATH, auth, deps.now());
+  let response: Response;
+  try {
+    response = await deps.fetch(`https://onlyfans.com${ONLINE_SUBSCRIBERS_PATH}`, {
+      headers,
+      signal: AbortSignal.timeout(20_000),
+    });
+  } catch {
+    return { fans: [], reason: "No se pudo leer.", status: null };
+  }
+  if (response.status === 401 || response.status === 400) {
+    return { fans: [], reason: "OnlyFans ha rechazado la firma", status: response.status };
+  }
+  if (!response.ok) return { fans: [], reason: "No se pudo leer.", status: response.status };
+  try {
+    return onlineReadFromPayload(response.status, await response.json());
+  } catch {
+    return { fans: [], reason: "No se pudo leer.", status: response.status };
+  }
+}
+
+/**
+ * Respaldo de la página: Colecciones, pestaña Todo, Filtros, En línea.
+ * No abre la lista «Fans» de user-lists. Si el filtro no aparece, no devuelve una lista vacía.
+ */
+export async function readOnlineSubscribers(page: Page, signal?: AbortSignal, urls: readonly string[] = ONLINE_COLLECTION_URLS): Promise<OnlineRead> {
+  if (signal?.aborted) return { fans: [], reason: "No se pudo leer.", status: null };
   const filtered: OnlineFan[] = [];
+  let sawOnline = false;
   const pending: Array<Promise<void>> = [];
   const onResponse = (response: { url(): string; status(): number; text(): Promise<string> }) => {
-    const kind = subscribersResponse(response.url());
-    if (!kind || response.status() < 200 || response.status() >= 300) return;
+    if (subscribersResponse(response.url()) !== "online") return;
+    if (response.status() < 200 || response.status() >= 300) return;
     pending.push(response.text().then((raw) => {
       let payload: unknown;
       try {
@@ -53,38 +121,66 @@ export async function readOnlineSubscribers(page: Page): Promise<OnlineFan[]> {
       } catch {
         return;
       }
-      const rows = onlineFansFromPayload(payload, kind !== "online");
-      (kind === "online" ? filtered : marked).push(...rows);
+      const rows = listOf(payload);
+      if (!rows) return;
+      sawOnline = true;
+      filtered.push(...onlineFansFromPayload({ list: rows }, true));
     }).catch(() => undefined));
   };
   page.on("response", onResponse);
   try {
-    await page.goto(FANS_URL, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
-    await wait(pending, 6_000);
-    await page.locator('[aria-label*="filter" i], [aria-label*="Filtrar" i]').first().click({ timeout: 2_500 }).catch(() => undefined);
-    await page.getByText("En línea", { exact: true }).click({ timeout: 3_000 }).catch(() => undefined);
-    const arrived = page.waitForResponse(
-      (response) => subscribersResponse(response.url()) === "online" && response.status() >= 200 && response.status() < 300,
-      { timeout: 6_000 },
-    ).catch(() => null);
-    await page.getByRole("button", { name: /^aplicar$/i }).click({ timeout: 3_000 }).catch(() => undefined);
-    await arrived;
-    await wait(pending, 2_000);
-    const chosen = filtered.length > 0 ? filtered : marked;
-    return dedupe(chosen);
+    for (const url of urls) {
+      if (url.includes("/user-lists")) continue;
+      if (signal?.aborted || page.isClosed()) break;
+      const opened = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 15_000 }).then(() => true, () => false);
+      if (!opened || signal?.aborted || page.isClosed()) continue;
+      await click(page.getByRole("tab", { name: /^(todo|all)$/i }));
+      const filters = await click(page.getByRole("button", { name: /filtros|filters/i }));
+      const filterLabel = await click(page.locator('[aria-label*="filter" i], [aria-label*="Filtrar" i], [aria-label*="Filtros" i]').first());
+      if (!filters && !filterLabel) continue;
+      const online = page.getByText(/^(en línea|online)$/i).first();
+      if (!await click(online)) continue;
+      const arrived = page.waitForResponse(
+        (response) => subscribersResponse(response.url()) === "online" && response.status() >= 200 && response.status() < 300,
+        { timeout: 6_000 },
+      ).then(() => true, () => false);
+      await click(page.getByRole("button", { name: /^(aplicar|apply)$/i }));
+      await arrived;
+      await wait(pending, 2_000, signal);
+      if (!sawOnline) continue;
+      const fans = dedupe(filtered);
+      return { fans, reason: fans.length === 0 ? "Nadie en línea" : null, status: 200 };
+    }
+    return { fans: [], reason: "No se pudo leer.", status: null };
   } finally {
     page.off("response", onResponse);
   }
 }
 
-function listOf(payload: unknown): unknown[] {
+function listOf(payload: unknown): unknown[] | null {
   if (Array.isArray(payload)) return payload;
-  if (!payload || typeof payload !== "object") return [];
+  if (!payload || typeof payload !== "object") return null;
   const row = payload as Record<string, unknown>;
   for (const key of ["list", "users", "items"]) {
     if (Array.isArray(row[key])) return row[key] as unknown[];
   }
-  return [];
+  const data = row.data;
+  if (data && typeof data === "object" && !Array.isArray(data)) {
+    const inner = data as Record<string, unknown>;
+    for (const key of ["list", "users", "items"]) {
+      if (Array.isArray(inner[key])) return inner[key] as unknown[];
+    }
+  }
+  return null;
+}
+
+async function click(locator: { click(options: { timeout: number }): Promise<void> }): Promise<boolean> {
+  try {
+    await locator.click({ timeout: 2_500 });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function onlineFlag(value: unknown): boolean | null {
@@ -107,6 +203,13 @@ function dedupe(rows: OnlineFan[]): OnlineFan[] {
   return [...map.values()].slice(0, 100);
 }
 
-function wait(pending: Array<Promise<void>>, ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms)).then(() => Promise.all(pending.splice(0))).then(() => undefined);
+function wait(pending: Array<Promise<void>>, ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timer);
+      resolve();
+    }, { once: true });
+  }).then(() => Promise.all(pending.splice(0))).then(() => undefined);
 }
