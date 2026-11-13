@@ -203,7 +203,7 @@ export function kickInboxWatch(): void {
       const read = await sessions.readChatsDirect(accountId);
       const account = (await sessions.listAccounts()).find((item) => item.id === accountId);
       if (!account?.creatorId || read.threads.length === 0) {
-        if (read.reason) console.info(`[fanlink:chat] api lista creator=${account?.creatorId ?? accountId} ${read.reason}`);
+        if (read.reason) console.info(`[fanlink:chat] api lista creator=${account?.creatorId?.trim() || "sin ficha"} ${read.reason}`);
         return false;
       }
       await saveChatRead(await getSql(), account.creatorId, read);
@@ -1004,8 +1004,8 @@ export async function listOnlineFansView(userId: string, input: { creatorId: str
   const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
   if (!account) return { fans: [], reason: "Sin datos" };
   const read = await sessions.readOnlineFans(account.id);
-  console.info(`[fanlink:online] cuenta=${input.creatorId} fans=${read.fans.length} motivo=${read.reason ?? "ok"}`);
-  return read;
+  console.info(`[fanlink:online] cuenta=${input.creatorId} fans=${read.fans.length} motivo=${read.reason ?? "ok"} status=${read.status ?? "sin"}`);
+  return { fans: read.fans, reason: read.reason };
 }
 
 export async function runFanChatMenuView(userId: string, input: { creatorId: string; fanKey: string; request: unknown }): Promise<FanMenuResult> {

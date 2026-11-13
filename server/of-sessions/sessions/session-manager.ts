@@ -50,7 +50,7 @@ import type { TxCursor } from "../sync/parse.ts";
 import { fetchSignedChats } from "../sync/of-chat-api.ts";
 import { collectChats, type CollectedChats } from "../sync/collect-chats.ts";
 import { collectNotifications, type CollectedNotifications } from "../sync/collect-notifications.ts";
-import { readOnlineSubscribers, type OnlineFan } from "../sync/online-fans.ts";
+import { fetchSignedOnlineFans, readOnlineSubscribers, type OnlineFan, type OnlineRead } from "../sync/online-fans.ts";
 import { NOTIFICATION_PACE_MS, notificationReadBusy } from "../../../src/lib/notifications.ts";
 import {
   judgeStorageState,
@@ -424,20 +424,31 @@ export class SessionManager {
    */
   async readOnlineFans(
     accountId: string,
-    options?: { budgetMs?: number; read?: (page: Page, signal: AbortSignal) => Promise<OnlineFan[]> },
-  ): Promise<{ fans: OnlineFan[]; reason: string | null }> {
+    options?: { budgetMs?: number; read?: (page: Page, signal: AbortSignal) => Promise<OnlineRead> },
+  ): Promise<OnlineRead> {
     assertAccountId(accountId);
     if (this.loginTasks.has(accountId)) {
-      return { fans: [], reason: "Esperando a que termine Conectar." };
+      return { fans: [], reason: "Esperando a que termine Conectar.", status: null };
     }
     if (this.watches.has(accountId)) {
-      return { fans: [], reason: "Ocupado." };
+      return { fans: [], reason: "Ocupado.", status: null };
+    }
+    if (this.options.site.id === "onlyfans" && !options?.read) {
+      try {
+        const signed = await fetchSignedOnlineFans(await this.readStorageState(accountId), {
+          fetch,
+          now: () => this.now().getTime(),
+        });
+        if (signed.reason !== "No se pudo leer.") return signed;
+      } catch {
+        // Sin JSON firmado se prueba la página.
+      }
     }
     const budgetMs = options?.budgetMs ?? 25_000;
     const readPage = options?.read ?? ((page: Page, signal: AbortSignal) => readOnlineSubscribers(page, signal));
     const controller = new AbortController();
     const job = this.runQueued(accountId, async (context) => {
-      if (controller.signal.aborted) return [] as OnlineFan[];
+      if (controller.signal.aborted) return { fans: [] as OnlineFan[], reason: "No se pudo leer.", status: null };
       const page = await context.newPage();
       const closePage = () => {
         void page.close().catch(() => undefined);
@@ -452,14 +463,14 @@ export class SessionManager {
     });
     const settled = job.then(
       (ran) => {
-        if (!ran.ok) return { fans: [] as OnlineFan[], reason: "Ocupado." };
-        return { fans: ran.value, reason: ran.value.length === 0 ? "Nadie en línea" : null };
+        if (!ran.ok) return { fans: [] as OnlineFan[], reason: "Ocupado.", status: null };
+        return ran.value;
       },
       (error: unknown) => {
         if (error instanceof SessionPendingError) {
-          return { fans: [] as OnlineFan[], reason: "Esperando a que termine Conectar." };
+          return { fans: [] as OnlineFan[], reason: "Esperando a que termine Conectar.", status: null };
         }
-        return { fans: [] as OnlineFan[], reason: "No se pudo leer." };
+        return { fans: [] as OnlineFan[], reason: "No se pudo leer.", status: null };
       },
     );
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -474,7 +485,7 @@ export class SessionManager {
       if (outcome.kind === "timeout") {
         controller.abort();
         await settled;
-        return { fans: [], reason: "No se pudo leer." };
+        return { fans: [], reason: "No se pudo leer.", status: null };
       }
       return outcome.value;
     } finally {
@@ -504,15 +515,23 @@ export class SessionManager {
   /** Lee la lista de chats por HTTP con la sesión guardada. No abre Chromium. */
   async readChatsDirect(accountId: string): Promise<CollectedChats> {
     const empty: CollectedChats = { threads: [], messages: [], reason: null, jsonPaths: ["api2/v2/chats"] };
+    const creatorId = await this.creatorLabel(accountId);
     try {
       const state = await this.readStorageState(accountId);
-      const read = await fetchSignedChats(state, { fetch, now: () => this.now().getTime() });
+      const read = await fetchSignedChats(state, { fetch, now: () => this.now().getTime(), creatorId });
       if (read.threads.length > 0) return { ...empty, threads: read.threads, messages: read.messages, reason: null };
       return { ...empty, threads: read.threads, messages: read.messages, reason: read.reason };
     } catch (error) {
       const missing = error instanceof Error && "code" in error && error.code === "ENOENT";
+      if (missing) console.info(`[fanlink:chat] sin sesión guardada creator=${creatorId}`);
       return { ...empty, reason: missing ? "sin sesión guardada" : publicErrorMessage(error, "no se pudo leer la sesión") };
     }
+  }
+
+  private async creatorLabel(accountId: string): Promise<string> {
+    const account = await this.options.store.get(accountId).catch(() => null);
+    const creator = account?.creatorId?.trim();
+    return creator || "sin ficha";
   }
 
   private async readChatsNow(accountId: string): Promise<CollectedChats> {
