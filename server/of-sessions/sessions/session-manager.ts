@@ -23,7 +23,7 @@ import {
   type ReadIdentity,
 } from "../identity.ts";
 import { messages, publicErrorMessage } from "../messages.ts";
-import { liveHoldsAccount } from "../live/hold.ts";
+import { liveHoldsAccount, stopLiveForAccount } from "../live/hold.ts";
 import type { AccountRepository } from "../store/repository.ts";
 import type { Account } from "../types.ts";
 import {
@@ -41,6 +41,7 @@ import { assertLoginDisplay } from "./display.ts";
 import { openWorkPage } from "./work-page.ts";
 import { closeIfIdle } from "../live/pages.ts";
 import { readAccountProxy } from "../proxy.ts";
+import { ProfileOwner } from "./profile-owner.ts";
 import { preparePrivateDir } from "./private-dir.ts";
 import type { SiteAdapter } from "./site.ts";
 import { hasLiveCookies } from "./site.ts";
@@ -83,8 +84,7 @@ const silentLogger = { info() {}, warn() {} };
 export class SessionManager {
   private readonly loginTasks = new Map<string, Promise<void>>();
   private readonly openContexts = new Set<BrowserContext>();
-  private readonly profileUsers = new Map<string, { context: BrowserContext; users: number }>();
-  private readonly profileWait = new Map<string, Promise<void>>();
+  private readonly profiles: ProfileOwner;
   private background: ManagedBrowser | null = null;
   private readTail: Promise<void> = Promise.resolve();
   private readonly reading = new Set<string>();
@@ -94,6 +94,13 @@ export class SessionManager {
 
   constructor(options: SessionManagerOptions) {
     this.options = options;
+    this.profiles = new ProfileOwner({
+      openShared: (accountId) => this.newRestoredContext(accountId),
+      openExclusive: (accountId) => this.launchLoginContext(accountId),
+      persist: (accountId, context) => this.rememberProfile(accountId, context),
+      closeContext: (context) => this.forgetContext(context),
+      isStopped: () => this.closed,
+    });
   }
 
   private get log() {
@@ -258,48 +265,6 @@ export class SessionManager {
     return this.loginTasks.get(accountId) ?? Promise.resolve();
   }
 
-  /**
-   * Restaura el JSON de la cuenta en un contexto nuevo. No abre el
-   * formulario ni rellena credenciales.
-   */
-  private async acquireProfile(accountId: string): Promise<BrowserContext> {
-    for (;;) {
-      const held = this.profileUsers.get(accountId);
-      if (held) {
-        held.users += 1;
-        return held.context;
-      }
-      const pending = this.profileWait.get(accountId);
-      if (pending) {
-        await pending;
-        continue;
-      }
-      let release: () => void = () => undefined;
-      const gate = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      this.profileWait.set(accountId, gate);
-      try {
-        const context = await this.newRestoredContext(accountId);
-        this.profileUsers.set(accountId, { context, users: 1 });
-        return context;
-      } finally {
-        this.profileWait.delete(accountId);
-        release();
-      }
-    }
-  }
-
-  private async releaseProfile(accountId: string): Promise<void> {
-    const held = this.profileUsers.get(accountId);
-    if (!held) return;
-    held.users -= 1;
-    if (held.users > 0) return;
-    this.profileUsers.delete(accountId);
-    this.openContexts.delete(held.context);
-    await held.context.close().catch(() => undefined);
-  }
-
   async withSession<T>(
     accountId: string,
     run: (context: BrowserContext) => Promise<T>,
@@ -315,16 +280,7 @@ export class SessionManager {
   /** El mismo perfil persistente, sin abrir otro Chromium. Quien llama suelta el perfil. */
   async borrowProfile(accountId: string): Promise<{ context: BrowserContext; release: () => Promise<void> }> {
     await this.assertUsable(accountId);
-    const context = await this.acquireProfile(accountId);
-    let released = false;
-    return {
-      context,
-      release: async () => {
-        if (released) return;
-        released = true;
-        await this.releaseProfile(accountId);
-      },
-    };
+    return this.profiles.lease(accountId);
   }
 
   /**
@@ -438,7 +394,11 @@ export class SessionManager {
     return job;
   }
 
-  /** Mantiene el perfil abierto para escuchar. No entra en la cola: si lo hiciera, la bóveda esperaría mientras el chat sigue abierto. */
+  /**
+   * Mantiene el perfil abierto para escuchar. No entra en la cola de lecturas:
+   * si lo hiciera, la bóveda esperaría mientras el chat sigue abierto.
+   * Comparte el único contexto de la cuenta; no lanza otro Chromium.
+   */
   holdWatch(accountId: string, run: (context: BrowserContext) => Promise<void>): Promise<boolean> {
     if (liveHoldsAccount(accountId)) return Promise.resolve(false);
     return this.readTail.then(async () => {
@@ -590,7 +550,8 @@ export class SessionManager {
 
   async close(): Promise<void> {
     this.closed = true;
-    this.profileUsers.clear();
+    this.profiles.stop();
+    await this.profiles.closeAll();
     const contexts = [...this.openContexts];
     this.openContexts.clear();
     await Promise.all(
@@ -685,11 +646,12 @@ export class SessionManager {
   }
 
   private async runLogin(accountId: string): Promise<void> {
-    let context: BrowserContext | undefined;
+    let leased: { context: BrowserContext; release: () => Promise<void> } | null = null;
     try {
       if (this.closed) return;
-      const { interruptLiveAccount } = await import("../live/room.ts");
-      await interruptLiveAccount(accountId);
+      // room.ts registra el cierre de la sala. Así Conectar no importa el ciclo al cargar.
+      await import("../live/room.ts");
+      await stopLiveForAccount(accountId);
       if (this.closed) return;
       await this.options.store.update(accountId, {
         status: "pending_login",
@@ -701,17 +663,8 @@ export class SessionManager {
         this.options.config.headlessLogin,
         this.options.displayEnv,
       );
-      const profileDir = this.profileDir(accountId);
-      await preparePrivateDir(profileDir);
-      context = await this.options.browsers.launchPersistentContext(
-        profileDir,
-        {
-          headless: this.options.config.headlessLogin,
-          proxy: await this.accountProxy(accountId),
-        },
-      );
-      await chmod(profileDir, 0o700);
-      this.openContexts.add(context);
+      leased = await this.profiles.login(accountId);
+      const context = leased.context;
       if (this.closed) {
         await this.options.store.update(accountId, { loginInProgress: false });
         return;
@@ -773,10 +726,7 @@ export class SessionManager {
       });
       this.log.warn(`login failed account=${accountId}`);
     } finally {
-      if (context) {
-        this.openContexts.delete(context);
-        await context.close().catch(() => undefined);
-      }
+      await leased?.release().catch(() => undefined);
     }
   }
 
@@ -872,7 +822,8 @@ export class SessionManager {
     identityReason: string | null;
     error: string | null;
   }> {
-    const context = await this.acquireProfile(accountId);
+    const leased = await this.profiles.lease(accountId);
+    const context = leased.context;
     const notes: IdentityNotes & { identities: ReadIdentity[] } = {
       identities: [],
       jsonPaths: [],
@@ -955,7 +906,7 @@ export class SessionManager {
     } finally {
       context.off("response", onResponse);
       if (page) await closeIfIdle(page);
-      await this.releaseProfile(accountId);
+      await leased.release();
     }
   }
 
@@ -1070,22 +1021,28 @@ export class SessionManager {
    */
   private async newRestoredContext(accountId: string): Promise<BrowserContext> {
     const profile = this.profileDir(accountId);
+    let profileExists = false;
     try {
-      const info = await stat(profile);
-      if (info.isDirectory()) {
-        const headless = this.options.config.headlessWork;
-        const proxy = await this.accountProxy(accountId);
-        console.info(`[fanlink:navegador] perfil=${accountId} headless=${String(headless)} proxy=${proxy ? "si" : "no"}`);
-        const context = await this.options.browsers.launchPersistentContext(profile, {
-          headless,
-          proxy,
-        });
-        await this.seedPersistentProfile(context, accountId);
-        this.openContexts.add(context);
-        return context;
-      }
+      profileExists = (await stat(profile)).isDirectory();
     } catch {
-      // Perfil ausente: se usa el JSON cifrado.
+      profileExists = false;
+    }
+    if (profileExists) {
+      const headless = this.options.config.headlessWork;
+      const proxy = await this.accountProxy(accountId);
+      console.info(`[fanlink:navegador] perfil=${accountId} headless=${String(headless)} proxy=${proxy ? "si" : "no"}`);
+      const context = await this.options.browsers.launchPersistentContext(profile, {
+        headless,
+        proxy,
+      });
+      this.openContexts.add(context);
+      try {
+        await this.seedPersistentProfile(context, accountId);
+      } catch (error) {
+        await this.forgetContext(context);
+        throw error;
+      }
+      return context;
     }
     const browser = await this.backgroundBrowser();
     const plainPath = await this.materializePlainStorage(accountId);
@@ -1101,7 +1058,8 @@ export class SessionManager {
   /**
    * El perfil guarda IndexedDB y las cookies con caducidad. Las de sesión
    * se pierden al cerrar Chromium, así que se reponen desde el JSON cifrado
-   * solo si el perfil no las tiene ya. No se pisan las del perfil.
+   * (reescrito al soltar el perfil). Si el perfil ya tiene esa cookie, no se
+   * pisa con una copia más vieja.
    */
   private async seedPersistentProfile(context: BrowserContext, accountId: string): Promise<void> {
     const encrypted = await readFile(this.storagePath(accountId));
@@ -1109,8 +1067,11 @@ export class SessionManager {
       JSON.parse(decryptBytes(encrypted, this.requireSessionKey()).toString("utf8")) as unknown,
     );
     const present = await context.cookies();
-    const known = new Set(present.map((cookie) => `${cookie.name}\n${cookie.domain}\n${cookie.path}`));
-    const missing = state.cookies.filter((cookie) => !known.has(`${cookie.name}\n${cookie.domain}\n${cookie.path}`));
+    const missing = state.cookies.filter((cookie) => {
+      const current = present.find((item) => sameCookieSlot(item, cookie));
+      if (!current) return true;
+      return savedCookieIsFresher(cookie, current);
+    });
     if (missing.length > 0) await context.addCookies(missing);
     if (state.origins.length === 0) return;
     await context.addInitScript((origins) => {
@@ -1187,6 +1148,49 @@ export class SessionManager {
     }
   }
 
+  /** Ventana de Conectar. Visible si el login no es headless. No siembra el JSON: la persona entra de nuevo. */
+  private async launchLoginContext(accountId: string): Promise<BrowserContext> {
+    const profileDir = this.profileDir(accountId);
+    await preparePrivateDir(profileDir);
+    const context = await this.options.browsers.launchPersistentContext(profileDir, {
+      headless: this.options.config.headlessLogin,
+      proxy: await this.accountProxy(accountId),
+    });
+    this.openContexts.add(context);
+    try {
+      await chmod(profileDir, 0o700);
+    } catch (error) {
+      await this.forgetContext(context);
+      throw error;
+    }
+    return context;
+  }
+
+  /** Reescribe el JSON cifrado (0600) con las cookies que el perfil tiene ahora, incluida `sess`. */
+  private async rememberProfile(accountId: string, context: BrowserContext): Promise<void> {
+    const sessionKey = this.options.config.sessionKey;
+    if (!sessionKey) return;
+    let state: StorageStateFile;
+    try {
+      state = parseStorageState(await context.storageState());
+    } catch {
+      this.log.warn(`session export failed account=${accountId}`);
+      return;
+    }
+    if (state.cookies.length === 0 && state.origins.length === 0) return;
+    const storagePath = this.storagePath(accountId);
+    await preparePrivateDir(path.dirname(storagePath));
+    await writeEncryptedSession(storagePath, state, sessionKey);
+  }
+
+  private async forgetContext(context: BrowserContext): Promise<void> {
+    this.openContexts.delete(context);
+    for (const page of context.pages()) {
+      await page.close().catch(() => undefined);
+    }
+    await context.close().catch(() => undefined);
+  }
+
   private async accountProxy(accountId: string) {
     const key = this.options.config.sessionKey;
     if (!key) return null;
@@ -1212,6 +1216,27 @@ export class SessionManager {
       `${accountId}.json`,
     );
   }
+}
+
+function sameCookieSlot(
+  left: { name: string; domain: string; path: string },
+  right: { name: string; domain: string; path: string },
+): boolean {
+  return (
+    left.name === right.name &&
+    left.path === right.path &&
+    left.domain.replace(/^\./, "").toLowerCase() === right.domain.replace(/^\./, "").toLowerCase()
+  );
+}
+
+/** Una cookie de sesión del perfil, o una que caduca igual o más tarde, no se sustituye. */
+function savedCookieIsFresher(
+  saved: { value: string; expires: number },
+  current: { value: string; expires: number },
+): boolean {
+  if (saved.value === current.value) return false;
+  if (current.expires === -1 || saved.expires === -1) return false;
+  return saved.expires > current.expires;
 }
 
 function mapCookies(
