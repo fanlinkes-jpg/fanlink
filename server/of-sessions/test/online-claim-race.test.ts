@@ -7,6 +7,7 @@ import { test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import pg from "pg";
 import { ONLINE_DEDUPE_MS, claimOnlineOutbound, noteStaleOnlineSends, onlineDedupeKey, parseOnlineBatchId, resolveStaleOnlineSend } from "../send/online-claim.ts";
+import { listPendingOutbounds } from "../sync/chat-store.ts";
 import type { ReadSql } from "../sync/store.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -59,6 +60,23 @@ test("el candado y sending_at corren en una sola conexión", async () => {
       batchId,
     });
     assert.equal(otherPrice.state, "comprobar");
+    await sql.query(
+      "insert into of_vault_item (creator_id, item_key, title) values ('cuenta', '44', 'Foto')",
+    );
+    const withMedia = await claimOnlineOutbound(sql, {
+      creatorId: "cuenta",
+      fanKey: "8",
+      authorId,
+      body: "hola",
+      priceCents: 500,
+      mediaIds: [44, 9],
+      nowMs,
+      batchId: randomUUID(),
+    });
+    assert.equal(withMedia.state, "nuevo");
+    const pending = await listPendingOutbounds(sql, ["cuenta"]);
+    const bubble = pending.find((item) => item.id === withMedia.id);
+    assert.deepEqual(bubble?.vault, [{ id: "44", name: "Foto" }, { id: "9", name: "9" }]);
     assert.equal(await resolveStaleOnlineSend(sql, claimed.id, "error"), false);
     await sql.query("update of_chat_outbound set sending_at = $2 where id = $1", [claimed.id, new Date(nowMs - 11 * 60_000).toISOString()]);
     assert.equal((await noteStaleOnlineSends(sql, nowMs)).includes(claimed.id), true);
@@ -120,6 +138,51 @@ test("dos lotes a la vez no crean dos filas del mismo fan y texto", async (t) =>
       assert.equal(Number(rows.rows[0]?.n), 1);
       assert.equal(rows.rows[0]?.status, "sending");
     }
+    for (let round = 0; round < 10; round += 1) {
+      const fanKey = `id-${round}`;
+      const batchId = randomUUID();
+      let release: () => void = () => undefined;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let opened: () => void = () => undefined;
+      const started = new Promise<void>((resolve) => {
+        opened = resolve;
+      });
+      const firstClaim = claimOnlineOutbound(sqlOf(left), {
+        ...shared,
+        fanKey,
+        batchId,
+        mediaIds: [4],
+        afterLock: async () => {
+          opened();
+          await held;
+        },
+      });
+      await started;
+      const secondClaim = claimOnlineOutbound(sqlOf(right), {
+        ...shared,
+        fanKey,
+        batchId,
+        priceCents: 960,
+        mediaIds: [8],
+      });
+      await delay(30);
+      release();
+      const [first, second] = await Promise.all([firstClaim, secondClaim]);
+      assert.deepEqual([first.state, second.state].sort(), ["comprobar", "nuevo"]);
+      const rows = await left.query<{ n: number }>(
+        "select count(*)::int as n from of_chat_outbound where id = $1",
+        [`${batchId}:${fanKey}`],
+      );
+      assert.equal(Number(rows.rows[0]?.n), 1);
+      const media = await left.query<{ media_id: string }>(
+        "select media_id from of_outbound_media where outbound_id = $1 order by position",
+        [`${batchId}:${fanKey}`],
+      );
+      const winner = first.state === "nuevo" ? "4" : "8";
+      assert.deepEqual(media.rows.map((row) => row.media_id), [winner]);
+    }
     const fanKey = "77";
     const reused = randomUUID();
     const again = await claimOnlineOutbound(sqlOf(left), { ...shared, fanKey, batchId: reused });
@@ -153,6 +216,7 @@ test("dos lotes a la vez no crean dos filas del mismo fan y texto", async (t) =>
     assert.equal(still.rows[0]?.error_reason, "Hay que resolver");
     assert.equal(await resolveStaleOnlineSend(sqlOf(left), priced.id, "error"), true);
   } finally {
+    await left.query("delete from of_outbound_media where creator_id = $1", [creatorId]).catch(() => undefined);
     await left.query("delete from of_chat_outbound where creator_id = $1", [creatorId]).catch(() => undefined);
     await left.query("delete from staff_profile where user_id = $1", [authorId]).catch(() => undefined);
     left.release();

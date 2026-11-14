@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ReadSql } from "../sync/store.ts";
+import { recordOutboundMedia } from "../sync/vault-store.ts";
 
 export const ONLINE_DEDUPE_MS = 30 * 60 * 1000;
 /** Un `sending` más viejo que esto se marca para resolver a mano. No se reenvía. */
@@ -53,6 +54,7 @@ export async function claimOnlineOutbound(sql: ReadSql, input: {
   await sql.query("begin");
   try {
     await sql.query("select pg_advisory_xact_lock(hashtext($1)::bigint)", [lockKey]);
+    await sql.query("select pg_advisory_xact_lock(hashtext($1)::bigint)", [`id\n${id}`]);
     if (input.afterLock) await input.afterLock();
     const rows = await sql.query<{ id: string; state: string }>(
       `with recent as (
@@ -80,6 +82,7 @@ export async function claimOnlineOutbound(sql: ReadSql, input: {
          where not exists (select 1 from recent)
            and not exists (select 1 from taken)
            and not exists (select 1 from same_id)
+         on conflict (id) do nothing
          returning id
        )
        select
@@ -92,12 +95,17 @@ export async function claimOnlineOutbound(sql: ReadSql, input: {
          end as state`,
       [input.creatorId, input.fanKey, dedupeKey, cutoff, id, input.authorId, input.body, input.priceCents, createdAt],
     );
-    await sql.query("commit");
     const row = rows[0];
-    if (!row || (row.state !== "nuevo" && row.state !== "enviado" && row.state !== "comprobar")) {
-      return { state: "comprobar", id };
+    const state = row?.state === "nuevo" || row?.state === "enviado" || row?.state === "comprobar" ? row.state : "comprobar";
+    const claimedId = row?.id || id;
+    if (state === "nuevo") {
+      const mediaIds = input.mediaIds
+        .filter((mediaId) => Number.isSafeInteger(mediaId) && mediaId > 0)
+        .map((mediaId) => String(mediaId));
+      if (mediaIds.length > 0) await recordOutboundMedia(sql, claimedId, input.creatorId, mediaIds);
     }
-    return { state: row.state, id: row.id };
+    await sql.query("commit");
+    return { state, id: claimedId };
   } catch (error) {
     await sql.query("rollback");
     throw error;
