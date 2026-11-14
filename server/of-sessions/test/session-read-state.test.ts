@@ -178,6 +178,52 @@ test("un 401 de fans se confirma con users/me de invitado", async () => {
   assert.equal(stored.launches, 0);
 });
 
+test("un 401 sin confirmar no repite users/me en cada lectura del panel", async () => {
+  clearSignRulesCache();
+  clearAccountPauses();
+  const dataDir = await tempDataDir();
+  let launches = 0;
+  let usersMe = 0;
+  let clock = 1_700_000_000_000;
+  const created = await createSessionRuntime({
+    config: testConfig(dataDir, { openLoginOnInvalidate: false }),
+    site: onlyFansSite,
+    browserFactory: closedBrowser(() => { launches += 1; }),
+    displayEnv: testDisplay,
+    now: () => new Date(clock),
+    fetch: (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("dynamic-rules")) return Response.json(RULES);
+      if (url.includes("/users/me")) {
+        usersMe += 1;
+        return Response.json({ isAuth: true, id: 42, username: "creadora" });
+      }
+      if (url.includes("subscriptions/subscribers")) return new Response("no", { status: 401 });
+      return new Response("no", { status: 500 });
+    }) as typeof fetch,
+  });
+  try {
+    const account = await created.store.create("Repite", "9ikis52");
+    await writeEncryptedSession(path.join(dataDir, "sessions", `${account.id}.json`), storedState(), TEST_SESSION_KEY);
+    await created.store.update(account.id, { hasStorageState: true, status: "active", connection: "live", sessionRejected: false });
+    const first = await created.sessions.readOnlineFans(account.id);
+    const second = await created.sessions.readOnlineFans(account.id);
+    assert.equal(first.reason, SESSION_EXPIRED_LABEL);
+    assert.equal(second.reason, SESSION_EXPIRED_LABEL);
+    assert.equal(usersMe, 1);
+    assert.equal((await created.sessions.getAccount(account.id)).sessionRejected, false);
+    clock += 31_000;
+    await created.sessions.readOnlineFans(account.id);
+    assert.equal(usersMe, 2);
+    assert.equal(launches, 0);
+  } finally {
+    clearSignRulesCache();
+    clearAccountPauses();
+    await created.close();
+    await removeDir(dataDir);
+  }
+});
+
 test("un 429 de fans no abre Chromium", async () => {
   const stored = await onlineCase((url) => {
     if (url.includes("subscriptions/subscribers")) return new Response("slow", { status: 429, headers: { "retry-after": "2" } });

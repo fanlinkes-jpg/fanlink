@@ -89,6 +89,7 @@ export interface SessionManagerOptions {
 }
 
 const silentLogger = { info() {}, warn() {} };
+const CONFIRM_BACKOFF_MS = 30_000;
 
 export class SessionManager {
   private readonly loginTasks = new Map<string, Promise<void>>();
@@ -100,6 +101,8 @@ export class SessionManager {
   private readonly watches = new Set<string>();
   /** Sube al empezar Reconectar y al guardarlo. Un 401 anterior no pisa el login. */
   private readonly sessionEpoch = new Map<string, number>();
+  /** Un 401 sin confirmar no vuelve a pedir users/me hasta esta marca. */
+  private readonly confirmNotBefore = new Map<string, number>();
   private closed = false;
   private started = false;
   private readonly options: SessionManagerOptions;
@@ -133,6 +136,7 @@ export class SessionManager {
    * La llama el login al empezar y otra vez al guardarse.
    */
   rotateSessionEpoch(accountId: string): number {
+    this.confirmNotBefore.delete(accountId);
     const next = this.sessionGeneration(accountId) + 1;
     this.sessionEpoch.set(accountId, next);
     return next;
@@ -713,8 +717,14 @@ export class SessionManager {
   async noteRouteRejection(accountId: string, reason: string | null, readEpoch?: number): Promise<boolean> {
     const epoch = readEpoch ?? this.sessionGeneration(accountId);
     if (this.sessionGeneration(accountId) !== epoch) return false;
+    const now = this.now().getTime();
+    if ((this.confirmNotBefore.get(accountId) ?? 0) > now) return false;
     const dead = await this.confirmSessionRejected(accountId, epoch);
-    if (!dead) return false;
+    if (!dead) {
+      this.confirmNotBefore.set(accountId, now + CONFIRM_BACKOFF_MS);
+      return false;
+    }
+    this.confirmNotBefore.delete(accountId);
     const updated = await this.recordSignedRead(accountId, 401, reason, epoch);
     return updated.sessionRejected === true;
   }
