@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AtSign, Bell, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, MessageCircle, RefreshCw, ScrollText, Send, Type } from "lucide-react";
-import { broadcastOnlineFans, cancelOnlineBroadcast, chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, markChatOpened, readChatVault, recordChatOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
+import { broadcastOnlineFans, cancelOnlineBroadcast, chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, markChatOpened, readChatVault, recordChatOutbound, resolveOnlineOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
 import { OnlineFansPanel, type OnlineBroadcastPayload } from "@/features/online-fans-panel";
 import type { OnlineFanRow } from "@/lib/online-fan-row";
 import { unreadChatRow, unreadTotalFor } from "../../server/of-sessions/sync/unread-chats.ts";
@@ -229,7 +229,7 @@ export function RealChatsPage() {
   const [priceLabel, setPriceLabel] = useState<string | null>(null);
   const [sendCreators, setSendCreators] = useState<string[]>([]);
   const jobList = useSyncExternalStore(chatSendSession.subscribe, chatSendSession.getJobs, chatSendSession.getJobs);
-  const [pendingOut, setPendingOut] = useState<Array<{ id: string; creatorId: string; threadKey: string; body: string; scheduledAt: string | null; authorName: string | null; authorId: string | null; priceCents: number | null; vault: Array<{ id: string; name: string }>; status: "pending" | "error"; errorReason: string | null }>>([]);
+  const [pendingOut, setPendingOut] = useState<Array<{ id: string; creatorId: string; threadKey: string; body: string; scheduledAt: string | null; authorName: string | null; authorId: string | null; priceCents: number | null; vault: Array<{ id: string; name: string }>; status: "pending" | "error" | "sending"; stale: boolean; errorReason: string | null }>>([]);
   const [scheduleAt, setScheduleAt] = useState("");
   const [panel, setPanel] = useState<ComposerPanel>(null);
   const [dialog, setDialog] = useState<"precio" | "programar" | null>(null);
@@ -270,6 +270,7 @@ export function RealChatsPage() {
           priceCents: item.priceCents,
           vault: item.vault ?? [],
           status: item.status,
+          stale: item.stale,
           errorReason: item.errorReason,
         }] : []
       ));
@@ -644,6 +645,15 @@ export function RealChatsPage() {
         free: item.free !== false,
       }));
     });
+  }
+
+  async function resolveStale(id: string, outcome: "sent" | "error") {
+    try {
+      await resolveOnlineOutbound({ data: { id, outcome } });
+      await refresh();
+    } catch (err) {
+      setError(sessionErrorText(err));
+    }
   }
 
   function retrySend(clientId: string) {
@@ -1200,6 +1210,12 @@ export function RealChatsPage() {
                     <p className="inline-block max-w-[70%] rounded-2xl border border-dashed border-[#c5cad6] px-3 py-2 text-sm">{item.body}</p>
                     {recovered.priceLabel ? <p className="mt-1 text-[10px] text-[#6d7585]">Precio {recovered.priceLabel}</p> : null}
                     <p className="mt-1 text-[10px] text-[#8a5a12]">{item.status === "error" ? bubbleCaption("error", item.errorReason) : pendingCaption(item)}</p>
+                    {item.status === "sending" && item.stale ? (
+                      <p className="mt-1 flex justify-end gap-2 text-[10px]">
+                        <button type="button" className="text-[#2456c7]" onClick={() => void resolveStale(item.id, "sent")}>Salió</button>
+                        <button type="button" className="text-[#2456c7]" onClick={() => void resolveStale(item.id, "error")}>No salió</button>
+                      </p>
+                    ) : null}
                     {item.status === "error" && mine ? (
                       <p className="mt-1 flex justify-end gap-2 text-[10px]">
                         <button type="button" className="text-[#2456c7]" onClick={() => retrySend(item.id)}>Reintentar</button>
@@ -1833,7 +1849,9 @@ function selectionOffsets(root: HTMLElement): { start: number; end: number } {
   return { start, end: start + range.toString().length };
 }
 
-function pendingCaption(item: { scheduledAt: string | null; authorName: string | null; status: "pending" | "error"; errorReason: string | null }): string {
+function pendingCaption(item: { scheduledAt: string | null; authorName: string | null; status: "pending" | "error" | "sending"; stale?: boolean; errorReason: string | null }): string {
+  if (item.status === "sending" && item.stale) return "Hay que resolver";
+  if (item.status === "sending") return "Enviando…";
   if (item.status === "error" && item.errorReason === "no enviado") return "no enviado";
   if (item.status === "error") return `No se envió: ${item.errorReason ?? "No se envió"}`;
   if (item.scheduledAt) return `Pendiente · programado ${item.scheduledAt.slice(0, 16).replace("T", " ")} · ${item.authorName ?? "Sin datos"} · no enviado`;

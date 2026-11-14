@@ -3,12 +3,12 @@ import type { SignRules } from "../sync/of-sign.ts";
 import { readJsonBody } from "../sync/of-sign.ts";
 import { signedHeaders } from "../sync/of-chat-api.ts";
 import { withAccountApi } from "../sync/api-list-pace.ts";
-import { chatSendGate, sendPace, sendPerMinute, type SendAccount } from "./gate.ts";
+import { chatSendGate, sendPerMinute, type SendAccount } from "./gate.ts";
 
 export const ONLINE_BROADCAST_FLAG = "FANLINK_ENABLE_ONLINE_BROADCAST";
 
 const batches = new Map<string, { controller: AbortController; creatorId: string; userId: string }>();
-const recentSends = new Map<string, number[]>();
+const lastSentAt = new Map<string, number>();
 
 export type OnlineSendStatus = "enviado" | "fallido";
 
@@ -51,7 +51,12 @@ export type OnlineBroadcastInput = {
 
 export function clearOnlineBroadcastPace(): void {
   batches.clear();
-  recentSends.clear();
+  lastSentAt.clear();
+}
+
+/** Hueco mínimo entre dos POST de la misma cuenta: 60/N segundos. */
+export function onlineSendGapMs(perMinute: number): number {
+  return Math.ceil(60_000 / perMinute);
 }
 
 export function emptyOnlineBroadcast(reason: string): OnlineBroadcastResult {
@@ -211,33 +216,10 @@ async function runOnlineBroadcast(input: OnlineBroadcastInput, key: string): Pro
         results.push({ fanKey, status: "fallido", reason: "Hay que comprobar si salió" });
         continue;
       }
-      const perMinute = sendPerMinute(input.env.FANLINK_SEND_PER_MINUTE);
-      const decision = sendPace(recentSends.get(key) ?? [], input.now(), perMinute);
-      if (decision.waitMs > 0) await input.sleep(decision.waitMs);
-      if (controller.signal.aborted) {
-        await input.finish(claimed.id, "fallido", null, "Cancelado");
-        results.push({ fanKey, status: "fallido", reason: "Cancelado" });
-        noteRest(queue.slice(index + 1), results, "Cancelado");
-        reason = "Cancelado";
-        break;
-      }
       const path = onlineMessagePath(chatId);
       let response: Response;
       try {
-        response = await withAccountApi(key, async () => {
-          const at = input.now();
-          const live = (recentSends.get(key) ?? []).filter((stamp) => at - stamp < 60_000);
-          recentSends.set(key, [...live, at]);
-          return input.fetch(`https://onlyfans.com${path}`, {
-            method: "POST",
-            headers: {
-              ...signedHeaders(input.rules, path, input.auth, at),
-              "content-type": "application/json",
-            },
-            body: JSON.stringify(onlineMessageBody({ text, mediaIds, price })),
-            signal: controller.signal,
-          });
-        });
+        response = await postWhenPaced(input, key, path, mediaIds, price, text, controller.signal);
       } catch {
         const why = controller.signal.aborted ? "Cancelado" : "No se pudo leer.";
         await input.finish(claimed.id, "fallido", null, why);
@@ -280,6 +262,44 @@ async function runOnlineBroadcast(input: OnlineBroadcastInput, key: string): Pro
     reason: reason ?? (failed ? "Hay fans que no recibieron el mensaje." : null),
     cap: ONLINE_FAN_CAP,
   };
+}
+
+async function postWhenPaced(
+  input: OnlineBroadcastInput,
+  key: string,
+  path: string,
+  mediaIds: number[],
+  price: number,
+  text: string,
+  signal: AbortSignal,
+): Promise<Response> {
+  const gap = onlineSendGapMs(sendPerMinute(input.env.FANLINK_SEND_PER_MINUTE));
+  while (true) {
+    if (signal.aborted) throw new DOMException("aborted", "AbortError");
+    const turn = await withAccountApi(key, async () => {
+      const now = input.now();
+      const last = lastSentAt.get(key);
+      const waitMs = last == null ? 0 : Math.max(0, gap - (now - last));
+      if (waitMs > 0) return { waitMs, response: null as Response | null };
+      lastSentAt.set(key, now);
+      const response = await input.fetch(`https://onlyfans.com${path}`, {
+        method: "POST",
+        headers: {
+          ...signedHeaders(input.rules, path, input.auth, now),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(onlineMessageBody({ text, mediaIds, price })),
+        signal,
+      });
+      return { waitMs: 0, response };
+    });
+    if (turn.waitMs > 0) {
+      await input.sleep(turn.waitMs);
+      continue;
+    }
+    if (!turn.response) throw new DOMException("aborted", "AbortError");
+    return turn.response;
+  }
 }
 
 function noteRest(fanKeys: readonly string[], results: OnlineSendRow[], why: string): void {

@@ -182,7 +182,8 @@ export type CreatorChatList = {
     authorId: string | null;
     priceCents: number | null;
     vault: Array<{ id: string; name: string }>;
-    status: "pending" | "error";
+    status: "pending" | "error" | "sending";
+    stale: boolean;
     errorReason: string | null;
   }>;
   notes: Array<{
@@ -422,6 +423,14 @@ export const discardChatOutbound = createServerFn({ method: "POST" })
   .handler(async ({ context, data }) => {
     const { discardChatOutboundView } = await import("./of-sessions-runtime.server");
     return discardChatOutboundView(context.userId, data);
+  });
+
+export const resolveOnlineOutbound = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { id: string; outcome: "sent" | "error" }) => input)
+  .handler(async ({ context, data }) => {
+    const { resolveOnlineOutboundView } = await import("./of-sessions-runtime.server");
+    return resolveOnlineOutboundView(context.userId, data);
   });
 
 export const reviewChatOutbound = createServerFn({ method: "POST" })

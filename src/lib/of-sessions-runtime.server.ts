@@ -46,7 +46,7 @@ import { loadSignRules } from "../../server/of-sessions/sync/of-sign.ts";
 import { prepareVaultSend } from "../../server/of-sessions/sync/vault-store.ts";
 import { withAccountApi } from "../../server/of-sessions/sync/api-list-pace.ts";
 import { canSeeOnlineFans, cancelOnlineBroadcast, emptyOnlineBroadcast, onlineBroadcastGate, refuseOnlineBroadcast, sendOnlineBroadcast, type OnlineBroadcastResult } from "../../server/of-sessions/send/online-broadcast.ts";
-import { claimOnlineOutbound, finishOnlineOutbound } from "../../server/of-sessions/send/online-claim.ts";
+import { claimOnlineOutbound, finishOnlineOutbound, resolveStaleOnlineSend } from "../../server/of-sessions/send/online-claim.ts";
 import { normalizeFanMenuRequest, runFanMenuOnPage, type FanMenuResult } from "../../server/of-sessions/sync/fan-menu.ts";
 import { chatPageUrl } from "../../server/of-sessions/sync/chats.ts";
 import { sendPace } from "../../server/of-sessions/send/gate.ts";
@@ -915,6 +915,20 @@ export async function discardChatOutboundView(userId: string, input: { clientId:
   });
 }
 
+export async function resolveOnlineOutboundView(userId: string, input: { id: string; outcome: "sent" | "error" }): Promise<{ ok: boolean }> {
+  const access = await accessFor(userId);
+  if (access.role !== "owner" && !access.perms.includes("mensajes")) {
+    throw new WorkspaceAccessError("No tienes permiso para escribir.");
+  }
+  const sql = await getSql();
+  const rows = await sql.query<{ creator_id: string }>("select creator_id from of_chat_outbound where id = $1", [input.id]);
+  const creatorId = rows[0]?.creator_id;
+  if (!creatorId || !canSeeOnlineFans(access, creatorId)) {
+    throw new WorkspaceAccessError("No tienes acceso para operar la sesión de esa creadora.");
+  }
+  return { ok: await resolveStaleOnlineSend(sql, input.id, input.outcome) };
+}
+
 export async function reviewChatOutboundView(userId: string, input: { clientId: string }): Promise<{ ok: true }> {
   const access = await accessFor(userId);
   const { reviewAwaitingView } = await import("../../server/of-sessions/send/chat-message.ts");
@@ -1118,6 +1132,7 @@ export async function broadcastOnlineFansView(
       authorId: access.userId,
       body,
       priceCents: input.priceCents,
+      mediaIds,
       nowMs: Date.now(),
     }),
     finish: (id, status, messageId, why) => finishOnlineOutbound(sql, id, status, messageId, why),

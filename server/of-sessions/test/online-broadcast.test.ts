@@ -5,6 +5,7 @@ import { clearAccountChatPace, withAccountApi } from "../sync/api-list-pace.ts";
 import { parseSignRules } from "../sync/of-sign.ts";
 import { readJsonBody } from "../sync/of-sign.ts";
 import { sendPerMinute } from "../send/gate.ts";
+import { onlineDedupeKey } from "../send/online-claim.ts";
 import {
   canSeeOnlineFans,
   cancelOnlineBroadcast,
@@ -13,6 +14,7 @@ import {
   onlineMessageBody,
   onlineMessagePath,
   onlineRecipients,
+  onlineSendGapMs,
   sendOnlineBroadcast,
   type OnlineBroadcastInput,
   type OnlineSendStatus,
@@ -125,18 +127,20 @@ test("el ritmo es el de FANLINK_SEND_PER_MINUTE y no se solapa con pullList", as
     now: () => clock,
     sleep: async (ms) => {
       waits.push(ms);
-      assert.equal(inPost, false);
-      assert.equal(posts, 2);
-      await withAccountApi("acc-pace", async () => {
-        pullBetween = true;
+      if (waits.length === 1) {
         assert.equal(inPost, false);
-      });
+        assert.equal(posts, 1);
+        await withAccountApi("acc-pace", async () => {
+          pullBetween = true;
+          assert.equal(inPost, false);
+        });
+      }
       clock += ms;
     },
   });
   assert.equal(paced.posted, 3);
   assert.equal(pullBetween, true);
-  assert.deepEqual(waits, [60_000]);
+  assert.deepEqual(waits, [30_000, 30_000]);
   clearOnlineBroadcastPace();
   clearAccountChatPace();
   let release: () => void = () => undefined;
@@ -268,7 +272,33 @@ test("101 destinatarios se quedan en el tope y el cuerpo es el del bundle", asyn
   assert.deepEqual(body, onlineMessageBody({ text: "hola", mediaIds: [44], price: 9.6 }));
 });
 
+test("dos lotes a la vez respetan el hueco de 60/N", async () => {
+  clearOnlineBroadcastPace();
+  clearAccountApiLock();
+  let clock = 0;
+  const stamps: number[] = [];
+  const env = { ...openEnv(), FANLINK_SEND_PER_MINUTE: "4" };
+  const fetchImpl: typeof fetch = async () => {
+    stamps.push(clock);
+    return Response.json({ id: stamps.length });
+  };
+  const pace = {
+    now: () => clock,
+    sleep: async (ms: number) => {
+      clock += ms;
+    },
+  };
+  await Promise.all([
+    sendOnlineBroadcast({ ...input(fetchImpl, env, account, undefined, "acc-gap"), requested: ["1"], online: [{ fanKey: "1" }], ...pace }),
+    sendOnlineBroadcast({ ...input(fetchImpl, env, account, undefined, "acc-gap"), batchId: "lote-b", requested: ["2"], online: [{ fanKey: "2" }], ...pace }),
+  ]);
+  stamps.sort((left, right) => left - right);
+  assert.equal(stamps.length, 2);
+  assert.ok((stamps[1] ?? 0) - (stamps[0] ?? 0) >= onlineSendGapMs(4));
+});
+
 test("el ritmo por defecto es 4 y el tope es 30", () => {
+  assert.notEqual(onlineDedupeKey({ text: "hola", priceCents: null, mediaIds: [] }), onlineDedupeKey({ text: "hola", priceCents: 500, mediaIds: [3] }));
   assert.equal(sendPerMinute(undefined), 4);
   assert.equal(sendPerMinute(""), 4);
   assert.equal(sendPerMinute("30"), 30);
@@ -336,6 +366,7 @@ function input(
     remove_headers: ["user-id"],
   });
   if (!rules) throw new Error("reglas");
+  let clock = 1_700_000_000_000;
   return {
     env,
     account: { ...target, accountId },
@@ -350,8 +381,10 @@ function input(
     priceCents: null,
     vaultReason: null,
     fetch: fetchImpl,
-    now: () => 1_700_000_000_000,
-    sleep: async () => undefined,
+    now: () => clock,
+    sleep: async (ms) => {
+      clock += ms;
+    },
     claim: hooks?.claim ?? (async (fanKey) => ({ state: "nuevo" as const, id: fanKey })),
     finish: async (id, status) => {
       await hooks?.finish?.(id, status);

@@ -1,4 +1,5 @@
 import { normalizeOutboundText, outboundTextDelta, OUTBOUND_TIE_MS, type OutboundDraft } from "./author-match.ts";
+import { noteStaleOnlineSends, ONLINE_STALE_REASON } from "../send/online-claim.ts";
 import { newFanEvents, collapseFans, type ChatMessage, type ChatThread, type ChatUser, type FanMessageEvent } from "./chats.ts";
 import { decodeMedia, encodeMedia, oldestCursor } from "./history.ts";
 import type { ReadSql } from "./store.ts";
@@ -837,11 +838,13 @@ export async function listPendingOutbounds(
   authorId: string | null;
   priceCents: number | null;
   vault: Array<{ id: string; name: string }>;
-  status: "pending" | "error";
+  status: "pending" | "error" | "sending";
+  stale: boolean;
   errorReason: string | null;
 }>> {
   if (!creatorIds.length) return [];
   await expireStuckPending(sql);
+  await noteStaleOnlineSends(sql, Date.now());
   const filter = creatorIds.map((_, index) => `$${index + 1}`).join(", ");
   const rows = await sql.query<{
     id: string;
@@ -875,7 +878,8 @@ export async function listPendingOutbounds(
     authorId: row.author_id,
     priceCents: centsOrNull(row.price_cents),
     vault: vault.get(row.id) ?? [],
-    status: row.status === "error" ? "error" : "pending",
+    status: row.status === "error" ? "error" : row.status === "sending" ? "sending" : "pending",
+    stale: row.status === "sending" && row.error_reason === ONLINE_STALE_REASON,
     errorReason: row.error_reason,
   }));
 }
