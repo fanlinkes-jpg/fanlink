@@ -1,13 +1,21 @@
 import type { Page } from "playwright";
+import { ONLINE_FAN_CAP } from "../../../src/lib/online-fan-row.ts";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
 import { sessionForApi, signedHeaders } from "./of-chat-api.ts";
-import { loadSignRules, type SignRules } from "./of-sign.ts";
+import { loadSignRules, readJsonBody, type SignRules } from "./of-sign.ts";
 
 export type OnlineFan = {
   fanKey: string;
   fanName: string | null;
   fanHandle: string | null;
   avatarUrl: string | null;
+  /** Céntimos del total que manda la API. Null si el campo no viene: no se inventa. */
+  spentCents: number | null;
+  /** Código de OF si no es USD. Null: se pinta $. */
+  currency: string | null;
+  /** True solo si la fila trae isOnline u online en verdadero. */
+  online: boolean;
+  lists: string[];
 };
 
 export type OnlineRead = {
@@ -34,7 +42,9 @@ export function onlineFansFromPayload(payload: unknown, onlyMarked = true): Onli
   for (const item of rows) {
     if (!item || typeof item !== "object" || Array.isArray(item)) continue;
     const row = item as Record<string, unknown>;
-    if (onlyMarked && onlineFlag(row.isOnline ?? row.online) !== true) continue;
+    const marked = onlineFlag(row.isOnline ?? row.online);
+    if (marked === false) continue;
+    if (onlyMarked && marked !== true) continue;
     const fanKey = text(row.id);
     if (!fanKey || seen.has(fanKey)) continue;
     seen.add(fanKey);
@@ -42,10 +52,14 @@ export function onlineFansFromPayload(payload: unknown, onlyMarked = true): Onli
       fanKey,
       fanName: text(row.name ?? row.displayName),
       fanHandle: text(row.username ?? row.handle),
-      avatarUrl: text(row.avatar),
+      avatarUrl: avatarOf(row),
+      spentCents: spentCents(row),
+      currency: currencyOf(row),
+      online: marked === true,
+      lists: listsOf(row),
     });
   }
-  return out.slice(0, 100);
+  return out.slice(0, ONLINE_FAN_CAP);
 }
 
 export function subscribersResponse(url: string): "online" | "all" | null {
@@ -99,9 +113,10 @@ export async function fetchSignedOnlineFans(
   }
   if (!response.ok) return { fans: [], reason: "No se pudo leer.", status: response.status };
   try {
-    return onlineReadFromPayload(response.status, await response.json());
-  } catch {
-    return { fans: [], reason: "No se pudo leer.", status: response.status };
+    return onlineReadFromPayload(response.status, await readJsonBody(response));
+  } catch (error) {
+    const timedOut = error instanceof Error && error.name === "TimeoutError";
+    return { fans: [], reason: "No se pudo leer.", status: response.status, ...(timedOut ? { fallback: false } : {}) };
   }
 }
 
@@ -127,7 +142,7 @@ export async function readOnlineSubscribers(page: Page, signal?: AbortSignal, ur
       const rows = listOf(payload);
       if (!rows) return;
       sawOnline = true;
-      filtered.push(...onlineFansFromPayload({ list: rows }, true));
+      filtered.push(...onlineFansFromPayload({ list: rows }, false));
     }).catch(() => undefined));
   };
   page.on("response", onResponse);
@@ -193,6 +208,58 @@ function onlineFlag(value: unknown): boolean | null {
   return null;
 }
 
+function currencyOf(row: Record<string, unknown>): string | null {
+  const nested = asRecord(row.subscribedOnData) ?? asRecord(row.subscribedByData);
+  const raw = text(row.currency ?? nested?.currency);
+  if (!raw) return null;
+  const code = raw.toUpperCase();
+  if (code === "USD" || code === "$") return null;
+  return /^[A-Z]{3}$/.test(code) ? code : null;
+}
+
+function spentCents(row: Record<string, unknown>): number | null {
+  const nested = asRecord(row.subscribedOnData) ?? asRecord(row.subscribedByData);
+  return money(row.totalSumm ?? row.spent ?? row.totalSpent ?? nested?.totalSumm ?? nested?.spent ?? nested?.totalSpent);
+}
+
+function money(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) return Math.round(value * 100);
+  if (typeof value === "string" && /^\d+(\.\d{1,2})?$/.test(value.trim())) return Math.round(Number(value.trim()) * 100);
+  return null;
+}
+
+function listsOf(row: Record<string, unknown>): string[] {
+  const source = Array.isArray(row.listsStates) ? row.listsStates : Array.isArray(row.lists) ? row.lists : [];
+  const names: string[] = [];
+  for (const item of source) {
+    const record = asRecord(item);
+    if (!record || record.hasUser === false) continue;
+    const name = text(record.name);
+    if (!name || names.includes(name)) continue;
+    names.push(name);
+  }
+  return names.slice(0, 12);
+}
+
+function avatarOf(row: Record<string, unknown>): string | null {
+  const direct = httpsUrl(row.avatar);
+  if (direct) return direct;
+  const thumbs = asRecord(row.avatarThumbs);
+  return thumbs ? (httpsUrl(thumbs.c144) ?? httpsUrl(thumbs.c50)) : null;
+}
+
+function httpsUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const clean = value.trim();
+  if (!/^https:\/\//i.test(clean) || clean.length > 400) return null;
+  return clean;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
 function text(value: unknown): string | null {
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
   if (typeof value !== "string") return null;
@@ -203,7 +270,7 @@ function text(value: unknown): string | null {
 function dedupe(rows: OnlineFan[]): OnlineFan[] {
   const map = new Map<string, OnlineFan>();
   for (const row of rows) map.set(row.fanKey, row);
-  return [...map.values()].slice(0, 100);
+  return [...map.values()].slice(0, ONLINE_FAN_CAP);
 }
 
 function wait(pending: Array<Promise<void>>, ms: number, signal?: AbortSignal): Promise<void> {

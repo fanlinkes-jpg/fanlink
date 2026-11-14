@@ -15,6 +15,7 @@ const RULES_TTL_MS = 30 * 60_000;
 export const RULES_TIMEOUT_MS = 5_000;
 /** Si la descarga falla y hay regla guardada, no se reintenta antes de esto. */
 export const RULES_RETRY_MS = 5 * 60_000;
+export const JSON_BODY_TIMEOUT_MS = 5_000;
 
 let cached: { rules: SignRules; at: number } | null = null;
 let failedAt: number | null = null;
@@ -73,7 +74,7 @@ async function downloadSignRules(fetchImpl: typeof fetch, now: number): Promise<
   try {
     const response = await fetchImpl(RULES_URL, { signal: controller.signal });
     if (!response.ok) throw new Error("no hay reglas de firma");
-    const rules = parseSignRules(await response.json());
+    const rules = parseSignRules(await readJsonBody(response));
     if (!rules) throw new Error("reglas de firma ilegibles");
     failedAt = null;
     cached = { rules, at: now };
@@ -86,6 +87,38 @@ async function downloadSignRules(fetchImpl: typeof fetch, now: number): Promise<
     throw error instanceof Error ? error : new Error("no hay reglas de firma");
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/** El cuerpo JSON no hereda el abort del fetch. Al cumplirse el tope se cancela la lectura. */
+export async function readJsonBody(
+  response: { json(): Promise<unknown>; body?: { cancel(): Promise<void> } | null },
+  ms = JSON_BODY_TIMEOUT_MS,
+): Promise<unknown> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let settled = false;
+  const job = response.json().then(
+    (value) => value,
+    (error: unknown) => {
+      if (settled) return undefined;
+      throw error;
+    },
+  );
+  try {
+    return await Promise.race([
+      job,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          void response.body?.cancel().catch(() => undefined);
+          const error = new Error("json");
+          error.name = "TimeoutError";
+          reject(error);
+        }, ms);
+      }),
+    ]);
+  } finally {
+    settled = true;
+    if (timer) clearTimeout(timer);
   }
 }
 

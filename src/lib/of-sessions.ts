@@ -182,8 +182,10 @@ export type CreatorChatList = {
     authorId: string | null;
     priceCents: number | null;
     vault: Array<{ id: string; name: string }>;
-    status: "pending" | "error";
+    status: "pending" | "error" | "sending";
+    stale: boolean;
     errorReason: string | null;
+    dedupeKey: string | null;
   }>;
   notes: Array<{
     creatorId: string;
@@ -354,6 +356,27 @@ export const listOnlineFans = createServerFn({ method: "POST" })
     return listOnlineFansView(context.userId, data);
   });
 
+export const broadcastOnlineFans = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string; fanKeys: string[]; text: string; priceCents: number | null; vaultItemIds?: string[]; batchId: string }) => {
+    if (!Array.isArray(input.fanKeys) || typeof input.batchId !== "string" || typeof input.text !== "string") {
+      throw new Error("Sin datos");
+    }
+    return input;
+  })
+  .handler(async ({ context, data }) => {
+    const { broadcastOnlineFansView } = await import("./of-sessions-runtime.server");
+    return broadcastOnlineFansView(context.userId, data);
+  });
+
+export const cancelOnlineBroadcast = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string; batchId: string }) => input)
+  .handler(async ({ context, data }) => {
+    const { cancelOnlineBroadcastView } = await import("./of-sessions-runtime.server");
+    return cancelOnlineBroadcastView(context.userId, data);
+  });
+
 export const runFanChatMenu = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((input: { creatorId: string; fanKey: string; request: unknown }) => input)
@@ -401,6 +424,14 @@ export const discardChatOutbound = createServerFn({ method: "POST" })
   .handler(async ({ context, data }) => {
     const { discardChatOutboundView } = await import("./of-sessions-runtime.server");
     return discardChatOutboundView(context.userId, data);
+  });
+
+export const resolveOnlineOutbound = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { id: string; outcome: "sent" | "error" }) => input)
+  .handler(async ({ context, data }) => {
+    const { resolveOnlineOutboundView } = await import("./of-sessions-runtime.server");
+    return resolveOnlineOutboundView(context.userId, data);
   });
 
 export const reviewChatOutbound = createServerFn({ method: "POST" })

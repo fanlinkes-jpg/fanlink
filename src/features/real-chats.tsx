@@ -1,7 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { AtSign, Bell, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, RefreshCw, ScrollText, Send, Type } from "lucide-react";
-import { chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, markChatOpened, readChatVault, recordChatOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
+import { AtSign, Bell, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, MessageCircle, RefreshCw, ScrollText, Send, Type } from "lucide-react";
+import { broadcastOnlineFans, cancelOnlineBroadcast, chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, markChatOpened, readChatVault, recordChatOutbound, resolveOnlineOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
+import { OnlineFansPanel, type OnlineBroadcastPayload } from "@/features/online-fans-panel";
+import type { OnlineFanRow } from "@/lib/online-fan-row";
 import { unreadChatRow, unreadTotalFor } from "../../server/of-sessions/sync/unread-chats.ts";
 import { inboxPillCounts, matchesInboxPill, tipThreads, type InboxPill } from "../../server/of-sessions/sync/chat-pills.ts";
 import { listCreatorNotifications, markCreatorNotificationsRead, type NotificationListItem } from "@/lib/of-notifications";
@@ -196,8 +198,11 @@ export function RealChatsPage() {
   const [filter, setFilter] = useState<InboxPill>("todos");
   const [onlineOpen, setOnlineOpen] = useState(false);
   const [onlineBusy, setOnlineBusy] = useState(false);
-  const [onlineFans, setOnlineFans] = useState<Array<{ fanKey: string; fanName: string | null; fanHandle: string | null }>>([]);
+  const [onlineFans, setOnlineFans] = useState<OnlineFanRow[]>([]);
   const [onlineNote, setOnlineNote] = useState<string | null>(null);
+  const [onlineCount, setOnlineCount] = useState<number | null>(null);
+  const [onlineSend, setOnlineSend] = useState<{ enabled: boolean; reason: string | null }>({ enabled: false, reason: "Envío a todos desactivado" });
+  const [onlineCap, setOnlineCap] = useState(100);
   const [insightsOpen, setInsightsOpen] = useState(false);
   const [tagHandle, setTagHandle] = useState<string | null>(null);
   const [menu, setMenu] = useState(false);
@@ -224,7 +229,7 @@ export function RealChatsPage() {
   const [priceLabel, setPriceLabel] = useState<string | null>(null);
   const [sendCreators, setSendCreators] = useState<string[]>([]);
   const jobList = useSyncExternalStore(chatSendSession.subscribe, chatSendSession.getJobs, chatSendSession.getJobs);
-  const [pendingOut, setPendingOut] = useState<Array<{ id: string; creatorId: string; threadKey: string; body: string; scheduledAt: string | null; authorName: string | null; authorId: string | null; priceCents: number | null; vault: Array<{ id: string; name: string }>; status: "pending" | "error"; errorReason: string | null }>>([]);
+  const [pendingOut, setPendingOut] = useState<Array<{ id: string; creatorId: string; threadKey: string; body: string; scheduledAt: string | null; authorName: string | null; authorId: string | null; priceCents: number | null; vault: Array<{ id: string; name: string }>; status: "pending" | "error" | "sending"; stale: boolean; errorReason: string | null; dedupeKey: string | null }>>([]);
   const [scheduleAt, setScheduleAt] = useState("");
   const [panel, setPanel] = useState<ComposerPanel>(null);
   const [dialog, setDialog] = useState<"precio" | "programar" | null>(null);
@@ -265,7 +270,9 @@ export function RealChatsPage() {
           priceCents: item.priceCents,
           vault: item.vault ?? [],
           status: item.status,
+          stale: item.stale,
           errorReason: item.errorReason,
+          dedupeKey: item.dedupeKey,
         }] : []
       ));
       pendingRef.current = nextPending;
@@ -356,14 +363,13 @@ export function RealChatsPage() {
     setNotesOpen(false);
   }
 
-  async function toggleOnline() {
-    const next = !onlineOpen;
-    setOnlineOpen(next);
-    if (!next) return;
+  async function loadOnlineFans() {
     const creator = creatorId === "all" ? selected?.creatorId ?? null : creatorId;
     if (!creator) {
       setOnlineFans([]);
+      setOnlineCount(null);
       setOnlineNote("Elige una cuenta");
+      setOnlineSend({ enabled: false, reason: "Elige una cuenta" });
       return;
     }
     setOnlineBusy(true);
@@ -376,15 +382,50 @@ export function RealChatsPage() {
           timer = setTimeout(() => resolve({ fans: [], reason: "No se pudo leer." }), 25_000);
         }),
       ]);
-      setOnlineFans(result.fans);
-      setOnlineNote(result.fans.length === 0 ? result.reason ?? "Nadie en línea" : null);
+      const rows = result.fans.map((fan) => ({
+        fanKey: fan.fanKey,
+        fanName: fan.fanName,
+        fanHandle: fan.fanHandle,
+        avatarUrl: "avatarUrl" in fan ? fan.avatarUrl : null,
+        spentCents: "spentCents" in fan ? fan.spentCents : null,
+        currency: "currency" in fan ? fan.currency : null,
+        online: "online" in fan ? fan.online : false,
+        lists: "lists" in fan ? fan.lists : [],
+      }));
+      setOnlineFans(rows);
+      const failed = rows.length === 0 && result.reason != null && result.reason !== "Nadie en línea";
+      setOnlineCount(failed ? null : rows.length);
+      setOnlineNote(rows.length === 0 ? result.reason ?? "Nadie en línea" : null);
+      setOnlineSend("send" in result && result.send ? result.send : { enabled: false, reason: "Envío a todos desactivado" });
+      if ("cap" in result && typeof result.cap === "number") setOnlineCap(result.cap);
     } catch (err) {
       setOnlineFans([]);
+      setOnlineCount(null);
       setOnlineNote(sessionErrorText(err));
+      setOnlineSend({ enabled: false, reason: "Envío a todos desactivado" });
     } finally {
       if (timer) clearTimeout(timer);
       setOnlineBusy(false);
     }
+  }
+
+  async function toggleOnline() {
+    const next = !onlineOpen;
+    setOnlineOpen(next);
+    if (!next) return;
+    await loadOnlineFans();
+  }
+
+  async function sendAllOnline(payload: OnlineBroadcastPayload) {
+    const creator = creatorId === "all" ? selected?.creatorId ?? null : creatorId;
+    if (!creator) return { posted: 0, results: [], stopped: false, retryAfter: null, reason: "Elige una cuenta", cap: onlineCap };
+    return broadcastOnlineFans({ data: { creatorId: creator, ...payload } });
+  }
+
+  async function cancelAllOnline(batchId: string) {
+    const creator = creatorId === "all" ? selected?.creatorId ?? null : creatorId;
+    if (!creator) return;
+    await cancelOnlineBroadcast({ data: { creatorId: creator, batchId } });
   }
 
   function openOnlineFan(fanKey: string) {
@@ -607,6 +648,15 @@ export function RealChatsPage() {
     });
   }
 
+  async function resolveStale(id: string, outcome: "sent" | "error") {
+    try {
+      await resolveOnlineOutbound({ data: { id, outcome } });
+      await refresh();
+    } catch (err) {
+      setError(sessionErrorText(err));
+    }
+  }
+
   function retrySend(clientId: string) {
     const local = chatSendSession.getJobs().find((job) => job.clientId === clientId);
     if (local) {
@@ -614,7 +664,7 @@ export function RealChatsPage() {
       return;
     }
     const item = pendingRef.current.find((row) => row.id === clientId && row.status === "error" && row.authorId === user?.id);
-    if (!item) return;
+    if (!item || item.dedupeKey) return;
     const recovered = draftFromPending(item);
     const job: OutboundSend = {
       clientId: item.id,
@@ -871,22 +921,20 @@ export function RealChatsPage() {
           <h1 className="truncate text-sm font-semibold uppercase tracking-wide">{creatorName}</h1>
           <div className="flex gap-2">
             <div className="relative">
-              <button type="button" onClick={() => void toggleOnline()} className={`rounded-lg px-3 py-1.5 text-xs font-medium ${onlineOpen ? "bg-[#3b6cff] text-white" : "bg-[#eef2ff] text-[#2456c7]"}`}>Fans en línea</button>
+              <button type="button" onClick={() => void toggleOnline()} className={`rounded-lg px-3 py-1.5 text-xs font-medium ${onlineOpen ? "bg-[#3b6cff] text-white" : "bg-[#eef2ff] text-[#2456c7]"}`}>Fans en línea{onlineCount == null ? "" : ` ${onlineCount}`}</button>
               {onlineOpen ? (
-                <div className="absolute left-0 top-full z-30 mt-1 max-h-72 w-64 overflow-y-auto rounded-xl border border-[#e6e8ee] bg-white py-1 shadow-lg">
-                  <p className="px-3 pt-2 text-[11px] uppercase tracking-wide text-[#6d7585]">Colecciones · Todo · En línea</p>
-                  {onlineBusy ? <p className="px-3 py-3 text-xs text-[#6d7585]">Leyendo Colecciones, pestaña Todo, filtro En línea…</p> : null}
-                  {!onlineBusy && onlineNote ? <p className="px-3 py-3 text-xs text-[#6d7585]">{onlineNote}</p> : null}
-                  {onlineFans.map((fan) => (
-                    <button key={fan.fanKey} type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-[#f4f7ff]" onClick={() => openOnlineFan(fan.fanKey)}>
-                      <span className="h-2 w-2 shrink-0 rounded-full bg-[#1f9d55]" />
-                      <span className="min-w-0">
-                        <span className="block truncate text-sm font-medium">{fan.fanName ?? fan.fanHandle ?? "Sin datos"}</span>
-                        <span className="block truncate text-[11px] text-[#6d7585]">{fan.fanHandle ? `@${fan.fanHandle.replace(/^@/, "")}` : "Sin usuario"}</span>
-                      </span>
-                    </button>
-                  ))}
-                </div>
+                <OnlineFansPanel
+                  busy={onlineBusy}
+                  note={onlineNote}
+                  fans={onlineFans}
+                  sendEnabled={onlineSend.enabled}
+                  sendReason={onlineSend.reason}
+                  onRefresh={() => void loadOnlineFans()}
+                  onOpenChat={openOnlineFan}
+                  cap={onlineCap}
+                  onSend={sendAllOnline}
+                  onCancel={(batchId) => void cancelAllOnline(batchId)}
+                />
               ) : null}
             </div>
             <button
@@ -1163,11 +1211,17 @@ export function RealChatsPage() {
                     <p className="inline-block max-w-[70%] rounded-2xl border border-dashed border-[#c5cad6] px-3 py-2 text-sm">{item.body}</p>
                     {recovered.priceLabel ? <p className="mt-1 text-[10px] text-[#6d7585]">Precio {recovered.priceLabel}</p> : null}
                     <p className="mt-1 text-[10px] text-[#8a5a12]">{item.status === "error" ? bubbleCaption("error", item.errorReason) : pendingCaption(item)}</p>
+                    {item.status === "sending" && item.stale ? (
+                      <p className="mt-1 flex justify-end gap-2 text-[10px]">
+                        <button type="button" className="text-[#2456c7]" onClick={() => void resolveStale(item.id, "sent")}>Salió</button>
+                        <button type="button" className="text-[#2456c7]" onClick={() => void resolveStale(item.id, "error")}>No salió</button>
+                      </p>
+                    ) : null}
                     {item.status === "error" && mine ? (
                       <p className="mt-1 flex justify-end gap-2 text-[10px]">
-                        <button type="button" className="text-[#2456c7]" onClick={() => retrySend(item.id)}>Reintentar</button>
+                        {item.dedupeKey ? null : <button type="button" className="text-[#2456c7]" onClick={() => retrySend(item.id)}>Reintentar</button>}
                         <button type="button" className="text-[#2456c7]" onClick={() => void discardSend(item.id)}>Descartar</button>
-                        <button type="button" className="text-[#2456c7]" onClick={() => restoreDraft(recovered)}>Recuperar</button>
+                        {item.dedupeKey ? null : <button type="button" className="text-[#2456c7]" onClick={() => restoreDraft(recovered)}>Recuperar</button>}
                       </p>
                     ) : null}
                     {item.errorReason === "Pendiente de confirmar" && teamAccess?.role === "owner" ? (
@@ -1796,7 +1850,9 @@ function selectionOffsets(root: HTMLElement): { start: number; end: number } {
   return { start, end: start + range.toString().length };
 }
 
-function pendingCaption(item: { scheduledAt: string | null; authorName: string | null; status: "pending" | "error"; errorReason: string | null }): string {
+function pendingCaption(item: { scheduledAt: string | null; authorName: string | null; status: "pending" | "error" | "sending"; stale?: boolean; errorReason: string | null }): string {
+  if (item.status === "sending" && item.stale) return "Hay que resolver";
+  if (item.status === "sending") return "Enviando…";
   if (item.status === "error" && item.errorReason === "no enviado") return "no enviado";
   if (item.status === "error") return `No se envió: ${item.errorReason ?? "No se envió"}`;
   if (item.scheduledAt) return `Pendiente · programado ${item.scheduledAt.slice(0, 16).replace("T", " ")} · ${item.authorName ?? "Sin datos"} · no enviado`;

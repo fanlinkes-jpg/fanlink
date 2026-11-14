@@ -38,6 +38,8 @@ export interface Sql {
     text: string,
     params?: unknown[],
   ): Promise<T[]>;
+  /** Una conexión para varias sentencias. En el pool reserva un cliente; en PGLite es la misma. */
+  isolate<T>(fn: (sql: Sql) => Promise<T>): Promise<T>;
 }
 
 /**
@@ -73,7 +75,7 @@ const identity = (v: string) => v;
 type Run = <T>(text: string, params: unknown[]) => Promise<T[]>;
 
 /** Wrap a query runner in the tagged-template + `.query()` `Sql` surface. */
-function toSql(run: Run): Sql {
+function toSql(run: Run, pin?: <T>(fn: (sql: Sql) => Promise<T>) => Promise<T>): Sql {
   const sql = (async <T = Record<string, unknown>>(
     strings: TemplateStringsArray,
     ...values: unknown[]
@@ -85,6 +87,7 @@ function toSql(run: Run): Sql {
   }) as unknown as Sql;
   sql.query = <T = Record<string, unknown>>(text: string, params: unknown[] = []) =>
     run<T>(text, params);
+  sql.isolate = pin ?? (<T>(fn: (sql: Sql) => Promise<T>) => fn(sql));
   return sql;
 }
 
@@ -100,6 +103,17 @@ function createNeonSql(): Promise<Sql> {
     return toSql(async <T>(text: string, params: unknown[]) => {
       const res = await pool.query(text, params);
       return res.rows as T[];
+    }, async <T>(fn: (sql: Sql) => Promise<T>) => {
+      const client = await pool.connect();
+      try {
+        const pinned = toSql(async <R>(text: string, params: unknown[]) => {
+          const res = await client.query(text, params);
+          return res.rows as R[];
+        });
+        return await fn(pinned);
+      } finally {
+        client.release();
+      }
     });
   })().catch((err) => {
     globalRef.__pgSqlPromise__ = undefined;

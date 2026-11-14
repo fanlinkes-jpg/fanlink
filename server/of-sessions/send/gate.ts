@@ -96,13 +96,16 @@ export function createSendLimiter() {
     run<T>(
       accountId: string,
       job: () => Promise<T>,
-      pace: { perMinute: number; now: () => number; sleep: (ms: number) => Promise<void> },
+      pace: { perMinute: number; now: () => number; sleep: (ms: number) => Promise<void>; minGapMs?: number },
     ): Promise<T> {
       const previous = tails.get(accountId) ?? Promise.resolve();
       const next = previous.then(async () => {
         const now = pace.now();
         const decision = sendPace(recent.get(accountId) ?? [], now, pace.perMinute);
-        if (decision.waitMs > 0) await pace.sleep(decision.waitMs);
+        const last = decision.recent.at(-1);
+        const gapWait = pace.minGapMs != null && last != null ? Math.max(0, pace.minGapMs - (now - last)) : 0;
+        const waitMs = Math.max(decision.waitMs, gapWait);
+        if (waitMs > 0) await pace.sleep(waitMs);
         const at = pace.now();
         recent.set(accountId, [...decision.recent, at].filter((stamp) => at - stamp < 60_000));
         return job();
@@ -112,6 +115,9 @@ export function createSendLimiter() {
     },
   };
 }
+
+/** El chat suelto y el lote de fans en línea gastan el mismo cupo por minuto. */
+export const sharedSendLimiter = createSendLimiter();
 
 function normalizeToken(value: string): string {
   return value.trim().replace(/^@+/, "").toLowerCase();

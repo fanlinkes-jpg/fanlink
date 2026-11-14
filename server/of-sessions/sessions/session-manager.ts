@@ -502,11 +502,11 @@ export class SessionManager {
   /**
    * Fans en línea. No espera a Conectar ni abre la página de la escucha.
    * A los 25 s aborta la página nueva, suelta el perfil y devuelve un motivo.
-   * `budgetMs` y `read` son para la prueba: en la app el tope es 25 s.
+   * `budgetMs`, `read` y `fetch` son para la prueba: en la app el tope es 25 s.
    */
   async readOnlineFans(
     accountId: string,
-    options?: { budgetMs?: number; read?: (page: Page, signal: AbortSignal) => Promise<OnlineRead> },
+    options?: { budgetMs?: number; read?: (page: Page, signal: AbortSignal) => Promise<OnlineRead>; fetch?: typeof fetch },
   ): Promise<OnlineRead> {
     assertAccountId(accountId);
     if (this.loginTasks.has(accountId)) {
@@ -518,7 +518,7 @@ export class SessionManager {
     if (this.options.site.id === "onlyfans" && !options?.read) {
       try {
         const signed = await fetchSignedOnlineFans(await this.readStorageState(accountId), {
-          fetch,
+          fetch: options?.fetch ?? fetch,
           now: () => this.now().getTime(),
         });
         if (signed.fallback === false || signed.reason !== "No se pudo leer.") return signed;

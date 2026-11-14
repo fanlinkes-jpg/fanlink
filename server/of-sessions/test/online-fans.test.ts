@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import { test } from "node:test";
 import type { Page } from "playwright";
+import { writeEncryptedSession } from "../crypto.ts";
+import { createSessionRuntime } from "../runtime.ts";
+import { onlyFansSite } from "../sessions/onlyfans.ts";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
 import { clearSignRulesCache, parseSignRules, RULES_TIMEOUT_MS } from "../sync/of-sign.ts";
+import { TEST_SESSION_KEY, removeDir, tempDataDir, testConfig, testDisplay } from "./helpers.ts";
 import {
   ONLINE_COLLECTION_URLS,
   ONLINE_SUBSCRIBERS_PATH,
@@ -23,8 +28,24 @@ test("el filtro en línea se reconoce y solo entran los que están conectados", 
       { id: 2, name: "Otro", username: "otro", isOnline: false },
     ],
   });
-  assert.deepEqual(rows, [{ fanKey: "1", fanName: "Arias Crazy", fanHandle: "arias_crazy1", avatarUrl: "https://cdn.example/a.jpg" }]);
-  assert.equal(onlineFansFromPayload({ list: [{ id: 9, username: "duchamp", isOnline: false }] }, false).length, 1);
+  assert.deepEqual(rows, [{ fanKey: "1", fanName: "Arias Crazy", fanHandle: "arias_crazy1", avatarUrl: "https://cdn.example/a.jpg", spentCents: null, currency: null, online: true, lists: [] }]);
+  const rich = onlineFansFromPayload({
+    list: [{
+      id: 5,
+      name: "Didi",
+      username: "didi",
+      isOnline: true,
+      totalSumm: 9.6,
+      avatarThumbs: { c50: "https://cdn.example/d.jpg" },
+      listsStates: [{ name: "VIP", hasUser: true }, { name: "Muted", hasUser: false }],
+    }, { id: 6, username: "sin", isOnline: true }],
+  });
+  assert.equal(rich[0]?.spentCents, 960);
+  assert.equal(rich[0]?.avatarUrl, "https://cdn.example/d.jpg");
+  assert.deepEqual(rich[0]?.lists, ["VIP"]);
+  assert.equal(rich[1]?.spentCents, null);
+  assert.equal(onlineFansFromPayload({ list: [{ id: 9, username: "duchamp", isOnline: false }] }, false).length, 0);
+  assert.equal(onlineFansFromPayload({ list: [{ id: 10, username: "sinmarca", currency: "EUR", totalSumm: 4.8 }] }, false)[0]?.currency, "EUR");
   const nested = onlineReadFromPayload(200, {
     data: {
       list: [
@@ -34,7 +55,7 @@ test("el filtro en línea se reconoce y solo entran los que están conectados", 
     },
   });
   assert.equal(nested.reason, null);
-  assert.deepEqual(nested.fans.map((fan) => fan.fanHandle), ["duchampprivate", "brendaoff"]);
+  assert.deepEqual(nested.fans.map((fan) => fan.fanHandle), ["duchampprivate"]);
   assert.equal(onlineReadFromPayload(200, { data: { list: [] } }).reason, "Nadie en línea");
   assert.equal(onlineReadFromPayload(200, { ok: true }).reason, "No se pudo leer.");
   assert.equal(onlineReadFromPayload(401, { list: [] }).reason, "OnlyFans ha rechazado la firma");
@@ -64,6 +85,7 @@ test("api2 firmada cuenta la lista filtrada, el 401 es la firma y el 200 vacío 
           list: [
             { id: 7, username: "duchampprivate", isOnline: true },
             { id: 8, username: "brendababypremium", isOnline: false },
+            { id: 9, username: "sinmarca" },
           ],
         },
       });
@@ -71,7 +93,7 @@ test("api2 firmada cuenta la lista filtrada, el 401 es la firma y el 200 vacío 
   });
   assert.equal(two.status, 200);
   assert.equal(two.reason, null);
-  assert.deepEqual(two.fans.map((fan) => fan.fanHandle), ["duchampprivate", "brendababypremium"]);
+  assert.deepEqual(two.fans.map((fan) => fan.fanHandle), ["duchampprivate", "sinmarca"]);
 
   const denied = await fetchSignedOnlineFans(state, {
     now: () => 1,
@@ -139,6 +161,73 @@ test("si las reglas de firma cuelgan, el error sale en 5 s y no pide Chromium", 
   clearSignRulesCache();
 });
 
+test("un json colgado no se salta el tope ni abre el respaldo", { timeout: 20_000 }, async () => {
+  const started = Date.now();
+  const rules = parseSignRules({
+    static_param: "param",
+    format: "1:{}:{:x}:2",
+    checksum_indexes: [0, 1],
+    checksum_constant: 10,
+    app_token: "token",
+  });
+  assert.ok(rules);
+  const read = await fetchSignedOnlineFans(sessionState(), {
+    now: () => started,
+    rules,
+    fetch: async () => ({
+      ok: true,
+      status: 200,
+      json: () => new Promise<unknown>(() => undefined),
+    }) as Response,
+  });
+  const elapsed = Date.now() - started;
+  assert.equal(read.reason, "No se pudo leer.");
+  assert.equal(read.fallback, false);
+  assert.equal(read.fans.length, 0);
+  assert.ok(elapsed >= 4_500 && elapsed < 8_000, `tardó ${elapsed} ms`);
+});
+
+test("readOnlineFans con reglas colgadas devuelve fallback false y no abre Chromium", { timeout: 20_000 }, async () => {
+  clearSignRulesCache();
+  const dataDir = await tempDataDir();
+  const events: string[] = [];
+  const created = await createSessionRuntime({
+    config: testConfig(dataDir),
+    site: onlyFansSite,
+    displayEnv: testDisplay,
+    browserFactory: {
+      async launchPersistentContext() {
+        events.push("persistent");
+        throw new Error("no se abre Chromium");
+      },
+      async launch() {
+        events.push("launch");
+        throw new Error("no se abre Chromium");
+      },
+    },
+  });
+  try {
+    const account = await created.sessions.ensureAccount("Prueba", "3zk7kbr");
+    await writeEncryptedSession(path.join(dataDir, "sessions", `${account.id}.json`), sessionState(), TEST_SESSION_KEY);
+    const started = Date.now();
+    const read = await created.sessions.readOnlineFans(account.id, {
+      fetch: (_input, init) => new Promise((_resolve, reject) => {
+        const abort = () => reject(new DOMException("The operation was aborted", "AbortError"));
+        if (init?.signal?.aborted) abort();
+        else init?.signal?.addEventListener("abort", abort, { once: true });
+      }),
+    });
+    const elapsed = Date.now() - started;
+    assert.equal(read.reason, "No se pudo leer.");
+    assert.equal(read.fallback, false);
+    assert.deepEqual(events, []);
+    assert.ok(elapsed >= 4_500 && elapsed < 8_000, `tardó ${elapsed} ms`);
+  } finally {
+    clearSignRulesCache();
+    await removeDir(dataDir);
+  }
+});
+
 test("el respaldo abre Colecciones en Todo y no la lista Fans", async () => {
   assert.deepEqual([...ONLINE_COLLECTION_URLS], ["https://onlyfans.com/my/collections/subscribers/active"]);
   assert.equal(ONLINE_COLLECTION_URLS.some((url) => url.includes("user-lists")), false);
@@ -187,7 +276,7 @@ function collectionPage(seen: string[]): Page {
           text: async () => JSON.stringify({
             data: {
               list: [
-                { id: 7, username: "duchampprivate", isOnline: true },
+                { id: 7, username: "duchampprivate" },
                 { id: 8, username: "offline", isOnline: false },
               ],
             },
