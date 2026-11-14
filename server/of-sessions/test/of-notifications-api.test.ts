@@ -476,10 +476,9 @@ function deps(urls: string[], respond: (url: string) => Response, methods?: stri
       methods?.push((init?.method ?? "GET").toUpperCase());
       const headers = init?.headers as Record<string, string> | undefined;
       const path = new URL(url).pathname;
-      if (!url.includes("?")) assert.equal(headers?.["user-id"], undefined);
-      if (url.includes("/users/notifications?")) assert.equal(headers?.["user-id"], "42");
+      assert.equal(headers?.["user-id"], "42");
       if (path === "/api2/v2/users/notifications/read" || path.startsWith("/api2/v2/users/notifications/read/")) {
-        assert.equal(headers?.["user-id"], undefined);
+        assert.equal(headers?.["user-id"], "42");
       }
       assert.equal(typeof headers?.sign, "string");
       assert.equal(headers?.cookie?.includes("\n"), false);

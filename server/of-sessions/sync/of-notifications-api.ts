@@ -32,8 +32,7 @@ import type { StorageStateFile } from "../sessions/storage-state.ts";
  * subscribed, purchases, tip, commented, mentioned, favorited,
  * message (Promociones), deactivated_media (OnlyFans).
  *
- * Las cabeceras, incluido si el POST lleva user-id, salen de of-sign.ts.
- * Cambiarlo es un solo sitio: signedUserId / headerRemoved.
+ * user-id y el id del hash salen de signedUserId: id real en todas las rutas.
  * Primero la lista. Un 400 o un fallo del contador no tiran la lista.
  * Un 429 corta la pasada y deja retryAfter.
  */
