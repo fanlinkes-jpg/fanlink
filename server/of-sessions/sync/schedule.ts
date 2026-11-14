@@ -1,4 +1,5 @@
 import type { IdentityState, SessionStatus } from "../types.ts";
+import { signedReadsBlocked } from "./session-link.ts";
 
 export type SkipReason = "mismatch" | "expired" | "pending" | "in_progress" | "backoff" | "not_due";
 
@@ -10,6 +11,8 @@ export type ScheduleAccount = {
   hasStorageState: boolean;
   consecutiveFailures: number;
   lastAttemptAt: string | null;
+  sessionRejected?: boolean;
+  connection?: string | null;
 };
 
 export type SchedulePick = {
@@ -116,6 +119,7 @@ export async function runSyncOnce(input: {
 }
 
 function skipReason(account: ScheduleAccount, now: Date, intervalMs: number, ignoreCadence: boolean): SkipReason | null {
+  if (signedReadsBlocked(account)) return "expired";
   if (account.identityState === "mismatch") return "mismatch";
   if (account.status === "expired") return "expired";
   if (account.status !== "active" || !account.hasStorageState) return "pending";

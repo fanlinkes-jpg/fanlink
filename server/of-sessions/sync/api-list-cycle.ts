@@ -1,5 +1,6 @@
 import { accountPause } from "./backoff.ts";
 import type { CollectedChats } from "./collect-chats.ts";
+import { signedReadsBlocked } from "./session-link.ts";
 
 /**
  * Un paso de la lista firmada. Cada cuenta se lee sola: un 401 o una
@@ -12,6 +13,8 @@ export type ApiListAccount = {
   identityState: string;
   /** False: no hay archivo de sesión. Undefined se trata como presente. */
   hasStorageState?: boolean;
+  sessionRejected?: boolean;
+  connection?: string | null;
 };
 
 export type ApiListRead = {
@@ -30,6 +33,7 @@ export type ApiListStep = {
 };
 
 export function shouldReadApiList(account: ApiListAccount, paused: boolean): boolean {
+  if (signedReadsBlocked(account)) return false;
   if (!account.creatorId || account.identityState === "mismatch" || account.status !== "active") return false;
   if (account.hasStorageState === false) return false;
   return !paused;
@@ -40,11 +44,15 @@ export function skipApiListNotice(account: ApiListAccount, seen: Set<string>): s
   if (shouldReadApiList(account, false)) return null;
   if (seen.has(account.id)) return null;
   seen.add(account.id);
-  const why = account.hasStorageState === false
-    ? "sin sesión guardada"
-    : account.identityState === "mismatch"
-      ? "no coincide"
-      : account.status;
+  const why = account.sessionRejected
+    ? "sesión rechazada"
+    : account.connection === "login_required"
+      ? "login requerido"
+      : account.hasStorageState === false
+        ? "sin sesión guardada"
+        : account.identityState === "mismatch"
+          ? "no coincide"
+          : account.status;
   return `[fanlink:chat] api lista creator=${account.creatorId ?? "-"} account=${account.id}: se omite (${why})`;
 }
 

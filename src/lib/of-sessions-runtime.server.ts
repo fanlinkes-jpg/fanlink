@@ -24,6 +24,8 @@ import { dashboardViewFor } from "../../server/of-sessions/metrics/dashboard.ts"
 import { apiListStep, passApiListAccounts, shouldReadApiList } from "../../server/of-sessions/sync/api-list-cycle.ts";
 import { passNotificationAccounts } from "../../server/of-sessions/sync/notification-cycle.ts";
 import type { NotificationPace } from "../../server/of-sessions/sync/api-list-pace.ts";
+import { accountSessionNotices, deriveConnectedFromLastRead, SESSION_EXPIRED_LABEL, signedReadsBlocked } from "../../server/of-sessions/sync/session-link.ts";
+import { mergeOnlineAccounts } from "../../server/of-sessions/sync/online-fans.ts";
 import { accountPause, blockKind, listAccountPauses, noteAccountBlock } from "../../server/of-sessions/sync/backoff.ts";
 import { presentTeamMetrics } from "../../server/of-sessions/metrics/present-team.ts";
 import { creatorIdsForReads } from "@/lib/dashboard-config";
@@ -261,7 +263,7 @@ function bootHistoryLoop(sessions: SessionManager): void {
         const accounts = await sessions.listAccounts();
         let stepped = false;
         for (const account of accounts) {
-          if (!account.creatorId || account.identityState === "mismatch") continue;
+          if (!account.creatorId || account.identityState === "mismatch" || signedReadsBlocked(account)) continue;
           const open = await listOpenHistory(await getSql(), account.creatorId);
           const next = nextHistoryThread(open.filter((item) => (skipUntil.get(`${account.creatorId}:${item.threadKey}`) ?? 0) <= Date.now()));
           if (!next) continue;
@@ -335,7 +337,9 @@ function bootApiListLoop(sessions: SessionManager): void {
     await sleep(5_000);
     while (true) {
       try {
-        await passApiListAccounts(sessions, await sessions.listAccounts(), skipNoted, async (account, read) => {
+        const listed = await sessions.listAccounts();
+        await applyDerivedConnections(sessions, listed);
+        await passApiListAccounts(sessions, listed, skipNoted, async (account, read) => {
           await finishApiRead(account, read);
         });
       } catch (error) {
@@ -421,6 +425,8 @@ async function chatScheduleAccounts(sessions: SessionManager): Promise<ScheduleA
         status: account.status,
         identityState: account.identityState,
         hasStorageState: account.hasStorageState,
+        sessionRejected: account.sessionRejected,
+        connection: account.connection,
         consecutiveFailures: state?.consecutiveFailures ?? 0,
         lastAttemptAt: pause ? new Date(pause.until - intervalMs).toISOString() : state?.lastAttemptAt ?? null,
       },
@@ -443,6 +449,8 @@ async function scheduleAccounts(sessions: SessionManager): Promise<ScheduleAccou
         status: account.status,
         identityState: account.identityState,
         hasStorageState: account.hasStorageState,
+        sessionRejected: account.sessionRejected,
+        connection: account.connection,
         consecutiveFailures: state?.consecutiveFailures ?? 0,
         lastAttemptAt: pause ? new Date(pause.until - intervalMs).toISOString() : state?.lastAttemptAt ?? null,
       },
@@ -592,7 +600,7 @@ export async function setSyncIntervalView(
 export async function listCreatorChatViews(userId: string): Promise<CreatorChatList> {
   const access = await accessFor(userId);
   const sessions = await getOfSessionManager();
-  const accounts = await sessions.listAccounts();
+  const accounts = await applyDerivedConnections(sessions, await sessions.listAccounts());
   const creatorIds = creatorIdsForChats(
     access,
     accounts.flatMap((account) => (account.creatorId ? [account.creatorId] : [])),
@@ -656,7 +664,35 @@ export async function listCreatorChatViews(userId: string): Promise<CreatorChatL
     pending: await listPendingOutbounds(sql, creatorIds),
     profiles: await listFanProfiles(sql, creatorIds),
     notes: await listFanNotes(sql, creatorIds),
+    accounts: accounts.flatMap((account) => account.creatorId && creatorIds.includes(account.creatorId) ? [{
+      creatorId: account.creatorId,
+      sessionRejected: account.sessionRejected,
+      connection: account.connection,
+    }] : []),
+    sessionNotices: accountSessionNotices(
+      accounts.flatMap((account) => account.creatorId ? [account] : []),
+      creatorIds,
+    ),
   };
+}
+
+async function applyDerivedConnections(sessions: SessionManager, accounts: readonly Account[]): Promise<Account[]> {
+  let ok = new Set<string>();
+  try {
+    const meta = await listChatMeta(await getSql());
+    ok = new Set(meta.filter((row) => row.status === "ok").map((row) => row.creatorId));
+  } catch {
+    return [...accounts];
+  }
+  const next: Account[] = [];
+  for (const account of accounts) {
+    if (account.creatorId && ok.has(account.creatorId) && deriveConnectedFromLastRead(account, true)) {
+      next.push(await sessions.recordSignedRead(account.id, 200));
+    } else {
+      next.push(account);
+    }
+  }
+  return next;
 }
 
 export async function syncCreatorChatView(userId: string, creatorId: string): Promise<void> {
@@ -1022,16 +1058,37 @@ export async function readChatVaultView(
   });
 }
 
-export async function listOnlineFansView(userId: string, input: { creatorId: string }): Promise<{ fans: OnlineFan[]; reason: string | null; cap: number; send: { enabled: boolean; reason: string | null } }> {
+export async function listOnlineFansView(userId: string, input: { creatorId: string }): Promise<{ fans: OnlineFan[]; reason: string | null; notices: string[]; cap: number; send: { enabled: boolean; reason: string | null } }> {
   const access = await accessFor(userId);
+  await noteStaleOnlineSends(await getSql(), Date.now());
+  const sessions = await getOfSessionManager();
+  const accounts = await sessions.listAccounts();
+  if (input.creatorId === "all") {
+    const known = accounts.flatMap((account) => account.creatorId ? [account.creatorId] : []);
+    const wanted = creatorIdsForChats(access, known);
+    if (wanted.length === 0) return { fans: [], reason: "Sin datos", notices: [], cap: ONLINE_FAN_CAP, send: { enabled: false, reason: "Sin datos" } };
+    const reads = [];
+    for (const creatorId of wanted) {
+      const account = accounts.find((item) => item.creatorId === creatorId);
+      if (!account || signedReadsBlocked(account)) {
+        reads.push({ creatorId, fans: [], reason: SESSION_EXPIRED_LABEL, status: 401 });
+        continue;
+      }
+      const read = await sessions.readOnlineFans(account.id);
+      console.info(`[fanlink:online] cuenta=${creatorId} fans=${read.fans.length} motivo=${read.reason ?? "ok"} status=${read.status ?? "sin"}`);
+      reads.push({ creatorId, fans: read.fans, reason: read.reason, status: read.status });
+    }
+    const merged = mergeOnlineAccounts(reads);
+    const reason = merged.fans.length === 0
+      ? merged.notices[0] ?? reads.find((read) => read.reason)?.reason ?? "Nadie en línea"
+      : null;
+    return { fans: merged.fans, reason, notices: merged.notices, cap: ONLINE_FAN_CAP, send: { enabled: false, reason: "Elige una cuenta" } };
+  }
   if (!canSeeOnlineFans(access, input.creatorId)) {
     throw new WorkspaceAccessError("No tienes acceso para operar la sesión de esa creadora.");
   }
-  await noteStaleOnlineSends(await getSql(), Date.now());
-  const sessions = await getOfSessionManager();
-  const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
-  if (!account) return { fans: [], reason: "Sin datos", cap: ONLINE_FAN_CAP, send: { enabled: false, reason: "Sin datos" } };
-  const read = await sessions.readOnlineFans(account.id);
+  const account = accounts.find((item) => item.creatorId === input.creatorId);
+  if (!account) return { fans: [], reason: "Sin datos", notices: [], cap: ONLINE_FAN_CAP, send: { enabled: false, reason: "Sin datos" } };
   const gate = onlineBroadcastGate(process.env, {
     creatorId: account.creatorId,
     accountId: account.id,
@@ -1039,8 +1096,16 @@ export async function listOnlineFansView(userId: string, input: { creatorId: str
     userId: account.identityUserId,
     label: account.label,
   });
+  const send = { enabled: gate.allowed, reason: gate.allowed ? null : gate.reason };
+  if (signedReadsBlocked(account)) {
+    return { fans: [], reason: SESSION_EXPIRED_LABEL, notices: [`${input.creatorId}: ${SESSION_EXPIRED_LABEL}`], cap: ONLINE_FAN_CAP, send };
+  }
+  const read = await sessions.readOnlineFans(account.id);
   console.info(`[fanlink:online] cuenta=${input.creatorId} fans=${read.fans.length} motivo=${read.reason ?? "ok"} status=${read.status ?? "sin"}`);
-  return { fans: read.fans, reason: read.reason, cap: ONLINE_FAN_CAP, send: { enabled: gate.allowed, reason: gate.allowed ? null : gate.reason } };
+  const notices = read.status === 401 || read.reason === SESSION_EXPIRED_LABEL
+    ? [`${input.creatorId}: ${SESSION_EXPIRED_LABEL}`]
+    : [];
+  return { fans: read.fans, reason: read.reason, notices, cap: ONLINE_FAN_CAP, send };
 }
 
 export async function cancelOnlineBroadcastView(
@@ -1065,6 +1130,7 @@ export async function broadcastOnlineFansView(
   const sessions = await getOfSessionManager();
   const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
   if (!account) return emptyOnlineBroadcast("Sin datos");
+  if (signedReadsBlocked(account)) return emptyOnlineBroadcast(SESSION_EXPIRED_LABEL);
   const fields = {
     creatorId: account.creatorId,
     accountId: account.id,

@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { authMiddleware } from "@/lib/auth/middleware";
 import type { NotificationCounts, NotificationKind, NotificationLabels, NotificationTab } from "@/lib/notifications";
+import { SESSION_EXPIRED_LABEL, signedReadsBlocked } from "../../server/of-sessions/sync/session-link.ts";
 
 // Los módulos de base y de disco solo se cargan dentro del handler: si fueran
 // un import de arriba, el cliente arrastraría el servidor al navegador.
@@ -39,6 +40,8 @@ export type NotificationList = {
   status: number | null;
   markOnOnlyfans: boolean;
   fanlinkUnread: number | null;
+  /** Cuenta con la sesión caducada. No es un cero de avisos. */
+  sessionNotice: string | null;
 };
 
 export type NotificationMarkResult = {
@@ -63,7 +66,15 @@ export const listCreatorNotifications = createServerFn({ method: "GET" })
     const devMode = !authConfigured && context.userId === DEV_USER_ID;
     const access = await ensureStaff(sql, context.userId, devMode);
     const page = await notificationPageFor(sql, access, data.creatorId, data.cursor);
-    return { ...page, markOnOnlyfans: await markReadEnabled(data.creatorId) };
+    const { getOfSessionManager } = await import("./of-sessions-runtime.server");
+    let sessionNotice: string | null = null;
+    try {
+      const account = (await (await getOfSessionManager()).listAccounts()).find((item) => item.creatorId === data.creatorId);
+      if (account && signedReadsBlocked(account)) sessionNotice = `${data.creatorId}: ${SESSION_EXPIRED_LABEL}`;
+    } catch {
+      sessionNotice = null;
+    }
+    return { ...page, markOnOnlyfans: await markReadEnabled(data.creatorId), sessionNotice };
   });
 
 export const markCreatorNotificationsRead = createServerFn({ method: "POST" })

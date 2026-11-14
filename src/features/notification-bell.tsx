@@ -45,6 +45,7 @@ export function NotificationBell({
   const [motivo, setMotivo] = useState<string | null>(null);
   const [markOnOnlyfans, setMarkOnOnlyfans] = useState(false);
   const [fanlinkUnread, setFanlinkUnread] = useState<number | null>(null);
+  const [sessionNotice, setSessionNotice] = useState<string | null>(null);
 
   useEffect(() => {
     let stop = false;
@@ -60,6 +61,7 @@ export function NotificationBell({
         setMotivo(data.motivo);
         setMarkOnOnlyfans(data.markOnOnlyfans);
         setFanlinkUnread(data.fanlinkUnread);
+        setSessionNotice(data.sessionNotice);
       } catch {
         if (!stop) {
           setItems(null);
@@ -106,18 +108,19 @@ export function NotificationBell({
     <>
       <button
         type="button"
-        aria-label={bellLabel(bell, motivo)}
+        aria-label={sessionNotice ?? bellLabel(bell, motivo)}
         onClick={() => {
           setOpen(true);
-          void acknowledge(null);
+          if (!sessionNotice) void acknowledge(null);
         }}
         className="relative grid h-8 w-8 place-items-center rounded-lg border border-line bg-surface text-fg"
       >
         <Bell className="h-4 w-4" />
-        {bell.count == null ? (
-          <span className="absolute -top-2 -right-2 rounded bg-raised px-1 text-[9px] text-muted">{SIN_DATOS}</span>
-        ) : bell.count > 0 ? (
+        {sessionNotice || bell.count == null || bell.count === 0 ? null : (
           <span className="absolute -top-1 -right-1 min-w-4 rounded-full bg-danger px-1 text-[10px] font-semibold text-white">{bell.count}</span>
+        )}
+        {!sessionNotice && bell.count == null ? (
+          <span className="absolute -top-2 -right-2 rounded bg-raised px-1 text-[9px] text-muted">{SIN_DATOS}</span>
         ) : null}
       </button>
       {open ? (
@@ -125,6 +128,7 @@ export function NotificationBell({
           creatorId={creatorId}
           role={role}
           items={items}
+          sessionNotice={sessionNotice}
           syncedAt={syncedAt}
           counts={counts}
           motivo={motivo}
@@ -144,6 +148,7 @@ function NotificationPanel({
   creatorId,
   role,
   items,
+  sessionNotice,
   syncedAt,
   counts,
   motivo,
@@ -157,6 +162,7 @@ function NotificationPanel({
   creatorId: string;
   role: "owner" | "member" | null;
   items: NotificationListItem[] | null;
+  sessionNotice: string | null;
   syncedAt: string | null;
   counts: NotificationCounts | null;
   motivo: string | null;
@@ -219,10 +225,11 @@ function NotificationPanel({
           </Button>
         </div>
         <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
+          {sessionNotice ? <p className="mb-3 text-sm text-[#8a5a12]">{sessionNotice}</p> : null}
           {items == null ? (
-            <p className="text-sm text-muted">{motivo && motivo !== "ok" ? motivoVisible(motivo) : SIN_DATOS}</p>
+            <p className="text-sm text-muted">{sessionNotice ?? (motivo && motivo !== "ok" ? motivoVisible(motivo) : SIN_DATOS)}</p>
           ) : shown.length === 0 && undated.length === 0 ? (
-            <p className="text-sm text-muted">{emptyLine(items.length, motivo, counts?.all ?? null)}</p>
+            sessionNotice ? null : <p className="text-sm text-muted">{emptyLine(items.length, motivo, counts?.all ?? null)}</p>
           ) : (
             <ul className="space-y-2">
               {shown.map((row) => {

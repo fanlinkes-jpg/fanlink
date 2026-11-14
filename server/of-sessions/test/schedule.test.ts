@@ -71,6 +71,21 @@ test("no lanza dos cuentas a la vez ni repite la que ya está en curso", async (
   assert.equal(inProgressIds.size, 0);
 });
 
+test("salta sesión rechazada y login_required antes de pedir", () => {
+  const pick = selectSyncAccount({
+    now: NOW,
+    intervalMs: INTERVAL,
+    inProgressIds: new Set(),
+    accounts: [
+      account({ accountId: "bad", creatorId: "9ikis52", sessionRejected: true, connection: "login_required" }),
+      account({ accountId: "stale", creatorId: "vieja", connection: "login_required" }),
+      account({ accountId: "ok", creatorId: "3zk7kbr" }),
+    ],
+  });
+  assert.equal(pick.accountId, "ok");
+  assert.equal(pick.skipped.filter((item) => item.reason === "expired").length, 2);
+});
+
 test("salta no coincide, caducada y pendiente; no verificada sí entra", () => {
   const pick = selectSyncAccount({
     now: NOW,

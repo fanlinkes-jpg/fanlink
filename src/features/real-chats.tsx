@@ -1,11 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { AtSign, Bell, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, MessageCircle, RefreshCw, ScrollText, Send, Type } from "lucide-react";
+import { AtSign, Bell, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, RefreshCw, ScrollText, Send, Type } from "lucide-react";
 import { broadcastOnlineFans, cancelOnlineBroadcast, chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, markChatOpened, readChatVault, recordChatOutbound, resolveOnlineOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
 import { OnlineFansPanel, type OnlineBroadcastPayload } from "@/features/online-fans-panel";
 import type { OnlineFanRow } from "@/lib/online-fan-row";
 import { unreadChatRow, unreadTotalFor } from "../../server/of-sessions/sync/unread-chats.ts";
 import { inboxPillCounts, matchesInboxPill, tipThreads, type InboxPill } from "../../server/of-sessions/sync/chat-pills.ts";
+import { accountFigure, everyAccountBlocked, SESSION_EXPIRED_LABEL } from "../../server/of-sessions/sync/session-link.ts";
 import { listCreatorNotifications, markCreatorNotificationsRead, type NotificationListItem } from "@/lib/of-notifications";
 import { NOTIFICATION_TABS, TAB_LABEL, isOwnerOnlyKind, tabOf, type NotificationCounts, type NotificationKind, type NotificationTab } from "@/lib/notifications";
 import { NotificationFanCard } from "@/features/notification-card";
@@ -220,6 +221,7 @@ export function RealChatsPage() {
   const [noteFilter, setNoteFilter] = useState<NotificationTab>("all");
   const [notes, setNotes] = useState<NoteRow[] | null>(null);
   const [noteCounts, setNoteCounts] = useState<NotificationCounts | null>(null);
+  const [noteNotice, setNoteNotice] = useState<string | null>(null);
   const notesButton = useRef<HTMLButtonElement>(null);
   const [notesPos, setNotesPos] = useState({ top: 0, left: 0 });
   const [discountPercent, setDiscountPercent] = useState("10");
@@ -307,6 +309,8 @@ export function RealChatsPage() {
       }
     }));
     setNoteCounts(pages.length === 1 ? pages[0]?.page?.counts ?? null : null);
+    const notices = pages.flatMap((entry) => entry.page?.sessionNotice ? [entry.page.sessionNotice] : []);
+    setNoteNotice(notices.length > 0 ? notices.join(" · ") : null);
     setNotes(pages.flatMap((entry) => entry.page?.items.map((item) => ({ ...item, creatorId: entry.id })) ?? [])
       .sort((left, right) => (right.occurredAt ?? "").localeCompare(left.occurredAt ?? "")));
   }
@@ -364,7 +368,7 @@ export function RealChatsPage() {
   }
 
   async function loadOnlineFans() {
-    const creator = creatorId === "all" ? selected?.creatorId ?? null : creatorId;
+    const creator = creatorId === "all" ? "all" : creatorId;
     if (!creator) {
       setOnlineFans([]);
       setOnlineCount(null);
@@ -378,8 +382,8 @@ export function RealChatsPage() {
     try {
       const result = await Promise.race([
         listOnlineFans({ data: { creatorId: creator } }),
-        new Promise<{ fans: []; reason: string }>((resolve) => {
-          timer = setTimeout(() => resolve({ fans: [], reason: "No se pudo leer." }), 25_000);
+        new Promise<{ fans: []; reason: string; notices: string[]; cap: number; send: { enabled: boolean; reason: string | null } }>((resolve) => {
+          timer = setTimeout(() => resolve({ fans: [], reason: "No se pudo leer.", notices: [], cap: onlineCap, send: { enabled: false, reason: "Envío a todos desactivado" } }), 25_000);
         }),
       ]);
       const rows = result.fans.map((fan) => ({
@@ -393,11 +397,12 @@ export function RealChatsPage() {
         lists: "lists" in fan ? fan.lists : [],
       }));
       setOnlineFans(rows);
+      const notice = result.notices.length > 0 ? result.notices.join(" · ") : null;
       const failed = rows.length === 0 && result.reason != null && result.reason !== "Nadie en línea";
       setOnlineCount(failed ? null : rows.length);
-      setOnlineNote(rows.length === 0 ? result.reason ?? "Nadie en línea" : null);
-      setOnlineSend("send" in result && result.send ? result.send : { enabled: false, reason: "Envío a todos desactivado" });
-      if ("cap" in result && typeof result.cap === "number") setOnlineCap(result.cap);
+      setOnlineNote(notice ?? (rows.length === 0 ? result.reason ?? "Nadie en línea" : null));
+      setOnlineSend(result.send);
+      if (typeof result.cap === "number") setOnlineCap(result.cap);
     } catch (err) {
       setOnlineFans([]);
       setOnlineCount(null);
@@ -441,10 +446,18 @@ export function RealChatsPage() {
   const accountMessages = (data?.messages ?? []).filter(
     (message) => creatorId === "all" || message.creatorId === creatorId,
   );
+  const scopeIds = creatorId === "all" ? creators.map((creator) => creator.id) : [creatorId];
+  const sessionRows = data?.accounts ?? [];
+  const viewBlocked = everyAccountBlocked(sessionRows, scopeIds);
+  const sessionNotices = (data?.sessionNotices ?? []).filter((notice) => {
+    if (creatorId === "all") return true;
+    return notice.startsWith(`${creatorId}:`);
+  });
+  const countedThreads = threads.filter((thread) => !sessionRows.some((row) => row.creatorId === thread.creatorId && accountFigure(row, 0) === SESSION_EXPIRED_LABEL));
   const pills = inboxPillCounts({
-    status: error ? "error" : data ? "ready" : "loading",
-    threads,
-    messages: data ? accountMessages : null,
+    status: viewBlocked ? "error" : error ? "error" : data ? "ready" : "loading",
+    threads: viewBlocked ? [] : countedThreads,
+    messages: viewBlocked ? null : data ? accountMessages : null,
   });
   const tipped = tipThreads(accountMessages, threads);
   const inbox = useInboxSelection({
@@ -966,8 +979,9 @@ export function RealChatsPage() {
                     })}
                   </div>
                   <ul className="min-h-0 flex-1 overflow-y-auto">
-                    {notes == null ? <li className="px-4 py-6 text-sm text-[#6d7585]">Sin datos</li> : null}
-                    {notes != null && notes.filter((item) => noteMatches(item.kind, noteFilter)).length === 0 ? <li className="px-4 py-6 text-sm text-[#6d7585]">Sin notificaciones</li> : null}
+                    {noteNotice ? <li className="px-4 py-6 text-sm text-[#8a5a12]">{noteNotice}</li> : null}
+                    {notes == null && !noteNotice ? <li className="px-4 py-6 text-sm text-[#6d7585]">Sin datos</li> : null}
+                    {notes != null && !noteNotice && notes.filter((item) => noteMatches(item.kind, noteFilter)).length === 0 ? <li className="px-4 py-6 text-sm text-[#6d7585]">Sin notificaciones</li> : null}
                     {(notes ?? []).filter((item) => noteMatches(item.kind, noteFilter)).map((item) => {
                       const thread = (data?.threads ?? []).find((row) => row.creatorId === item.creatorId && (
                         (item.threadKey != null && row.threadKey === item.threadKey)
@@ -1003,7 +1017,8 @@ export function RealChatsPage() {
             </select>
             <span className="shrink-0 text-[10px] text-[#6d7585]">Más recientes</span>
             {(() => {
-              const total = unreadTotalFor(data ? "ready" : "loading", data?.threads ?? [], creatorId);
+              if (viewBlocked) return <span className="shrink-0 text-[10px] text-[#8a5a12]">{SESSION_EXPIRED_LABEL}</span>;
+              const total = unreadTotalFor(data ? "ready" : "loading", countedThreads, creatorId);
               if (total == null) return <span className="shrink-0 text-[10px] text-[#6d7585]" title="Sin datos">Sin datos</span>;
               if (total === 0) return null;
               return <span className="shrink-0 rounded-full bg-[#3b6cff] px-1.5 text-[10px] font-semibold text-white" aria-label={`${total} chats sin leer`}>{total}</span>;
@@ -1016,9 +1031,10 @@ export function RealChatsPage() {
               ["propinas", "Con propinas", pills.propinas],
             ] as const).map(([id, label, count]) => (
               <button key={id} type="button" onClick={() => setFilter(id)} className={`rounded-full px-3 py-1 text-xs ${filter === id ? "bg-[#3b6cff] text-white" : "bg-[#f3f4f6] text-[#6d7585]"}`} aria-pressed={filter === id}>
-                {label} {count == null ? "· Sin datos" : count}
+                {label} {viewBlocked ? "" : count == null ? "· Sin datos" : accountFigure({ sessionRejected: false, connection: "live" }, count)}
               </button>
             ))}
+            {sessionNotices.length > 0 && !viewBlocked ? <p className="w-full text-[10px] text-[#8a5a12]">{sessionNotices.join(" · ")}</p> : null}
             {marks.hidden.length > 0 ? (
               <button type="button" onClick={() => setShowHidden((open) => !open)} className={`rounded-full px-3 py-1 text-xs ${showHidden ? "bg-[#3b6cff] text-white" : "bg-[#f3f4f6] text-[#6d7585]"}`}>Ocultos {marks.hidden.length}</button>
             ) : null}
@@ -1036,7 +1052,7 @@ export function RealChatsPage() {
           });
         }}>
         {visible.length === 0 ? (
-          <p className="px-4 py-8 text-sm text-[#6d7585]">{threads.length === 0 ? emptyChatsLabel(data) : "Sin datos"}</p>
+          <p className="px-4 py-8 text-sm text-[#6d7585]">{viewBlocked ? SESSION_EXPIRED_LABEL : sessionNotices.length > 0 && threads.length === 0 ? sessionNotices.join(" · ") : threads.length === 0 ? emptyChatsLabel(data) : "Sin datos"}</p>
         ) : (
           <ul>
             {visible.map((thread) => {
