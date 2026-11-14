@@ -445,7 +445,7 @@ export class SessionManager {
           fetch,
           now: () => this.now().getTime(),
         });
-        if (signed.reason !== "No se pudo leer.") return signed;
+        if (signed.fallback === false || signed.reason !== "No se pudo leer.") return signed;
       } catch {
         // Sin JSON firmado se prueba la página.
       }

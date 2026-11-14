@@ -68,8 +68,10 @@ export async function loadSignRules(fetchImpl: typeof fetch, now: number): Promi
 }
 
 async function downloadSignRules(fetchImpl: typeof fetch, now: number): Promise<SignRules> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), RULES_TIMEOUT_MS);
   try {
-    const response = await fetchImpl(RULES_URL, { signal: AbortSignal.timeout(RULES_TIMEOUT_MS) });
+    const response = await fetchImpl(RULES_URL, { signal: controller.signal });
     if (!response.ok) throw new Error("no hay reglas de firma");
     const rules = parseSignRules(await response.json());
     if (!rules) throw new Error("reglas de firma ilegibles");
@@ -82,6 +84,8 @@ async function downloadSignRules(fetchImpl: typeof fetch, now: number): Promise<
       return cached.rules;
     }
     throw error instanceof Error ? error : new Error("no hay reglas de firma");
+  } finally {
+    clearTimeout(timer);
   }
 }
 

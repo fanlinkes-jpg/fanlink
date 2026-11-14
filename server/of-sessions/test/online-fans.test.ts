@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Page } from "playwright";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
-import { parseSignRules } from "../sync/of-sign.ts";
+import { clearSignRulesCache, parseSignRules, RULES_TIMEOUT_MS } from "../sync/of-sign.ts";
 import {
   ONLINE_COLLECTION_URLS,
   ONLINE_SUBSCRIBERS_PATH,
@@ -34,13 +34,13 @@ test("el filtro en línea se reconoce y solo entran los que están conectados", 
     },
   });
   assert.equal(nested.reason, null);
-  assert.deepEqual(nested.fans.map((fan) => fan.fanHandle), ["duchampprivate"]);
+  assert.deepEqual(nested.fans.map((fan) => fan.fanHandle), ["duchampprivate", "brendaoff"]);
   assert.equal(onlineReadFromPayload(200, { data: { list: [] } }).reason, "Nadie en línea");
   assert.equal(onlineReadFromPayload(200, { ok: true }).reason, "No se pudo leer.");
   assert.equal(onlineReadFromPayload(401, { list: [] }).reason, "OnlyFans ha rechazado la firma");
 });
 
-test("api2 firmada deja solo al que está en línea, el 401 es la firma y el 200 vacío no es un fallo", async () => {
+test("api2 firmada cuenta la lista filtrada, el 401 es la firma y el 200 vacío no es un fallo", async () => {
   const rules = parseSignRules({
     static_param: "param",
     format: "1:{}:{:x}:2",
@@ -71,7 +71,7 @@ test("api2 firmada deja solo al que está en línea, el 401 es la firma y el 200
   });
   assert.equal(two.status, 200);
   assert.equal(two.reason, null);
-  assert.deepEqual(two.fans.map((fan) => fan.fanHandle), ["duchampprivate"]);
+  assert.deepEqual(two.fans.map((fan) => fan.fanHandle), ["duchampprivate", "brendababypremium"]);
 
   const denied = await fetchSignedOnlineFans(state, {
     now: () => 1,
@@ -96,6 +96,47 @@ test("api2 firmada deja solo al que está en línea, el 401 es la firma y el 200
     fetch: async () => new Response("no-json", { status: 200, headers: { "content-type": "text/plain" } }),
   });
   assert.equal(broken.reason, "No se pudo leer.");
+
+  const unmarked = onlineReadFromPayload(200, {
+    list: [
+      { id: 21, username: "duchampprivate", name: "Duchamp" },
+      { id: 22, username: "brendababypremium" },
+    ],
+  });
+  assert.equal(unmarked.status, 200);
+  assert.equal(unmarked.reason, null);
+  assert.equal(unmarked.fans.length, 2);
+});
+
+test("un 200 filtrado sin isOnline cuenta las filas", () => {
+  const read = onlineReadFromPayload(200, {
+    data: { list: [{ id: 21, username: "duchampprivate" }, { id: 22, username: "brendababypremium" }] },
+  });
+  assert.equal(read.reason, null);
+  assert.equal(read.fans.length, 2);
+});
+
+test("si las reglas de firma cuelgan, el error sale en 5 s y no pide Chromium", { timeout: 15_000 }, async () => {
+  clearSignRulesCache();
+  const started = Date.now();
+  let subscribers = 0;
+  const read = await fetchSignedOnlineFans(sessionState(), {
+    now: () => started,
+    fetch: (input, init) => new Promise((_resolve, reject) => {
+      const url = String(input);
+      if (url.includes("/subscriptions/subscribers")) subscribers += 1;
+      const abort = () => reject(new DOMException("The operation was aborted", "AbortError"));
+      if (init?.signal?.aborted) abort();
+      else init?.signal?.addEventListener("abort", abort, { once: true });
+    }),
+  });
+  const elapsed = Date.now() - started;
+  assert.equal(read.reason, "No se pudo leer.");
+  assert.equal(read.fallback, false);
+  assert.equal(subscribers, 0);
+  assert.equal(RULES_TIMEOUT_MS, 5_000);
+  assert.ok(elapsed >= 4_500 && elapsed < 8_000, `tardó ${elapsed} ms`);
+  clearSignRulesCache();
 });
 
 test("el respaldo abre Colecciones en Todo y no la lista Fans", async () => {
