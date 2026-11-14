@@ -50,8 +50,8 @@ import { collectCreatorRead, type CollectedRead } from "../sync/collect.ts";
 import type { TxCursor } from "../sync/parse.ts";
 import { accountPause, noteAccountBlock, pauseWaitReason } from "../sync/backoff.ts";
 import { chatPaceOf, planChatPull, rememberChatPace, withAccountApi } from "../sync/api-list-pace.ts";
-import { fetchSignedChats, type SignedChatOptions } from "../sync/of-chat-api.ts";
-import { applySignedRead, signedReadsBlocked, SESSION_EXPIRED_LABEL } from "../sync/session-link.ts";
+import { fetchSignedChats, fetchSignedUsersMe, type SignedChatOptions } from "../sync/of-chat-api.ts";
+import { applySignedRead, sessionRejectionConfirmed, signedReadsBlocked, successfulLoginPatch, SESSION_EXPIRED_LABEL, type SessionConfirmProbe } from "../sync/session-link.ts";
 import { collectChats, type CollectedChats } from "../sync/collect-chats.ts";
 import { dispatchNotificationMark, fetchSignedNotifications, type CollectedNotifications, type MarkNotificationsResult } from "../sync/of-notifications-api.ts";
 import { notificationMarkReadGate } from "../send/gate.ts";
@@ -98,6 +98,8 @@ export class SessionManager {
   private readTail: Promise<void> = Promise.resolve();
   private readonly reading = new Set<string>();
   private readonly watches = new Set<string>();
+  /** Sube al empezar Reconectar y al guardarlo. Un 401 anterior no pisa el login. */
+  private readonly sessionEpoch = new Map<string, number>();
   private closed = false;
   private started = false;
   private readonly options: SessionManagerOptions;
@@ -119,6 +121,21 @@ export class SessionManager {
 
   private get now() {
     return this.options.now ?? (() => new Date());
+  }
+
+  /** Generación actual. La lectura la copia al empezar. */
+  sessionGeneration(accountId: string): number {
+    return this.sessionEpoch.get(accountId) ?? 0;
+  }
+
+  /**
+   * Reconectar invalida las lecturas que ya estaban en vuelo.
+   * La llama el login al empezar y otra vez al guardarse.
+   */
+  rotateSessionEpoch(accountId: string): number {
+    const next = this.sessionGeneration(accountId) + 1;
+    this.sessionEpoch.set(accountId, next);
+    return next;
   }
 
   async addAccount(label: string, creatorId?: string | null): Promise<Account> {
@@ -511,6 +528,7 @@ export class SessionManager {
     options?: { budgetMs?: number; read?: (page: Page, signal: AbortSignal) => Promise<OnlineRead>; fetch?: typeof fetch },
   ): Promise<OnlineRead> {
     assertAccountId(accountId);
+    const epoch = this.sessionGeneration(accountId);
     const stored = await this.options.store.get(accountId);
     if (signedReadsBlocked(stored)) {
       return { fans: [], reason: SESSION_EXPIRED_LABEL, status: 401, sessionRejected: true };
@@ -527,9 +545,13 @@ export class SessionManager {
           fetch: options?.fetch ?? this.options.fetch ?? fetch,
           now: () => this.now().getTime(),
         });
+        if (signed.status === 429 || (signed.retryAfterMs ?? 0) > 0) {
+          noteAccountBlock(accountId, "429");
+          return { ...signed, fans: [], reason: signed.reason ?? "OnlyFans respondió 429", fallback: false };
+        }
         if (signed.status === 401) {
-          await this.recordSignedRead(accountId, 401, signed.reason).catch(() => undefined);
-          return { ...signed, fans: [], reason: SESSION_EXPIRED_LABEL, sessionRejected: true };
+          const marked = await this.noteRouteRejection(accountId, signed.reason, epoch);
+          return { ...signed, fans: [], reason: SESSION_EXPIRED_LABEL, sessionRejected: marked, fallback: false };
         }
         if (signed.fallback === false || signed.reason !== "No se pudo leer.") return signed;
       } catch {
@@ -588,6 +610,7 @@ export class SessionManager {
   /** Lee la lista de chats por HTTP con la sesión guardada. No abre Chromium. */
   async readChatsDirect(accountId: string, openThreadKeys: readonly string[] = [], pull?: SignedChatOptions, creatorId?: string | null): Promise<CollectedChats> {
     const empty: CollectedChats = { threads: [], messages: [], reason: null, jsonPaths: ["api2/v2/chats"] };
+    const epoch = this.sessionGeneration(accountId);
     try {
       const state = await this.readStorageState(accountId);
       const read = await fetchSignedChats(state, {
@@ -599,9 +622,9 @@ export class SessionManager {
         creatorId,
       }, { openThreadKeys, ...pull });
       if (read.sessionRejected) {
-        await this.recordSignedRead(accountId, 401, read.reason).catch(() => undefined);
+        await this.recordSignedRead(accountId, 401, read.reason, epoch).catch(() => undefined);
       } else if (read.accepted) {
-        await this.recordSignedRead(accountId, 200).catch(() => undefined);
+        await this.recordSignedRead(accountId, 200, null, epoch).catch(() => undefined);
       }
       if (read.signatureRejected || read.retryAfterMs > 0) {
         noteAccountBlock(accountId, read.signatureRejected ? "400" : "429");
@@ -668,17 +691,57 @@ export class SessionManager {
    * Un 200 deja la conexión en Aceptada. No borra `sessionRejected`.
    * Un 401 lo marca si aún no lo estaba. No abre Chromium.
    */
-  async recordSignedRead(accountId: string, httpStatus: number, reason?: string | null): Promise<Account> {
+  async recordSignedRead(accountId: string, httpStatus: number, reason?: string | null, readEpoch?: number): Promise<Account> {
     const account = await this.options.store.get(accountId);
     const patch = applySignedRead(account, httpStatus, {
       loginAlreadyOpen: this.loginTasks.has(accountId),
       reason,
+      readEpoch,
+      currentEpoch: this.sessionGeneration(accountId),
     });
     if (!patch) return account;
     return this.options.store.update(accountId, {
       ...patch,
       lastCheckedAt: this.now().toISOString(),
     });
+  }
+
+  /**
+   * Un 401 de otra ruta no marca la sesión. La confirma la lista (401) o
+   * users/me de invitado. Si Reconectar cambió la generación, no se aplica.
+   */
+  async noteRouteRejection(accountId: string, reason: string | null, readEpoch?: number): Promise<boolean> {
+    const epoch = readEpoch ?? this.sessionGeneration(accountId);
+    if (this.sessionGeneration(accountId) !== epoch) return false;
+    const dead = await this.confirmSessionRejected(accountId, epoch);
+    if (!dead) return false;
+    const updated = await this.recordSignedRead(accountId, 401, reason, epoch);
+    return updated.sessionRejected === true;
+  }
+
+  private async confirmSessionRejected(accountId: string, epoch: number): Promise<boolean> {
+    if (this.sessionGeneration(accountId) !== epoch) return false;
+    let state;
+    try {
+      state = await this.readStorageState(accountId);
+    } catch {
+      return false;
+    }
+    const deps = { fetch: this.options.fetch ?? fetch, now: () => this.now().getTime() };
+    const probes: SessionConfirmProbe[] = [];
+    const usersMe = await fetchSignedUsersMe(state, deps);
+    probes.push({ route: "users-me", status: usersMe.status ?? 0, guest: usersMe.guest });
+    if (sessionRejectionConfirmed(probes)) return this.sessionGeneration(accountId) === epoch;
+    if (usersMe.status === 200 && !usersMe.guest) return false;
+    const chats = await fetchSignedChats(state, {
+      ...deps,
+      sleep: async () => undefined,
+      minGapMs: 0,
+      accountId,
+    }, { list: "head", messages: "none", listCap: 1 });
+    probes.push({ route: "chats", status: chats.sessionRejected ? 401 : chats.accepted ? 200 : chats.retryAfterMs ? 429 : 0 });
+    if (this.sessionGeneration(accountId) !== epoch) return false;
+    return sessionRejectionConfirmed(probes);
   }
 
   /**
@@ -920,6 +983,7 @@ export class SessionManager {
 
   private async runLogin(accountId: string): Promise<void> {
     let leased: { context: BrowserContext; release: () => Promise<void> } | null = null;
+    this.rotateSessionEpoch(accountId);
     try {
       if (this.closed) return;
       // room.ts registra el cierre de la sala. Así Conectar no importa el ciclo al cargar.
@@ -974,13 +1038,10 @@ export class SessionManager {
       await preparePrivateDir(path.dirname(storagePath));
       const exportedState = parseStorageState(await context.storageState());
       await writeEncryptedSession(storagePath, exportedState, sessionKey);
+      this.rotateSessionEpoch(accountId);
       await this.options.store.update(accountId, {
-        status: "active",
-        loginInProgress: false,
-        sessionRejected: false,
-        hasStorageState: true,
+        ...successfulLoginPatch(),
         lastCheckedAt: this.now().toISOString(),
-        lastError: null,
       });
       this.log.info(`session stored account=${accountId}`);
     } catch (error) {

@@ -4,6 +4,7 @@ import { backoffDelayMs } from "./backoff.ts";
 import { directorySpendById, fillThreadSpend, mergeMessages, mergeThreads, parseChatList, parseChatMessages, parsePreviewMessages, type ChatMessage, type ChatThread } from "./chats.ts";
 import { awaitAccountGap, REQUEST_GAP_MS } from "./api-list-pace.ts";
 import { noteMissingUnread } from "./unread-chats.ts";
+import { usersMeKeepsSession, usersMeVerdict } from "../identity.ts";
 import { loadSignRules, signedUserId, signOnlyfans, type SignRules } from "./of-sign.ts";
 import { SESSION_EXPIRED_LABEL } from "./session-link.ts";
 
@@ -254,6 +255,20 @@ export async function fetchSignedVault(state: StorageStateFile, deps: {
     else return { ...empty, status: read.status, reason: read.reason };
   }
   return { ...empty, payloads, status, reason: payloads.length === 0 ? "No se ha podido leer la bóveda." : null };
+}
+
+/** users/me firmado. Un 200 de invitado no es una sesión válida. No escribe el estado. */
+export async function fetchSignedUsersMe(state: StorageStateFile, deps: {
+  fetch: typeof fetch;
+  now: () => number;
+}): Promise<{ status: number | null; guest: boolean }> {
+  const auth = sessionForApi(state, deps.now());
+  if ("reason" in auth) return { status: null, guest: false };
+  const rules = await loadSignRules(deps.fetch, deps.now());
+  const page = await getJson(deps.fetch, "/api2/v2/users/me", signedHeaders(rules, "/api2/v2/users/me", auth, deps.now()), deps.now());
+  if (page.status === 401) return { status: 401, guest: true };
+  if (!page.ok) return { status: page.status, guest: false };
+  return { status: page.status, guest: !usersMeKeepsSession(usersMeVerdict(page.body)) };
 }
 
 type JsonPage = {

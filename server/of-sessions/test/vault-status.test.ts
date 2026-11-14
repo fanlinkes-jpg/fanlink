@@ -74,9 +74,9 @@ async function readVault(status: number, marked: number[]) {
       async borrowProfile() {
         throw new Error("chromium");
       },
-      async recordSignedRead(_id, httpStatus) {
-        marked.push(httpStatus);
-        return { id: "acc-9" } as Account;
+      async noteRouteRejection(_id, _reason, _epoch) {
+        marked.push(401);
+        return true;
       },
     },
   });

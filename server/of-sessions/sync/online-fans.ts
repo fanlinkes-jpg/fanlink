@@ -29,6 +29,8 @@ export type OnlineRead = {
   sessionRejected?: boolean;
   /** 400. No es una sesión caducada. */
   signatureRejected?: boolean;
+  /** 429. Cero si no hay que esperar. Con valor, no se abre Chromium. */
+  retryAfterMs?: number;
 };
 
 export type OnlineAccountRead = {
@@ -92,6 +94,9 @@ export function onlineReadFromPayload(status: number, payload: unknown): OnlineR
   if (status === 400) {
     return { fans: [], reason: "OnlyFans ha rechazado la firma", status, signatureRejected: true };
   }
+  if (status === 429) {
+    return { fans: [], reason: "OnlyFans respondió 429", status, fallback: false, retryAfterMs: 15_000 };
+  }
   if (status !== 200) return { fans: [], reason: "No se pudo leer.", status };
   const rows = listOf(payload);
   if (!rows) return { fans: [], reason: "No se pudo leer.", status };
@@ -126,10 +131,14 @@ export async function fetchSignedOnlineFans(
   } catch {
     return { fans: [], reason: "No se pudo leer.", status: null };
   }
+  if (response.status === 429) {
+    const paced = onlineReadFromPayload(429, null);
+    return { ...paced, retryAfterMs: retryAfterMs(response), fallback: false };
+  }
   if (response.status === 401 || response.status === 400) {
     return onlineReadFromPayload(response.status, null);
   }
-  if (!response.ok) return { fans: [], reason: "No se pudo leer.", status: response.status };
+  if (!response.ok) return { fans: [], reason: "No se pudo leer.", status: response.status, fallback: false };
   try {
     return onlineReadFromPayload(response.status, await readJsonBody(response));
   } catch (error) {
@@ -218,6 +227,13 @@ export function mergeOnlineAccounts(reads: readonly OnlineAccountRead[]): { fans
     }
   }
   return { fans, notices };
+}
+
+function retryAfterMs(response: Response): number {
+  const header = response.headers.get("retry-after");
+  const seconds = Number(header);
+  if (header && Number.isFinite(seconds) && seconds >= 0) return Math.min(Math.round(seconds * 1000), 30 * 60_000);
+  return 15_000;
 }
 
 function listOf(payload: unknown): unknown[] | null {

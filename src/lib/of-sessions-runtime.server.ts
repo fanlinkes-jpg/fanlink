@@ -338,8 +338,8 @@ function bootApiListLoop(sessions: SessionManager): void {
     while (true) {
       try {
         const listed = await sessions.listAccounts();
-        await applyDerivedConnections(sessions, listed);
-        await passApiListAccounts(sessions, listed, skipNoted, async (account, read) => {
+        const ready = await applyDerivedConnections(sessions, listed);
+        await passApiListAccounts(sessions, ready, skipNoted, async (account, read) => {
           await finishApiRead(account, read);
         });
       } catch (error) {

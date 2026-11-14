@@ -87,16 +87,49 @@ export function deriveConnectedFromLastRead(account: SignedReadAccount, lastRead
   return applySignedRead(account, 200);
 }
 
+/** Lo que escribe un login que termina bien. La conexión queda aceptada ahí mismo. */
+export function successfulLoginPatch(): AccountPatch {
+  return {
+    status: "active",
+    connection: "live",
+    loginInProgress: false,
+    sessionRejected: false,
+    hasStorageState: true,
+    lastError: null,
+  };
+}
+
+export type SessionConfirmProbe =
+  | { route: "chats"; status: number }
+  | { route: "users-me"; status: number; guest: boolean };
+
+/**
+ * Un 401 en otra ruta no tumba la sesión. La confirma un 401 de la lista
+ * o un users/me de invitado (isAuth distinto de true, o sin id o username).
+ * Un 200 de verdad de cualquiera de las dos la deja viva.
+ */
+export function sessionRejectionConfirmed(probes: readonly SessionConfirmProbe[]): boolean {
+  for (const probe of probes) {
+    if (probe.route === "chats" && probe.status === 401) return true;
+    if (probe.route === "users-me" && (probe.guest || probe.status === 401)) return true;
+    if (probe.route === "chats" && probe.status === 200) return false;
+    if (probe.route === "users-me" && probe.status === 200 && !probe.guest) return false;
+  }
+  return false;
+}
+
 /**
  * Efecto de una lectura firmada sobre `accounts.json`.
  * Un 200 deja la cuenta conectada y no borra `sessionRejected`.
  * Un 401 lo marca si aún no lo estaba. Si ya lo estaba, no reescribe.
+ * Si la generación de la sesión cambió (Reconectar), el resultado se tira.
  */
 export function applySignedRead(
   account: SignedReadAccount,
   httpStatus: number,
-  options?: { loginAlreadyOpen?: boolean; reason?: string | null },
+  options?: { loginAlreadyOpen?: boolean; reason?: string | null; readEpoch?: number; currentEpoch?: number },
 ): AccountPatch | null {
+  if (options?.readEpoch != null && options.currentEpoch != null && options.readEpoch !== options.currentEpoch) return null;
   if (httpStatus === 401) {
     if (account.sessionRejected) return null;
     const loginAlreadyOpen = options?.loginAlreadyOpen === true;

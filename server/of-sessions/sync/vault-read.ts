@@ -1,5 +1,4 @@
 import type { SessionManager } from "../sessions/session-manager.ts";
-import type { Account } from "../types.ts";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
 import { noteAccountBlock } from "./backoff.ts";
 import { fetchSignedVault, type SignedVaultRead } from "./of-chat-api.ts";
@@ -10,7 +9,8 @@ import { persistVaultRead } from "./vault-store.ts";
 import { rememberVaultThumbs, type ThumbBrowser } from "./vault-thumbs.ts";
 
 export type VaultReadSessions = Pick<SessionManager, "listAccounts" | "readStorageState" | "borrowProfile"> & {
-  recordSignedRead?: (accountId: string, httpStatus: number, reason?: string | null) => Promise<Account>;
+  sessionGeneration?: (accountId: string) => number;
+  noteRouteRejection?: (accountId: string, reason: string | null, readEpoch?: number) => Promise<boolean>;
 };
 
 export type VaultReadDeps = {
@@ -36,11 +36,12 @@ export async function readChatVaultView(
   const list = input.listId || "all";
   const offset = input.offset ?? 0;
   const now = deps.now ?? (() => Date.now());
+  const epoch = deps.sessions.sessionGeneration?.(account.id);
   const read = await fetchSignedVault(state, { fetch: deps.fetch, now }, list, offset);
   console.info(`[fanlink:vault] creator=${input.creatorId} status=${read.status ?? "sin"}`);
   const blocked = vaultAuthReason(read);
   if (blocked) {
-    if (read.sessionRejected) await deps.sessions.recordSignedRead?.(account.id, 401, read.reason)?.catch(() => undefined);
+    if (read.sessionRejected) await deps.sessions.noteRouteRejection?.(account.id, read.reason, epoch)?.catch(() => undefined);
     if (read.signatureRejected) noteAccountBlock(account.id, "400");
     if (read.retryAfterMs > 0) noteAccountBlock(account.id, "429");
     return { items: [], reason: blocked };

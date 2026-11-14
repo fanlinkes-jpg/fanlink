@@ -6,6 +6,8 @@ import {
   accountSessionNotices,
   applySignedRead,
   deriveConnectedFromLastRead,
+  sessionRejectionConfirmed,
+  successfulLoginPatch,
   derivedConnectedIds,
   everyAccountBlocked,
   showsConnected,
@@ -88,6 +90,33 @@ test("una cuenta rechazada no enseña un 0", () => {
     ],
     ["9ikis52", "3zk7kbr"],
   ), false);
+});
+
+test("Reconectar deja la conexión en aceptada en el mismo guardado", () => {
+  const patch = successfulLoginPatch();
+  assert.equal(patch.connection, "live");
+  assert.equal(patch.sessionRejected, false);
+  assert.equal(patch.status, "active");
+});
+
+test("un 401 de otra generación no pisa el login", () => {
+  const live: SignedReadAccount = { ...loginRequired, connection: "live", status: "active", sessionRejected: false };
+  assert.equal(applySignedRead(live, 401, { readEpoch: 1, currentEpoch: 2 }), null);
+  assert.equal(applySignedRead(live, 401, { readEpoch: 2, currentEpoch: 2 })?.sessionRejected, true);
+});
+
+test("un 401 de otra ruta no tumba la sesión hasta confirmarla", () => {
+  assert.equal(sessionRejectionConfirmed([{ route: "users-me", status: 200, guest: true }]), true);
+  assert.equal(sessionRejectionConfirmed([{ route: "chats", status: 401 }]), true);
+  assert.equal(sessionRejectionConfirmed([{ route: "users-me", status: 200, guest: false }]), false);
+  assert.equal(sessionRejectionConfirmed([
+    { route: "users-me", status: 429, guest: false },
+    { route: "chats", status: 200 },
+  ]), false);
+  assert.equal(sessionRejectionConfirmed([
+    { route: "users-me", status: 500, guest: false },
+    { route: "chats", status: 401 },
+  ]), true);
 });
 
 test("derivar la conexión no incluye a la cuenta rechazada", () => {

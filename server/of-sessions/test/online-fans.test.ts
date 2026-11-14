@@ -118,6 +118,15 @@ test("api2 firmada cuenta la lista filtrada, el 401 es la sesión y el 200 vací
   assert.equal(signature.reason, "OnlyFans ha rechazado la firma");
   assert.equal(signature.signatureRejected, true);
   assert.equal(signature.sessionRejected, undefined);
+  const limited = await fetchSignedOnlineFans(state, {
+    now: () => 1,
+    rules,
+    fetch: async () => new Response("slow", { status: 429, headers: { "retry-after": "3" } }),
+  });
+  assert.equal(limited.status, 429);
+  assert.equal(limited.fallback, false);
+  assert.equal(limited.retryAfterMs, 3_000);
+  assert.equal(limited.sessionRejected, undefined);
 
   const empty = await fetchSignedOnlineFans(state, {
     now: () => 1,
