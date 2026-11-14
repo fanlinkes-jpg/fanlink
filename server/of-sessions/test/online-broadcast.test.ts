@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { test } from "node:test";
 import { clearAccountChatPace, withAccountApi } from "../sync/api-list-pace.ts";
 import { parseSignRules } from "../sync/of-sign.ts";
 import { readJsonBody } from "../sync/of-sign.ts";
-import { sendPerMinute } from "../send/gate.ts";
+import { createSendLimiter, sendPerMinute, sharedSendLimiter } from "../send/gate.ts";
 import { onlineDedupeKey } from "../send/online-claim.ts";
 import {
   canSeeOnlineFans,
@@ -221,6 +221,7 @@ test("cancelar el lote deja constancia de a quién le llegó", async () => {
   const started = new Promise<void>((resolve) => {
     secondStarted = resolve;
   });
+  const batchId = randomUUID();
   const sent = sendOnlineBroadcast({
     ...input(async (_url, init) => {
       posts += 1;
@@ -230,16 +231,17 @@ test("cancelar el lote deja constancia de a quién le llegó", async () => {
       if (init?.signal?.aborted) throw new DOMException("aborted", "AbortError");
       return Response.json({ id: 2 });
     }, openEnv(), account, undefined, "acc-cancel"),
-    batchId: "lote-1",
+    batchId,
     requested: ["1", "2", "3"],
     online: ["1", "2", "3"].map((fanKey) => ({ fanKey })),
   });
   await started;
-  assert.equal(cancelOnlineBroadcast("lote-1", "chatter", "3zk7kbr"), true);
+  assert.equal(cancelOnlineBroadcast(batchId, "chatter", "3zk7kbr"), true);
   release();
   const done = await sent;
   assert.equal(done.results.find((row) => row.fanKey === "1")?.status, "enviado");
-  assert.equal(done.results.filter((row) => row.reason === "Cancelado").length, 2);
+  assert.equal(done.results.find((row) => row.fanKey === "2")?.reason, "Hay que resolver");
+  assert.equal(done.results.filter((row) => row.reason === "Cancelado").length, 1);
   assert.equal(posts, 2);
 });
 
@@ -274,7 +276,7 @@ test("101 destinatarios se quedan en el tope y el cuerpo es el del bundle", asyn
 
 test("dos lotes a la vez respetan el hueco de 60/N", async () => {
   clearOnlineBroadcastPace();
-  clearAccountApiLock();
+  clearAccountChatPace();
   let clock = 0;
   const stamps: number[] = [];
   const env = { ...openEnv(), FANLINK_SEND_PER_MINUTE: "4" };
@@ -288,9 +290,10 @@ test("dos lotes a la vez respetan el hueco de 60/N", async () => {
       clock += ms;
     },
   };
+  const limiter = createSendLimiter();
   await Promise.all([
-    sendOnlineBroadcast({ ...input(fetchImpl, env, account, undefined, "acc-gap"), requested: ["1"], online: [{ fanKey: "1" }], ...pace }),
-    sendOnlineBroadcast({ ...input(fetchImpl, env, account, undefined, "acc-gap"), batchId: "lote-b", requested: ["2"], online: [{ fanKey: "2" }], ...pace }),
+    sendOnlineBroadcast({ ...input(fetchImpl, env, account, undefined, "acc-gap"), limiter, requested: ["1"], online: [{ fanKey: "1" }], ...pace }),
+    sendOnlineBroadcast({ ...input(fetchImpl, env, account, undefined, "acc-gap"), limiter, batchId: randomUUID(), requested: ["2"], online: [{ fanKey: "2" }], ...pace }),
   ]);
   stamps.sort((left, right) => left - right);
   assert.equal(stamps.length, 2);
@@ -329,6 +332,61 @@ test("un chatter solo ve las cuentas que tiene asignadas", () => {
   assert.equal(canSeeOnlineFans(chatter, "otra"), false);
   assert.equal(canSeeOnlineFans({ role: "member", perms: [], creatorIds: ["3zk7kbr"] }, "3zk7kbr"), false);
   assert.equal(canSeeOnlineFans({ role: "owner", perms: [], creatorIds: [] }, "otra"), true);
+});
+
+test("un batchId vacío no hace POST", async () => {
+  let posts = 0;
+  const fetchImpl: typeof fetch = async () => {
+    posts += 1;
+    return Response.json({ id: 1 });
+  };
+  const empty = await sendOnlineBroadcast({ ...input(fetchImpl, openEnv()), batchId: "" });
+  const blank = await sendOnlineBroadcast({ ...input(fetchImpl, openEnv()), batchId: "   " });
+  assert.equal(empty.reason, "Sin datos");
+  assert.equal(blank.reason, "Sin datos");
+  assert.equal(posts, 0);
+});
+
+test("un fetch que lanza o un corte no pasan la fila a error", async () => {
+  let finished = 0;
+  const finish = async () => {
+    finished += 1;
+  };
+  const thrown = await sendOnlineBroadcast({
+    ...input(async () => {
+      throw new Error("red");
+    }, openEnv(), account, { finish }, "acc-ambiguous"),
+    requested: ["1"],
+    online: [{ fanKey: "1" }],
+  });
+  const timed = await sendOnlineBroadcast({
+    ...input(async () => {
+      throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    }, openEnv(), account, { finish }, "acc-timeout"),
+    requested: ["1"],
+    online: [{ fanKey: "1" }],
+  });
+  assert.equal(finished, 0);
+  assert.equal(thrown.posted, 0);
+  assert.equal(thrown.results[0]?.reason, "Hay que resolver");
+  assert.equal(timed.results[0]?.reason, "Hay que resolver");
+});
+
+test("el lote gasta el mismo cupo por minuto que un envío suelto", async () => {
+  const key = `acc-share-${randomUUID()}`;
+  await sharedSendLimiter.run(key, async () => undefined, { perMinute: 1, now: () => 5_000, sleep: async () => undefined });
+  let waited = 0;
+  await sendOnlineBroadcast({
+    ...input(async () => Response.json({ id: 1 }), { ...openEnv(), FANLINK_SEND_PER_MINUTE: "1" }, account, undefined, key),
+    limiter: undefined,
+    requested: ["1"],
+    online: [{ fanKey: "1" }],
+    now: () => 5_000,
+    sleep: async (ms) => {
+      waited = ms;
+    },
+  });
+  assert.equal(waited, 60_000);
 });
 
 test("readJsonBody cancela el cuerpo al cumplirse el tope", async () => {
@@ -371,7 +429,8 @@ function input(
     env,
     account: { ...target, accountId },
     userId: "chatter",
-    batchId: "lote",
+    batchId: randomUUID(),
+    limiter: createSendLimiter(),
     auth: { cookie: "auth_id=42; sess=ok", userId: "42", xBc: "huella" },
     rules,
     requested: ["1", "2"],

@@ -1,5 +1,5 @@
 import { normalizeOutboundText, outboundTextDelta, OUTBOUND_TIE_MS, type OutboundDraft } from "./author-match.ts";
-import { noteStaleOnlineSends, ONLINE_STALE_REASON } from "../send/online-claim.ts";
+import { ONLINE_STALE_REASON } from "../send/online-claim.ts";
 import { newFanEvents, collapseFans, type ChatMessage, type ChatThread, type ChatUser, type FanMessageEvent } from "./chats.ts";
 import { decodeMedia, encodeMedia, oldestCursor } from "./history.ts";
 import type { ReadSql } from "./store.ts";
@@ -841,11 +841,12 @@ export async function listPendingOutbounds(
   status: "pending" | "error" | "sending";
   stale: boolean;
   errorReason: string | null;
+  dedupeKey: string | null;
 }>> {
   if (!creatorIds.length) return [];
   await expireStuckPending(sql);
-  await noteStaleOnlineSends(sql, Date.now());
   const filter = creatorIds.map((_, index) => `$${index + 1}`).join(", ");
+  const reasonSlot = `$${creatorIds.length + 1}`;
   const rows = await sql.query<{
     id: string;
     creator_id: string;
@@ -857,15 +858,21 @@ export async function listPendingOutbounds(
     price_cents: number | string | null;
     status: string | null;
     error_reason: string | null;
+    dedupe_key: string | null;
+    stale: boolean | string | null;
   }>(
     `select o.id, o.creator_id, o.thread_key, o.body, o.scheduled_at, p.display_name as author_name,
-            o.author_id, o.price_cents, o.status, o.error_reason
+            o.author_id, o.price_cents, o.status, o.error_reason, o.dedupe_key,
+            (o.status = 'sending' and o.dedupe_key is not null and (
+              o.error_reason = ${reasonSlot}
+              or (o.sending_at is not null and o.sending_at < now() - interval '10 minutes')
+            )) as stale
      from of_chat_outbound o
      left join staff_profile p on p.user_id = o.author_id
      where o.creator_id in (${filter}) and o.matched_message_key is null
        and coalesce(o.status, 'pending') not in ('sent', 'discarded')
      order by o.created_at`,
-    creatorIds,
+    [...creatorIds, ONLINE_STALE_REASON],
   );
   const vault = await pendingVaultPieces(sql, rows);
   return rows.map((row) => ({
@@ -879,8 +886,9 @@ export async function listPendingOutbounds(
     priceCents: centsOrNull(row.price_cents),
     vault: vault.get(row.id) ?? [],
     status: row.status === "error" ? "error" : row.status === "sending" ? "sending" : "pending",
-    stale: row.status === "sending" && row.error_reason === ONLINE_STALE_REASON,
+    stale: row.stale === true || row.stale === "t",
     errorReason: row.error_reason,
+    dedupeKey: row.dedupe_key,
   }));
 }
 

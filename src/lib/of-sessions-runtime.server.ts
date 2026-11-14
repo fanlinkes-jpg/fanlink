@@ -46,7 +46,7 @@ import { loadSignRules } from "../../server/of-sessions/sync/of-sign.ts";
 import { prepareVaultSend } from "../../server/of-sessions/sync/vault-store.ts";
 import { withAccountApi } from "../../server/of-sessions/sync/api-list-pace.ts";
 import { canSeeOnlineFans, cancelOnlineBroadcast, emptyOnlineBroadcast, onlineBroadcastGate, refuseOnlineBroadcast, sendOnlineBroadcast, type OnlineBroadcastResult } from "../../server/of-sessions/send/online-broadcast.ts";
-import { claimOnlineOutbound, finishOnlineOutbound, resolveStaleOnlineSend } from "../../server/of-sessions/send/online-claim.ts";
+import { claimOnlineOutbound, finishOnlineOutbound, noteStaleOnlineSends, resolveStaleOnlineSend } from "../../server/of-sessions/send/online-claim.ts";
 import { normalizeFanMenuRequest, runFanMenuOnPage, type FanMenuResult } from "../../server/of-sessions/sync/fan-menu.ts";
 import { chatPageUrl } from "../../server/of-sessions/sync/chats.ts";
 import { sendPace } from "../../server/of-sessions/send/gate.ts";
@@ -926,6 +926,7 @@ export async function resolveOnlineOutboundView(userId: string, input: { id: str
   if (!creatorId || !canSeeOnlineFans(access, creatorId)) {
     throw new WorkspaceAccessError("No tienes acceso para operar la sesión de esa creadora.");
   }
+  await noteStaleOnlineSends(sql, Date.now());
   return { ok: await resolveStaleOnlineSend(sql, input.id, input.outcome) };
 }
 
@@ -1026,6 +1027,7 @@ export async function listOnlineFansView(userId: string, input: { creatorId: str
   if (!canSeeOnlineFans(access, input.creatorId)) {
     throw new WorkspaceAccessError("No tienes acceso para operar la sesión de esa creadora.");
   }
+  await noteStaleOnlineSends(await getSql(), Date.now());
   const sessions = await getOfSessionManager();
   const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
   if (!account) return { fans: [], reason: "Sin datos", cap: ONLINE_FAN_CAP, send: { enabled: false, reason: "Sin datos" } };

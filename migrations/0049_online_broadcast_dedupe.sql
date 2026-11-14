@@ -2,6 +2,7 @@
 -- Idempotente. No borra filas. No es única: la ventana la mira la transacción.
 
 alter table of_chat_outbound add column if not exists dedupe_key text;
+alter table of_chat_outbound add column if not exists sending_at timestamptz;
 
 create index if not exists of_chat_outbound_online_recent
   on of_chat_outbound (creator_id, fan_key, dedupe_key, created_at desc);

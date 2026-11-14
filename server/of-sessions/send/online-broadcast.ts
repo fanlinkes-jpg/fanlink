@@ -3,12 +3,19 @@ import type { SignRules } from "../sync/of-sign.ts";
 import { readJsonBody } from "../sync/of-sign.ts";
 import { signedHeaders } from "../sync/of-chat-api.ts";
 import { withAccountApi } from "../sync/api-list-pace.ts";
-import { chatSendGate, sendPerMinute, type SendAccount } from "./gate.ts";
+import { chatSendGate, createSendLimiter, sendPerMinute, sharedSendLimiter, type SendAccount } from "./gate.ts";
+import { ONLINE_STALE_REASON, parseOnlineBatchId } from "./online-claim.ts";
 
 export const ONLINE_BROADCAST_FLAG = "FANLINK_ENABLE_ONLINE_BROADCAST";
 
 const batches = new Map<string, { controller: AbortController; creatorId: string; userId: string }>();
-const lastSentAt = new Map<string, number>();
+
+export class AmbiguousOnlineSend extends Error {
+  constructor() {
+    super(ONLINE_STALE_REASON);
+    this.name = "AmbiguousOnlineSend";
+  }
+}
 
 export type OnlineSendStatus = "enviado" | "fallido";
 
@@ -45,13 +52,13 @@ export type OnlineBroadcastInput = {
   fetch: typeof fetch;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
+  limiter?: ReturnType<typeof createSendLimiter>;
   claim: (fanKey: string) => Promise<{ state: "nuevo" | "enviado" | "comprobar"; id: string }>;
   finish: (id: string, status: OnlineSendStatus, messageId: string | null, reason: string | null) => Promise<void>;
 };
 
 export function clearOnlineBroadcastPace(): void {
   batches.clear();
-  lastSentAt.clear();
 }
 
 /** Hueco mínimo entre dos POST de la misma cuenta: 60/N segundos. */
@@ -173,6 +180,7 @@ export function sendOnlineBroadcast(input: OnlineBroadcastInput): Promise<Online
 }
 
 async function runOnlineBroadcast(input: OnlineBroadcastInput, key: string): Promise<OnlineBroadcastResult> {
+  if (!parseOnlineBatchId(input.batchId)) return emptyOnlineBroadcast("Sin datos");
   const refusal = refuseOnlineBroadcast(input);
   if (refusal) return emptyOnlineBroadcast(refusal);
   const picked = onlineRecipients(input.requested, input.online);
@@ -220,7 +228,11 @@ async function runOnlineBroadcast(input: OnlineBroadcastInput, key: string): Pro
       let response: Response;
       try {
         response = await postWhenPaced(input, key, path, mediaIds, price, text, controller.signal);
-      } catch {
+      } catch (error) {
+        if (error instanceof AmbiguousOnlineSend) {
+          results.push({ fanKey, status: "fallido", reason: ONLINE_STALE_REASON });
+          continue;
+        }
         const why = controller.signal.aborted ? "Cancelado" : "No se pudo leer.";
         await input.finish(claimed.id, "fallido", null, why);
         results.push({ fanKey, status: "fallido", reason: why });
@@ -273,33 +285,35 @@ async function postWhenPaced(
   text: string,
   signal: AbortSignal,
 ): Promise<Response> {
-  const gap = onlineSendGapMs(sendPerMinute(input.env.FANLINK_SEND_PER_MINUTE));
-  while (true) {
+  const limiter = input.limiter ?? sharedSendLimiter;
+  return limiter.run(key, async () => {
     if (signal.aborted) throw new DOMException("aborted", "AbortError");
-    const turn = await withAccountApi(key, async () => {
+    return withAccountApi(key, async () => {
       const now = input.now();
-      const last = lastSentAt.get(key);
-      const waitMs = last == null ? 0 : Math.max(0, gap - (now - last));
-      if (waitMs > 0) return { waitMs, response: null as Response | null };
-      lastSentAt.set(key, now);
-      const response = await input.fetch(`https://onlyfans.com${path}`, {
-        method: "POST",
-        headers: {
-          ...signedHeaders(input.rules, path, input.auth, now),
-          "content-type": "application/json",
-        },
-        body: JSON.stringify(onlineMessageBody({ text, mediaIds, price })),
-        signal,
-      });
-      return { waitMs: 0, response };
+      try {
+        return await input.fetch(`https://onlyfans.com${path}`, {
+          method: "POST",
+          headers: {
+            ...signedHeaders(input.rules, path, input.auth, now),
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(onlineMessageBody({ text, mediaIds, price })),
+          signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]),
+        });
+      } catch {
+        throw new AmbiguousOnlineSend();
+      }
     });
-    if (turn.waitMs > 0) {
-      await input.sleep(turn.waitMs);
-      continue;
-    }
-    if (!turn.response) throw new DOMException("aborted", "AbortError");
-    return turn.response;
-  }
+  }, {
+    perMinute: sendPerMinute(input.env.FANLINK_SEND_PER_MINUTE),
+    minGapMs: onlineSendGapMs(sendPerMinute(input.env.FANLINK_SEND_PER_MINUTE)),
+    now: input.now,
+    sleep: async (ms) => {
+      if (signal.aborted) throw new DOMException("aborted", "AbortError");
+      await input.sleep(ms);
+      if (signal.aborted) throw new DOMException("aborted", "AbortError");
+    },
+  });
 }
 
 function noteRest(fanKeys: readonly string[], results: OnlineSendRow[], why: string): void {

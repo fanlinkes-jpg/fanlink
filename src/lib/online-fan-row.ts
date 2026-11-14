@@ -1,5 +1,26 @@
 export const ONLINE_FAN_CAP = 100;
 
+/** El mismo id solo si el texto, el precio, la bóveda y la lista no cambiaron. */
+export function onlineBatchPayload(input: {
+  text: string;
+  priceCents: number | null;
+  vaultItemIds: readonly string[];
+  fanKeys: readonly string[];
+}): string {
+  const vault = [...input.vaultItemIds].map((item) => item.trim()).filter(Boolean).sort().join(",");
+  const fans = [...input.fanKeys].sort().join(",");
+  return `${input.text}\n${input.priceCents ?? ""}\n${vault}\n${fans}`;
+}
+
+export function nextOnlineBatchId(
+  previous: { id: string; payload: string } | null,
+  payload: string,
+  createId: () => string,
+): string {
+  if (previous && previous.id && previous.payload === payload) return previous.id;
+  return createId();
+}
+
 export type OnlineFanRow = {
   fanKey: string;
   fanName: string | null;

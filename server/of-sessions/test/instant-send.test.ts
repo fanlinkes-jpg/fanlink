@@ -16,6 +16,7 @@ const FILES = [
   "0019_chat_author.sql", "0024_outbound_schedule.sql", "0025_outbound_send.sql",
   "0037_vault_mirror.sql", "0038_vault_fan_filter.sql", "0039_outbound_media.sql",
   "0040_vault_full_tags.sql", "0041_send_claim.sql", "0042_vault_paid_with.sql", "0043_outbound_lease.sql",
+  "0049_online_broadcast_dedupe.sql",
 ];
 
 const account = { id: "acc-9", creatorId: "9ikis52", identityHandle: "bigpoppa1111", identityUserId: "42", identityState: "ok", label: "Prueba" };

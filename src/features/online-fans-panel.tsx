@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { MessageCircle, RefreshCw } from "lucide-react";
-import { fanInitials, filterOnlineFans, onlineCapPhrase, onlineListNames, spendLabel, type OnlineFanRow } from "@/lib/online-fan-row";
+import { fanInitials, filterOnlineFans, nextOnlineBatchId, onlineBatchPayload, onlineCapPhrase, onlineListNames, spendLabel, type OnlineFanRow } from "@/lib/online-fan-row";
 
 export type OnlineBroadcastPayload = {
   fanKeys: string[];
@@ -49,15 +49,23 @@ export function OnlineFansPanel({
   const [composing, setComposing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [sending, setSending] = useState(false);
-  const [batchId, setBatchId] = useState<string | null>(null);
+  const batchRef = useRef<{ id: string; payload: string } | null>(null);
+  const [liveBatchId, setLiveBatchId] = useState<string | null>(null);
   const [progress, setProgress] = useState<OnlineBroadcastProgress | null>(null);
   const lists = useMemo(() => onlineListNames(fans), [fans]);
   const visible = filterOnlineFans(fans, lists.includes(list) || list === "Todos" ? list : "Todos");
   const names = new Map(fans.map((fan) => [fan.fanKey, fan.fanName ?? fan.fanHandle ?? fan.fanKey]));
 
   async function confirmSend() {
-    const id = batchId ?? crypto.randomUUID();
-    setBatchId(id);
+    const payload = onlineBatchPayload({
+      text: draft,
+      priceCents: priceCents(price),
+      vaultItemIds: vault.split(/[,;\s]+/),
+      fanKeys: visible.map((fan) => fan.fanKey),
+    });
+    const id = nextOnlineBatchId(batchRef.current, payload, () => crypto.randomUUID());
+    batchRef.current = { id, payload };
+    setLiveBatchId(id);
     setSending(true);
     try {
       const result = await onSend({
@@ -73,6 +81,7 @@ export function OnlineFansPanel({
       const reason = err instanceof Error && err.message ? err.message : "No se pudo leer.";
       setProgress({ posted: 0, results: [], stopped: false, retryAfter: null, reason, cap });
     } finally {
+      batchRef.current = null;
       setSending(false);
     }
   }
@@ -124,7 +133,7 @@ export function OnlineFansPanel({
       <div className="space-y-2 border-t border-[#e6e8ee] px-3 py-2">
         {sendEnabled && composing ? (
           <>
-            <textarea value={draft} onChange={(event) => { setDraft(event.target.value); setConfirming(false); setBatchId(null); }} rows={3} placeholder="Mensaje" className="w-full resize-none rounded-lg border border-[#e6e8ee] px-2 py-1.5 text-sm" />
+            <textarea value={draft} onChange={(event) => { setDraft(event.target.value); setConfirming(false); }} rows={3} placeholder="Mensaje" className="w-full resize-none rounded-lg border border-[#e6e8ee] px-2 py-1.5 text-sm" />
             <input value={price} onChange={(event) => { setPrice(event.target.value); setConfirming(false); }} inputMode="decimal" placeholder="Precio por fan, opcional" aria-label="Precio por fan" className="w-full rounded-lg border border-[#e6e8ee] px-2 py-1.5 text-sm" />
             <input value={vault} onChange={(event) => { setVault(event.target.value); setConfirming(false); }} placeholder="Ids de la bóveda, opcional" aria-label="Ids de la bóveda" className="w-full rounded-lg border border-[#e6e8ee] px-2 py-1.5 text-sm" />
             <p className="text-[11px] text-[#6d7585]">{visible.length === 0 ? "Nadie en esta lista" : `Destinatarios: ${visible.length}`}</p>
@@ -133,7 +142,7 @@ export function OnlineFansPanel({
                 <p className="text-xs">{onlineCapPhrase(visible.length, cap)}</p>
                 <div className="flex gap-2">
                   <button type="button" disabled={sending || visible.length === 0} className="rounded-lg bg-[#3b6cff] px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50" onClick={() => void confirmSend()}>{sending ? "Enviando…" : "Confirmar"}</button>
-                  <button type="button" className="rounded-lg px-3 py-1.5 text-xs text-[#6d7585]" onClick={() => { if (sending && batchId) onCancel(batchId); else setConfirming(false); }}>Cancelar</button>
+                  <button type="button" className="rounded-lg px-3 py-1.5 text-xs text-[#6d7585]" onClick={() => { if (sending && liveBatchId) onCancel(liveBatchId); else setConfirming(false); }}>Cancelar</button>
                 </div>
               </div>
             ) : (

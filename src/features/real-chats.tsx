@@ -229,7 +229,7 @@ export function RealChatsPage() {
   const [priceLabel, setPriceLabel] = useState<string | null>(null);
   const [sendCreators, setSendCreators] = useState<string[]>([]);
   const jobList = useSyncExternalStore(chatSendSession.subscribe, chatSendSession.getJobs, chatSendSession.getJobs);
-  const [pendingOut, setPendingOut] = useState<Array<{ id: string; creatorId: string; threadKey: string; body: string; scheduledAt: string | null; authorName: string | null; authorId: string | null; priceCents: number | null; vault: Array<{ id: string; name: string }>; status: "pending" | "error" | "sending"; stale: boolean; errorReason: string | null }>>([]);
+  const [pendingOut, setPendingOut] = useState<Array<{ id: string; creatorId: string; threadKey: string; body: string; scheduledAt: string | null; authorName: string | null; authorId: string | null; priceCents: number | null; vault: Array<{ id: string; name: string }>; status: "pending" | "error" | "sending"; stale: boolean; errorReason: string | null; dedupeKey: string | null }>>([]);
   const [scheduleAt, setScheduleAt] = useState("");
   const [panel, setPanel] = useState<ComposerPanel>(null);
   const [dialog, setDialog] = useState<"precio" | "programar" | null>(null);
@@ -272,6 +272,7 @@ export function RealChatsPage() {
           status: item.status,
           stale: item.stale,
           errorReason: item.errorReason,
+          dedupeKey: item.dedupeKey,
         }] : []
       ));
       pendingRef.current = nextPending;
@@ -663,7 +664,7 @@ export function RealChatsPage() {
       return;
     }
     const item = pendingRef.current.find((row) => row.id === clientId && row.status === "error" && row.authorId === user?.id);
-    if (!item) return;
+    if (!item || item.dedupeKey) return;
     const recovered = draftFromPending(item);
     const job: OutboundSend = {
       clientId: item.id,
@@ -1218,9 +1219,9 @@ export function RealChatsPage() {
                     ) : null}
                     {item.status === "error" && mine ? (
                       <p className="mt-1 flex justify-end gap-2 text-[10px]">
-                        <button type="button" className="text-[#2456c7]" onClick={() => retrySend(item.id)}>Reintentar</button>
+                        {item.dedupeKey ? null : <button type="button" className="text-[#2456c7]" onClick={() => retrySend(item.id)}>Reintentar</button>}
                         <button type="button" className="text-[#2456c7]" onClick={() => void discardSend(item.id)}>Descartar</button>
-                        <button type="button" className="text-[#2456c7]" onClick={() => restoreDraft(recovered)}>Recuperar</button>
+                        {item.dedupeKey ? null : <button type="button" className="text-[#2456c7]" onClick={() => restoreDraft(recovered)}>Recuperar</button>}
                       </p>
                     ) : null}
                     {item.errorReason === "Pendiente de confirmar" && teamAccess?.role === "owner" ? (

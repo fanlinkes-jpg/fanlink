@@ -185,6 +185,7 @@ export type CreatorChatList = {
     status: "pending" | "error" | "sending";
     stale: boolean;
     errorReason: string | null;
+    dedupeKey: string | null;
   }>;
   notes: Array<{
     creatorId: string;

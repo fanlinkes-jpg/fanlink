@@ -1,5 +1,5 @@
 import { deliverIfNoMedia } from "./media-gate.ts";
-import { chatSendGate, createSendLimiter, publicSendReason, sendPerMinute, type SendAccount } from "./gate.ts";
+import { chatSendGate, createSendLimiter, publicSendReason, sendPerMinute, sharedSendLimiter, type SendAccount } from "./gate.ts";
 import { itemSaleBlocked, type SaleFolder } from "../sync/vault-block.ts";
 import type { ReadSql } from "../sync/store.ts";
 
@@ -27,8 +27,6 @@ export type DeliverInput = {
   outboundMedia?: { sql: ReadSql; outboundId: string } | null;
 };
 
-const sharedLimiter = createSendLimiter();
-
 /** Una cuenta a la vez. Si el gate, NO VENDER o un medio no dejan, no abre el navegador y no reintenta. */
 export async function deliverChatSend(input: DeliverInput): Promise<{ sent: boolean; opened: boolean; messageId: string | null; reason: string | null; awaitingId?: boolean; attachedIds: string[] }> {
   const gate = chatSendGate(input.flag, input.allowlist, input.account);
@@ -37,7 +35,7 @@ export async function deliverChatSend(input: DeliverInput): Promise<{ sent: bool
     return { sent: false, opened: false, messageId: null, reason: "NO VENDER", attachedIds: [] };
   }
   const accountId = input.account.accountId ?? input.account.creatorId ?? "cuenta";
-  const limiter = input.limiter ?? sharedLimiter;
+  const limiter = input.limiter ?? sharedSendLimiter;
   const runOpen = async () => limiter.run(accountId, async () => input.open(), {
     perMinute: input.perMinute,
     now: input.now,

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { fanInitials, filterOnlineFans, onlineCapPhrase, onlineListNames, spendLabel } from "./online-fan-row.ts";
+import { fanInitials, filterOnlineFans, nextOnlineBatchId, onlineBatchPayload, onlineCapPhrase, onlineListNames, spendLabel } from "./online-fan-row.ts";
 
 test("el gasto ausente no se presenta como cero y el filtro no suma dinero", () => {
   assert.equal(spendLabel(null), "Sin datos");
@@ -18,4 +18,10 @@ test("el gasto ausente no se presenta como cero y el filtro no suma dinero", () 
   assert.deepEqual(filterOnlineFans(fans, "VIP").map((fan) => fan.fanKey), ["1"]);
   assert.equal(fanInitials("Didi Luna", null), "DL");
   assert.equal(fanInitials(null, "@alejandrogym"), "AL");
+  const payload = onlineBatchPayload({ text: "hola", priceCents: 500, vaultItemIds: ["b", "a"], fanKeys: ["2", "1"] });
+  assert.equal(payload, onlineBatchPayload({ text: "hola", priceCents: 500, vaultItemIds: ["a", "b"], fanKeys: ["1", "2"] }));
+  assert.equal(nextOnlineBatchId({ id: "mismo", payload }, payload, () => "nuevo"), "mismo");
+  assert.equal(nextOnlineBatchId({ id: "mismo", payload }, onlineBatchPayload({ text: "hola", priceCents: 960, vaultItemIds: ["a"], fanKeys: ["1"] }), () => "nuevo"), "nuevo");
+  assert.equal(nextOnlineBatchId(null, payload, () => "nuevo"), "nuevo");
+  assert.equal(nextOnlineBatchId({ id: "", payload }, payload, () => "nuevo"), "nuevo");
 });
