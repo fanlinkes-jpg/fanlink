@@ -7,7 +7,8 @@ export const SPEND_NULL_TTL_MS = 10 * 60_000;
 /** Como mucho estos GET /users/{id} por pasada. */
 export const USER_SPEND_CAP = 10;
 const SUBSCRIBER_PAGE = 10;
-const MAX_SUBSCRIBER_PAGES = 40;
+/** Ocho páginas caben en el lector sin dejar la cuenta ocupada unos 12 s. */
+export const SUBSCRIBER_PAGE_CAP = 8;
 
 export type SpendPage = {
   ok: boolean;
@@ -24,11 +25,26 @@ type SubEntry = { at: number; byId: Map<string, number> };
 const subscribers = new Map<string, SubEntry>();
 const userKnown = new Map<string, { at: number; cents: number }>();
 const nullUntil = new Map<string, number>();
+/** Un 403, 404 o 5xx de suscriptores no se repite en cada ciclo de 15 s. */
+const subscriberHold = new Map<string, number>();
 
 export function clearFanSpendCache(): void {
   subscribers.clear();
   userKnown.clear();
   nullUntil.clear();
+  subscriberHold.clear();
+}
+
+export function pruneFanSpendCache(now: number): void {
+  for (const [key, hit] of userKnown) {
+    if (now - hit.at >= SUBSCRIBER_TTL_MS) userKnown.delete(key);
+  }
+  for (const [key, until] of nullUntil) {
+    if (until <= now) nullUntil.delete(key);
+  }
+  for (const [key, until] of subscriberHold) {
+    if (until <= now) subscriberHold.delete(key);
+  }
 }
 
 export function subscriberSpendPath(offset: number): string {
@@ -80,6 +96,7 @@ export async function collectFanSpend(input: {
   now: number;
   log?: (line: string) => void;
 }): Promise<{ byFan: Map<string, number>; stopped: SpendStop | null }> {
+  pruneFanSpendCache(input.now);
   const byFan = new Map<string, number>();
   let threadCount = 0;
   for (const thread of input.threads) {
@@ -187,16 +204,24 @@ function logged(
 
 async function refreshSubscribers(input: {
   accountId: string;
+  creatorId: string;
   request: (path: string) => Promise<SpendPage>;
   now: number;
+  log?: (line: string) => void;
 }): Promise<SpendStop | null> {
+  const held = subscriberHold.get(input.accountId);
+  if (held != null && held > input.now) return null;
   const cached = subscribers.get(input.accountId);
   if (cached && input.now - cached.at < SUBSCRIBER_TTL_MS) return null;
   const byId = new Map<string, number>(cached?.byId);
-  for (let page = 0; page < MAX_SUBSCRIBER_PAGES; page += 1) {
+  for (let page = 0; page < SUBSCRIBER_PAGE_CAP; page += 1) {
     const offset = page * SUBSCRIBER_PAGE;
     const read = await input.request(subscriberSpendPath(offset));
     if (!read.ok) {
+      if (!read.sessionRejected && read.retryAfterMs === 0 && read.status !== 400) {
+        subscriberHold.set(input.accountId, input.now + SPEND_NULL_TTL_MS);
+        input.log?.(`[fanlink:spend] creator=${input.creatorId} subscribers status=${read.status}`);
+      }
       return { status: read.status, retryAfterMs: read.retryAfterMs, sessionRejected: read.sessionRejected };
     }
     const rows = subscriberRows(read.body);

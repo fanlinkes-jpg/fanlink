@@ -43,9 +43,9 @@ import { type VaultFile } from "../../server/of-sessions/sync/vault-listen.ts";
 import { readChatVaultView as readVaultPage, type VaultReadDeps } from "../../server/of-sessions/sync/vault-read.ts";
 import { ONLINE_FAN_CAP } from "@/lib/online-fan-row";
 import { fetchSignedOnlineFans, type OnlineFan } from "../../server/of-sessions/sync/online-fans.ts";
-import { sessionForApi, signedHeaders } from "../../server/of-sessions/sync/of-chat-api.ts";
-import { collectFanSpend } from "../../server/of-sessions/sync/fan-spend.ts";
-import { awaitAccountGap, withAccountApi } from "../../server/of-sessions/sync/api-list-pace.ts";
+import { sessionForApi } from "../../server/of-sessions/sync/of-chat-api.ts";
+import { withAccountApi } from "../../server/of-sessions/sync/api-list-pace.ts";
+import { blockedVisibleSpend, canReadFanSpend, runVisibleFanSpend, spendReadsBlocked } from "../../server/of-sessions/sync/visible-spend.ts";
 import { loadSignRules } from "../../server/of-sessions/sync/of-sign.ts";
 import { prepareVaultSend } from "../../server/of-sessions/sync/vault-store.ts";
 import { canSeeOnlineFans, cancelOnlineBroadcast, emptyOnlineBroadcast, onlineBroadcastGate, refuseOnlineBroadcast, sendOnlineBroadcast, visibleOnlineCreatorIds, type OnlineBroadcastResult } from "../../server/of-sessions/send/online-broadcast.ts";
@@ -1234,75 +1234,42 @@ export async function runFanChatMenuView(userId: string, input: { creatorId: str
   return ran.value;
 }
 
-export async function readVisibleFanSpendView(userId: string, input: { creatorId: string; fanIds: string[] }): Promise<{ byFan: Record<string, number | null> }> {
+export async function readVisibleFanSpendView(userId: string, input: { creatorId: string; fanIds: string[]; cardIds?: string[] }): Promise<{ byFan: Record<string, number | null>; retryAfterMs: number; blocked: boolean }> {
   const access = await accessFor(userId);
-  if (access.role !== "owner" && !access.perms.includes("mensajes")) {
-    throw new WorkspaceAccessError("No tienes permiso para escribir.");
+  if (!canReadFanSpend(access.role, access.perms)) {
+    throw new WorkspaceAccessError("No tienes permiso para leer los chats.");
   }
   const creatorId = parseCreatorId(input.creatorId);
   const fanIds = [...new Set(input.fanIds.filter((id) => /^\d{1,20}$/.test(id)))].slice(0, 10);
   const sessions = await getOfSessionManager();
   const account = (await sessions.listAccounts()).find((item) => item.creatorId === creatorId);
-  if (!account || fanIds.length === 0) return { byFan: {} };
-  return withAccountApi(account.id, async () => {
-    let state;
-    try {
-      state = await sessions.readStorageState(account.id);
-    } catch {
-      return { byFan: {} };
-    }
-    const auth = sessionForApi(state, Date.now());
-    if ("reason" in auth) return { byFan: {} };
-    const rules = await loadSignRules(fetch, Date.now());
-    const now = Date.now();
-    const result = await collectFanSpend({
-      accountId: account.id,
-      creatorId,
-      threads: fanIds.map((id) => ({ fanKey: id, spentCents: null })),
-      visibleIds: fanIds,
-      request: async (path) => {
-        await awaitAccountGap(account.id, () => Date.now(), (ms) => new Promise((resolve) => setTimeout(resolve, ms)));
-        const response = await fetch(`https://onlyfans.com${path}`, {
-          method: "GET",
-          headers: signedHeaders(rules, path, auth, Date.now()),
-        });
-        const retryHeader = response.headers.get("retry-after");
-        let body: unknown = null;
-        if (response.ok) body = await response.json().catch(() => null);
-        else await response.body?.cancel().catch(() => undefined);
-        return {
-          ok: response.ok,
-          status: response.status,
-          body,
-          retryAfterMs: response.status === 429 ? retryHeaderMs(retryHeader) : 0,
-          sessionRejected: response.status === 401,
-        };
-      },
-      now,
-      log: (line) => console.info(line),
-    });
-    if (result.stopped?.sessionRejected) await sessions.noteApiSessionRejected(account.id);
-    if (result.stopped && result.stopped.retryAfterMs > 0) noteAccountBlock(account.id, "429");
-    if (result.stopped?.status === 400) noteAccountBlock(account.id, "400");
-    const sql = await getSql();
-    const byFan: Record<string, number | null> = {};
-    for (const id of fanIds) {
-      const cents = result.byFan.get(id);
-      byFan[id] = cents ?? null;
-      if (cents == null) continue;
-      await sql.query(
-        "update of_chat_thread set spent_cents = $3 where creator_id = $1 and fan_key = $2 and spent_cents is null",
-        [creatorId, id, cents],
-      );
-    }
-    return { byFan };
-  });
-}
-
-function retryHeaderMs(header: string | null): number {
-  const seconds = Number(header);
-  if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1000);
-  return 15_000;
+  if (!account || fanIds.length === 0) return { byFan: {}, retryAfterMs: 0, blocked: false };
+  const blocked = blockedVisibleSpend(accountPause(account.id)?.until ?? null, spendReadsBlocked(account), Date.now());
+  if (blocked) return blocked;
+  let state;
+  try {
+    state = await sessions.readStorageState(account.id);
+  } catch {
+    return { byFan: {}, retryAfterMs: 0, blocked: false };
+  }
+  const auth = sessionForApi(state, Date.now());
+  if ("reason" in auth) return { byFan: {}, retryAfterMs: 0, blocked: false };
+  const rules = await loadSignRules(fetch, Date.now());
+  return withAccountApi(account.id, async () => runVisibleFanSpend({
+    accountId: account.id,
+    creatorId,
+    fanIds,
+    cardIds: input.cardIds,
+    auth,
+    rules,
+    fetch,
+    now: () => Date.now(),
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    sql: await getSql(),
+    log: (line) => console.info(line),
+    onSessionRejected: () => sessions.noteApiSessionRejected(account.id),
+    onBlock: (reason) => noteAccountBlock(account.id, reason),
+  }));
 }
 
 export async function markChatOpenedView(userId: string, input: { creatorId: string; threadKey: string }): Promise<{ marked: boolean }> {

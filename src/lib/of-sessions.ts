@@ -324,8 +324,8 @@ export const chatSendAccess = createServerFn({ method: "GET" })
 
 export const readVisibleFanSpend = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { creatorId: string; fanIds: string[] }) => input)
-  .handler(async ({ context, data }): Promise<{ byFan: Record<string, number | null> }> => {
+  .validator((input: { creatorId: string; fanIds: string[]; cardIds?: string[] }) => input)
+  .handler(async ({ context, data }): Promise<{ byFan: Record<string, number | null>; retryAfterMs: number; blocked: boolean }> => {
     const { readVisibleFanSpendView } = await import("./of-sessions-runtime.server");
     return readVisibleFanSpendView(context.userId, data);
   });

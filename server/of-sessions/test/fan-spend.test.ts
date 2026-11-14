@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parseChatList } from "../sync/chats.ts";
 import {
+  SUBSCRIBER_PAGE_CAP,
   USER_SPEND_CAP,
   clearFanSpendCache,
   collectFanSpend,
@@ -110,6 +111,59 @@ test("un 429 corta la tanda y el tope de users/{id} es 10", async () => {
     now: NOW,
   });
   assert.equal(called.filter((url) => url.includes("/users/")).length, USER_SPEND_CAP);
+  clearFanSpendCache();
+});
+
+test("un 403 de suscriptores no se repite a los 15 s y la paginación tiene tope", async () => {
+  clearFanSpendCache();
+  const logs: string[] = [];
+  let calls = 0;
+  const once = () => collectFanSpend({
+    accountId: "acc-403",
+    creatorId: "3zk7kbr",
+    threads: [{ fanKey: "1", spentCents: null }],
+    visibleIds: [],
+    request: async () => {
+      calls += 1;
+      return page(403, null);
+    },
+    now: NOW,
+    log: (line) => logs.push(line),
+  });
+  await once();
+  await collectFanSpend({
+    accountId: "acc-403",
+    creatorId: "3zk7kbr",
+    threads: [{ fanKey: "1", spentCents: null }],
+    visibleIds: [],
+    request: async () => {
+      calls += 1;
+      return page(200, []);
+    },
+    now: NOW + 15_000,
+    log: (line) => logs.push(line),
+  });
+  assert.equal(calls, 1);
+  assert.equal(logs.some((line) => line.includes("subscribers status=403")), true);
+  assert.equal(logs.some((line) => line.includes("fan=")), false);
+
+  clearFanSpendCache();
+  let pages = 0;
+  await collectFanSpend({
+    accountId: "acc-pages",
+    creatorId: "3zk7kbr",
+    threads: [],
+    visibleIds: [],
+    request: async () => {
+      pages += 1;
+      return page(200, Array.from({ length: 10 }, (_, index) => ({
+        id: pages * 10 + index,
+        subscribedOnData: { totalSumm: 1 },
+      })));
+    },
+    now: NOW,
+  });
+  assert.equal(pages, SUBSCRIBER_PAGE_CAP);
   clearFanSpendCache();
 });
 

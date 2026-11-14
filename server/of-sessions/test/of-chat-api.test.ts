@@ -126,12 +126,17 @@ test("los suscriptores traen el 0 real y sin totalSumm el hilo sigue en null", a
   try {
     const zero = await fetchSignedChats(state(), spendDeps(seen, waits, () => now, (ms) => { now += ms; }, logs, (url) => {
       if (url.includes("/subscriptions/subscribers")) {
-        return json(200, [{ id: 9, name: "Ana", subscribedOnData: { totalSumm: 0, tipsSumm: 4 } }]);
+        return json(200, [
+          { id: 9, name: "Ana", subscribedOnData: { totalSumm: 0, tipsSumm: 4 } },
+          { id: 8, name: "Bo" },
+        ]);
       }
-      return json(200, { list: [thread("9")], hasMore: false });
+      return json(200, { list: [thread("9"), thread("8")], hasMore: false });
     }), { listCap: 20, messages: "none" });
-    assert.equal(zero.threads[0]?.spentCents, 0);
-    assert.equal(spendTone(zero.threads[0]?.spentCents ?? null).label, "$0.00");
+    assert.equal(zero.threads.find((item) => item.threadKey === "9")?.spentCents, 0);
+    assert.equal(spendTone(0).label, "$0.00");
+    assert.equal(zero.threads.find((item) => item.threadKey === "8")?.spentCents, null);
+    assert.equal(spendTone(null).label, "Sin datos");
     const asked = seen.find((item) => item.url.includes("/subscriptions/subscribers"));
     const path = `${new URL(asked?.url ?? "").pathname}${new URL(asked?.url ?? "").search}`;
     assert.equal(path, "/api2/v2/subscriptions/subscribers?limit=10&type=active&offset=0");
