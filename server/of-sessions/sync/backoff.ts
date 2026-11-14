@@ -22,6 +22,15 @@ type Pause = { until: number; reason: string; attempt: number };
 
 const pauses = new Map<string, Pause>();
 
+/** Pausa fija, por ejemplo el Retry-After de un 429. */
+export function pauseAccountFor(accountId: string, reason: string, delayMs: number, now = Date.now()): number {
+  const prev = pauses.get(accountId);
+  const attempt = prev && prev.until > now ? prev.attempt + 1 : 0;
+  const delay = Math.max(0, Math.round(delayMs));
+  pauses.set(accountId, { until: now + delay, reason, attempt });
+  return delay;
+}
+
 export function noteAccountBlock(accountId: string, reason: string, now = Date.now(), random: () => number = Math.random): number {
   const prev = pauses.get(accountId);
   const attempt = prev && prev.until > now ? prev.attempt + 1 : 0;

@@ -42,7 +42,7 @@ import { normalizeFanMenuRequest, runFanMenuOnPage, type FanMenuResult } from ".
 import { chatPageUrl } from "../../server/of-sessions/sync/chats.ts";
 import { sendPace } from "../../server/of-sessions/send/gate.ts";
 import { chatSendGate, publicSendReason, type SendAccount } from "../../server/of-sessions/send/gate.ts";
-import { markOpenedChat, markReadGate } from "../../server/of-sessions/sync/mark-read.ts";
+import { markOpenedChat, markOpenRejected, markReadGate } from "../../server/of-sessions/sync/mark-read.ts";
 import { loadSignRules } from "../../server/of-sessions/sync/of-sign.ts";
 import { sessionForApi } from "../../server/of-sessions/sync/of-chat-api.ts";
 import type { SendChatHooks } from "../../server/of-sessions/send/chat-message.ts";
@@ -1058,6 +1058,7 @@ export async function markChatOpenedView(userId: string, input: { creatorId: str
   const sessions = await getOfSessionManager();
   const account = (await sessions.listAccounts()).find((item) => item.creatorId === creatorId);
   if (!account) return { marked: false };
+  if (markOpenRejected(account.identityState, accountPause(account.id) != null)) return { marked: false };
   const fields = sendAccount(account);
   if (!markReadGate(process.env.FANLINK_CHAT_MARK_READ, process.env.FANLINK_SEND_ALLOW_ACCOUNTS, fields).allowed) {
     return { marked: false };
@@ -1085,8 +1086,9 @@ export async function markChatOpenedView(userId: string, input: { creatorId: str
     rules,
     auth,
     log: (line) => console.info(line),
+    onSessionRejected: () => sessions.noteApiSessionRejected(account.id),
   });
-  return { marked: result.status === 200 };
+  return { marked: result.status != null && result.status >= 200 && result.status < 300 };
 }
 
 export async function loadOlderMessagesView(userId: string, input: { creatorId: string; threadKey: string }): Promise<{ ok: boolean }> {

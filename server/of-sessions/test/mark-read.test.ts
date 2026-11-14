@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { clearAccountChatPace } from "../sync/api-list-pace.ts";
+import { accountPause, clearAccountPauses } from "../sync/backoff.ts";
 import { clearUnreadMarks } from "../sync/chat-store.ts";
-import { clearMarkReadJobs, markOpenedChat, markReadPath } from "../sync/mark-read.ts";
+import { openedThread, shouldMarkOpened } from "../../../src/lib/mark-read-open.ts";
+import { clearMarkReadJobs, markOpenedChat, markOpenRejected, markReadPath } from "../sync/mark-read.ts";
 import { parseSignRules, signOnlyfans } from "../sync/of-sign.ts";
 import { signedHeaders } from "../sync/of-chat-api.ts";
 import type { ReadSql } from "../sync/store.ts";
@@ -51,7 +53,7 @@ test("con el flag y la cuenta, abrir manda un POST firmado y un 200 deja el unre
     assert.equal(calls[0]?.sign, signedHeaders(rules, path ?? "", auth, TIME).sign);
     assert.equal(updates, 1);
     assert.equal(unread, 0);
-    assert.deepEqual(logs, ["[fanlink:chat] ruta=mark-as-read status=200"]);
+    assert.deepEqual(logs, ["[fanlink:chat] creator=3zk7kbr ruta=mark-as-read status=200"]);
     assert.equal(logs.join("").includes("99"), false);
     assert.equal(logs.join("").includes(SECRET), false);
     assert.equal(logs.join("").includes(calls[0]?.sign ?? "sign"), false);
@@ -118,11 +120,115 @@ test("el flag apagado, otra cuenta o un fallo no mandan un 0 inventado", async (
     assert.equal(fetches, 1);
     assert.equal(updates, 0);
     assert.equal(unread, 4);
-    assert.deepEqual(logs, ["[fanlink:chat] ruta=mark-as-read status=400"]);
+    assert.deepEqual(logs, ["[fanlink:chat] creator=3zk7kbr ruta=mark-as-read status=400"]);
   } finally {
     clearMarkReadJobs();
     clearUnreadMarks();
     clearAccountChatPace();
+  }
+});
+
+test("un 2xx deja el unread en 0; un 401 o un 429 no, y pausan", async () => {
+  const rules = rulesOf();
+  const auth = authOf();
+  const logs: string[] = [];
+  let unread = 4;
+  let updates = 0;
+  let rejected = 0;
+  const sql = memorySql(() => unread, () => {
+    unread = 0;
+    updates += 1;
+  });
+  try {
+    const ok = await markOpenedChat({
+      ...input(sql, async () => new Response(null, { status: 204 }), logs, rules, auth),
+      onSessionRejected: () => { rejected += 1; },
+    });
+    assert.equal(ok.status, 204);
+    assert.equal(updates, 1);
+    assert.equal(unread, 0);
+    unread = 4;
+    const denied = await markOpenedChat({
+      ...input(sql, async () => new Response(null, { status: 401, headers: { "retry-after": "3" } }), logs, rules, auth),
+      threadKey: "98",
+      onSessionRejected: () => { rejected += 1; },
+    });
+    assert.equal(denied.status, 401);
+    assert.equal(unread, 4);
+    assert.equal(rejected, 1);
+    assert.equal(accountPause("acc-1", TIME)?.until, TIME + 3000);
+    const limited = await markOpenedChat({
+      ...input(sql, async () => new Response(null, { status: 429, headers: { "retry-after": "4" } }), logs, rules, auth),
+      accountId: "acc-2",
+      threadKey: "97",
+      onSessionRejected: () => { rejected += 1; },
+    });
+    assert.equal(limited.status, 429);
+    assert.equal(unread, 4);
+    assert.equal(rejected, 1);
+    assert.equal(accountPause("acc-2", TIME)?.until, TIME + 4000);
+    assert.equal(logs.some((line) => line === "[fanlink:chat] creator=3zk7kbr ruta=mark-as-read status=401"), true);
+    assert.equal(logs.join("").includes("98"), false);
+    assert.equal(logs.join("").includes(SECRET), false);
+    assert.equal(markOpenRejected("mismatch", false), true);
+    assert.equal(markOpenRejected("matched", true), true);
+    assert.equal(markOpenRejected("matched", false), false);
+  } finally {
+    clearMarkReadJobs();
+    clearAccountChatPace();
+    clearUnreadMarks();
+    clearAccountPauses();
+  }
+});
+
+test("teclado, la primera conversación y un aviso hacen un POST con el flag y ninguno sin él", async () => {
+  const rules = rulesOf();
+  const auth = authOf();
+  const ways = ["keyboard", "auto", "notification"] as const;
+  try {
+    for (const how of ways) {
+      const threadKey = how === "keyboard" ? "k1" : how === "auto" ? "a1" : "n1";
+      const list = how === "auto"
+        ? [{ id: threadKey, unread: 4 as number | null }]
+        : [{ id: "prev", unread: 0 as number | null }, { id: threadKey, unread: 4 as number | null }];
+      const opened = openedThread({
+        how,
+        threads: list,
+        selectedId: how === "auto" ? null : "prev",
+        targetId: threadKey,
+        arrow: "down",
+      });
+      assert.equal(shouldMarkOpened(opened, "true"), true);
+      assert.equal(shouldMarkOpened(opened, undefined), false);
+      let calls = 0;
+      const fetchImpl: typeof fetch = async () => {
+        calls += 1;
+        return new Response(null, { status: 200 });
+      };
+      const sql = memorySql(() => 4, () => undefined);
+      const on = await markOpenedChat({
+        ...input(sql, fetchImpl, [], rules, auth),
+        threadKey,
+        flag: "true",
+      });
+      assert.equal(on.posted, true);
+      assert.equal(calls, 1);
+      calls = 0;
+      const off = await markOpenedChat({
+        ...input(sql, fetchImpl, [], rules, auth),
+        threadKey,
+        flag: undefined,
+      });
+      assert.equal(off.posted, false);
+      assert.equal(calls, 0);
+      clearMarkReadJobs();
+      clearAccountChatPace();
+    }
+  } finally {
+    clearMarkReadJobs();
+    clearAccountChatPace();
+    clearUnreadMarks();
+    clearAccountPauses();
   }
 });
 

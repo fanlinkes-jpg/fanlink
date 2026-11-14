@@ -9,7 +9,7 @@ import { chromium } from "playwright";
 import { PGlite } from "@electric-sql/pglite";
 import { parseChatList, type ChatThread } from "../sync/chats.ts";
 import { collectChats } from "../sync/collect-chats.ts";
-import { watchPage } from "../sync/inbox-watch.ts";
+import { blockChatRead, watchPage } from "../sync/inbox-watch.ts";
 import { pauseWaitReason } from "../sync/backoff.ts";
 import { liveRequestAllowed } from "../live/desk.ts";
 import { clearUnreadMarks, noteUnreadMarked, saveChatRead } from "../sync/chat-store.ts";
@@ -255,21 +255,24 @@ test("una lista empezada antes de marcar leído no repone el número", async () 
       jsonPaths: [],
       list: "full",
       startedAt: "2026-11-14T00:00:03.000Z",
-      threads: [storedThread("25", 3)],
+      threads: [storedThread("25", 1)],
       messages: [],
     });
-    const pending = await sql.query<{ unread: number | null }>("select unread from of_chat_thread where thread_key = '25'");
-    assert.equal(pending[0]?.unread, 0);
+    const later = await sql.query<{ unread: number | null }>("select unread from of_chat_thread where thread_key = '25'");
+    assert.equal(later[0]?.unread, 1);
+    await saveChatRead(sql, "3zk7kbr", { reason: null, jsonPaths: [], list: "full", threads: [storedThread("8", 1)], messages: [] });
+    noteUnreadMarked("3zk7kbr", "8", Date.parse("2026-11-14T00:00:05.000Z"));
+    await sql.query("update of_chat_thread set unread = 0 where thread_key = '8'");
     await saveChatRead(sql, "3zk7kbr", {
       reason: null,
       jsonPaths: [],
       list: "full",
-      startedAt: "2026-11-14T00:00:04.000Z",
-      threads: [storedThread("25", 0)],
+      startedAt: "2026-11-14T00:00:06.000Z",
+      threads: [storedThread("8", 3)],
       messages: [],
     });
-    const confirmed = await sql.query<{ unread: number | null }>("select unread from of_chat_thread where thread_key = '25'");
-    assert.equal(confirmed[0]?.unread, 0);
+    const again = await sql.query<{ unread: number | null }>("select unread from of_chat_thread where thread_key = '8'");
+    assert.equal(again[0]?.unread, 3);
   } finally {
     clearUnreadMarks();
     await pg.close();
@@ -329,6 +332,14 @@ test("el respaldo que abre el hilo no manda mark-as-read", { timeout: 60_000 }, 
     await browser.close();
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
+});
+
+test("el bloqueo de marcar leído se instala una vez por página", async () => {
+  let routes = 0;
+  const page = { route: async () => { routes += 1; } };
+  await blockChatRead(page as never);
+  await blockChatRead(page as never);
+  assert.equal(routes, 1);
 });
 
 test("ni la vista en directo ni un POST de leído salen hacia OnlyFans", () => {

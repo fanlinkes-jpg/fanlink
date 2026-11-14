@@ -220,11 +220,18 @@ async function pullSigned(input: {
   }
 }
 
-export async function blockChatRead(page: Page): Promise<void> {
-  await page.route("**/*", (route) => {
+const chatReadArmed = new WeakMap<Page, Promise<void>>();
+
+/** Una sola vez por página. Los goto siguientes no vuelven a registrar la ruta. */
+export function blockChatRead(page: Page): Promise<void> {
+  const armed = chatReadArmed.get(page);
+  if (armed) return armed;
+  const job = page.route("**/*", (route) => {
     if (isChatReadWrite(route.request().method(), route.request().url())) return route.abort();
     return route.continue();
-  });
+  }).then(() => undefined);
+  chatReadArmed.set(page, job);
+  return job;
 }
 
 export function watchPage(page: Page, threadKey: () => string, accountUserId: () => string | null = () => null): WatchSession {

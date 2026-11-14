@@ -577,6 +577,10 @@ export class SessionManager {
     });
   }
 
+  async noteApiSessionRejected(accountId: string): Promise<void> {
+    await this.markApiSessionRejected(accountId, "OnlyFans ha rechazado la sesión (401). Pulsa Reconectar.");
+  }
+
   private async markApiSessionRejected(accountId: string, reason: string): Promise<void> {
     const loginAlreadyOpen = this.loginTasks.has(accountId);
     const visible = reason.replace(/cookie|set-cookie|authorization|sess=/gi, "[omitido]").slice(0, 180);

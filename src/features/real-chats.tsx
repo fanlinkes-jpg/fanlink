@@ -2,7 +2,6 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, typ
 import { createPortal } from "react-dom";
 import { AtSign, Bell, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, MessageCircle, RefreshCw, ScrollText, Send, Type } from "lucide-react";
 import { chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, markChatOpened, readChatVault, recordChatOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
-import { markReadOnOpen } from "@/lib/mark-read-open";
 import { unreadChatRow, unreadTotalFor } from "../../server/of-sessions/sync/unread-chats.ts";
 import { inboxPillCounts, matchesInboxPill, tipThreads, type InboxPill } from "../../server/of-sessions/sync/chat-pills.ts";
 import { listCreatorNotifications, markCreatorNotificationsRead, type NotificationListItem } from "@/lib/of-notifications";
@@ -431,6 +430,33 @@ export function RealChatsPage() {
   const meta = data?.meta.find((item) => item.creatorId === selected?.creatorId);
   const running = selected ? data?.runningCreatorIds.includes(selected.creatorId) : false;
   const canForce = teamAccess?.role === "owner" && selected != null;
+  const openedKey = selected ? `${selected.creatorId}:${selected.threadKey}` : null;
+  const markedOpen = useRef<string | null>(null);
+  useEffect(() => {
+    if (!selected || !openedKey) return;
+    if (markedOpen.current === openedKey) return;
+    markedOpen.current = openedKey;
+    if (selected.unread === 0) return;
+    void markChatOpened({ data: { creatorId: selected.creatorId, threadKey: selected.threadKey } }).then((result) => {
+      if (result.marked) void refresh();
+    }).catch(() => undefined);
+  }, [openedKey, selected?.unread]);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      const target = event.target;
+      if (target instanceof HTMLElement && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+      if (dialog != null || insightsOpen) return;
+      const index = visible.findIndex((thread) => thread.creatorId === selected?.creatorId && thread.threadKey === selected?.threadKey);
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      const next = visible[index + step];
+      if (!next) return;
+      event.preventDefault();
+      setSelectedKey(`${next.creatorId}:${next.threadKey}`);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [visible, selected, dialog, insightsOpen]);
   useEffect(() => {
     if (dialog == null) return;
     const onKey = (event: KeyboardEvent) => {
@@ -789,12 +815,8 @@ export function RealChatsPage() {
     });
   }
 
-  function chooseThread(thread: { creatorId: string; threadKey: string; unread: number | null }) {
+  function chooseThread(thread: { creatorId: string; threadKey: string }) {
     setSelectedKey(`${thread.creatorId}:${thread.threadKey}`);
-    if (!markReadOnOpen("click", thread.unread)) return;
-    void markChatOpened({ data: { creatorId: thread.creatorId, threadKey: thread.threadKey } }).then((result) => {
-      if (result.marked) void refresh();
-    }).catch(() => undefined);
   }
 
   function fanNickname(creatorId: string, fanKey: string | null): string | null {

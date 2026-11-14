@@ -16,14 +16,16 @@ export function clearUnreadMarks(): void {
   markedReadAt.clear();
 }
 
-function keepMarkedUnread(creatorId: string, threadKey: string, startedAt: string | undefined, incoming: number | null): boolean {
+function keepMarkedUnread(creatorId: string, threadKey: string, startedAt: string | undefined, _incoming: number | null): boolean {
   const key = `${creatorId}\0${threadKey}`;
   const marked = markedReadAt.get(key);
   if (marked == null || !startedAt) return false;
   const started = Date.parse(startedAt);
-  if (!Number.isFinite(started) || started < marked) return started < marked;
-  if (incoming === 0) markedReadAt.delete(key);
-  return incoming !== 0;
+  if (!Number.isFinite(started) || started >= marked) {
+    markedReadAt.delete(key);
+    return false;
+  }
+  return true;
 }
 
 export type StoredThread = ChatThread & { creatorId: string; syncedAt: string };
