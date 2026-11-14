@@ -271,8 +271,8 @@ describe("miniaturas de la bóveda", { concurrency: 1 }, () => {
         listId: "sets",
         offset: 40,
         loadPage: async (listId, offset) => {
-          const payloads = await fetchSignedVault(storageState(), { fetch: fetchImpl, now: () => Date.now() }, listId, offset);
-          return payloads.flatMap((payload) => parseVaultBundle(payload).items);
+          const read = await fetchSignedVault(storageState(), { fetch: fetchImpl, now: () => Date.now() }, listId, offset);
+          return read.payloads.flatMap((payload) => parseVaultBundle(payload).items);
         },
       }),
     });
