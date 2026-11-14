@@ -453,7 +453,7 @@ export class SessionManager {
       label: account.label,
     });
     if (!gate.allowed) return quiet;
-    return withAccountChatReader(accountId, async () => {
+    return withAccountApi(accountId, async () => {
       const state = await this.readStorageState(accountId);
       return dispatchNotificationMark({
         flag: process.env.FANLINK_NOTIF_MARK_READ,
