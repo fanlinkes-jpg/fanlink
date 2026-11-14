@@ -34,7 +34,8 @@ test("la sonda pide las dos rutas en GET, A y B, y solo imprime ruta, variante y
   assert.equal(variantA["user-id"], "42");
   assert.equal(variantB["user-id"], undefined);
   assert.notEqual(variantA.sign, variantB.sign);
-  assert.equal(variantB.sign, signOnlyfans(rules, route, "42", 1_700_000_000_000).sign);
+  assert.equal(variantB.sign, signOnlyfans(rules, route, "0", 1_700_000_000_000).sign);
+  assert.notEqual(variantA.sign, signOnlyfans(rules, route, "0", 1_700_000_000_000).sign);
   const calls: Array<{ url: string; method: string | undefined; body: unknown; redirect: RequestRedirect | undefined; sign: string; userId: string | undefined }> = [];
   let clock = 0;
   const lines: string[] = [];

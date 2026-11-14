@@ -94,24 +94,19 @@ async function downloadSignRules(fetchImpl: typeof fetch, now: number): Promise<
  *
  * Checksum = suma de charCode(hash[i]) para i en checksum_indexes, más
  * checksum_constant. No se suman checksum_constants: checksum_constant ya
- * es esa suma (DATAHOARDERS/dynamic-rules 48c8c17, 974 = 974). Con el id
- * real en el cuarto campo, esa suma es la de 3064d53.
+ * es esa suma (DATAHOARDERS/dynamic-rules 48c8c17, 974 = 974).
  *
- * 3064d53 mete el id real en el hash y manda la cabecera user-id en todas
- * las rutas. OF-Scraper create_login_sign firma con el auth_id real.
- * remove_headers de DATAHOARDERS no distingue si la ruta lleva query.
+ * El cuarto campo es el id real de la cuenta, en GET y en POST, con query
+ * o sin ella. La cabecera user-id lleva ese mismo id. Lo decidió la sonda
+ * del 2026-11-14 02:55 en 3zk7kbr: users/me y users/notifications/count
+ * respondieron 200 con las dos variantes.
  *
- * El corte de esta rama es otro, y no viene de 3064d53: en una ruta con
- * query se firma el id real y se manda user-id; en una ruta sin query, si
- * remove_headers incluye user-id, se firma con 0 y no se manda esa cabecera.
- * `npm run probe:sign` lo compara en el Mac. Aquí no se cambia el corte.
- *
- * El 401 intermitente visto en el Mac con el checksum de 3064d53 es de la
- * sesión (rotación de sess), no de la suma.
+ * El 401 intermitente visto en el Mac es de la sesión (rotación de sess),
+ * no de la suma.
  */
 export function signOnlyfans(rules: SignRules, pathWithQuery: string, userId: string, timeMs: number): { sign: string; time: string } {
   const time = String(timeMs);
-  const signedUser = signedUserId(rules, pathWithQuery, userId);
+  const signedUser = signedUserId(userId);
   const hash = createHash("sha1").update([rules.staticParam, time, pathWithQuery, signedUser].join("\n")).digest("hex");
   const checksum = rules.checksumIndexes.reduce((sum, index) => {
     const code = hash.charCodeAt(index);
@@ -121,18 +116,9 @@ export function signOnlyfans(rules: SignRules, pathWithQuery: string, userId: st
   return { sign, time };
 }
 
-export function pathHasQuery(pathWithQuery: string): boolean {
-  return pathWithQuery.includes("?");
-}
-
-export function signedUserId(rules: SignRules, pathWithQuery: string, userId: string): string {
-  if (pathHasQuery(pathWithQuery)) return userId;
-  return headerRemoved(rules, "user-id") ? "0" : userId;
-}
-
-export function headerRemoved(rules: SignRules, name: string): boolean {
-  const needle = normalizeHeaderName(name);
-  return rules.removeHeaders.some((item) => normalizeHeaderName(item) === needle);
+/** Id real de la cuenta. Igual con query y sin ella. */
+export function signedUserId(userId: string): string {
+  return userId;
 }
 
 export function normalizeHeaderName(name: string): string {

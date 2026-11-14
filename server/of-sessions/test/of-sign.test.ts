@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { test } from "node:test";
 import { clearSignRulesCache, loadSignRules, parseSignRules, RULES_TIMEOUT_MS, signOnlyfans } from "../sync/of-sign.ts";
 import { sessionForApi, signedHeaders } from "../sync/of-chat-api.ts";
@@ -14,6 +15,12 @@ const VECTOR_SIGN = "1:347360f1fb69d4ffaa2e35bede98ca8e038f26d8:71:2";
 const SIGN_WITH_ZERO = "1:b7a3bd0d7368462e6edae6c433abedb3c8a5fc29:107:2";
 
 const QUERY = "/api2/v2/chats?limit=20";
+
+function signOf(path: string, userId: string): string {
+  const hash = createHash("sha1").update(["param", "1700000000000", path, userId].join("\n")).digest("hex");
+  const checksum = hash.charCodeAt(0) + hash.charCodeAt(1) + 10;
+  return `1:${hash}:${checksum.toString(16)}:2`;
+}
 
 function rulesJson(extra: Record<string, unknown> = {}) {
   return {
@@ -48,19 +55,27 @@ test("una ruta con query firma el id real y no suma checksum_constants", () => {
   assert.equal(headers.sign.includes("secret"), false);
 });
 
-test("sin query, esta rama quita user-id y firma con 0", () => {
+test("con query y sin ella el hash lleva el id real y va la cabecera user-id", () => {
   const rules = parseSignRules(rulesJson());
   assert.ok(rules);
-  const path = "/api2/v2/chats";
-  const signed = signOnlyfans(rules, path, "42", 1_700_000_000_000);
-  assert.notEqual(signed.sign, VECTOR_SIGN);
-  const headers = signedHeaders(rules, path, {
-    cookie: "auth_id=42; sess=secret",
-    userId: "42",
-    xBc: "huella",
-  }, 1_700_000_000_000);
-  assert.equal(headers["user-id"], undefined);
-  assert.equal(headers.sign, signed.sign);
+  const paths = [
+    "/api2/v2/chats?limit=20",
+    "/api2/v2/chats",
+    "/api2/v2/chats/7/messages",
+    "/api2/v2/chats/7/mark-as-read",
+    "/api2/v2/users/notifications/read",
+  ];
+  for (const path of paths) {
+    assert.equal(signOnlyfans(rules, path, "42", 1_700_000_000_000).sign, signOf(path, "42"));
+    assert.notEqual(signOnlyfans(rules, path, "42", 1_700_000_000_000).sign, signOf(path, "0"));
+    const headers = signedHeaders(rules, path, {
+      cookie: "auth_id=42; sess=secret",
+      userId: "42",
+      xBc: "huella",
+    }, 1_700_000_000_000);
+    assert.equal(headers["user-id"], "42");
+    assert.equal(headers.sign, signOf(path, "42"));
+  }
 });
 
 test("checksum_constants que no suman checksum_constant invalidan la regla", () => {

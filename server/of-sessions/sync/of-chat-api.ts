@@ -4,7 +4,7 @@ import { backoffDelayMs } from "./backoff.ts";
 import { mergeMessages, mergeThreads, parseChatList, parseChatMessages, parsePreviewMessages, type ChatMessage, type ChatThread } from "./chats.ts";
 import { awaitAccountGap, REQUEST_GAP_MS } from "./api-list-pace.ts";
 import { noteMissingUnread } from "./unread-chats.ts";
-import { headerRemoved, loadSignRules, normalizeHeaderName, pathHasQuery, signOnlyfans, type SignRules } from "./of-sign.ts";
+import { loadSignRules, signedUserId, signOnlyfans, type SignRules } from "./of-sign.ts";
 
 const HOST = "onlyfans.com";
 
@@ -77,7 +77,7 @@ export function sessionForApi(state: StorageStateFile, nowMs: number): { cookie:
 /** Única función que arma las cabeceras firmadas. `signOnlyfans` solo calcula sign y time. */
 export function signedHeaders(rules: SignRules, pathWithQuery: string, auth: { cookie: string; userId: string; xBc: string }, timeMs: number): Record<string, string> {
   const signed = signOnlyfans(rules, pathWithQuery, auth.userId, timeMs);
-  const headers: Record<string, string> = {
+  return {
     accept: "application/json, text/plain, */*",
     "app-token": rules.appToken,
     cookie: auth.cookie,
@@ -86,15 +86,8 @@ export function signedHeaders(rules: SignRules, pathWithQuery: string, auth: { c
     "user-agent": BROWSER_FINGERPRINT.userAgent,
     "x-bc": auth.xBc,
     referer: "https://onlyfans.com/",
-    "user-id": auth.userId,
+    "user-id": signedUserId(auth.userId),
   };
-  if (!pathHasQuery(pathWithQuery)) {
-    for (const name of rules.removeHeaders) {
-      delete headers[normalizeHeaderName(name)];
-    }
-    if (headerRemoved(rules, "user-id")) delete headers["user-id"];
-  }
-  return headers;
 }
 
 export async function fetchSignedChats(state: StorageStateFile, deps: SignedChatDeps, options: SignedChatOptions = {}): Promise<SignedChats> {
