@@ -17,7 +17,13 @@ export function spendLabel(cents: number | null, currency: string | null = null)
   const sign = cents < 0 ? "-" : "";
   const amount = (Math.abs(cents) / 100).toFixed(2);
   if (!currency || currency === "USD" || currency === "$") return `${sign}$${amount}`;
+  if (currency === "EUR") return cents === 0 ? "0 €" : `${sign}${amount} €`;
   return `${sign}${amount} ${currency}`;
+}
+
+export function onlineCapPhrase(count: number, cap: number): string {
+  const shown = Math.min(count, cap);
+  return `Vas a escribir a ${shown} fans en línea. El tope es ${cap}.`;
 }
 
 export function filterOnlineFans<T extends { lists: readonly string[] }>(fans: readonly T[], list: string): T[] {

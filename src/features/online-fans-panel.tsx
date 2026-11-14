@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { MessageCircle, RefreshCw } from "lucide-react";
-import { fanInitials, filterOnlineFans, onlineListNames, spendLabel, type OnlineFanRow } from "@/lib/online-fan-row";
+import { fanInitials, filterOnlineFans, onlineCapPhrase, onlineListNames, spendLabel, type OnlineFanRow } from "@/lib/online-fan-row";
 
 export type OnlineBroadcastPayload = {
   fanKeys: string[];
@@ -130,7 +130,7 @@ export function OnlineFansPanel({
             <p className="text-[11px] text-[#6d7585]">{visible.length === 0 ? "Nadie en esta lista" : `Destinatarios: ${visible.length}`}</p>
             {confirming ? (
               <div className="space-y-2">
-                <p className="text-xs">Vas a escribir a {Math.min(visible.length, cap)} fans en línea. El tope es {cap}.</p>
+                <p className="text-xs">{onlineCapPhrase(visible.length, cap)}</p>
                 <div className="flex gap-2">
                   <button type="button" disabled={sending || visible.length === 0} className="rounded-lg bg-[#3b6cff] px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50" onClick={() => void confirmSend()}>{sending ? "Enviando…" : "Confirmar"}</button>
                   <button type="button" className="rounded-lg px-3 py-1.5 text-xs text-[#6d7585]" onClick={() => { if (sending && batchId) onCancel(batchId); else setConfirming(false); }}>Cancelar</button>

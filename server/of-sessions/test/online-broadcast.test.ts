@@ -4,11 +4,13 @@ import { test } from "node:test";
 import { clearAccountChatPace, withAccountApi } from "../sync/api-list-pace.ts";
 import { parseSignRules } from "../sync/of-sign.ts";
 import { readJsonBody } from "../sync/of-sign.ts";
+import { sendPerMinute } from "../send/gate.ts";
 import {
   canSeeOnlineFans,
   cancelOnlineBroadcast,
   clearOnlineBroadcastPace,
   onlineChatId,
+  onlineMessageBody,
   onlineMessagePath,
   onlineRecipients,
   sendOnlineBroadcast,
@@ -86,14 +88,14 @@ test("el mismo lote no vuelve a enviar a quien ya recibió el mensaje", async ()
     return Response.json({ id: posts });
   };
   const first = await sendOnlineBroadcast(input(fetchImpl, openEnv(), account, {
-    claim: async (fanKey) => done.has(fanKey) ? "enviado" : "nuevo",
+    claim: async (fanKey) => ({ state: done.has(fanKey) ? "enviado" as const : "nuevo" as const, id: fanKey }),
     finish: async (fanKey, status) => {
       if (status === "enviado") done.add(fanKey);
     },
   }));
   assert.equal(first.posted, 2);
   const second = await sendOnlineBroadcast(input(fetchImpl, openEnv(), account, {
-    claim: async (fanKey) => done.has(fanKey) ? "enviado" : "nuevo",
+    claim: async (fanKey) => ({ state: done.has(fanKey) ? "enviado" as const : "nuevo" as const, id: fanKey }),
     finish: async (fanKey, status) => {
       if (status === "enviado") done.add(fanKey);
     },
@@ -109,9 +111,13 @@ test("el ritmo es el de FANLINK_SEND_PER_MINUTE y no se solapa con pullList", as
   let clock = 0;
   const waits: number[] = [];
   let posts = 0;
+  let inPost = false;
+  let pullBetween = false;
   const paced = await sendOnlineBroadcast({
     ...input(async () => {
+      inPost = true;
       posts += 1;
+      inPost = false;
       return Response.json({ id: posts });
     }, { ...openEnv(), FANLINK_SEND_PER_MINUTE: "2" }, account, undefined, "acc-pace"),
     requested: ["1", "2", "3"],
@@ -119,10 +125,17 @@ test("el ritmo es el de FANLINK_SEND_PER_MINUTE y no se solapa con pullList", as
     now: () => clock,
     sleep: async (ms) => {
       waits.push(ms);
+      assert.equal(inPost, false);
+      assert.equal(posts, 2);
+      await withAccountApi("acc-pace", async () => {
+        pullBetween = true;
+        assert.equal(inPost, false);
+      });
       clock += ms;
     },
   });
   assert.equal(paced.posted, 3);
+  assert.equal(pullBetween, true);
   assert.deepEqual(waits, [60_000]);
   clearOnlineBroadcastPace();
   clearAccountChatPace();
@@ -226,6 +239,60 @@ test("cancelar el lote deja constancia de a quién le llegó", async () => {
   assert.equal(posts, 2);
 });
 
+test("101 destinatarios se quedan en el tope y el cuerpo es el del bundle", async () => {
+  clearOnlineBroadcastPace();
+  let clock = 0;
+  let posts = 0;
+  let body: unknown;
+  const fans = Array.from({ length: 101 }, (_, index) => String(index + 1));
+  const sent = await sendOnlineBroadcast({
+    ...input(async (_url, init) => {
+      posts += 1;
+      body ??= JSON.parse(String(init?.body));
+      return Response.json({ id: posts });
+    }, { ...openEnv(), FANLINK_SEND_PER_MINUTE: "30" }, account, undefined, "acc-cap"),
+    requested: fans,
+    online: fans.map((fanKey) => ({ fanKey })),
+    mediaIds: [44],
+    priceCents: 960,
+    now: () => clock,
+    sleep: async (ms) => {
+      clock += ms;
+    },
+  });
+  assert.equal(onlineRecipients(fans, fans.map((fanKey) => ({ fanKey }))).capped, true);
+  assert.equal(sent.posted, 100);
+  assert.equal(sent.cap, 100);
+  assert.equal(sent.reason, "Tope de 100");
+  assert.equal(posts, 100);
+  assert.deepEqual(body, onlineMessageBody({ text: "hola", mediaIds: [44], price: 9.6 }));
+});
+
+test("el ritmo por defecto es 4 y el tope es 30", () => {
+  assert.equal(sendPerMinute(undefined), 4);
+  assert.equal(sendPerMinute(""), 4);
+  assert.equal(sendPerMinute("30"), 30);
+  assert.equal(sendPerMinute("31"), 4);
+  assert.equal(sendPerMinute("0"), 4);
+});
+
+test("una fila en sending no se reenvía", async () => {
+  clearOnlineBroadcastPace();
+  let posts = 0;
+  const sent = await sendOnlineBroadcast({
+    ...input(async () => {
+      posts += 1;
+      return Response.json({ id: 1 });
+    }, openEnv(), account, {
+      claim: async (fanKey) => ({ state: "comprobar" as const, id: fanKey }),
+    }, "acc-sending"),
+    requested: ["1"],
+    online: [{ fanKey: "1" }],
+  });
+  assert.equal(posts, 0);
+  assert.equal(sent.results[0]?.reason, "Hay que comprobar si salió");
+});
+
 test("un chatter solo ve las cuentas que tiene asignadas", () => {
   const chatter = { role: "member" as const, perms: ["mensajes"], creatorIds: ["3zk7kbr"] };
   assert.equal(canSeeOnlineFans(chatter, "3zk7kbr"), true);
@@ -255,8 +322,8 @@ function input(
   env: NodeJS.ProcessEnv,
   target = account,
   hooks?: {
-    claim?: (fanKey: string) => Promise<"nuevo" | "enviado">;
-    finish?: (fanKey: string, status: OnlineSendStatus) => Promise<void>;
+    claim?: (fanKey: string) => Promise<{ state: "nuevo" | "enviado" | "comprobar"; id: string }>;
+    finish?: (id: string, status: OnlineSendStatus) => Promise<void>;
   },
   accountId = target.accountId ?? "acc-1",
 ): OnlineBroadcastInput {
@@ -285,9 +352,9 @@ function input(
     fetch: fetchImpl,
     now: () => 1_700_000_000_000,
     sleep: async () => undefined,
-    claim: hooks?.claim ?? (async () => "nuevo"),
-    finish: async (fanKey, status) => {
-      await hooks?.finish?.(fanKey, status);
+    claim: hooks?.claim ?? (async (fanKey) => ({ state: "nuevo" as const, id: fanKey })),
+    finish: async (id, status) => {
+      await hooks?.finish?.(id, status);
     },
   };
 }

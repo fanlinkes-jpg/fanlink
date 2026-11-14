@@ -33,7 +33,7 @@ import { chatIntervalMinFromEnv } from "../../server/of-sessions/sync/chats.ts";
 import { chatIntervalMinutes, inboxIsOpen, activeThreadWatches } from "../../server/of-sessions/sync/live.ts";
 import { openWatchContext, runInboxWatch } from "../../server/of-sessions/sync/inbox-watch.ts";
 import { pickAccountWatch } from "../../server/of-sessions/sync/watch-plan.ts";
-import { listChatMeta, listChats, listOpenHistory, listPendingOutbounds, markChatList, markHistory, markOutboundAwaiting, markOutboundError, markOutboundSent, recordOutbound, saveChatRead, saveFanCards } from "../../server/of-sessions/sync/chat-store.ts";
+import { listChatMeta, listChats, listOpenHistory, listPendingOutbounds, markChatList, markHistory, markOutboundAwaiting, recordOutbound, saveChatRead, saveFanCards } from "../../server/of-sessions/sync/chat-store.ts";
 import { historyPerMinute, listPageDone, nextHistoryThread, oldestCursor, pageFinished } from "../../server/of-sessions/sync/history.ts";
 import { captureChatListPage, captureOlderMessages } from "../../server/of-sessions/sync/history-scroll.ts";
 import { openWorkPage } from "../../server/of-sessions/sessions/work-page.ts";
@@ -44,15 +44,14 @@ import { fetchSignedOnlineFans, type OnlineFan } from "../../server/of-sessions/
 import { sessionForApi } from "../../server/of-sessions/sync/of-chat-api.ts";
 import { loadSignRules } from "../../server/of-sessions/sync/of-sign.ts";
 import { prepareVaultSend } from "../../server/of-sessions/sync/vault-store.ts";
-import { insertOutboundOnce, readOutboundClaim } from "../../server/of-sessions/sync/chat-store.ts";
+import { withAccountApi } from "../../server/of-sessions/sync/api-list-pace.ts";
 import { canSeeOnlineFans, cancelOnlineBroadcast, emptyOnlineBroadcast, onlineBroadcastGate, refuseOnlineBroadcast, sendOnlineBroadcast, type OnlineBroadcastResult } from "../../server/of-sessions/send/online-broadcast.ts";
+import { claimOnlineOutbound, finishOnlineOutbound } from "../../server/of-sessions/send/online-claim.ts";
 import { normalizeFanMenuRequest, runFanMenuOnPage, type FanMenuResult } from "../../server/of-sessions/sync/fan-menu.ts";
 import { chatPageUrl } from "../../server/of-sessions/sync/chats.ts";
 import { sendPace } from "../../server/of-sessions/send/gate.ts";
 import { chatSendGate, publicSendReason, type SendAccount } from "../../server/of-sessions/send/gate.ts";
 import { markOpenedChat, markOpenRejected, markReadGate } from "../../server/of-sessions/sync/mark-read.ts";
-import { loadSignRules } from "../../server/of-sessions/sync/of-sign.ts";
-import { sessionForApi } from "../../server/of-sessions/sync/of-chat-api.ts";
 import type { SendChatHooks } from "../../server/of-sessions/send/chat-message.ts";
 import { composeChat } from "../../server/of-sessions/send/compose.ts";
 import { liveViewGate } from "../../server/of-sessions/live/desk.ts";
@@ -1087,7 +1086,7 @@ export async function broadcastOnlineFansView(
   } catch {
     return emptyOnlineBroadcast("No se pudo leer.");
   }
-  const fresh = await fetchSignedOnlineFans(state, { fetch, now: () => Date.now(), rules });
+  const fresh = await withAccountApi(account.id, () => fetchSignedOnlineFans(state, { fetch, now: () => Date.now(), rules }));
   if (fresh.fans.length === 0 && fresh.reason && fresh.reason !== "Nadie en línea") {
     return emptyOnlineBroadcast(fresh.reason);
   }
@@ -1112,30 +1111,16 @@ export async function broadcastOnlineFansView(
     sleep: (ms) => new Promise((resolve) => {
       setTimeout(resolve, ms);
     }),
-    claim: async (fanKey) => {
-      const id = `${batchId}:${fanKey}`;
-      const existing = await readOutboundClaim(sql, id);
-      if (existing?.status === "sent" || existing?.ofMessageKey) return "enviado";
-      if (!existing) {
-        await insertOutboundOnce(sql, {
-          id,
-          creatorId: input.creatorId,
-          threadKey: fanKey,
-          fanKey,
-          authorId: access.userId,
-          body,
-          priceCents: input.priceCents,
-          createdAt: new Date().toISOString(),
-          ofMessageKey: null,
-        });
-      }
-      return "nuevo";
-    },
-    finish: async (fanKey, status, messageId, why) => {
-      const id = `${batchId}:${fanKey}`;
-      if (status === "enviado") await markOutboundSent(sql, id, messageId ?? id);
-      else await markOutboundError(sql, id, why ?? "No se pudo leer.");
-    },
+    claim: (fanKey) => claimOnlineOutbound(sql, {
+      batchId,
+      creatorId: input.creatorId,
+      fanKey,
+      authorId: access.userId,
+      body,
+      priceCents: input.priceCents,
+      nowMs: Date.now(),
+    }),
+    finish: (id, status, messageId, why) => finishOnlineOutbound(sql, id, status, messageId, why),
   });
 }
 

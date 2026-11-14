@@ -45,8 +45,8 @@ export type OnlineBroadcastInput = {
   fetch: typeof fetch;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
-  claim: (fanKey: string) => Promise<"nuevo" | "enviado">;
-  finish: (fanKey: string, status: OnlineSendStatus, messageId: string | null, reason: string | null) => Promise<void>;
+  claim: (fanKey: string) => Promise<{ state: "nuevo" | "enviado" | "comprobar"; id: string }>;
+  finish: (id: string, status: OnlineSendStatus, messageId: string | null, reason: string | null) => Promise<void>;
 };
 
 export function clearOnlineBroadcastPace(): void {
@@ -161,10 +161,10 @@ export function cancelOnlineBroadcast(batchId: string, userId: string, creatorId
   return true;
 }
 
-/** Una cola por cuenta, el mismo mutex que pullList, y el ritmo FANLINK_SEND_PER_MINUTE. */
+/** El ritmo espera fuera del mutex. El mutex solo cubre cada POST. */
 export function sendOnlineBroadcast(input: OnlineBroadcastInput): Promise<OnlineBroadcastResult> {
   const key = input.account.accountId || input.account.creatorId || "cuenta";
-  return withAccountApi(key, () => runOnlineBroadcast(input, key));
+  return runOnlineBroadcast(input, key);
 }
 
 async function runOnlineBroadcast(input: OnlineBroadcastInput, key: string): Promise<OnlineBroadcastResult> {
@@ -189,55 +189,61 @@ async function runOnlineBroadcast(input: OnlineBroadcastInput, key: string): Pro
   let retryAfter: number | null = null;
   let reason: string | null = picked.capped ? `Tope de ${ONLINE_FAN_CAP}` : null;
   try {
-    const pending: string[] = [];
-    for (const fanKey of picked.send) {
-      if ((await input.claim(fanKey)) === "enviado") {
-        results.push({ fanKey, status: "enviado", reason: null });
-        continue;
-      }
-      pending.push(fanKey);
-    }
-    for (let index = 0; index < pending.length; index += 1) {
-      const fanKey = pending[index] ?? "";
+    const queue = picked.send;
+    for (let index = 0; index < queue.length; index += 1) {
+      const fanKey = queue[index] ?? "";
       if (controller.signal.aborted) {
-        await markRest(input, pending.slice(index), results, "Cancelado");
+        noteRest(queue.slice(index), results, "Cancelado");
         reason = "Cancelado";
         break;
       }
       const chatId = onlineChatId(fanKey);
       if (!chatId) {
-        await input.finish(fanKey, "fallido", null, "Sin datos");
         results.push({ fanKey, status: "fallido", reason: "Sin datos" });
+        continue;
+      }
+      const claimed = await input.claim(fanKey);
+      if (claimed.state === "enviado") {
+        results.push({ fanKey, status: "enviado", reason: null });
+        continue;
+      }
+      if (claimed.state === "comprobar") {
+        results.push({ fanKey, status: "fallido", reason: "Hay que comprobar si salió" });
         continue;
       }
       const perMinute = sendPerMinute(input.env.FANLINK_SEND_PER_MINUTE);
       const decision = sendPace(recentSends.get(key) ?? [], input.now(), perMinute);
       if (decision.waitMs > 0) await input.sleep(decision.waitMs);
       if (controller.signal.aborted) {
-        await markRest(input, pending.slice(index), results, "Cancelado");
+        await input.finish(claimed.id, "fallido", null, "Cancelado");
+        results.push({ fanKey, status: "fallido", reason: "Cancelado" });
+        noteRest(queue.slice(index + 1), results, "Cancelado");
         reason = "Cancelado";
         break;
       }
-      const at = input.now();
-      recentSends.set(key, [...decision.recent, at].filter((stamp) => at - stamp < 60_000));
       const path = onlineMessagePath(chatId);
       let response: Response;
       try {
-        response = await input.fetch(`https://onlyfans.com${path}`, {
-          method: "POST",
-          headers: {
-            ...signedHeaders(input.rules, path, input.auth, at),
-            "content-type": "application/json",
-          },
-          body: JSON.stringify(onlineMessageBody({ text, mediaIds, price })),
-          signal: controller.signal,
+        response = await withAccountApi(key, async () => {
+          const at = input.now();
+          const live = (recentSends.get(key) ?? []).filter((stamp) => at - stamp < 60_000);
+          recentSends.set(key, [...live, at]);
+          return input.fetch(`https://onlyfans.com${path}`, {
+            method: "POST",
+            headers: {
+              ...signedHeaders(input.rules, path, input.auth, at),
+              "content-type": "application/json",
+            },
+            body: JSON.stringify(onlineMessageBody({ text, mediaIds, price })),
+            signal: controller.signal,
+          });
         });
       } catch {
         const why = controller.signal.aborted ? "Cancelado" : "No se pudo leer.";
-        await input.finish(fanKey, "fallido", null, why);
+        await input.finish(claimed.id, "fallido", null, why);
         results.push({ fanKey, status: "fallido", reason: why });
         if (controller.signal.aborted) {
-          await markRest(input, pending.slice(index + 1), results, "Cancelado");
+          noteRest(queue.slice(index + 1), results, "Cancelado");
           reason = "Cancelado";
           break;
         }
@@ -246,20 +252,20 @@ async function runOnlineBroadcast(input: OnlineBroadcastInput, key: string): Pro
       if (response.status === 429) {
         retryAfter = retryAfterSeconds(response);
         stopped = true;
-        await input.finish(fanKey, "fallido", null, "OnlyFans pide esperar.");
+        await input.finish(claimed.id, "fallido", null, "OnlyFans pide esperar.");
         results.push({ fanKey, status: "fallido", reason: "OnlyFans pide esperar." });
-        await markRest(input, pending.slice(index + 1), results, "OnlyFans pide esperar.");
+        noteRest(queue.slice(index + 1), results, "OnlyFans pide esperar.");
         reason = "OnlyFans pide esperar.";
         break;
       }
       if (!response.ok) {
-        await input.finish(fanKey, "fallido", null, "No se pudo leer.");
+        await input.finish(claimed.id, "fallido", null, "No se pudo leer.");
         results.push({ fanKey, status: "fallido", reason: "No se pudo leer." });
         continue;
       }
       const messageId = await messageIdOf(response);
       posted += 1;
-      await input.finish(fanKey, "enviado", messageId, null);
+      await input.finish(claimed.id, "enviado", messageId, null);
       results.push({ fanKey, status: "enviado", reason: null });
     }
   } finally {
@@ -276,11 +282,8 @@ async function runOnlineBroadcast(input: OnlineBroadcastInput, key: string): Pro
   };
 }
 
-async function markRest(input: OnlineBroadcastInput, fanKeys: readonly string[], results: OnlineSendRow[], why: string): Promise<void> {
-  for (const fanKey of fanKeys) {
-    await input.finish(fanKey, "fallido", null, why);
-    results.push({ fanKey, status: "fallido", reason: why });
-  }
+function noteRest(fanKeys: readonly string[], results: OnlineSendRow[], why: string): void {
+  for (const fanKey of fanKeys) results.push({ fanKey, status: "fallido", reason: why });
 }
 
 async function messageIdOf(response: Response): Promise<string | null> {
