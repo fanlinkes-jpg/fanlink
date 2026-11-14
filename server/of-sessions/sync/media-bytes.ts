@@ -1,17 +1,62 @@
-const thumbCache = new Map<string, { body: Uint8Array; contentType: string; at: number }>();
-
-export function putVaultThumb(creatorId: string, mediaId: string, body: Uint8Array, contentType: string): void {
-  thumbCache.set(`${creatorId}\n${mediaId}`, { body, contentType, at: Date.now() });
-}
-
-export function getVaultThumb(creatorId: string, mediaId: string): { body: Uint8Array; contentType: string } | null {
-  const hit = thumbCache.get(`${creatorId}\n${mediaId}`);
-  if (!hit || Date.now() - hit.at > 10 * 60_000) return null;
-  return { body: hit.body, contentType: hit.contentType };
-}
 import { sessionForApi } from "./of-chat-api.ts";
 import { mediaHostAllowed, nextMediaUrl } from "./history.ts";
 import { BROWSER_FINGERPRINT } from "../sessions/browser-factory.ts";
+
+/** Dos páginas de la bóveda (40 + 40) y un margen, para no perder la anterior al pasar de página. */
+export const VAULT_THUMB_CACHE_MAX = 160;
+/** Tope de bytes vivos. Una miniatura que no cabe no entra. */
+export const VAULT_THUMB_CACHE_BYTES = 24 * 1024 * 1024;
+const THUMB_TTL_MS = 10 * 60_000;
+
+const thumbCache = new Map<string, { body: Uint8Array; contentType: string; at: number }>();
+let thumbBytes = 0;
+let thumbNow = (): number => Date.now();
+
+export function setVaultThumbClock(clock: () => number): void {
+  thumbNow = clock;
+}
+
+export function clearVaultThumbs(): void {
+  thumbCache.clear();
+  thumbBytes = 0;
+}
+
+function thumbKey(creatorId: string, mediaId: string): string {
+  return `${creatorId}\n${mediaId}`;
+}
+
+function forgetThumb(key: string): void {
+  const hit = thumbCache.get(key);
+  if (!hit) return;
+  thumbBytes -= hit.body.byteLength;
+  thumbCache.delete(key);
+}
+
+export function putVaultThumb(creatorId: string, mediaId: string, body: Uint8Array, contentType: string): void {
+  const key = thumbKey(creatorId, mediaId);
+  forgetThumb(key);
+  if (body.byteLength > VAULT_THUMB_CACHE_BYTES) return;
+  thumbCache.set(key, { body, contentType, at: thumbNow() });
+  thumbBytes += body.byteLength;
+  while (thumbCache.size > VAULT_THUMB_CACHE_MAX || thumbBytes > VAULT_THUMB_CACHE_BYTES) {
+    const oldest = thumbCache.keys().next().value;
+    if (oldest === undefined) break;
+    forgetThumb(oldest);
+  }
+}
+
+export function getVaultThumb(creatorId: string, mediaId: string): { body: Uint8Array; contentType: string } | null {
+  const key = thumbKey(creatorId, mediaId);
+  const hit = thumbCache.get(key);
+  if (!hit) return null;
+  if (thumbNow() - hit.at > THUMB_TTL_MS) {
+    forgetThumb(key);
+    return null;
+  }
+  thumbCache.delete(key);
+  thumbCache.set(key, hit);
+  return { body: hit.body, contentType: hit.contentType };
+}
 
 export type MediaBytes = {
   status: number;
@@ -50,22 +95,41 @@ export function mediaFromFetchResponse(response: Response): MediaBytes | null {
   };
 }
 
+type LoadResult = MediaBytes | { status: number };
+
+function asMedia(result: LoadResult): MediaBytes | null {
+  if (!("contentType" in result)) return null;
+  return result;
+}
+
 /**
  * Pide el Range y devuelve el stream del CDN. No llama a arrayBuffer ni
- * junta el archivo en memoria. Un redirect no se sigue.
+ * junta el archivo en memoria. Un redirect no se sigue a un host distinto
+ * de OnlyFans, CloudFront o S3.
  */
 export async function readSessionMediaBytes(
   creatorId: string,
   target: string,
   range?: string | null,
 ): Promise<MediaBytes | null> {
-  if (!mediaHostAllowed(target)) return null;
+  const result = await readSessionMediaResult(creatorId, target, range);
+  return result.media;
+}
+
+/** Igual que `readSessionMediaBytes`, pero conserva el status cuando el CDN rechaza la URL. */
+export async function readSessionMediaResult(
+  creatorId: string,
+  target: string,
+  range?: string | null,
+): Promise<{ status: number; media: MediaBytes | null }> {
+  if (!mediaHostAllowed(target)) return { status: 0, media: null };
   const header = mediaRangeHeader(range);
   try {
+    // Import en línea: este módulo y el runtime se referencian al pedir bytes de una cuenta.
     const { getOfSessionManager } = await import("../../../src/lib/of-sessions-runtime.server.ts");
     const sessions = await getOfSessionManager();
     const account = (await sessions.listAccounts()).find((item) => item.creatorId === creatorId);
-    if (!account || account.status !== "active" || !account.hasStorageState) return null;
+    if (!account || account.status !== "active" || !account.hasStorageState) return { status: 0, media: null };
     const state = await sessions.readStorageState(account.id);
     const auth = sessionForApi(state, Date.now());
     const cookie = "cookie" in auth ? auth.cookie : "";
@@ -76,37 +140,55 @@ export async function readSessionMediaBytes(
     };
     if (cookie) headers.cookie = cookie;
     if (header) headers.range = header;
-    const loaded = await loadMedia(target, headers, Boolean(header));
-    if (loaded || !cookie) return loaded;
+    const first = await loadMedia(target, headers, Boolean(header));
+    const media = asMedia(first);
+    if (media) return { status: media.status, media };
+    if (!cookie) return { status: first.status, media: null };
     delete headers.cookie;
-    return loadMedia(target, headers, Boolean(header));
+    const second = await loadMedia(target, headers, Boolean(header));
+    const again = asMedia(second);
+    if (again) return { status: again.status, media: again };
+    const status = first.status === 403 || first.status === 410 ? first.status : second.status || first.status;
+    return { status, media: null };
   } catch {
-    return null;
+    return { status: 0, media: null };
   }
 }
 
-async function loadMedia(target: string, headers: Record<string, string>, ranged: boolean): Promise<MediaBytes | null> {
-  let response = await fetch(target, { headers, redirect: "manual" });
+async function loadMedia(target: string, headers: Record<string, string>, ranged: boolean): Promise<LoadResult> {
+  let response: Response;
+  try {
+    response = await fetch(target, { headers, redirect: "manual" });
+  } catch {
+    return { status: 0 };
+  }
   if (response.status >= 300 && response.status < 400) {
     const next = nextMediaUrl(target, response.headers.get("location"));
     await response.body?.cancel().catch(() => undefined);
-    if (!next) return null;
-    response = await fetch(next, { headers, redirect: "manual" });
+    if (!next) return { status: response.status };
+    try {
+      response = await fetch(next, { headers, redirect: "manual" });
+    } catch {
+      return { status: 0 };
+    }
   }
   if (!response.ok && response.status !== 206) {
     noteThumb(response.status);
     await response.body?.cancel().catch(() => undefined);
-    return null;
+    return { status: response.status };
   }
   if (ranged) {
     const media = mediaFromFetchResponse(response);
-    if (!media) await response.body?.cancel().catch(() => undefined);
+    if (!media) {
+      await response.body?.cancel().catch(() => undefined);
+      return { status: response.status };
+    }
     return media;
   }
   const raw = new Uint8Array(await response.arrayBuffer());
-  if (raw.byteLength === 0 || raw.byteLength > 8_000_000) return null;
+  if (raw.byteLength === 0 || raw.byteLength > 8_000_000) return { status: response.status };
   const type = (response.headers.get("content-type") ?? "application/octet-stream").split(";")[0] ?? "application/octet-stream";
-  if (type.startsWith("text/")) return null;
+  if (type.startsWith("text/")) return { status: response.status };
   return { status: response.status, body: raw, contentType: type, contentLength: raw.byteLength };
 }
 

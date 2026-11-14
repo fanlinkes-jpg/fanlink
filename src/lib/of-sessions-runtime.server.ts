@@ -36,6 +36,7 @@ import { historyPerMinute, listPageDone, nextHistoryThread, oldestCursor, pageFi
 import { captureChatListPage, captureOlderMessages } from "../../server/of-sessions/sync/history-scroll.ts";
 import { openWorkPage } from "../../server/of-sessions/sessions/work-page.ts";
 import { type VaultFile } from "../../server/of-sessions/sync/vault-listen.ts";
+import { readChatVaultView as readVaultPage, type VaultReadDeps } from "../../server/of-sessions/sync/vault-read.ts";
 import type { OnlineFan } from "../../server/of-sessions/sync/online-fans.ts";
 import { normalizeFanMenuRequest, runFanMenuOnPage, type FanMenuResult } from "../../server/of-sessions/sync/fan-menu.ts";
 import { chatPageUrl } from "../../server/of-sessions/sync/chats.ts";
@@ -990,24 +991,23 @@ export async function resolveChatSendHooks(
   };
 }
 
-export async function readChatVaultView(userId: string, input: { creatorId: string; threadKey: string; listId?: string; offset?: number }): Promise<{ items: VaultFile[]; reason: string | null }> {
-  const access = await accessFor(userId);
+export async function readChatVaultView(
+  userId: string,
+  input: { creatorId: string; threadKey: string; listId?: string; offset?: number },
+  deps?: Partial<VaultReadDeps>,
+): Promise<{ items: VaultFile[]; reason: string | null }> {
+  const access = deps?.access ?? await accessFor(userId);
   if (access.role !== "owner" && !access.perms.includes("mensajes")) {
     throw new WorkspaceAccessError("No tienes permiso para escribir.");
   }
-  const sessions = await getOfSessionManager();
-  const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
-  if (!account || !account.hasStorageState) return { items: [], reason: "Sin datos" };
-  const { fetchSignedVault } = await import("../../server/of-sessions/sync/of-chat-api.ts");
-  const { persistVaultRead } = await import("../../server/of-sessions/sync/vault-store.ts");
-  const payloads = await fetchSignedVault(await sessions.readStorageState(account.id), { fetch, now: () => Date.now() }, input.listId || "all", input.offset ?? 0);
-  const saved = await persistVaultRead(await getSql(), input.creatorId, payloads);
-  console.info(`[fanlink:vault] api medios=${saved.length} fotos=${saved.filter((item) => item.preview).length}`);
-  if (saved.length === 0) return { items: [], reason: "No se ha podido leer la bóveda." };
-  return {
-    items: saved.map((item) => ({ id: item.id, title: item.title, kind: item.kind })),
-    reason: null,
-  };
+  return readVaultPage(input, {
+    fetch: deps?.fetch ?? fetch,
+    now: deps?.now ?? (() => Date.now()),
+    sql: deps?.sql ?? await getSql(),
+    sessions: deps?.sessions ?? await getOfSessionManager(),
+    access,
+    openBrowser: deps?.openBrowser,
+  });
 }
 
 export async function listOnlineFansView(userId: string, input: { creatorId: string }): Promise<{ fans: OnlineFan[]; reason: string | null }> {

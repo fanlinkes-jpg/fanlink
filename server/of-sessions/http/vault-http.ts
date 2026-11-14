@@ -5,7 +5,7 @@ import { loadSaleContext } from "../sync/vault-store.ts";
 import type { ReadSql } from "../sync/store.ts";
 import { creatorAllowed, queryVaultForActor, type VaultActor } from "../sync/vault-query.ts";
 import type { MassEnv } from "../../../src/lib/mass/gates.ts";
-import type { MediaBytes } from "../sync/media-bytes.ts";
+import { getVaultThumb, type MediaBytes } from "../sync/media-bytes.ts";
 
 export type SessionActor = VaultActor | null;
 
@@ -62,6 +62,10 @@ export async function handleVaultMedia(request: Request, deps: {
   deps.log?.(mediaLogLine(creatorId, mediaId));
   if (!creatorId || !mediaId) return new Response("Sin datos", { status: 404 });
   if (!creatorAllowed(actor, creatorId)) return new Response("Sin datos", { status: 403 });
+  if (variant === "preview" && !request.headers.get("range")) {
+    const cached = getVaultThumb(creatorId, mediaId);
+    if (cached) return thumbResponse(cached);
+  }
   const preview = await deps.findPreview(creatorId, mediaId, variant);
   return streamMedia(preview, request, deps.fetchBytes);
 }
@@ -151,6 +155,18 @@ async function streamMedia(
   if (length != null) headers.set("content-length", String(length));
   if (bytes.contentRange) headers.set("content-range", bytes.contentRange);
   return new Response(body, { status: bytes.status, headers });
+}
+
+function thumbResponse(cached: { body: Uint8Array; contentType: string }): Response {
+  const body = cached.body.buffer.slice(cached.body.byteOffset, cached.body.byteOffset + cached.body.byteLength) as ArrayBuffer;
+  return new Response(body, {
+    status: 200,
+    headers: {
+      "content-type": cached.contentType,
+      "cache-control": "private, max-age=300",
+      "x-content-type-options": "nosniff",
+    },
+  });
 }
 
 function mediaBody(bytes: MediaBytes): BodyInit | null {

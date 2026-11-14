@@ -17,7 +17,7 @@ import type { ReadSql } from "../sync/store.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
-const NEW_FILES = ["0037_vault_mirror.sql", "0038_vault_fan_filter.sql", "0039_outbound_media.sql", "0040_vault_full_tags.sql", "0041_send_claim.sql", "0042_vault_paid_with.sql"];
+const NEW_FILES = ["0037_vault_mirror.sql", "0038_vault_fan_filter.sql", "0039_outbound_media.sql", "0040_vault_full_tags.sql", "0041_send_claim.sql", "0042_vault_paid_with.sql", "0044_vault_thumb_page.sql"];
 
 const OLD_0028 = `
 alter table of_chat_message add column if not exists media_count integer;
