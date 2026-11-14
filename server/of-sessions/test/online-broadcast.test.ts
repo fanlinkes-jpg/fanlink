@@ -8,6 +8,7 @@ import { createSendLimiter, sendPerMinute, sharedSendLimiter } from "../send/gat
 import { onlineDedupeKey } from "../send/online-claim.ts";
 import {
   canSeeOnlineFans,
+  visibleOnlineCreatorIds,
   cancelOnlineBroadcast,
   clearOnlineBroadcastPace,
   onlineChatId,
@@ -332,6 +333,25 @@ test("un chatter solo ve las cuentas que tiene asignadas", () => {
   assert.equal(canSeeOnlineFans(chatter, "otra"), false);
   assert.equal(canSeeOnlineFans({ role: "member", perms: [], creatorIds: ["3zk7kbr"] }, "3zk7kbr"), false);
   assert.equal(canSeeOnlineFans({ role: "owner", perms: [], creatorIds: [] }, "otra"), true);
+});
+
+test("all de un miembro sin permiso no elige cuentas y no hay lectura", () => {
+  const denied = { role: "member" as const, perms: [] as string[], creatorIds: ["3zk7kbr"] };
+  const ids = visibleOnlineCreatorIds(denied, "all", ["3zk7kbr", "otra"]);
+  const reads: string[] = [];
+  for (const id of ids) reads.push(id);
+  assert.deepEqual(ids, []);
+  assert.deepEqual(reads, []);
+});
+
+test("all de un miembro no incluye la cuenta que no tiene asignada", () => {
+  const chatter = { role: "member" as const, perms: ["mensajes"], creatorIds: ["3zk7kbr"] };
+  const ids = visibleOnlineCreatorIds(chatter, "all", ["3zk7kbr", "otra"]);
+  const reads: string[] = [];
+  for (const id of ids) reads.push(id);
+  assert.deepEqual(ids, ["3zk7kbr"]);
+  assert.deepEqual(reads, ["3zk7kbr"]);
+  assert.equal(reads.includes("otra"), false);
 });
 
 test("un batchId vacío no hace POST", async () => {

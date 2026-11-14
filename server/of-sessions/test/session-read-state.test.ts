@@ -7,7 +7,10 @@ import type { BrowserFactory } from "../sessions/browser-factory.ts";
 import { onlyFansSite } from "../sessions/onlyfans.ts";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
 import { clearAccountPauses } from "../sync/backoff.ts";
-import { clearSignRulesCache } from "../sync/of-sign.ts";
+import { clearAccountChatPace } from "../sync/api-list-pace.ts";
+import { clearMarkReadJobs, markOpenedChat } from "../sync/mark-read.ts";
+import { clearSignRulesCache, parseSignRules } from "../sync/of-sign.ts";
+import type { ReadSql } from "../sync/store.ts";
 import { passApiListAccounts } from "../sync/api-list-cycle.ts";
 import { SESSION_EXPIRED_LABEL } from "../sync/session-link.ts";
 import { removeDir, tempDataDir, TEST_SESSION_KEY, testConfig, testDisplay } from "./helpers.ts";
@@ -273,6 +276,70 @@ test("un 401 de notificaciones que empezó antes de Reconectar no marca la sesi�
   }
 });
 
+test("un 401 de mark-as-read que ya iba en vuelo no marca la sesión nueva", async () => {
+  clearSignRulesCache();
+  clearAccountPauses();
+  clearAccountChatPace();
+  clearMarkReadJobs();
+  const dataDir = await tempDataDir();
+  let launches = 0;
+  let release = () => undefined as void;
+  let entered = () => undefined as void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const started = new Promise<void>((resolve) => { entered = resolve; });
+  const rules = parseSignRules(RULES);
+  if (!rules) throw new Error("reglas");
+  const created = await createSessionRuntime({
+    config: testConfig(dataDir, { openLoginOnInvalidate: false }),
+    site: onlyFansSite,
+    browserFactory: closedBrowser(() => { launches += 1; }),
+    displayEnv: testDisplay,
+    fetch: (async () => new Response("{}", { status: 500 })) as typeof fetch,
+  });
+  try {
+    const account = await created.store.create("Marca", "3zk7kbr");
+    await writeEncryptedSession(path.join(dataDir, "sessions", `${account.id}.json`), storedState(), TEST_SESSION_KEY);
+    await created.store.update(account.id, { hasStorageState: true, status: "active", connection: "live", sessionRejected: false });
+    const epoch = created.sessions.sessionGeneration(account.id);
+    const pending = markOpenedChat({
+      accountId: account.id,
+      creatorId: "3zk7kbr",
+      threadKey: "99",
+      flag: "true",
+      allowlist: "3zk7kbr",
+      account: { creatorId: "3zk7kbr", accountId: account.id, handle: "creadora", userId: "42", label: "Marca" },
+      sql: unreadSql(),
+      fetch: (async () => {
+        entered();
+        await gate;
+        return new Response("{}", { status: 401, headers: { "content-type": "application/json" } });
+      }) as typeof fetch,
+      now: () => Date.now(),
+      sleep: async () => undefined,
+      rules,
+      auth: { cookie: "auth_id=42; sess=ok", userId: "42", xBc: "huella" },
+      onSessionRejected: () => created.sessions.noteApiSessionRejected(account.id, epoch),
+    });
+    await started;
+    created.sessions.rotateSessionEpoch(account.id);
+    await created.store.update(account.id, { connection: "live", status: "active", sessionRejected: false });
+    release();
+    await pending;
+    const stored = await created.sessions.getAccount(account.id);
+    assert.equal(stored.sessionRejected, false);
+    assert.equal(stored.connection, "live");
+    assert.equal(launches, 0);
+  } finally {
+    release();
+    clearMarkReadJobs();
+    clearAccountChatPace();
+    clearAccountPauses();
+    clearSignRulesCache();
+    await created.close();
+    await removeDir(dataDir);
+  }
+});
+
 test("el margen de users/me es por cuenta y Reconectar lo borra", async () => {
   clearSignRulesCache();
   clearAccountPauses();
@@ -381,6 +448,15 @@ async function onlineCase(route: (url: string) => Response): Promise<{
     await created.close();
     await removeDir(dataDir);
   }
+}
+
+function unreadSql(): ReadSql {
+  return {
+    async query<T>(text: string): Promise<T[]> {
+      if (text.startsWith("select")) return [{ unread: 4 }] as T[];
+      return [];
+    },
+  };
 }
 
 function signedFetch(count: () => void, status: number): typeof fetch {

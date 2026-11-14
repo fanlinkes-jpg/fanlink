@@ -76,6 +76,20 @@ export function onlineBroadcastGate(env: NodeJS.ProcessEnv, account: SendAccount
   return chatSendGate(env.FANLINK_ENABLE_SEND, env.FANLINK_SEND_ALLOW_ACCOUNTS, account);
 }
 
+/**
+ * Cuentas cuya lista en línea puede pedirse. «all» solo deja las que
+ * canSeeOnlineFans acepta: un miembro sin mensajes, o sin esa cuenta
+ * asignada, no entra y no dispara la lectura firmada.
+ */
+export function visibleOnlineCreatorIds(
+  access: { role: "owner" | "member"; perms: readonly string[]; creatorIds: readonly string[] },
+  creatorId: string,
+  known: readonly string[],
+): string[] {
+  if (creatorId === "all") return known.filter((id) => canSeeOnlineFans(access, id));
+  return canSeeOnlineFans(access, creatorId) ? [creatorId] : [];
+}
+
 export function canSeeOnlineFans(
   access: { role: "owner" | "member"; perms: readonly string[]; creatorIds: readonly string[] },
   creatorId: string,

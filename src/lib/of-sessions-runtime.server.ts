@@ -47,7 +47,7 @@ import { sessionForApi } from "../../server/of-sessions/sync/of-chat-api.ts";
 import { loadSignRules } from "../../server/of-sessions/sync/of-sign.ts";
 import { prepareVaultSend } from "../../server/of-sessions/sync/vault-store.ts";
 import { withAccountApi } from "../../server/of-sessions/sync/api-list-pace.ts";
-import { canSeeOnlineFans, cancelOnlineBroadcast, emptyOnlineBroadcast, onlineBroadcastGate, refuseOnlineBroadcast, sendOnlineBroadcast, type OnlineBroadcastResult } from "../../server/of-sessions/send/online-broadcast.ts";
+import { canSeeOnlineFans, cancelOnlineBroadcast, emptyOnlineBroadcast, onlineBroadcastGate, refuseOnlineBroadcast, sendOnlineBroadcast, visibleOnlineCreatorIds, type OnlineBroadcastResult } from "../../server/of-sessions/send/online-broadcast.ts";
 import { claimOnlineOutbound, finishOnlineOutbound, noteStaleOnlineSends, resolveStaleOnlineSend } from "../../server/of-sessions/send/online-claim.ts";
 import { normalizeFanMenuRequest, runFanMenuOnPage, type FanMenuResult } from "../../server/of-sessions/sync/fan-menu.ts";
 import { chatPageUrl } from "../../server/of-sessions/sync/chats.ts";
@@ -1060,13 +1060,19 @@ export async function readChatVaultView(
 
 export async function listOnlineFansView(userId: string, input: { creatorId: string }): Promise<{ fans: OnlineFan[]; reason: string | null; notices: string[]; cap: number; send: { enabled: boolean; reason: string | null } }> {
   const access = await accessFor(userId);
-  await noteStaleOnlineSends(await getSql(), Date.now());
+  if (input.creatorId !== "all" && !canSeeOnlineFans(access, input.creatorId)) {
+    throw new WorkspaceAccessError("No tienes acceso para operar la sesión de esa creadora.");
+  }
+  if (input.creatorId === "all" && access.role !== "owner" && !access.perms.includes("mensajes")) {
+    return { fans: [], reason: "Sin datos", notices: [], cap: ONLINE_FAN_CAP, send: { enabled: false, reason: "Sin datos" } };
+  }
   const sessions = await getOfSessionManager();
   const accounts = await sessions.listAccounts();
+  const known = accounts.flatMap((account) => account.creatorId ? [account.creatorId] : []);
+  const wanted = visibleOnlineCreatorIds(access, input.creatorId, known);
+  if (wanted.length === 0) return { fans: [], reason: "Sin datos", notices: [], cap: ONLINE_FAN_CAP, send: { enabled: false, reason: "Sin datos" } };
+  await noteStaleOnlineSends(await getSql(), Date.now());
   if (input.creatorId === "all") {
-    const known = accounts.flatMap((account) => account.creatorId ? [account.creatorId] : []);
-    const wanted = creatorIdsForChats(access, known);
-    if (wanted.length === 0) return { fans: [], reason: "Sin datos", notices: [], cap: ONLINE_FAN_CAP, send: { enabled: false, reason: "Sin datos" } };
     const reads = [];
     for (const creatorId of wanted) {
       const account = accounts.find((item) => item.creatorId === creatorId);
@@ -1083,9 +1089,6 @@ export async function listOnlineFansView(userId: string, input: { creatorId: str
       ? merged.notices[0] ?? reads.find((read) => read.reason)?.reason ?? "Nadie en línea"
       : null;
     return { fans: merged.fans, reason, notices: merged.notices, cap: ONLINE_FAN_CAP, send: { enabled: false, reason: "Elige una cuenta" } };
-  }
-  if (!canSeeOnlineFans(access, input.creatorId)) {
-    throw new WorkspaceAccessError("No tienes acceso para operar la sesión de esa creadora.");
   }
   const account = accounts.find((item) => item.creatorId === input.creatorId);
   if (!account) return { fans: [], reason: "Sin datos", notices: [], cap: ONLINE_FAN_CAP, send: { enabled: false, reason: "Sin datos" } };
@@ -1244,6 +1247,7 @@ export async function markChatOpenedView(userId: string, input: { creatorId: str
   if (!markReadGate(process.env.FANLINK_CHAT_MARK_READ, process.env.FANLINK_SEND_ALLOW_ACCOUNTS, fields).allowed) {
     return { marked: false };
   }
+  const epoch = sessions.sessionGeneration(account.id);
   let state;
   try {
     state = await sessions.readStorageState(account.id);
@@ -1253,7 +1257,6 @@ export async function markChatOpenedView(userId: string, input: { creatorId: str
   const auth = sessionForApi(state, Date.now());
   if ("reason" in auth) return { marked: false };
   const rules = await loadSignRules(fetch, Date.now());
-  const epoch = sessions.sessionGeneration(account.id);
   const result = await markOpenedChat({
     accountId: account.id,
     creatorId,
