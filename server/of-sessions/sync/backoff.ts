@@ -30,6 +30,15 @@ export function noteAccountBlock(accountId: string, reason: string, now = Date.n
   return delay;
 }
 
+/** Un 400 es la firma. Un 429 u otra pausa dice la causa y los segundos. */
+export function pauseWaitReason(pause: { reason: string; until: number }, now: number): { reason: string; signatureRejected: boolean } {
+  if (pause.reason === "400") {
+    return { reason: "OnlyFans rechazó la firma", signatureRejected: true };
+  }
+  const seconds = Math.max(1, Math.ceil((pause.until - now) / 1000));
+  return { reason: `pausa por ${pause.reason} (espera ${seconds} s)`, signatureRejected: false };
+}
+
 export function accountPause(accountId: string, now = Date.now()): Pause | null {
   const row = pauses.get(accountId);
   if (!row || row.until <= now) return null;

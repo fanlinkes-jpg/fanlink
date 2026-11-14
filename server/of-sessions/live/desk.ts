@@ -61,6 +61,7 @@ export function liveRequestAllowed(raw: string, method = "GET", typing = false):
     return false;
   }
   if (path.includes("..") || path.includes("\\")) return false;
+  if (LIVE_WRITES.has(method.toUpperCase()) && /\/chats\/[^/]+\/messages\/read\/?$/.test(path)) return false;
   if (liveBootPath(path)) return method.toUpperCase() === "GET" || method.toUpperCase() === "HEAD";
   if (!liveHostPathAllowed(host, path)) return false;
   return !liveWriteBlocked(method, path, typing);

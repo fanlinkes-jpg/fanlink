@@ -234,6 +234,13 @@ export function watchPage(page: Page, threadKey: () => string, accountUserId: ()
       return response?.status() ?? 0;
     },
     listen({ onMessages, onThreads, onUsers, onBlock }) {
+      void page.route("**/*", (route) => {
+        const request = route.request();
+        if (request.method().toUpperCase() === "POST" && /\/messages\/read\/?(?:\?|$)/.test(request.url())) {
+          return route.abort();
+        }
+        return route.continue();
+      });
       page.on("websocket", (socket) => {
         socket.on("framereceived", (frame) => {
           const text = typeof frame.payload === "string" ? frame.payload : frame.payload.toString("utf8");

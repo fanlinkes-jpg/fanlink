@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, typ
 import { createPortal } from "react-dom";
 import { AtSign, Bell, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, MessageCircle, RefreshCw, ScrollText, Send, Type } from "lucide-react";
 import { chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, readChatVault, recordChatOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
-import { unreadChatRow, unreadChatTotal } from "../../server/of-sessions/sync/unread-chats.ts";
+import { unreadChatRow, unreadTotalFor } from "../../server/of-sessions/sync/unread-chats.ts";
 import { listCreatorNotifications, markCreatorNotificationsRead, type NotificationListItem } from "@/lib/of-notifications";
 import { kindLabel } from "@/lib/notifications";
 import { useCrm, type VaultItem } from "@/lib/crm";
@@ -951,7 +951,12 @@ export function RealChatsPage() {
               {creators.map((creator) => <option key={creator.id} value={creator.id}>{creator.name}</option>)}
             </select>
             <span className="shrink-0 text-[10px] text-[#6d7585]">Más recientes</span>
-            {unreadChatTotal(threads) > 0 ? <span className="shrink-0 rounded-full bg-[#3b6cff] px-1.5 text-[10px] font-semibold text-white" aria-label={`${unreadChatTotal(threads)} chats sin leer`}>{unreadChatTotal(threads)}</span> : null}
+            {(() => {
+              const total = unreadTotalFor(data ? "ready" : "loading", data?.threads ?? [], creatorId);
+              if (total == null) return <span className="shrink-0 text-[10px] text-[#6d7585]" title="Sin datos">Sin datos</span>;
+              if (total === 0) return null;
+              return <span className="shrink-0 rounded-full bg-[#3b6cff] px-1.5 text-[10px] font-semibold text-white" aria-label={`${total} chats sin leer`}>{total}</span>;
+            })()}
           </div>
           <div className="flex gap-2">
             <button type="button" onClick={() => setFilter("propinas")} className={`rounded-full px-3 py-1 text-xs ${filter === "propinas" ? "bg-[#3b6cff] text-white" : "bg-[#f3f4f6] text-[#6d7585]"}`}>Con propinas</button>
@@ -998,7 +1003,7 @@ export function RealChatsPage() {
                     <span className="flex items-center gap-1">
                       <span className={`truncate text-sm ${unread.bold ? "font-bold text-[#1d2433]" : "font-medium"}`}>{fanTitle(thread)}</span>
                       {creatorId === "all" ? <span className="shrink-0 rounded bg-[#f3f4f6] px-1 text-[10px] text-[#6d7585]">{creators.find((creator) => creator.id === thread.creatorId)?.name ?? "Cuenta"}</span> : null}
-                      {unread.badge != null ? <span className="shrink-0 rounded-full bg-[#3b6cff] px-1.5 text-[10px] font-semibold text-white" aria-label={`${unread.badge} sin leer`}>{unread.badge}</span> : null}
+                      {unread.badge != null && !marks.muted.includes(threadMark(thread.creatorId, thread.threadKey)) ? <span className="shrink-0 rounded-full bg-[#3b6cff] px-1.5 text-[10px] font-semibold text-white" aria-label={`${unread.badge} sin leer`}>{unread.badge}</span> : null}
                       {thread.online === false ? <span className="rounded bg-[#f3f4f6] px-1 text-[10px] text-[#6d7585]">OFF</span> : null}
                     </span>
                     <span className="block truncate text-xs text-[#6d7585]">{thread.fanHandle ? `@${thread.fanHandle.replace(/^@/, "")}` : "Sin datos"}</span>

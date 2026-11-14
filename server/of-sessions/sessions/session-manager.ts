@@ -47,7 +47,7 @@ import type { SiteAdapter } from "./site.ts";
 import { hasLiveCookies } from "./site.ts";
 import { collectCreatorRead, type CollectedRead } from "../sync/collect.ts";
 import type { TxCursor } from "../sync/parse.ts";
-import { accountPause, noteAccountBlock } from "../sync/backoff.ts";
+import { accountPause, noteAccountBlock, pauseWaitReason } from "../sync/backoff.ts";
 import { chatPaceOf, planChatPull, rememberChatPace, withAccountChatReader } from "../sync/api-list-pace.ts";
 import { fetchSignedChats, type SignedChatOptions } from "../sync/of-chat-api.ts";
 import { collectChats, type CollectedChats } from "../sync/collect-chats.ts";
@@ -608,8 +608,10 @@ export class SessionManager {
       if (account.identityState === "mismatch") {
         return { ...empty, reason: "Lecturas bloqueadas: la sesión guardada es de otra cuenta." };
       }
-      if (accountPause(accountId)) {
-        return { ...empty, reason: "OnlyFans rechazó la firma", signatureRejected: true };
+      const pause = accountPause(accountId);
+      if (pause) {
+        const waited = pauseWaitReason(pause, this.now().getTime());
+        return { ...empty, reason: waited.reason, signatureRejected: waited.signatureRejected };
       }
       const now = this.now().getTime();
       const planned = planChatPull(chatPaceOf(accountId), now, part);

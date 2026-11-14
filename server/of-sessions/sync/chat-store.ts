@@ -108,6 +108,13 @@ export async function saveChatRead(
         ],
       );
     }
+    if (read.threads.length > 0) {
+      await sql.query(
+        `update of_chat_thread set unread = null
+         where creator_id = $1 and not (thread_key = any($2::text[]))`,
+        [creatorId, read.threads.map((thread) => thread.threadKey)],
+      );
+    }
     for (const message of read.messages) {
       await sql.query(
         `insert into of_chat_message (
@@ -190,7 +197,7 @@ export async function saveChatRead(
           message.fanKey,
           message.sentAt,
           (message.body || "").replace(/\s+/g, " ").trim().slice(0, 180),
-          message.fromFan ? 1 : 0,
+          null,
           syncedAt,
           ORIGIN,
           message.fromFan,

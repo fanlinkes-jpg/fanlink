@@ -1,19 +1,9 @@
 /**
  * No leídos de `/api2/v2/chats`. Sale de `unreadMessagesCount` (o `unread`).
  * Si el campo no viene, no se guarda un 0: la fila no se pone en negrita
- * y el log nombra a la creadora. Abrir el hilo en el CRM no marca leído
- * en OnlyFans. `FANLINK_MARK_CHAT_READ` queda apagado.
+ * y el log nombra a la creadora. Abrir el hilo en el CRM no llama a
+ * OnlyFans para marcarlo leído.
  */
-
-export function markChatReadEnabled(raw = process.env.FANLINK_MARK_CHAT_READ): boolean {
-  return raw === "true";
-}
-
-/** El no leído que sigue mostrando la lista después de abrir el hilo. */
-export function unreadAfterOpen(unread: number | null, enabled = markChatReadEnabled()): number | null {
-  if (!enabled) return unread;
-  return unread;
-}
 
 export function unreadCountOf(record: Record<string, unknown>): number | null {
   const key = ["unreadMessagesCount", "unread_messages_count", "unread"].find((name) => name in record);
@@ -35,9 +25,33 @@ export function unreadChatRow(unread: number | null): { bold: boolean; badge: nu
   return { bold: true, badge: unread };
 }
 
-/** Chats con al menos un mensaje sin leer. Es el total de la pestaña, no la suma de mensajes. */
-export function unreadChatTotal(threads: readonly { unread: number | null }[]): number {
-  return threads.filter((thread) => (thread.unread ?? 0) > 0).length;
+/**
+ * Chats con al menos un mensaje sin leer en la cuenta elegida.
+ * Null mientras carga, si la lectura falló, o si ningún hilo de esa cuenta
+ * trae una cifra. No es la suma de mensajes.
+ */
+export function unreadTotalFor(
+  status: "loading" | "error" | "ready",
+  threads: readonly { creatorId: string; unread: number | null }[],
+  creatorId: string,
+): number | null {
+  if (status !== "ready") return null;
+  const rows = creatorId === "all" ? threads : threads.filter((thread) => thread.creatorId === creatorId);
+  if (rows.length === 0 || rows.every((thread) => thread.unread == null)) return null;
+  return rows.filter((thread) => (thread.unread ?? 0) > 0).length;
+}
+
+/** La última lista firmada manda. Lo que no vino en ella deja de contar. */
+export function unreadAfterListRead<T extends { threadKey: string; unread: number | null }>(
+  stored: readonly T[],
+  listed: readonly { threadKey: string; unread: number | null }[],
+): T[] {
+  const fresh = new Map(listed.map((thread) => [thread.threadKey, thread.unread]));
+  return stored.map((thread) => (
+    fresh.has(thread.threadKey)
+      ? { ...thread, unread: fresh.get(thread.threadKey) ?? null }
+      : { ...thread, unread: null }
+  ));
 }
 
 export function noteMissingUnread(creatorId: string | null | undefined, missing: number, log: (line: string) => void = console.info): void {
