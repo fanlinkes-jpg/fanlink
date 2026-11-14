@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdir } from "node:fs/promises";
+import { createServer } from "node:net";
 import path from "node:path";
 import { test } from "node:test";
 import { chromium, type Page } from "playwright";
 
 const root = path.resolve(import.meta.dirname, "../../..");
-const port = 18731;
 const shots = path.join(root, "tmp/chat-layout");
 
 const viewports = [
@@ -16,7 +16,8 @@ const viewports = [
 ] as const;
 
 test("el botón Enviar se ve entero sin scroll de página", async () => {
-  const server = startDev();
+  const port = await freePort();
+  const server = startDev(port);
   const browser = await chromium.launch();
   try {
     await waitForServer(`http://127.0.0.1:${port}/mensajes`);
@@ -148,7 +149,19 @@ test("el botón Enviar se ve entero sin scroll de página", async () => {
   }
 });
 
-function startDev(): ChildProcess {
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const chosen = typeof address === "object" && address ? address.port : 0;
+      server.close(() => resolve(chosen));
+    });
+  });
+}
+
+function startDev(port: number): ChildProcess {
   const env: NodeJS.ProcessEnv = { ...process.env, VITE_AUTH_ENABLED: "false" };
   delete env.DATABASE_URL;
   return spawn(process.execPath, ["node_modules/vite/bin/vite.js", "dev", "--host", "127.0.0.1", "--port", String(port), "--strictPort"], {
