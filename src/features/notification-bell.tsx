@@ -12,6 +12,7 @@ import {
   type NotificationTab,
 } from "@/lib/notifications";
 import { listCreatorNotifications, markCreatorNotificationsRead, type NotificationListItem } from "@/lib/of-notifications";
+import { NotificationFanCard } from "@/features/notification-card";
 
 export type NotificationTarget = {
   creatorId: string;
@@ -217,26 +218,16 @@ function NotificationPanel({
                 const item = items.find((entry) => entry.key === row.key);
                 if (!item) return null;
                 return (
-                  <li key={item.key} className="rounded-lg border border-line px-3 py-2 text-sm">
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="font-medium">{item.labels.title}{fresh(item) ? " · nueva" : ""}</p>
-                      <span className="shrink-0 text-xs text-muted">{item.labels.when}</span>
-                    </div>
-                    <p className="mt-1 text-muted">{item.labels.body}</p>
-                    {item.labels.amount ? <p className="mt-1 tabular-nums">{item.labels.amount}</p> : null}
-                    <div className="mt-2 flex gap-2">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        disabled={item.labels.destination === "none"}
-                        onClick={() => onOpenThread?.({ creatorId, fanKey: item.fanKey, threadKey: item.threadKey })}
-                      >
-                        {item.labels.destination === "none" ? SIN_DATOS : "Abrir"}
-                      </Button>
-                      {fresh(item) ? (
-                        <Button type="button" variant="ghost" onClick={() => void mark([item.key])}>Marcar leída</Button>
-                      ) : null}
-                    </div>
+                  <li key={item.key} className="rounded-lg border border-line px-3 py-2">
+                    <NotificationFanCard
+                      item={item}
+                      handle={item.fanHandle}
+                      avatarUrl={item.avatarUrl}
+                      lists={item.lists}
+                      renew={item.renewAuto}
+                      onChat={item.labels.destination === "none" ? undefined : () => onOpenThread?.({ creatorId, fanKey: item.fanKey, threadKey: item.threadKey })}
+                      onMark={fresh(item) ? () => void mark([item.key]) : undefined}
+                    />
                   </li>
                 );
               })}
@@ -250,10 +241,14 @@ function NotificationPanel({
                   const item = items?.find((entry) => entry.key === row.key);
                   if (!item) return null;
                   return (
-                    <li key={item.key} className="rounded-lg border border-line px-3 py-2 text-sm">
-                      <p className="font-medium">{item.labels.title}</p>
-                      <p className="mt-1 text-muted">{item.labels.body}</p>
-                      <p className="mt-1 text-xs text-muted">{SIN_DATOS}</p>
+                    <li key={item.key} className="rounded-lg border border-line px-3 py-2">
+                      <NotificationFanCard
+                        item={item}
+                        handle={item.fanHandle}
+                        avatarUrl={item.avatarUrl}
+                        lists={item.lists}
+                        renew={item.renewAuto}
+                      />
                     </li>
                   );
                 })}

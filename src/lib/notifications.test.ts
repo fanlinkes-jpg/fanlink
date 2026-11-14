@@ -15,6 +15,10 @@ import {
   parseNotificationCounts,
   visibleMarkScope,
   parseNotificationPayload,
+  isRecentFan,
+  notificationStamp,
+  renewLabel,
+  spanishNotificationText,
   relativeNotificationWhen,
   redactedNotificationUrl,
   tabOf,
@@ -259,6 +263,85 @@ test("filtra por pestaña, texto y fechas, y cuenta no leídas", () => {
   assert.equal(own.find((row) => row.key === "yo")?.fanKey, null);
   assert.equal(own.find((row) => row.key === "promo")?.fanKey, null);
   assert.equal(tabOf(own.find((row) => row.key === "promo")!.kind), "promotions");
+});
+
+test("la ficha usa listas, renovación y reciente solo si la API los trae", () => {
+  const now = Date.parse("2026-11-13T12:00:00.000Z");
+  const rows = parseNotificationPayload({
+    list: [{
+      id: "ficha",
+      type: "subscribed",
+      createdAt: "2026-11-13T10:00:00.000Z",
+      text: "subscribed to your profile!",
+      user: {
+        id: 9,
+        name: "Ana",
+        username: "ana",
+        avatar: "https://cdn.example/a.jpg",
+        lastSeen: "2026-11-13T11:00:00.000Z",
+        listsStates: [
+          { name: "Low Spenders-CVI", hasUser: true, type: "custom" },
+          { name: "Oculta", hasUser: false, type: "custom" },
+        ],
+        subscribedOnData: { autoRenew: true },
+      },
+    }],
+  });
+  const row = rows[0];
+  assert.ok(row);
+  assert.deepEqual(row.lists, ["Low Spenders-CVI"]);
+  assert.equal(row.renewAuto, true);
+  assert.equal(row.fanHandle, "ana");
+  assert.equal(row.avatarUrl, "https://cdn.example/a.jpg");
+  assert.equal(isRecentFan(row.fanSeenAt, now), true);
+  assert.equal(spanishNotificationText(row.body), "se ha suscrito a tu perfil");
+  assert.equal(renewLabel(row.renewAuto), "Renovación sí");
+  assert.equal(renewLabel(false), "Renovación no");
+  assert.ok(notificationStamp(row.occurredAt)?.includes("2026"));
+});
+
+test("sin listas, renovación ni lastSeen no se inventan", () => {
+  const rows = parseNotificationPayload({
+    list: [{ id: "vacia", type: "subscribed", createdAt: "2026-11-01T10:00:00.000Z", text: "hola", user: { id: 3, name: "Bo" } }],
+  });
+  const row = rows[0];
+  assert.ok(row);
+  assert.equal(row.lists, null);
+  assert.equal(row.renewAuto, null);
+  assert.equal(row.fanSeenAt, null);
+  assert.equal(row.postRef, null);
+  assert.equal(isRecentFan(row.fanSeenAt, Date.now()), false);
+  assert.equal(renewLabel(row.renewAuto), null);
+  assert.equal(spanishNotificationText(row.body), "hola");
+});
+
+test("un comentario guarda el texto y la publicación si vienen", () => {
+  const withPost = parseNotificationPayload({
+    list: [{
+      id: "com",
+      type: "commented",
+      createdAt: "2026-11-13T10:00:00.000Z",
+      text: "qué buen post",
+      replacePairs: { "{POST_LINK}": "https://onlyfans.com/99887766" },
+      user: { id: 4, name: "Cleo" },
+    }],
+  });
+  assert.equal(withPost[0]?.kind, "comment");
+  assert.equal(tabOf(withPost[0]!.kind), "comments");
+  assert.equal(withPost[0]?.body, "qué buen post");
+  assert.equal(withPost[0]?.postRef, "99887766");
+  const bare = parseNotificationPayload({
+    list: [{ id: "com2", type: "commented", text: "solo texto", user: { id: 5, name: "Dio" } }],
+  });
+  assert.equal(bare[0]?.postRef, null);
+  assert.equal(bare[0]?.body, "solo texto");
+});
+
+test("lastSeen de hace días no cuenta como reciente", () => {
+  const rows = parseNotificationPayload({
+    list: [{ id: "viejo", type: "tip", createdAt: "2026-11-13T10:00:00.000Z", user: { id: 6, name: "Eva", lastSeen: "2026-11-01T10:00:00.000Z" } }],
+  });
+  assert.equal(isRecentFan(rows[0]?.fanSeenAt, Date.parse("2026-11-13T12:00:00.000Z")), false);
 });
 
 function record(key: string, extra: Partial<NotificationRecord> = {}): NotificationRecord {

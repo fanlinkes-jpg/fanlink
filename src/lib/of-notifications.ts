@@ -18,6 +18,12 @@ export type NotificationListItem = {
   pending: boolean;
   seen: boolean;
   ofUnread: boolean | null;
+  fanHandle: string | null;
+  avatarUrl: string | null;
+  lists: string[] | null;
+  renewAuto: boolean | null;
+  fanSeenAt: string | null;
+  postRef: string | null;
   labels: NotificationLabels;
 };
 

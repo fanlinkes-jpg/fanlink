@@ -142,10 +142,64 @@ test("el chatter no recibe páginas vacías ni la cuenta de otra persona", async
   }
 });
 
+test("la ficha guarda listas y renovación y deja null lo que no vino", async () => {
+  const { pg, sql } = await database();
+  try {
+    await saveNotificationRead(sql, "c-alba", {
+      captured: true,
+      status: 200,
+      motivo: "ok",
+      reason: null,
+      counts: null,
+      items: [{
+        key: "ficha",
+        kind: "subscription",
+        body: "se ha suscrito a tu perfil",
+        fanKey: "9",
+        fanName: "Ana",
+        threadKey: null,
+        amountCents: null,
+        occurredAt: "2026-11-13T10:00:00.000Z",
+        pending: false,
+        fanHandle: "ana",
+        avatarUrl: "https://cdn.example/a.jpg",
+        lists: ["Low Spenders-CVI"],
+        renewAuto: true,
+        fanSeenAt: "2026-11-13T11:00:00.000Z",
+        postRef: null,
+      }, {
+        key: "vacia",
+        kind: "comment",
+        body: "solo texto",
+        fanKey: "5",
+        fanName: "Dio",
+        threadKey: null,
+        amountCents: null,
+        occurredAt: "2026-11-13T10:00:00.000Z",
+        pending: false,
+      }],
+    });
+    const rows = await listNotificationRows(sql, "c-alba", "dueña", { role: "owner" });
+    const card = rows.rows.find((row) => row.key === "ficha");
+    const bare = rows.rows.find((row) => row.key === "vacia");
+    assert.equal(card?.fanHandle, "ana");
+    assert.deepEqual(card?.lists, ["Low Spenders-CVI"]);
+    assert.equal(card?.renewAuto, true);
+    assert.equal(card?.avatarUrl, "https://cdn.example/a.jpg");
+    assert.ok(card?.fanSeenAt);
+    assert.equal(bare?.lists, null);
+    assert.equal(bare?.renewAuto, null);
+    assert.equal(bare?.postRef, null);
+    assert.equal(bare?.fanSeenAt, null);
+  } finally {
+    await pg.close();
+  }
+});
+
 test("las migraciones de notificaciones se aplican dos veces", async () => {
   const pg = new PGlite();
   try {
-    for (const name of ["0034_notifications.sql", "0035_notification_first_seen.sql", "0036_notification_key_text.sql"]) {
+    for (const name of ["0034_notifications.sql", "0035_notification_first_seen.sql", "0036_notification_key_text.sql", "0044_notification_counts.sql", "0046_notification_fan_card.sql"]) {
       const sql = await readFile(path.join(root, "migrations", name), "utf8");
       await pg.exec(sql);
       await pg.exec(sql);
@@ -403,6 +457,7 @@ async function database() {
   const pg = new PGlite(dir);
   await pg.exec(await readFile(path.join(root, "migrations/0034_notifications.sql"), "utf8"));
   await pg.exec(await readFile(path.join(root, "migrations/0044_notification_counts.sql"), "utf8"));
+  await pg.exec(await readFile(path.join(root, "migrations/0046_notification_fan_card.sql"), "utf8"));
   const sql = {
     query: async <T>(text: string, params: unknown[] = []) => (await pg.query<T>(text, params)).rows,
   };

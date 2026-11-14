@@ -87,6 +87,16 @@ export type ParsedNotification = {
   pending: boolean;
   /** false cuando OnlyFans manda isRead true. null si el JSON no trae el campo. */
   ofUnread?: boolean | null;
+  fanHandle?: string | null;
+  avatarUrl?: string | null;
+  /** null si el JSON no trae listas. [] si las trae vacías. */
+  lists?: string[] | null;
+  /** null si no viene un booleano de renovación. */
+  renewAuto?: boolean | null;
+  /** lastSeen del fan, si el JSON lo trae. */
+  fanSeenAt?: string | null;
+  /** id de la publicación, solo si el JSON lo trae. */
+  postRef?: string | null;
 };
 
 export type NotificationRecord = ParsedNotification & {
@@ -578,6 +588,7 @@ function notificationFrom(record: Record<string, unknown>, options: ParseNotific
   });
   if (!key) return null;
   const pending = placed.kind === "tag" && isPending(record, body);
+  const card = fanCard(record);
   return {
     key,
     kind: placed.kind,
@@ -589,7 +600,121 @@ function notificationFrom(record: Record<string, unknown>, options: ParseNotific
     occurredAt,
     pending,
     ofUnread: unreadFlag(record),
+    fanHandle: card.fanHandle,
+    avatarUrl: card.avatarUrl,
+    lists: card.lists,
+    renewAuto: card.renewAuto,
+    fanSeenAt: card.fanSeenAt,
+    postRef: card.postRef,
   };
+}
+
+/** La frase inglesa de suscripción se enseña en español. El resto se deja como viene. */
+export function spanishNotificationText(body: string | null): string | null {
+  if (!body) return null;
+  return body.replace(/subscribed to your profile!?/gi, "se ha suscrito a tu perfil");
+}
+
+export function notificationStamp(iso: string | null): string | null {
+  if (!iso) return null;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat("es-ES", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Europe/Madrid",
+  }).format(date);
+}
+
+const DAY_MS = 86_400_000;
+
+/** «Reciente» solo si lastSeen viene en el JSON y cae en las últimas 24 h. */
+export function isRecentFan(iso: string | null | undefined, now: number): boolean {
+  if (!iso) return false;
+  const time = new Date(iso).getTime();
+  if (Number.isNaN(time)) return false;
+  const age = now - time;
+  return age >= 0 && age <= DAY_MS;
+}
+
+export function renewLabel(value: boolean | null | undefined): string | null {
+  if (value == null) return null;
+  return value ? "Renovación sí" : "Renovación no";
+}
+
+function fanCard(record: Record<string, unknown>): {
+  fanHandle: string | null;
+  avatarUrl: string | null;
+  lists: string[] | null;
+  renewAuto: boolean | null;
+  fanSeenAt: string | null;
+  postRef: string | null;
+} {
+  const user = nested(record, ["user", "fromUser", "relatedUser", "subscriber"]);
+  return {
+    fanHandle: (user ? firstString(user, ["username"]) : null) ?? firstString(record, ["username"]),
+    avatarUrl: user ? avatarOf(user) : null,
+    lists: user ? readFanLists(user) : null,
+    renewAuto: user ? readRenew(user) : null,
+    fanSeenAt: user ? firstTime(user, ["lastSeen"]) : null,
+    postRef: postRefOf(record),
+  };
+}
+
+function avatarOf(user: Record<string, unknown>): string | null {
+  const direct = user.avatar;
+  if (typeof direct === "string" && /^https?:\/\//.test(direct)) return direct;
+  const thumbs = user.avatarThumbs;
+  if (!thumbs || typeof thumbs !== "object" || Array.isArray(thumbs)) return null;
+  const bag = thumbs as Record<string, unknown>;
+  for (const key of ["c144", "c50"]) {
+    const value = bag[key];
+    if (typeof value === "string" && /^https?:\/\//.test(value)) return value;
+  }
+  return null;
+}
+
+function readFanLists(user: Record<string, unknown>): string[] | null {
+  const raw = user.listsStates ?? user.listStates ?? user.lists;
+  if (!Array.isArray(raw)) return null;
+  const names: string[] = [];
+  for (const item of raw) {
+    if (typeof item === "string" && item.trim()) {
+      names.push(item.trim());
+      continue;
+    }
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const row = item as Record<string, unknown>;
+    if (row.hasUser !== true) continue;
+    const name = typeof row.name === "string" ? row.name.trim() : "";
+    if (name) names.push(name);
+  }
+  return names;
+}
+
+function readRenew(user: Record<string, unknown>): boolean | null {
+  const nestedRenew = user.subscribedOnData;
+  const bag = nestedRenew && typeof nestedRenew === "object" && !Array.isArray(nestedRenew)
+    ? nestedRenew as Record<string, unknown>
+    : null;
+  const raw = bag?.autoRenew ?? bag?.renewedAuto ?? bag?.isAutoRenew ?? user.autoRenew;
+  return typeof raw === "boolean" ? raw : null;
+}
+
+function postRefOf(record: Record<string, unknown>): string | null {
+  const direct = firstString(record, ["postId", "post_id"]);
+  if (direct) return direct;
+  const pairs = record.replacePairs;
+  if (!pairs || typeof pairs !== "object" || Array.isArray(pairs)) return null;
+  for (const [key, value] of Object.entries(pairs as Record<string, unknown>)) {
+    if (typeof value !== "string" || !/POST/i.test(key)) continue;
+    const match = /(\d{5,})/.exec(value);
+    if (match?.[1]) return match[1];
+  }
+  return null;
 }
 
 /**
@@ -728,6 +853,12 @@ function fillGaps(previous: ParsedNotification, incoming: ParsedNotification): P
     occurredAt: incoming.occurredAt ?? previous.occurredAt,
     pending: previous.pending || incoming.pending,
     ofUnread: incoming.ofUnread ?? previous.ofUnread ?? null,
+    fanHandle: incoming.fanHandle ?? previous.fanHandle ?? null,
+    avatarUrl: incoming.avatarUrl ?? previous.avatarUrl ?? null,
+    lists: incoming.lists ?? previous.lists ?? null,
+    renewAuto: incoming.renewAuto ?? previous.renewAuto ?? null,
+    fanSeenAt: incoming.fanSeenAt ?? previous.fanSeenAt ?? null,
+    postRef: incoming.postRef ?? previous.postRef ?? null,
   };
 }
 

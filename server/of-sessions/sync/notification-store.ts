@@ -61,8 +61,9 @@ export async function saveNotificationRead(
     await sql.query(
       `insert into of_notification (
          creator_id, notification_key, kind, body, fan_key, fan_name, thread_key,
-         amount_cents, occurred_at, pending, first_seen_at, synced_at, origin, of_unread
-       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+         amount_cents, occurred_at, pending, first_seen_at, synced_at, origin, of_unread,
+         fan_handle, avatar_url, fan_lists, renew_auto, fan_seen_at, post_ref
+       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
        on conflict (creator_id, notification_key) do update set
          kind = case
            when of_notification.kind in ('agency', 'other')
@@ -81,7 +82,13 @@ export async function saveNotificationRead(
          occurred_at = coalesce(excluded.occurred_at, of_notification.occurred_at),
          pending = of_notification.pending or excluded.pending,
          synced_at = excluded.synced_at,
-         of_unread = coalesce(excluded.of_unread, of_notification.of_unread)`,
+         of_unread = coalesce(excluded.of_unread, of_notification.of_unread),
+         fan_handle = coalesce(excluded.fan_handle, of_notification.fan_handle),
+         avatar_url = coalesce(excluded.avatar_url, of_notification.avatar_url),
+         fan_lists = coalesce(excluded.fan_lists, of_notification.fan_lists),
+         renew_auto = coalesce(excluded.renew_auto, of_notification.renew_auto),
+         fan_seen_at = coalesce(excluded.fan_seen_at, of_notification.fan_seen_at),
+         post_ref = coalesce(excluded.post_ref, of_notification.post_ref)`,
       [
         creatorId,
         item.key,
@@ -97,6 +104,12 @@ export async function saveNotificationRead(
         syncedAt,
         ORIGIN,
         item.ofUnread ?? null,
+        item.fanHandle ?? null,
+        item.avatarUrl ?? null,
+        listsText(item.lists),
+        item.renewAuto ?? null,
+        item.fanSeenAt ?? null,
+        item.postRef ?? null,
       ],
     );
   }
@@ -168,9 +181,16 @@ export async function listNotificationRows(
     pending: boolean | string;
     seen_at: Date | string | null;
     of_unread: boolean | string | null;
+    fan_handle: string | null;
+    avatar_url: string | null;
+    fan_lists: string | null;
+    renew_auto: boolean | string | null;
+    fan_seen_at: Date | string | null;
+    post_ref: string | null;
   }>(
     `select n.notification_key, n.kind, n.body, n.fan_key, n.fan_name, n.thread_key,
-            n.amount_cents, n.occurred_at, n.pending, s.seen_at, n.of_unread
+            n.amount_cents, n.occurred_at, n.pending, s.seen_at, n.of_unread,
+            n.fan_handle, n.avatar_url, n.fan_lists, n.renew_auto, n.fan_seen_at, n.post_ref
      from of_notification n
      left join of_notification_seen s
        on s.creator_id = n.creator_id
@@ -200,6 +220,12 @@ export async function listNotificationRows(
         pending: row.pending === true || row.pending === "t" || row.pending === "true",
         seenAt: asIso(row.seen_at),
         ofUnread: row.of_unread == null ? null : row.of_unread === true || row.of_unread === "t" || row.of_unread === "true",
+        fanHandle: row.fan_handle,
+        avatarUrl: row.avatar_url,
+        lists: listsOf(row.fan_lists),
+        renewAuto: boolOrNull(row.renew_auto),
+        fanSeenAt: asIso(row.fan_seen_at),
+        postRef: row.post_ref,
       },
     ];
   });
@@ -302,6 +328,12 @@ export async function notificationPageFor(
           pending: row.pending,
           seen: Boolean(row.seenAt),
           ofUnread: row.ofUnread ?? null,
+          fanHandle: row.fanHandle ?? null,
+          avatarUrl: row.avatarUrl ?? null,
+          lists: row.lists ?? null,
+          renewAuto: row.renewAuto ?? null,
+          fanSeenAt: row.fanSeenAt ?? null,
+          postRef: row.postRef ?? null,
           labels,
         },
       ];
@@ -322,8 +354,32 @@ export type NotificationListRow = {
   pending: boolean;
   seen: boolean;
   ofUnread: boolean | null;
+  fanHandle: string | null;
+  avatarUrl: string | null;
+  lists: string[] | null;
+  renewAuto: boolean | null;
+  fanSeenAt: string | null;
+  postRef: string | null;
   labels: NonNullable<ReturnType<typeof notificationLabels>>;
 };
+
+function boolOrNull(value: boolean | string | null): boolean | null {
+  if (value == null) return null;
+  if (value === true || value === "t" || value === "true") return true;
+  if (value === false || value === "f" || value === "false") return false;
+  return null;
+}
+
+function listsText(lists: string[] | null | undefined): string | null {
+  if (lists == null) return null;
+  return lists.join("\n");
+}
+
+function listsOf(value: string | null): string[] | null {
+  if (value == null) return null;
+  if (value === "") return [];
+  return value.split("\n").filter((item) => item.length > 0);
+}
 
 function asCounts(value: NotificationCounts | string | null): NotificationCounts | null {
   if (!value) return null;

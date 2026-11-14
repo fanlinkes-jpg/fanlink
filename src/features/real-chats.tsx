@@ -1,13 +1,15 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { AtSign, Bell, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, MessageCircle, RefreshCw, ScrollText, Send, Type } from "lucide-react";
+import { AtSign, Bell, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, RefreshCw, ScrollText, Send, Type } from "lucide-react";
 import { chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, markChatOpened, readChatVault, recordChatOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
 import { unreadChatRow, unreadTotalFor } from "../../server/of-sessions/sync/unread-chats.ts";
 import { inboxPillCounts, matchesInboxPill, tipThreads, type InboxPill } from "../../server/of-sessions/sync/chat-pills.ts";
 import { listCreatorNotifications, markCreatorNotificationsRead, type NotificationListItem } from "@/lib/of-notifications";
-import { kindLabel } from "@/lib/notifications";
+import { NOTIFICATION_TABS, TAB_LABEL, isOwnerOnlyKind, tabOf, type NotificationCounts, type NotificationKind, type NotificationTab } from "@/lib/notifications";
+import { NotificationFanCard } from "@/features/notification-card";
 import { useCrm, type VaultItem } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
+import { clearOpenThread, peekOpenThread } from "@/lib/open-thread";
 import { useChatFanCards } from "@/lib/use-chat-fan-cards";
 import { chatFanCardFor, fanCardTransactions } from "@/lib/chat-fan-cards";
 import { FanInsights } from "@/features/fan-insights";
@@ -49,39 +51,16 @@ function madridClock(value: string): string {
 
 type NoteRow = NotificationListItem & { creatorId: string };
 
-const NOTE_FILTERS = [
-  ["suscripciones", "Suscripciones"],
-  ["propinas", "Propinas"],
-  ["compras", "Compras"],
-  ["etiquetas", "Etiquetas"],
-  ["comentarios", "Comentarios"],
-  ["onlyfans", "OnlyFans"],
-] as const;
-
-type NoteFilter = "todas" | (typeof NOTE_FILTERS)[number][0];
-
-function noteMatches(kind: string, filter: NoteFilter): boolean {
-  if (filter === "todas") return kind !== "agency";
-  if (filter === "suscripciones") return kind === "subscription" || kind === "renewal";
-  if (filter === "propinas") return kind === "tip";
-  if (filter === "compras") return kind === "ppv";
-  if (filter === "etiquetas") return kind === "tag";
-  if (filter === "comentarios") return kind === "comment" || kind === "mention";
-  return kind === "like" || kind === "promotion" || kind === "system" || kind === "message" || kind === "other";
+function noteMatches(kind: string, filter: NotificationTab): boolean {
+  if (isOwnerOnlyKind(kind as NotificationKind)) return false;
+  if (filter === "all") return true;
+  return tabOf(kind as NotificationKind) === filter;
 }
 
-function noteWhen(value: string | null): string {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  const dayKey = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Madrid", year: "numeric", month: "2-digit", day: "2-digit" });
-  const clock = new Intl.DateTimeFormat("es-ES", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Europe/Madrid" }).format(date);
-  const today = dayKey.format(new Date());
-  const that = dayKey.format(date);
-  if (that === today) return `Hoy ${clock}`;
-  if (dayKey.format(new Date(Date.now() - 86_400_000)) === that) return `Ayer ${clock}`;
-  const day = new Intl.DateTimeFormat("es-ES", { day: "numeric", month: "short", timeZone: "Europe/Madrid" }).format(date).replace(".", "");
-  return `${day} ${clock}`;
+function noteBadge(counts: NotificationCounts | null, tab: NotificationTab): string {
+  if (!counts) return "";
+  const value = counts[tab];
+  return value == null ? " · Sin datos" : ` ${value}`;
 }
 
 function FanLink({ item, href, copied, onCopy }: { item: string; href: string | null; copied: boolean; onCopy: (href: string) => void }) {
@@ -233,8 +212,9 @@ export function RealChatsPage() {
   const [fanActionError, setFanActionError] = useState<string | null>(null);
   const [fanLists, setFanLists] = useState<Array<{ name: string; on: boolean }>>([]);
   const [notesOpen, setNotesOpen] = useState(false);
-  const [noteFilter, setNoteFilter] = useState<NoteFilter>("todas");
+  const [noteFilter, setNoteFilter] = useState<NotificationTab>("all");
   const [notes, setNotes] = useState<NoteRow[] | null>(null);
+  const [noteCounts, setNoteCounts] = useState<NotificationCounts | null>(null);
   const notesButton = useRef<HTMLButtonElement>(null);
   const [notesPos, setNotesPos] = useState({ top: 0, left: 0 });
   const [discountPercent, setDiscountPercent] = useState("10");
@@ -308,17 +288,20 @@ export function RealChatsPage() {
     const ids = (creatorId === "all" ? creators : creators.filter((creator) => creator.id === creatorId)).map((creator) => creator.id);
     if (ids.length === 0) {
       setNotes([]);
+      setNoteCounts(null);
       return;
     }
     const pages = await Promise.all(ids.map(async (id) => {
       try {
         const page = await listCreatorNotifications({ data: { creatorId: id } });
-        return page.items.map((item) => ({ ...item, creatorId: id }));
+        return { id, page };
       } catch {
-        return [] as NoteRow[];
+        return { id, page: null };
       }
     }));
-    setNotes(pages.flat().sort((left, right) => (right.occurredAt ?? "").localeCompare(left.occurredAt ?? "")));
+    setNoteCounts(pages.length === 1 ? pages[0]?.page?.counts ?? null : null);
+    setNotes(pages.flatMap((entry) => entry.page?.items.map((item) => ({ ...item, creatorId: entry.id })) ?? [])
+      .sort((left, right) => (right.occurredAt ?? "").localeCompare(left.occurredAt ?? "")));
   }
 
   useEffect(() => {
@@ -326,6 +309,18 @@ export function RealChatsPage() {
     const timer = setInterval(() => { void loadNotes(); }, 20_000);
     return () => clearInterval(timer);
   }, [creatorId, creators.length]);
+
+  useEffect(() => {
+    const pending = peekOpenThread();
+    if (!pending || !data) return;
+    const thread = data.threads.find((row) => row.creatorId === pending.creatorId && (
+      (pending.threadKey != null && row.threadKey === pending.threadKey)
+      || (pending.fanKey != null && (row.fanKey === pending.fanKey || row.threadKey === pending.fanKey))
+    ));
+    if (!thread) return;
+    clearOpenThread();
+    setSelectedKey(`${thread.creatorId}:${thread.threadKey}`);
+  }, [data]);
 
   function markNotes(rows: NoteRow[]) {
     const unread = rows.filter((item) => !item.seen);
@@ -911,12 +906,13 @@ export function RealChatsPage() {
                     <h2 className="text-base font-semibold">Notificaciones</h2>
                     <button type="button" aria-label="Actualizar notificaciones" className="grid h-8 w-8 place-items-center rounded-full text-[#6d7585] hover:bg-[#f4f7ff]" onClick={() => void loadNotes()}><RefreshCw className="h-4 w-4" /></button>
                   </div>
-                  <div className="flex gap-2 overflow-x-auto px-4 pb-3">
-                    {NOTE_FILTERS.map(([id, label]) => {
+                  <div className="flex flex-wrap gap-2 px-4 pb-3">
+                    {NOTIFICATION_TABS.map((id) => {
                       const on = noteFilter === id;
+                      const label = TAB_LABEL[id];
                       return (
-                        <button key={id} type="button" onClick={() => { setNoteFilter(on ? "todas" : id); if (!on) markNotes((notes ?? []).filter((item) => noteMatches(item.kind, id))); }} className={`shrink-0 rounded-full px-3 py-1.5 text-sm ${on ? "bg-[#e7f3ff] text-[#1890d4]" : "bg-[#f2f3f5] text-[#3c4456]"}`}>
-                          {label}
+                        <button key={id} type="button" onClick={() => { setNoteFilter(id); if (id !== "all") markNotes((notes ?? []).filter((item) => noteMatches(item.kind, id))); }} className={`rounded-full px-3 py-1.5 text-sm ${on ? "bg-[#e7f3ff] text-[#1890d4]" : "bg-[#f2f3f5] text-[#3c4456]"}`}>
+                          {label}{noteBadge(noteCounts, id)}
                         </button>
                       );
                     })}
@@ -929,38 +925,20 @@ export function RealChatsPage() {
                         (item.threadKey != null && row.threadKey === item.threadKey)
                         || (item.fanKey != null && (row.fanKey === item.fanKey || row.threadKey === item.fanKey || row.fanHandle?.replace(/^@/, "") === item.fanKey))
                       ));
-                      const name = item.fanName ?? thread?.fanName ?? "Sin datos";
-                      const handle = thread?.fanHandle?.replace(/^@/, "") ?? (item.fanKey && !/^\d+$/.test(item.fanKey) ? item.fanKey : null);
-                      const lists = thread?.lists?.filter(Boolean).slice(0, 3) ?? [];
-                      const reply = thread && thread.lastFromFan === false && (!item.occurredAt || !thread.lastMessageAt || thread.lastMessageAt >= item.occurredAt)
-                        ? (data?.messages ?? []).filter((message) => message.creatorId === item.creatorId && message.threadKey === thread.threadKey && !message.fromFan && (!item.occurredAt || message.sentAt >= item.occurredAt)).sort((left, right) => right.sentAt.localeCompare(left.sentAt))[0]
-                        : undefined;
-                      const bought = item.kind === "ppv";
-                      const fact = item.body?.trim() || item.labels.body;
+                      const handle = item.fanHandle ?? thread?.fanHandle?.replace(/^@/, "") ?? null;
+                      const lists = item.lists ?? thread?.lists?.filter(Boolean) ?? null;
+                      const renew = item.renewAuto ?? thread?.renewAuto ?? null;
+                      const avatar = item.avatarUrl ?? thread?.avatarUrl ?? null;
                       return (
-                        <li key={`${item.creatorId}:${item.key}`} className="border-b border-[#eef0f3]">
-                          <div className="flex w-full items-start gap-3 px-4 py-3">
-                            <button type="button" disabled={thread == null} onClick={() => openNote(item)} className="flex min-w-0 flex-1 items-start gap-3 text-left disabled:cursor-default">
-                              {thread?.avatarUrl ? (
-                                <img src={thread.avatarUrl} alt="" className="h-11 w-11 shrink-0 rounded-full object-cover" />
-                              ) : (
-                                <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#eef2ff] text-sm font-semibold text-[#2456c7]">{name.slice(0, 1)}</span>
-                              )}
-                              <span className="min-w-0 flex-1">
-                                <span className="block truncate text-sm">
-                                  <span className="font-semibold">{bought ? `Compró ${name}` : name}</span>
-                                  {handle ? <span className="ml-1 text-[#8b909a]">@{handle}</span> : null}
-                                </span>
-                                {lists.length > 0 ? <span className="mt-1 flex flex-wrap gap-1">{lists.map((list) => <span key={list} className="rounded-full bg-[#f2f3f5] px-2 py-0.5 text-[10px] text-[#3c4456]">{list}</span>)}</span> : null}
-                                <span className="mt-0.5 block text-sm text-[#1c2333]">{kindLabel(item.kind)} · {fact}</span>
-                                {item.occurredAt ? <span className="mt-1 block text-xs text-[#8b909a]">{noteWhen(item.occurredAt)}</span> : null}
-                                {thread && thread.lastFromFan === false && (!item.occurredAt || !thread.lastMessageAt || thread.lastMessageAt >= item.occurredAt) ? <span className="mt-1 block text-xs font-medium text-[#1f9d55]">{reply?.authorName ? `Respondido · ${reply.authorName}` : "Respondido"}</span> : null}
-                              </span>
-                            </button>
-                            <button type="button" aria-label={`Abrir chat de ${name}`} disabled={thread == null} onClick={() => openNote(item)} className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-[#2456c7] hover:bg-[#eef2ff] disabled:text-[#c5cad6]">
-                              <MessageCircle className="h-4 w-4" />
-                            </button>
-                          </div>
+                        <li key={`${item.creatorId}:${item.key}`} className="border-b border-[#eef0f3] px-4 py-3">
+                          <NotificationFanCard
+                            item={item}
+                            handle={handle}
+                            avatarUrl={avatar}
+                            lists={lists}
+                            renew={renew}
+                            onChat={thread ? () => openNote(item) : undefined}
+                          />
                         </li>
                       );
                     })}
