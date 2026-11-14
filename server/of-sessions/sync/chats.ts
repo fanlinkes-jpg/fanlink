@@ -21,6 +21,7 @@ export type ChatThread = {
   lastFromUserId: string | null;
   /** True si lo escribió el fan, false si salió de la cuenta, null si no se sabe. */
   lastFromFan: boolean | null;
+  /** Céntimos de `subscribedOnData.totalSumm`, en dólares. 0 es un gasto real. Null si el campo no vino. */
   spentCents: number | null;
   subscribesCents: number | null;
   tipsCents: number | null;

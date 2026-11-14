@@ -69,7 +69,7 @@ El servidor sincroniza solo cada cuenta con sesión activa. Por defecto cada 30 
 Decisión del dueño, del 2026-11-06: cualquier chatter ve el gasto de cada fan en todas las creadoras. El código lo mantiene así.
 
 - Un miembro con permiso de mensajes ve y trabaja los chats de todas las cuentas. `creatorIdsForChats` devuelve todas, y `canOperateCreator` con `mensajes` no mira la asignación. La asignación se guarda, pero no recorta el chat.
-- El gasto de cada fan (`spentCents`) sale en la bandeja, bajo el avatar, y en la ficha del fan para cualquier chatter, en todas las creadoras. `presentRead` no lo quita a un miembro. El color sale de `SPEND_TIERS` en `src/lib/spend-tiers.ts`: $0 gris, hasta $50 verde, hasta $200 azul, hasta $1000 morado, y por encima dorado. Si el JSON no trae el gasto, sigue en Sin datos.
+- El gasto de cada fan (`spentCents`) sale en la bandeja, bajo el avatar, y en la ficha del fan para cualquier chatter, en todas las creadoras. `presentRead` no lo quita a un miembro. El color sale de `SPEND_TIERS` en `src/lib/spend-tiers.ts`: $0 gris, hasta $50 verde, hasta $200 azul, hasta $1000 morado, y por encima dorado. Si OnlyFans trae `subscribedOnData.totalSumm` y es 0, se guarda 0 y bajo el avatar sale $0.00. Si el campo no viene, sigue en Sin datos.
 - Los ingresos agregados de una creadora los ve solo la dueña. `canSeeAgencyEarnings` es cierto solo para el rol owner. Un miembro recibe `earnings` y `transactions` en null, y en Inicio `dayGrossCents` y `monthGrossCents` también en null.
 - El bruto de otro chatter lo ve solo la dueña. Cada chatter ve el suyo (`canSeeChatterFigures`).
 - Forzar la sincronización solo lo puede la dueña.
