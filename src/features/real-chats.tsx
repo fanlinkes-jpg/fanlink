@@ -319,7 +319,7 @@ export function RealChatsPage() {
     ));
     if (!thread) return;
     clearOpenThread();
-    setSelectedKey(`${thread.creatorId}:${thread.threadKey}`);
+    chooseThread(thread);
   }, [data]);
 
   function markNotes(rows: NoteRow[]) {
