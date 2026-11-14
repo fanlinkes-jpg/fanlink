@@ -1,17 +1,23 @@
+export const ONLINE_FAN_CAP = 100;
+
 export type OnlineFanRow = {
   fanKey: string;
   fanName: string | null;
   fanHandle: string | null;
   avatarUrl: string | null;
   spentCents: number | null;
+  currency: string | null;
+  online: boolean;
   lists: string[];
 };
 
-/** El gasto de un fan. No suma la agencia. Sin campo, no es un cero. */
-export function spendLabel(cents: number | null): string {
+/** El gasto de un fan. No suma la agencia. Sin campo, no es un cero. Sin moneda, $. */
+export function spendLabel(cents: number | null, currency: string | null = null): string {
   if (cents == null) return "Sin datos";
   const sign = cents < 0 ? "-" : "";
-  return `${sign}$${(Math.abs(cents) / 100).toFixed(2)}`;
+  const amount = (Math.abs(cents) / 100).toFixed(2);
+  if (!currency || currency === "USD" || currency === "$") return `${sign}$${amount}`;
+  return `${sign}${amount} ${currency}`;
 }
 
 export function filterOnlineFans<T extends { lists: readonly string[] }>(fans: readonly T[], list: string): T[] {

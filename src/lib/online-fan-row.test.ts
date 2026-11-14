@@ -6,6 +6,7 @@ test("el gasto ausente no se presenta como cero y el filtro no suma dinero", () 
   assert.equal(spendLabel(null), "Sin datos");
   assert.equal(spendLabel(0), "$0.00");
   assert.equal(spendLabel(960), "$9.60");
+  assert.equal(spendLabel(480, "EUR"), "4.80 EUR");
   const fans = [
     { fanKey: "1", lists: ["VIP"], spentCents: 960 },
     { fanKey: "2", lists: ["Nuevos"], spentCents: null },

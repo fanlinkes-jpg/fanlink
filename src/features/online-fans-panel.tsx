@@ -7,6 +7,7 @@ export type OnlineBroadcastPayload = {
   text: string;
   priceCents: number | null;
   vaultItemIds: string[];
+  batchId: string;
 };
 
 export type OnlineBroadcastProgress = {
@@ -15,6 +16,7 @@ export type OnlineBroadcastProgress = {
   stopped: boolean;
   retryAfter: number | null;
   reason: string | null;
+  cap: number;
 };
 
 export function OnlineFansPanel({
@@ -23,18 +25,22 @@ export function OnlineFansPanel({
   fans,
   sendEnabled,
   sendReason,
+  cap,
   onRefresh,
   onOpenChat,
   onSend,
+  onCancel,
 }: {
   busy: boolean;
   note: string | null;
   fans: OnlineFanRow[];
   sendEnabled: boolean;
   sendReason: string | null;
+  cap: number;
   onRefresh: () => void;
   onOpenChat: (fanKey: string) => void;
   onSend: (payload: OnlineBroadcastPayload) => Promise<OnlineBroadcastProgress>;
+  onCancel: (batchId: string) => void;
 }) {
   const [list, setList] = useState("Todos");
   const [draft, setDraft] = useState("");
@@ -43,12 +49,15 @@ export function OnlineFansPanel({
   const [composing, setComposing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [sending, setSending] = useState(false);
+  const [batchId, setBatchId] = useState<string | null>(null);
   const [progress, setProgress] = useState<OnlineBroadcastProgress | null>(null);
   const lists = useMemo(() => onlineListNames(fans), [fans]);
   const visible = filterOnlineFans(fans, lists.includes(list) || list === "Todos" ? list : "Todos");
   const names = new Map(fans.map((fan) => [fan.fanKey, fan.fanName ?? fan.fanHandle ?? fan.fanKey]));
 
   async function confirmSend() {
+    const id = batchId ?? crypto.randomUUID();
+    setBatchId(id);
     setSending(true);
     try {
       const result = await onSend({
@@ -56,12 +65,13 @@ export function OnlineFansPanel({
         text: draft,
         priceCents: priceCents(price),
         vaultItemIds: vault.split(/[,;\s]+/).map((item) => item.trim()).filter(Boolean),
+        batchId: id,
       });
       setProgress(result);
       setConfirming(false);
     } catch (err) {
       const reason = err instanceof Error && err.message ? err.message : "No se pudo leer.";
-      setProgress({ posted: 0, results: [], stopped: false, retryAfter: null, reason });
+      setProgress({ posted: 0, results: [], stopped: false, retryAfter: null, reason, cap });
     } finally {
       setSending(false);
     }
@@ -99,11 +109,11 @@ export function OnlineFansPanel({
               ) : (
                 <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#e8eefc] text-[11px] font-semibold text-[#2456c7]">{fanInitials(fan.fanName, fan.fanHandle)}</span>
               )}
-              <span className="absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border border-white bg-[#1f9d55]" />
+              {fan.online ? <span className="absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border border-white bg-[#1f9d55]" /> : null}
             </span>
             <span className="min-w-0 flex-1">
               <span className="block truncate text-sm font-medium">{fan.fanName ?? fan.fanHandle ?? "Sin datos"}</span>
-              <span className="block truncate text-[11px] text-[#6d7585]">{spendLabel(fan.spentCents)}</span>
+              <span className="block truncate text-[11px] text-[#6d7585]">{spendLabel(fan.spentCents, fan.currency)}</span>
             </span>
             <button type="button" aria-label={`Abrir chat de ${fan.fanName ?? fan.fanHandle ?? "fan"}`} className="rounded-md p-1 text-[#2456c7] hover:bg-[#eef2ff]" onClick={() => onOpenChat(fan.fanKey)}>
               <MessageCircle className="h-4 w-4" />
@@ -114,16 +124,16 @@ export function OnlineFansPanel({
       <div className="space-y-2 border-t border-[#e6e8ee] px-3 py-2">
         {sendEnabled && composing ? (
           <>
-            <textarea value={draft} onChange={(event) => { setDraft(event.target.value); setConfirming(false); }} rows={3} placeholder="Mensaje" className="w-full resize-none rounded-lg border border-[#e6e8ee] px-2 py-1.5 text-sm" />
+            <textarea value={draft} onChange={(event) => { setDraft(event.target.value); setConfirming(false); setBatchId(null); }} rows={3} placeholder="Mensaje" className="w-full resize-none rounded-lg border border-[#e6e8ee] px-2 py-1.5 text-sm" />
             <input value={price} onChange={(event) => { setPrice(event.target.value); setConfirming(false); }} inputMode="decimal" placeholder="Precio por fan, opcional" aria-label="Precio por fan" className="w-full rounded-lg border border-[#e6e8ee] px-2 py-1.5 text-sm" />
             <input value={vault} onChange={(event) => { setVault(event.target.value); setConfirming(false); }} placeholder="Ids de la bóveda, opcional" aria-label="Ids de la bóveda" className="w-full rounded-lg border border-[#e6e8ee] px-2 py-1.5 text-sm" />
             <p className="text-[11px] text-[#6d7585]">{visible.length === 0 ? "Nadie en esta lista" : `Destinatarios: ${visible.length}`}</p>
             {confirming ? (
               <div className="space-y-2">
-                <p className="text-xs">Vas a escribir a {visible.length} fans en línea.</p>
+                <p className="text-xs">Vas a escribir a {Math.min(visible.length, cap)} fans en línea. El tope es {cap}.</p>
                 <div className="flex gap-2">
                   <button type="button" disabled={sending || visible.length === 0} className="rounded-lg bg-[#3b6cff] px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50" onClick={() => void confirmSend()}>{sending ? "Enviando…" : "Confirmar"}</button>
-                  <button type="button" className="rounded-lg px-3 py-1.5 text-xs text-[#6d7585]" onClick={() => setConfirming(false)}>Cancelar</button>
+                  <button type="button" className="rounded-lg px-3 py-1.5 text-xs text-[#6d7585]" onClick={() => { if (sending && batchId) onCancel(batchId); else setConfirming(false); }}>Cancelar</button>
                 </div>
               </div>
             ) : (

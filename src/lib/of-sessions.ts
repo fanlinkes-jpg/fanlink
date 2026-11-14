@@ -356,10 +356,23 @@ export const listOnlineFans = createServerFn({ method: "POST" })
 
 export const broadcastOnlineFans = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { creatorId: string; fanKeys: string[]; text: string; priceCents: number | null; vaultItemIds?: string[] }) => input)
+  .validator((input: { creatorId: string; fanKeys: string[]; text: string; priceCents: number | null; vaultItemIds?: string[]; batchId: string }) => {
+    if (!Array.isArray(input.fanKeys) || typeof input.batchId !== "string" || typeof input.text !== "string") {
+      throw new Error("Sin datos");
+    }
+    return input;
+  })
   .handler(async ({ context, data }) => {
     const { broadcastOnlineFansView } = await import("./of-sessions-runtime.server");
     return broadcastOnlineFansView(context.userId, data);
+  });
+
+export const cancelOnlineBroadcast = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string; batchId: string }) => input)
+  .handler(async ({ context, data }) => {
+    const { cancelOnlineBroadcastView } = await import("./of-sessions-runtime.server");
+    return cancelOnlineBroadcastView(context.userId, data);
   });
 
 export const runFanChatMenu = createServerFn({ method: "POST" })

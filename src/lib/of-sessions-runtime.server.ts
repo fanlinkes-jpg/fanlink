@@ -39,11 +39,13 @@ import { captureChatListPage, captureOlderMessages } from "../../server/of-sessi
 import { openWorkPage } from "../../server/of-sessions/sessions/work-page.ts";
 import { type VaultFile } from "../../server/of-sessions/sync/vault-listen.ts";
 import { readChatVaultView as readVaultPage, type VaultReadDeps } from "../../server/of-sessions/sync/vault-read.ts";
-import type { OnlineFan } from "../../server/of-sessions/sync/online-fans.ts";
+import { ONLINE_FAN_CAP } from "@/lib/online-fan-row";
+import { fetchSignedOnlineFans, type OnlineFan } from "../../server/of-sessions/sync/online-fans.ts";
 import { sessionForApi } from "../../server/of-sessions/sync/of-chat-api.ts";
 import { loadSignRules } from "../../server/of-sessions/sync/of-sign.ts";
 import { prepareVaultSend } from "../../server/of-sessions/sync/vault-store.ts";
-import { canSeeOnlineFans, emptyOnlineBroadcast, onlineBroadcastGate, refuseOnlineBroadcast, sendOnlineBroadcast, type OnlineBroadcastResult } from "../../server/of-sessions/send/online-broadcast.ts";
+import { insertOutboundOnce, readOutboundClaim } from "../../server/of-sessions/sync/chat-store.ts";
+import { canSeeOnlineFans, cancelOnlineBroadcast, emptyOnlineBroadcast, onlineBroadcastGate, refuseOnlineBroadcast, sendOnlineBroadcast, type OnlineBroadcastResult } from "../../server/of-sessions/send/online-broadcast.ts";
 import { normalizeFanMenuRequest, runFanMenuOnPage, type FanMenuResult } from "../../server/of-sessions/sync/fan-menu.ts";
 import { chatPageUrl } from "../../server/of-sessions/sync/chats.ts";
 import { sendPace } from "../../server/of-sessions/send/gate.ts";
@@ -1006,14 +1008,14 @@ export async function readChatVaultView(
   });
 }
 
-export async function listOnlineFansView(userId: string, input: { creatorId: string }): Promise<{ fans: OnlineFan[]; reason: string | null; send: { enabled: boolean; reason: string | null } }> {
+export async function listOnlineFansView(userId: string, input: { creatorId: string }): Promise<{ fans: OnlineFan[]; reason: string | null; cap: number; send: { enabled: boolean; reason: string | null } }> {
   const access = await accessFor(userId);
   if (!canSeeOnlineFans(access, input.creatorId)) {
     throw new WorkspaceAccessError("No tienes acceso para operar la sesión de esa creadora.");
   }
   const sessions = await getOfSessionManager();
   const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
-  if (!account) return { fans: [], reason: "Sin datos", send: { enabled: false, reason: "Sin datos" } };
+  if (!account) return { fans: [], reason: "Sin datos", cap: ONLINE_FAN_CAP, send: { enabled: false, reason: "Sin datos" } };
   const read = await sessions.readOnlineFans(account.id);
   const gate = onlineBroadcastGate(process.env, {
     creatorId: account.creatorId,
@@ -1023,12 +1025,23 @@ export async function listOnlineFansView(userId: string, input: { creatorId: str
     label: account.label,
   });
   console.info(`[fanlink:online] cuenta=${input.creatorId} fans=${read.fans.length} motivo=${read.reason ?? "ok"} status=${read.status ?? "sin"}`);
-  return { fans: read.fans, reason: read.reason, send: { enabled: gate.allowed, reason: gate.allowed ? null : gate.reason } };
+  return { fans: read.fans, reason: read.reason, cap: ONLINE_FAN_CAP, send: { enabled: gate.allowed, reason: gate.allowed ? null : gate.reason } };
+}
+
+export async function cancelOnlineBroadcastView(
+  userId: string,
+  input: { creatorId: string; batchId: string },
+): Promise<{ cancelled: boolean }> {
+  const access = await accessFor(userId);
+  if (!canSeeOnlineFans(access, input.creatorId)) {
+    throw new WorkspaceAccessError("No tienes acceso para operar la sesión de esa creadora.");
+  }
+  return { cancelled: cancelOnlineBroadcast(input.batchId, access.userId, input.creatorId) };
 }
 
 export async function broadcastOnlineFansView(
   userId: string,
-  input: { creatorId: string; fanKeys: string[]; text: string; priceCents: number | null; vaultItemIds?: string[] },
+  input: { creatorId: string; fanKeys: string[]; text: string; priceCents: number | null; vaultItemIds?: string[]; batchId: string },
 ): Promise<OnlineBroadcastResult> {
   const access = await accessFor(userId);
   if (!canSeeOnlineFans(access, input.creatorId)) {
@@ -1074,13 +1087,23 @@ export async function broadcastOnlineFansView(
   } catch {
     return emptyOnlineBroadcast("No se pudo leer.");
   }
+  const fresh = await fetchSignedOnlineFans(state, { fetch, now: () => Date.now(), rules });
+  if (fresh.fans.length === 0 && fresh.reason && fresh.reason !== "Nadie en línea") {
+    return emptyOnlineBroadcast(fresh.reason);
+  }
+  const sql = await getSql();
+  const body = input.text.replace(/\s+/g, " ").trim();
+  const batchId = input.batchId.trim();
   return sendOnlineBroadcast({
     env: process.env,
     account: fields,
+    userId: access.userId,
+    batchId,
     auth,
     rules,
-    fans: input.fanKeys.map((fanKey) => ({ fanKey })),
-    text: input.text,
+    requested: input.fanKeys,
+    online: fresh.fans,
+    text: body,
     mediaIds,
     priceCents: input.priceCents,
     vaultReason: null,
@@ -1089,6 +1112,30 @@ export async function broadcastOnlineFansView(
     sleep: (ms) => new Promise((resolve) => {
       setTimeout(resolve, ms);
     }),
+    claim: async (fanKey) => {
+      const id = `${batchId}:${fanKey}`;
+      const existing = await readOutboundClaim(sql, id);
+      if (existing?.status === "sent" || existing?.ofMessageKey) return "enviado";
+      if (!existing) {
+        await insertOutboundOnce(sql, {
+          id,
+          creatorId: input.creatorId,
+          threadKey: fanKey,
+          fanKey,
+          authorId: access.userId,
+          body,
+          priceCents: input.priceCents,
+          createdAt: new Date().toISOString(),
+          ofMessageKey: null,
+        });
+      }
+      return "nuevo";
+    },
+    finish: async (fanKey, status, messageId, why) => {
+      const id = `${batchId}:${fanKey}`;
+      if (status === "enviado") await markOutboundSent(sql, id, messageId ?? id);
+      else await markOutboundError(sql, id, why ?? "No se pudo leer.");
+    },
   });
 }
 

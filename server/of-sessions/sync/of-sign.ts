@@ -90,14 +90,26 @@ async function downloadSignRules(fetchImpl: typeof fetch, now: number): Promise<
   }
 }
 
-/** El cuerpo JSON no hereda el abort del fetch. Este tope sí mantiene el proceso vivo. */
-export async function readJsonBody(response: { json(): Promise<unknown> }, ms = JSON_BODY_TIMEOUT_MS): Promise<unknown> {
+/** El cuerpo JSON no hereda el abort del fetch. Al cumplirse el tope se cancela la lectura. */
+export async function readJsonBody(
+  response: { json(): Promise<unknown>; body?: { cancel(): Promise<void> } | null },
+  ms = JSON_BODY_TIMEOUT_MS,
+): Promise<unknown> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let settled = false;
+  const job = response.json().then(
+    (value) => value,
+    (error: unknown) => {
+      if (settled) return undefined;
+      throw error;
+    },
+  );
   try {
     return await Promise.race([
-      response.json(),
+      job,
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => {
+          void response.body?.cancel().catch(() => undefined);
           const error = new Error("json");
           error.name = "TimeoutError";
           reject(error);
@@ -105,6 +117,7 @@ export async function readJsonBody(response: { json(): Promise<unknown> }, ms = 
       }),
     ]);
   } finally {
+    settled = true;
     if (timer) clearTimeout(timer);
   }
 }

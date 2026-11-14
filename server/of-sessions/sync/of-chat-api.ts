@@ -78,7 +78,7 @@ export function sessionForApi(state: StorageStateFile, nowMs: number): { cookie:
 /** Única función que arma las cabeceras firmadas. `signOnlyfans` solo calcula sign y time. */
 export function signedHeaders(rules: SignRules, pathWithQuery: string, auth: { cookie: string; userId: string; xBc: string }, timeMs: number): Record<string, string> {
   const signed = signOnlyfans(rules, pathWithQuery, auth.userId, timeMs);
-  return {
+  const headers: Record<string, string> = {
     accept: "application/json, text/plain, */*",
     "app-token": rules.appToken,
     cookie: auth.cookie,
@@ -89,6 +89,7 @@ export function signedHeaders(rules: SignRules, pathWithQuery: string, auth: { c
     referer: "https://onlyfans.com/",
     "user-id": signedUserId(auth.userId),
   };
+  return headers;
 }
 
 export async function fetchSignedChats(state: StorageStateFile, deps: SignedChatDeps, options: SignedChatOptions = {}): Promise<SignedChats> {

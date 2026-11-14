@@ -1,4 +1,5 @@
 import type { Page } from "playwright";
+import { ONLINE_FAN_CAP } from "../../../src/lib/online-fan-row.ts";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
 import { sessionForApi, signedHeaders } from "./of-chat-api.ts";
 import { loadSignRules, readJsonBody, type SignRules } from "./of-sign.ts";
@@ -10,6 +11,10 @@ export type OnlineFan = {
   avatarUrl: string | null;
   /** Céntimos del total que manda la API. Null si el campo no viene: no se inventa. */
   spentCents: number | null;
+  /** Código de OF si no es USD. Null: se pinta $. */
+  currency: string | null;
+  /** True solo si la fila trae isOnline u online en verdadero. */
+  online: boolean;
   lists: string[];
 };
 
@@ -37,7 +42,9 @@ export function onlineFansFromPayload(payload: unknown, onlyMarked = true): Onli
   for (const item of rows) {
     if (!item || typeof item !== "object" || Array.isArray(item)) continue;
     const row = item as Record<string, unknown>;
-    if (onlyMarked && onlineFlag(row.isOnline ?? row.online) !== true) continue;
+    const marked = onlineFlag(row.isOnline ?? row.online);
+    if (marked === false) continue;
+    if (onlyMarked && marked !== true) continue;
     const fanKey = text(row.id);
     if (!fanKey || seen.has(fanKey)) continue;
     seen.add(fanKey);
@@ -47,10 +54,12 @@ export function onlineFansFromPayload(payload: unknown, onlyMarked = true): Onli
       fanHandle: text(row.username ?? row.handle),
       avatarUrl: avatarOf(row),
       spentCents: spentCents(row),
+      currency: currencyOf(row),
+      online: marked === true,
       lists: listsOf(row),
     });
   }
-  return out.slice(0, 100);
+  return out.slice(0, ONLINE_FAN_CAP);
 }
 
 export function subscribersResponse(url: string): "online" | "all" | null {
@@ -199,6 +208,15 @@ function onlineFlag(value: unknown): boolean | null {
   return null;
 }
 
+function currencyOf(row: Record<string, unknown>): string | null {
+  const nested = asRecord(row.subscribedOnData) ?? asRecord(row.subscribedByData);
+  const raw = text(row.currency ?? nested?.currency);
+  if (!raw) return null;
+  const code = raw.toUpperCase();
+  if (code === "USD" || code === "$") return null;
+  return /^[A-Z]{3}$/.test(code) ? code : null;
+}
+
 function spentCents(row: Record<string, unknown>): number | null {
   const nested = asRecord(row.subscribedOnData) ?? asRecord(row.subscribedByData);
   return money(row.totalSumm ?? row.spent ?? row.totalSpent ?? nested?.totalSumm ?? nested?.spent ?? nested?.totalSpent);
@@ -252,7 +270,7 @@ function text(value: unknown): string | null {
 function dedupe(rows: OnlineFan[]): OnlineFan[] {
   const map = new Map<string, OnlineFan>();
   for (const row of rows) map.set(row.fanKey, row);
-  return [...map.values()].slice(0, 100);
+  return [...map.values()].slice(0, ONLINE_FAN_CAP);
 }
 
 function wait(pending: Array<Promise<void>>, ms: number, signal?: AbortSignal): Promise<void> {

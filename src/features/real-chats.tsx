@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AtSign, Bell, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, MessageCircle, RefreshCw, ScrollText, Send, Type } from "lucide-react";
-import { broadcastOnlineFans, chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, markChatOpened, readChatVault, recordChatOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
+import { broadcastOnlineFans, cancelOnlineBroadcast, chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, markChatOpened, readChatVault, recordChatOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
 import { OnlineFansPanel, type OnlineBroadcastPayload } from "@/features/online-fans-panel";
 import type { OnlineFanRow } from "@/lib/online-fan-row";
 import { unreadChatRow, unreadTotalFor } from "../../server/of-sessions/sync/unread-chats.ts";
@@ -202,6 +202,7 @@ export function RealChatsPage() {
   const [onlineNote, setOnlineNote] = useState<string | null>(null);
   const [onlineCount, setOnlineCount] = useState<number | null>(null);
   const [onlineSend, setOnlineSend] = useState<{ enabled: boolean; reason: string | null }>({ enabled: false, reason: "Envío a todos desactivado" });
+  const [onlineCap, setOnlineCap] = useState(100);
   const [insightsOpen, setInsightsOpen] = useState(false);
   const [tagHandle, setTagHandle] = useState<string | null>(null);
   const [menu, setMenu] = useState(false);
@@ -385,6 +386,8 @@ export function RealChatsPage() {
         fanHandle: fan.fanHandle,
         avatarUrl: "avatarUrl" in fan ? fan.avatarUrl : null,
         spentCents: "spentCents" in fan ? fan.spentCents : null,
+        currency: "currency" in fan ? fan.currency : null,
+        online: "online" in fan ? fan.online : false,
         lists: "lists" in fan ? fan.lists : [],
       }));
       setOnlineFans(rows);
@@ -392,6 +395,7 @@ export function RealChatsPage() {
       setOnlineCount(failed ? null : rows.length);
       setOnlineNote(rows.length === 0 ? result.reason ?? "Nadie en línea" : null);
       setOnlineSend("send" in result && result.send ? result.send : { enabled: false, reason: "Envío a todos desactivado" });
+      if ("cap" in result && typeof result.cap === "number") setOnlineCap(result.cap);
     } catch (err) {
       setOnlineFans([]);
       setOnlineCount(null);
@@ -412,8 +416,14 @@ export function RealChatsPage() {
 
   async function sendAllOnline(payload: OnlineBroadcastPayload) {
     const creator = creatorId === "all" ? selected?.creatorId ?? null : creatorId;
-    if (!creator) return { posted: 0, results: [], stopped: false, retryAfter: null, reason: "Elige una cuenta" };
+    if (!creator) return { posted: 0, results: [], stopped: false, retryAfter: null, reason: "Elige una cuenta", cap: onlineCap };
     return broadcastOnlineFans({ data: { creatorId: creator, ...payload } });
+  }
+
+  async function cancelAllOnline(batchId: string) {
+    const creator = creatorId === "all" ? selected?.creatorId ?? null : creatorId;
+    if (!creator) return;
+    await cancelOnlineBroadcast({ data: { creatorId: creator, batchId } });
   }
 
   function openOnlineFan(fanKey: string) {
@@ -910,7 +920,9 @@ export function RealChatsPage() {
                   sendReason={onlineSend.reason}
                   onRefresh={() => void loadOnlineFans()}
                   onOpenChat={openOnlineFan}
+                  cap={onlineCap}
                   onSend={sendAllOnline}
+                  onCancel={(batchId) => void cancelAllOnline(batchId)}
                 />
               ) : null}
             </div>

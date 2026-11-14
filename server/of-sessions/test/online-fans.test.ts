@@ -28,7 +28,7 @@ test("el filtro en línea se reconoce y solo entran los que están conectados", 
       { id: 2, name: "Otro", username: "otro", isOnline: false },
     ],
   });
-  assert.deepEqual(rows, [{ fanKey: "1", fanName: "Arias Crazy", fanHandle: "arias_crazy1", avatarUrl: "https://cdn.example/a.jpg", spentCents: null, lists: [] }]);
+  assert.deepEqual(rows, [{ fanKey: "1", fanName: "Arias Crazy", fanHandle: "arias_crazy1", avatarUrl: "https://cdn.example/a.jpg", spentCents: null, currency: null, online: true, lists: [] }]);
   const rich = onlineFansFromPayload({
     list: [{
       id: 5,
@@ -44,7 +44,8 @@ test("el filtro en línea se reconoce y solo entran los que están conectados", 
   assert.equal(rich[0]?.avatarUrl, "https://cdn.example/d.jpg");
   assert.deepEqual(rich[0]?.lists, ["VIP"]);
   assert.equal(rich[1]?.spentCents, null);
-  assert.equal(onlineFansFromPayload({ list: [{ id: 9, username: "duchamp", isOnline: false }] }, false).length, 1);
+  assert.equal(onlineFansFromPayload({ list: [{ id: 9, username: "duchamp", isOnline: false }] }, false).length, 0);
+  assert.equal(onlineFansFromPayload({ list: [{ id: 10, username: "sinmarca", currency: "EUR", totalSumm: 4.8 }] }, false)[0]?.currency, "EUR");
   const nested = onlineReadFromPayload(200, {
     data: {
       list: [
@@ -54,7 +55,7 @@ test("el filtro en línea se reconoce y solo entran los que están conectados", 
     },
   });
   assert.equal(nested.reason, null);
-  assert.deepEqual(nested.fans.map((fan) => fan.fanHandle), ["duchampprivate", "brendaoff"]);
+  assert.deepEqual(nested.fans.map((fan) => fan.fanHandle), ["duchampprivate"]);
   assert.equal(onlineReadFromPayload(200, { data: { list: [] } }).reason, "Nadie en línea");
   assert.equal(onlineReadFromPayload(200, { ok: true }).reason, "No se pudo leer.");
   assert.equal(onlineReadFromPayload(401, { list: [] }).reason, "OnlyFans ha rechazado la firma");
@@ -84,6 +85,7 @@ test("api2 firmada cuenta la lista filtrada, el 401 es la firma y el 200 vacío 
           list: [
             { id: 7, username: "duchampprivate", isOnline: true },
             { id: 8, username: "brendababypremium", isOnline: false },
+            { id: 9, username: "sinmarca" },
           ],
         },
       });
@@ -91,7 +93,7 @@ test("api2 firmada cuenta la lista filtrada, el 401 es la firma y el 200 vacío 
   });
   assert.equal(two.status, 200);
   assert.equal(two.reason, null);
-  assert.deepEqual(two.fans.map((fan) => fan.fanHandle), ["duchampprivate", "brendababypremium"]);
+  assert.deepEqual(two.fans.map((fan) => fan.fanHandle), ["duchampprivate", "sinmarca"]);
 
   const denied = await fetchSignedOnlineFans(state, {
     now: () => 1,
@@ -241,7 +243,7 @@ test("el respaldo abre Colecciones en Todo y no la lista Fans", async () => {
   assert.ok(seen.some((item) => item.includes("filtros")));
   assert.ok(seen.some((item) => item.includes("en línea")));
   assert.equal(read.reason, null);
-  assert.deepEqual(read.fans.map((fan) => fan.fanHandle), ["duchampprivate", "offline"]);
+  assert.deepEqual(read.fans.map((fan) => fan.fanHandle), ["duchampprivate"]);
 });
 
 test("si el goto o el filtro de la página fallan, no se dice que no hay nadie", async () => {
