@@ -61,7 +61,7 @@ test("solo se escribe a quien sigue en línea y el POST usa el id del fan", asyn
     online: [{ fanKey: "1" }, { fanKey: "2" }],
   });
   assert.deepEqual(urls, [`https://onlyfans.com${onlineMessagePath("1")}`]);
-  assert.equal(headers[0]?.get("user-id"), null);
+  assert.equal(headers[0]?.get("user-id"), "42");
   const rules = parseSignRules({
     static_param: "param",
     format: "1:{}:{:x}:2",
@@ -71,7 +71,7 @@ test("solo se escribe a quien sigue en línea y el POST usa el id del fan", asyn
     remove_headers: ["user-id"],
   });
   assert.ok(rules);
-  const hash = createHash("sha1").update(["param", "1700000000000", onlineMessagePath("1"), "0"].join("\n")).digest("hex");
+  const hash = createHash("sha1").update(["param", "1700000000000", onlineMessagePath("1"), "42"].join("\n")).digest("hex");
   const checksum = hash.charCodeAt(0) + hash.charCodeAt(1) + 10;
   assert.equal(headers[0]?.get("sign"), `1:${hash}:${Math.abs(checksum).toString(16)}:2`);
   assert.equal(sent.posted, 1);
