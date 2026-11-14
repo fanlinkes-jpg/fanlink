@@ -40,6 +40,10 @@ import { openWorkPage } from "../../server/of-sessions/sessions/work-page.ts";
 import { type VaultFile } from "../../server/of-sessions/sync/vault-listen.ts";
 import { readChatVaultView as readVaultPage, type VaultReadDeps } from "../../server/of-sessions/sync/vault-read.ts";
 import type { OnlineFan } from "../../server/of-sessions/sync/online-fans.ts";
+import { sessionForApi } from "../../server/of-sessions/sync/of-chat-api.ts";
+import { loadSignRules } from "../../server/of-sessions/sync/of-sign.ts";
+import { prepareVaultSend } from "../../server/of-sessions/sync/vault-store.ts";
+import { canSeeOnlineFans, emptyOnlineBroadcast, onlineBroadcastGate, refuseOnlineBroadcast, sendOnlineBroadcast, type OnlineBroadcastResult } from "../../server/of-sessions/send/online-broadcast.ts";
 import { normalizeFanMenuRequest, runFanMenuOnPage, type FanMenuResult } from "../../server/of-sessions/sync/fan-menu.ts";
 import { chatPageUrl } from "../../server/of-sessions/sync/chats.ts";
 import { sendPace } from "../../server/of-sessions/send/gate.ts";
@@ -1002,17 +1006,90 @@ export async function readChatVaultView(
   });
 }
 
-export async function listOnlineFansView(userId: string, input: { creatorId: string }): Promise<{ fans: OnlineFan[]; reason: string | null }> {
+export async function listOnlineFansView(userId: string, input: { creatorId: string }): Promise<{ fans: OnlineFan[]; reason: string | null; send: { enabled: boolean; reason: string | null } }> {
   const access = await accessFor(userId);
-  if (access.role !== "owner" && !access.perms.includes("mensajes")) {
-    throw new WorkspaceAccessError("No tienes permiso para escribir.");
+  if (!canSeeOnlineFans(access, input.creatorId)) {
+    throw new WorkspaceAccessError("No tienes acceso para operar la sesión de esa creadora.");
   }
   const sessions = await getOfSessionManager();
   const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
-  if (!account) return { fans: [], reason: "Sin datos" };
+  if (!account) return { fans: [], reason: "Sin datos", send: { enabled: false, reason: "Sin datos" } };
   const read = await sessions.readOnlineFans(account.id);
+  const gate = onlineBroadcastGate(process.env, {
+    creatorId: account.creatorId,
+    accountId: account.id,
+    handle: account.identityHandle,
+    userId: account.identityUserId,
+    label: account.label,
+  });
   console.info(`[fanlink:online] cuenta=${input.creatorId} fans=${read.fans.length} motivo=${read.reason ?? "ok"} status=${read.status ?? "sin"}`);
-  return { fans: read.fans, reason: read.reason };
+  return { fans: read.fans, reason: read.reason, send: { enabled: gate.allowed, reason: gate.allowed ? null : gate.reason } };
+}
+
+export async function broadcastOnlineFansView(
+  userId: string,
+  input: { creatorId: string; fanKeys: string[]; text: string; priceCents: number | null; vaultItemIds?: string[] },
+): Promise<OnlineBroadcastResult> {
+  const access = await accessFor(userId);
+  if (!canSeeOnlineFans(access, input.creatorId)) {
+    throw new WorkspaceAccessError("No tienes acceso para operar la sesión de esa creadora.");
+  }
+  const sessions = await getOfSessionManager();
+  const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
+  if (!account) return emptyOnlineBroadcast("Sin datos");
+  const fields = {
+    creatorId: account.creatorId,
+    accountId: account.id,
+    handle: account.identityHandle,
+    userId: account.identityUserId,
+    label: account.label,
+  };
+  const blocked = refuseOnlineBroadcast({
+    env: process.env,
+    account: fields,
+    text: input.text,
+    priceCents: input.priceCents,
+    vaultReason: null,
+  });
+  if (blocked) return emptyOnlineBroadcast(blocked);
+  const vaultIds = (input.vaultItemIds ?? []).map((item) => item.trim()).filter(Boolean);
+  const planned = await prepareVaultSend(await getSql(), input.creatorId, vaultIds);
+  if (!planned.ok) return emptyOnlineBroadcast(planned.reason);
+  const mediaIds: number[] = [];
+  for (const piece of planned.pieces) {
+    if (!/^[0-9]{1,18}$/.test(piece.id)) return emptyOnlineBroadcast("Sin datos");
+    mediaIds.push(Number(piece.id));
+  }
+  let state;
+  try {
+    state = await sessions.readStorageState(account.id);
+  } catch {
+    return emptyOnlineBroadcast("No se pudo leer.");
+  }
+  const auth = sessionForApi(state, Date.now());
+  if ("reason" in auth) return emptyOnlineBroadcast("No se pudo leer.");
+  let rules;
+  try {
+    rules = await loadSignRules(fetch, Date.now());
+  } catch {
+    return emptyOnlineBroadcast("No se pudo leer.");
+  }
+  return sendOnlineBroadcast({
+    env: process.env,
+    account: fields,
+    auth,
+    rules,
+    fans: input.fanKeys.map((fanKey) => ({ fanKey })),
+    text: input.text,
+    mediaIds,
+    priceCents: input.priceCents,
+    vaultReason: null,
+    fetch,
+    now: () => Date.now(),
+    sleep: (ms) => new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    }),
+  });
 }
 
 export async function runFanChatMenuView(userId: string, input: { creatorId: string; fanKey: string; request: unknown }): Promise<FanMenuResult> {

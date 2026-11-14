@@ -354,6 +354,14 @@ export const listOnlineFans = createServerFn({ method: "POST" })
     return listOnlineFansView(context.userId, data);
   });
 
+export const broadcastOnlineFans = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string; fanKeys: string[]; text: string; priceCents: number | null; vaultItemIds?: string[] }) => input)
+  .handler(async ({ context, data }) => {
+    const { broadcastOnlineFansView } = await import("./of-sessions-runtime.server");
+    return broadcastOnlineFansView(context.userId, data);
+  });
+
 export const runFanChatMenu = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((input: { creatorId: string; fanKey: string; request: unknown }) => input)
