@@ -322,6 +322,14 @@ export const chatSendAccess = createServerFn({ method: "GET" })
     return chatSendAccessView(context.userId);
   });
 
+export const readVisibleFanSpend = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string; fanIds: string[] }) => input)
+  .handler(async ({ context, data }): Promise<{ byFan: Record<string, number | null> }> => {
+    const { readVisibleFanSpendView } = await import("./of-sessions-runtime.server");
+    return readVisibleFanSpendView(context.userId, data);
+  });
+
 export const markChatOpened = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((input: { creatorId: string; threadKey: string }) => input)

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AtSign, Bell, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, RefreshCw, ScrollText, Send, Type } from "lucide-react";
-import { broadcastOnlineFans, cancelOnlineBroadcast, chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, markChatOpened, readChatVault, recordChatOutbound, resolveOnlineOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
+import { broadcastOnlineFans, cancelOnlineBroadcast, chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, markChatOpened, readChatVault, readVisibleFanSpend, recordChatOutbound, resolveOnlineOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
 import { OnlineFansPanel, type OnlineBroadcastPayload } from "@/features/online-fans-panel";
 import type { OnlineFanRow } from "@/lib/online-fan-row";
 import { unreadChatRow, unreadTotalFor } from "../../server/of-sessions/sync/unread-chats.ts";
@@ -31,6 +31,7 @@ import {
   type OutboundSend,
 } from "@/lib/send-queue";
 import { spendTone } from "@/lib/spend-tiers";
+import { rowSpendCents } from "@/lib/row-spend";
 import { useInboxSelection } from "@/lib/inbox-selection";
 import { ChatMediaPlayer } from "@/features/chat-media-player";
 import { VAULT_THUMB_MISSING, vaultMediaSrc } from "@/lib/chat-media";
@@ -197,6 +198,7 @@ export function RealChatsPage() {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [filter, setFilter] = useState<InboxPill>("todos");
+  const [fetchedSpend, setFetchedSpend] = useState<Record<string, number | null>>({});
   const [onlineOpen, setOnlineOpen] = useState(false);
   const [onlineBusy, setOnlineBusy] = useState(false);
   const [onlineFans, setOnlineFans] = useState<OnlineFanRow[]>([]);
@@ -474,6 +476,31 @@ export function RealChatsPage() {
   const selected = inbox.selected;
   const visible = inbox.visible;
   const fanCards = useChatFanCards(visible);
+  const spendAsked = useRef("");
+  useEffect(() => {
+    const creator = creatorId === "all" ? selected?.creatorId ?? null : creatorId;
+    if (!creator) return;
+    const missing = visible.flatMap((thread) => {
+      if (thread.creatorId !== creator || !thread.fanKey || !/^\d{1,20}$/.test(thread.fanKey)) return [];
+      const card = chatFanCardFor(fanCards.fans, thread.creatorId, thread.fanKey)?.spentCents ?? null;
+      const fetched = fetchedSpend[`${thread.creatorId}:${thread.fanKey}`];
+      if (rowSpendCents(thread.spentCents, card, fetched === undefined ? null : fetched) != null) return [];
+      if (fetched !== undefined) return [];
+      return [thread.fanKey];
+    });
+    const ids = [...new Set(missing)].slice(0, 10).sort();
+    if (ids.length === 0) return;
+    const key = `${creator}:${ids.join(",")}`;
+    if (spendAsked.current === key) return;
+    spendAsked.current = key;
+    void readVisibleFanSpend({ data: { creatorId: creator, fanIds: ids } }).then((result) => {
+      setFetchedSpend((current) => {
+        const next = { ...current };
+        for (const id of ids) next[`${creator}:${id}`] = result.byFan[id] ?? null;
+        return next;
+      });
+    }).catch(() => undefined);
+  }, [visible, creatorId, selected?.creatorId, fanCards.fans, fetchedSpend]);
   const messages = (data?.messages ?? [])
     .filter((message) => message.creatorId === selected?.creatorId && message.threadKey === selected?.threadKey)
     .sort((left, right) => left.sentAt.localeCompare(right.sentAt));
@@ -1070,8 +1097,8 @@ export function RealChatsPage() {
                     ) : (
                       <span className="grid h-10 w-10 place-items-center rounded-full bg-[#eef2ff] text-sm">{fanTitle(thread).slice(0, 1)}</span>
                     )}
-                    <span className="text-[10px] font-medium" style={{ color: spendTone(thread.spentCents ?? chatFanCardFor(fanCards.fans, thread.creatorId, thread.fanKey)?.spentCents ?? null).color ?? "#6d7585" }}>
-                      {spendTone(thread.spentCents ?? chatFanCardFor(fanCards.fans, thread.creatorId, thread.fanKey)?.spentCents ?? null).label}
+                    <span className="text-[10px] font-medium" style={{ color: spendTone(rowSpendCents(thread.spentCents, chatFanCardFor(fanCards.fans, thread.creatorId, thread.fanKey)?.spentCents ?? null, thread.fanKey ? fetchedSpend[`${thread.creatorId}:${thread.fanKey}`] ?? null : null)).color ?? "#6d7585" }}>
+                      {spendTone(rowSpendCents(thread.spentCents, chatFanCardFor(fanCards.fans, thread.creatorId, thread.fanKey)?.spentCents ?? null, thread.fanKey ? fetchedSpend[`${thread.creatorId}:${thread.fanKey}`] ?? null : null)).label}
                     </span>
                   </span>
                   <span className="min-w-0 flex-1">

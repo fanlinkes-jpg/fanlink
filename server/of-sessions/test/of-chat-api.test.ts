@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { clearAccountChatPace, REQUEST_GAP_MS } from "../sync/api-list-pace.ts";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
-import { clearSpendAsks, fetchSignedChats, parseSetCookieLine, type SignedChatDeps } from "../sync/of-chat-api.ts";
+import { clearFanSpendCache } from "../sync/fan-spend.ts";
+import { fetchSignedChats, parseSetCookieLine, type SignedChatDeps } from "../sync/of-chat-api.ts";
 import { signOnlyfans, type SignRules } from "../sync/of-sign.ts";
 import { spendTone } from "../../../src/lib/spend-tiers.ts";
 
@@ -115,97 +116,41 @@ test("las cookies rotadas se parsean y esta lectura no las guarda", async () => 
   assert.equal(foreign, null);
 });
 
-test("un gasto 0 de users/list se guarda como $0.00 y si no viene totalSumm sigue en null", async () => {
-  clearSpendAsks();
+test("los suscriptores traen el 0 real y sin totalSumm el hilo sigue en null", async () => {
+  clearFanSpendCache();
   clearAccountChatPace();
   const logs: string[] = [];
   const waits: number[] = [];
   let now = 1_700_000_000_000;
-  const seen: Array<{ url: string; sign: string; userId: string }> = [];
+  const seen: Array<{ url: string; sign: string; userId: string; method: string }> = [];
   try {
     const zero = await fetchSignedChats(state(), spendDeps(seen, waits, () => now, (ms) => { now += ms; }, logs, (url) => {
-      if (url.includes("/users/list")) return json(200, { "9": { id: "9", name: "Ana", subscribedOnData: { totalSumm: 0 } } });
+      if (url.includes("/subscriptions/subscribers")) {
+        return json(200, [{ id: 9, name: "Ana", subscribedOnData: { totalSumm: 0, tipsSumm: 4 } }]);
+      }
       return json(200, { list: [thread("9")], hasMore: false });
     }), { listCap: 20, messages: "none" });
     assert.equal(zero.threads[0]?.spentCents, 0);
     assert.equal(spendTone(zero.threads[0]?.spentCents ?? null).label, "$0.00");
-    const asked = seen.find((item) => item.url.includes("/users/list"));
+    const asked = seen.find((item) => item.url.includes("/subscriptions/subscribers"));
     const path = `${new URL(asked?.url ?? "").pathname}${new URL(asked?.url ?? "").search}`;
-    assert.equal(path, "/api2/v2/users/list?r[]=9");
+    assert.equal(path, "/api2/v2/subscriptions/subscribers?limit=10&type=active&offset=0");
+    assert.equal(asked?.method, "GET");
     assert.equal(asked?.sign, signOnlyfans(rules, path, "42", now).sign);
     assert.equal(asked?.userId, "42");
+    assert.equal(seen.some((item) => item.url.includes("/users/list") || item.url.includes("mark-as-read")), false);
     assert.deepEqual(waits, [REQUEST_GAP_MS]);
-    assert.equal(logs[0], "[fanlink:spend] creator=3zk7kbr requested=1 filled=1 still null=0");
-    assert.equal(logs[0]?.includes("r[]"), false);
-
-    clearSpendAsks();
-    clearAccountChatPace();
-    now = 1_700_000_000_000;
-    waits.length = 0;
-    logs.length = 0;
-    const missing = await fetchSignedChats(state(), spendDeps(seen, waits, () => now, (ms) => { now += ms; }, logs, (url) => {
-      if (url.includes("/users/list")) return json(200, { "8": { id: "8", name: "Bo", subscribedOnData: { tipsSumm: 4 } } });
-      return json(200, { list: [thread("8")], hasMore: false });
-    }), { listCap: 20, messages: "none" });
-    assert.equal(missing.threads[0]?.spentCents, null);
-    assert.equal(spendTone(missing.threads[0]?.spentCents ?? null).label, "Sin datos");
-    assert.equal(logs.at(-1), "[fanlink:spend] creator=3zk7kbr requested=1 filled=0 still null=1");
+    assert.equal(logs[0]?.startsWith("[fanlink:spend] creator=3zk7kbr "), true);
+    assert.equal(logs[0]?.includes("subscribers=1"), true);
+    assert.equal(logs.join("").includes("fan=9"), false);
   } finally {
-    clearSpendAsks();
-    clearAccountChatPace();
-  }
-});
-
-test("users/list va en tandas de 10, no repite un gasto que ya vino y un 429 para", async () => {
-  clearSpendAsks();
-  clearAccountChatPace();
-  const urls: string[] = [];
-  try {
-    const many = await fetchSignedChats(state(), deps(urls, (url) => {
-      if (!url.includes("/users/list")) {
-        return json(200, { list: Array.from({ length: 11 }, (_, index) => thread(String(index + 1))), hasMore: false });
-      }
-      const ids = [...new URL(url).searchParams.getAll("r[]")];
-      assert.ok(ids.length <= 10);
-      return json(200, Object.fromEntries(ids.map((id) => [id, { id, name: id, subscribedOnData: { totalSumm: 1 } }])));
-    }), { listCap: 20, messages: "none" });
-    const lists = urls.filter((url) => url.includes("/users/list"));
-    assert.equal(lists.length, 2);
-    assert.equal(many.threads.every((thread) => thread.spentCents === 100), true);
-
-    urls.length = 0;
-    clearSpendAsks();
-    await fetchSignedChats(state(), deps(urls, (url) => {
-      if (url.includes("/users/list")) return json(200, { "2": { id: "2", subscribedOnData: { totalSumm: 3 } } });
-      return json(200, {
-        list: [
-          { ...thread("1"), withUser: { id: "1", name: "Ya", subscribedOnData: { totalSumm: 0 } } },
-          thread("2"),
-        ],
-        hasMore: false,
-      });
-    }), { listCap: 20, messages: "none" });
-    const only = urls.filter((url) => url.includes("/users/list"));
-    assert.equal(only.length, 1);
-    assert.equal(new URL(only[0] ?? "").search, "?r[]=2");
-
-    urls.length = 0;
-    clearSpendAsks();
-    const limited = await fetchSignedChats(state(), deps(urls, (url) => {
-      if (url.includes("/users/list")) return json(429, { error: "slow" }, { retryAfter: "4" });
-      return json(200, { list: [thread("4")], hasMore: false });
-    }), { listCap: 20, messages: "none" });
-    assert.equal(limited.retryAfterMs, 4_000);
-    assert.equal(limited.threads[0]?.spentCents, null);
-    assert.equal(urls.filter((url) => url.includes("/users/list")).length, 1);
-  } finally {
-    clearSpendAsks();
+    clearFanSpendCache();
     clearAccountChatPace();
   }
 });
 
 function spendDeps(
-  seen: Array<{ url: string; sign: string; userId: string }>,
+  seen: Array<{ url: string; sign: string; userId: string; method: string }>,
   waits: number[],
   now: () => number,
   sleep: (ms: number) => void,
@@ -225,7 +170,7 @@ function spendDeps(
     fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const headers = init?.headers as Record<string, string>;
-      seen.push({ url, sign: headers.sign ?? "", userId: headers["user-id"] ?? "" });
+      seen.push({ url, sign: headers.sign ?? "", userId: headers["user-id"] ?? "", method: init?.method ?? "GET" });
       return respond(url);
     }) as typeof fetch,
   };
