@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
+import { WorkspaceAccessError } from "../../../src/lib/access-policy.ts";
 import { writeEncryptedSession } from "../crypto.ts";
 import { createSessionRuntime } from "../runtime.ts";
 import type { BrowserFactory } from "../sessions/browser-factory.ts";
@@ -8,8 +9,10 @@ import { onlyFansSite } from "../sessions/onlyfans.ts";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
 import { clearAccountPauses } from "../sync/backoff.ts";
 import { clearAccountChatPace } from "../sync/api-list-pace.ts";
-import { clearMarkReadJobs, markOpenedChat } from "../sync/mark-read.ts";
-import { clearSignRulesCache, parseSignRules } from "../sync/of-sign.ts";
+import { clearFanSpendCache } from "../sync/fan-spend.ts";
+import { clearMarkReadJobs } from "../sync/mark-read.ts";
+import { clearSignRulesCache, loadSignRules } from "../sync/of-sign.ts";
+import { bindSignedViews, listOnlineFansView, markChatOpenedView, readVisibleFanSpendView } from "../sync/signed-views.ts";
 import type { ReadSql } from "../sync/store.ts";
 import { passApiListAccounts } from "../sync/api-list-cycle.ts";
 import { SESSION_EXPIRED_LABEL } from "../sync/session-link.ts";
@@ -287,8 +290,6 @@ test("un 401 de mark-as-read que ya iba en vuelo no marca la sesión nueva", asy
   let entered = () => undefined as void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
   const started = new Promise<void>((resolve) => { entered = resolve; });
-  const rules = parseSignRules(RULES);
-  if (!rules) throw new Error("reglas");
   const created = await createSessionRuntime({
     config: testConfig(dataDir, { openLoginOnInvalidate: false }),
     site: onlyFansSite,
@@ -300,26 +301,175 @@ test("un 401 de mark-as-read que ya iba en vuelo no marca la sesión nueva", asy
     const account = await created.store.create("Marca", "3zk7kbr");
     await writeEncryptedSession(path.join(dataDir, "sessions", `${account.id}.json`), storedState(), TEST_SESSION_KEY);
     await created.store.update(account.id, { hasStorageState: true, status: "active", connection: "live", sessionRejected: false });
-    const epoch = created.sessions.sessionGeneration(account.id);
-    const pending = markOpenedChat({
-      accountId: account.id,
-      creatorId: "3zk7kbr",
-      threadKey: "99",
-      flag: "true",
-      allowlist: "3zk7kbr",
-      account: { creatorId: "3zk7kbr", accountId: account.id, handle: "creadora", userId: "42", label: "Marca" },
-      sql: unreadSql(),
-      fetch: (async () => {
+    const previousFetch = globalThis.fetch;
+    const previousMark = process.env.FANLINK_CHAT_MARK_READ;
+    const previousAllow = process.env.FANLINK_SEND_ALLOW_ACCOUNTS;
+    process.env.FANLINK_CHAT_MARK_READ = "true";
+    process.env.FANLINK_SEND_ALLOW_ACCOUNTS = "3zk7kbr";
+    bindSignedViews({
+      accessFor: ownerAccess,
+      sessions: async () => created.sessions,
+      sql: async () => unreadSql(),
+    });
+    try {
+      await loadSignRules((async () => Response.json(RULES)) as typeof fetch, Date.now());
+      globalThis.fetch = (async () => {
         entered();
         await gate;
         return new Response("{}", { status: 401, headers: { "content-type": "application/json" } });
-      }) as typeof fetch,
-      now: () => Date.now(),
-      sleep: async () => undefined,
-      rules,
-      auth: { cookie: "auth_id=42; sess=ok", userId: "42", xBc: "huella" },
-      onSessionRejected: () => created.sessions.noteApiSessionRejected(account.id, epoch),
-    });
+      }) as typeof fetch;
+      const pending = markChatOpenedView("dueña-marca", { creatorId: "3zk7kbr", threadKey: "99" });
+      await started;
+      created.sessions.rotateSessionEpoch(account.id);
+      await created.store.update(account.id, { connection: "live", status: "active", sessionRejected: false });
+      release();
+      await pending;
+      const stored = await created.sessions.getAccount(account.id);
+      assert.equal(stored.sessionRejected, false);
+      assert.equal(stored.connection, "live");
+      assert.equal(launches, 0);
+    } finally {
+      process.env.FANLINK_CHAT_MARK_READ = previousMark;
+      process.env.FANLINK_SEND_ALLOW_ACCOUNTS = previousAllow;
+      globalThis.fetch = previousFetch;
+    }
+  } finally {
+    release();
+    clearMarkReadJobs();
+    clearAccountChatPace();
+    clearAccountPauses();
+    clearSignRulesCache();
+    await created.close();
+    await removeDir(dataDir);
+  }
+});
+
+test("listOnlineFansView sin permiso no abre la sesión ni firma", async () => {
+  let opened = false;
+  let signed = 0;
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).includes("onlyfans.com")) signed += 1;
+    return previousFetch(input, init);
+  }) as typeof fetch;
+  bindSignedViews({
+    accessFor: async (userId) => ({ userId, role: "member", perms: [], creatorIds: [] }),
+    sessions: async () => {
+      opened = true;
+      throw new Error("no abrir");
+    },
+    sql: async () => {
+      opened = true;
+      throw new Error("no sql");
+    },
+  });
+  try {
+    await assert.rejects(
+      () => listOnlineFansView("sin-fans", { creatorId: "3zk7kbr" }),
+      (error: unknown) => error instanceof WorkspaceAccessError,
+    );
+    assert.equal(opened, false);
+    assert.equal(signed, 0);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("listOnlineFansView y readOnlineFans comparten el mutex sin anidar", async () => {
+  clearSignRulesCache();
+  clearAccountPauses();
+  clearAccountChatPace();
+  const dataDir = await tempDataDir();
+  let launches = 0;
+  let active = 0;
+  let max = 0;
+  let entered = 0;
+  let release = () => undefined as void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const created = await createSessionRuntime({
+    config: testConfig(dataDir, { openLoginOnInvalidate: false }),
+    site: onlyFansSite,
+    browserFactory: closedBrowser(() => { launches += 1; }),
+    displayEnv: testDisplay,
+    fetch: (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("dynamic-rules")) return Response.json(RULES);
+      if (!url.includes("subscriptions/subscribers")) return new Response("no", { status: 500 });
+      entered += 1;
+      active += 1;
+      max = Math.max(max, active);
+      if (entered === 1) await gate;
+      active -= 1;
+      return Response.json({ list: [] });
+    }) as typeof fetch,
+  });
+  bindSignedViews({
+    accessFor: ownerAccess,
+    sessions: async () => created.sessions,
+    sql: async () => emptySql(),
+  });
+  try {
+    const account = await created.store.create("Online", "3zk7kbr");
+    await writeEncryptedSession(path.join(dataDir, "sessions", `${account.id}.json`), storedState(), TEST_SESSION_KEY);
+    await created.store.update(account.id, { hasStorageState: true, status: "active", connection: "live", sessionRejected: false });
+    const both = Promise.all([
+      created.sessions.readOnlineFans(account.id),
+      listOnlineFansView("dueña-online", { creatorId: "3zk7kbr" }),
+    ]);
+    const deadline = Date.now() + 2000;
+    while (entered < 1 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(entered, 1);
+    assert.equal(max, 1);
+    release();
+    await both;
+    assert.equal(entered, 2);
+    assert.equal(max, 1);
+    assert.equal(launches, 0);
+  } finally {
+    release();
+    clearAccountChatPace();
+    clearAccountPauses();
+    clearSignRulesCache();
+    await created.close();
+    await removeDir(dataDir);
+  }
+});
+
+test("un 401 de gasto visible que ya iba en vuelo no marca la sesión nueva", async () => {
+  clearSignRulesCache();
+  clearAccountPauses();
+  clearAccountChatPace();
+  clearFanSpendCache();
+  const dataDir = await tempDataDir();
+  let launches = 0;
+  let release = () => undefined as void;
+  let entered = () => undefined as void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const started = new Promise<void>((resolve) => { entered = resolve; });
+  const created = await createSessionRuntime({
+    config: testConfig(dataDir, { openLoginOnInvalidate: false }),
+    site: onlyFansSite,
+    browserFactory: closedBrowser(() => { launches += 1; }),
+    displayEnv: testDisplay,
+    fetch: (async () => new Response("{}", { status: 500 })) as typeof fetch,
+  });
+  const previousFetch = globalThis.fetch;
+  bindSignedViews({
+    accessFor: ownerAccess,
+    sessions: async () => created.sessions,
+    sql: async () => emptySql(),
+  });
+  try {
+    const account = await created.store.create("Gasto", "3zk7kbr");
+    await writeEncryptedSession(path.join(dataDir, "sessions", `${account.id}.json`), storedState(), TEST_SESSION_KEY);
+    await created.store.update(account.id, { hasStorageState: true, status: "active", connection: "live", sessionRejected: false });
+    await loadSignRules((async () => Response.json(RULES)) as typeof fetch, Date.now());
+    globalThis.fetch = (async () => {
+      entered();
+      await gate;
+      return new Response("{}", { status: 401, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const pending = readVisibleFanSpendView("dueña-gasto", { creatorId: "3zk7kbr", fanIds: ["7"] });
     await started;
     created.sessions.rotateSessionEpoch(account.id);
     await created.store.update(account.id, { connection: "live", status: "active", sessionRejected: false });
@@ -327,11 +477,11 @@ test("un 401 de mark-as-read que ya iba en vuelo no marca la sesión nueva", asy
     await pending;
     const stored = await created.sessions.getAccount(account.id);
     assert.equal(stored.sessionRejected, false);
-    assert.equal(stored.connection, "live");
     assert.equal(launches, 0);
   } finally {
     release();
-    clearMarkReadJobs();
+    globalThis.fetch = previousFetch;
+    clearFanSpendCache();
     clearAccountChatPace();
     clearAccountPauses();
     clearSignRulesCache();
@@ -448,6 +598,14 @@ async function onlineCase(route: (url: string) => Response): Promise<{
     await created.close();
     await removeDir(dataDir);
   }
+}
+
+function ownerAccess(userId: string) {
+  return Promise.resolve({ userId, role: "owner" as const, perms: [], creatorIds: [] });
+}
+
+function emptySql(): ReadSql {
+  return { async query() { return []; } };
 }
 
 function unreadSql(): ReadSql {

@@ -546,10 +546,10 @@ export class SessionManager {
     }
     if (this.options.site.id === "onlyfans" && !options?.read) {
       try {
-        const signed = await fetchSignedOnlineFans(await this.readStorageState(accountId), {
+        const signed = await withAccountApi(accountId, async () => fetchSignedOnlineFans(await this.readStorageState(accountId), {
           fetch: options?.fetch ?? this.options.fetch ?? fetch,
           now: () => this.now().getTime(),
-        });
+        }));
         if (signed.status === 429 || (signed.retryAfterMs ?? 0) > 0) {
           noteAccountBlock(accountId, "429");
           return { ...signed, fans: [], reason: signed.reason ?? "OnlyFans respondió 429", fallback: false };
