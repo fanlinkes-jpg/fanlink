@@ -1081,7 +1081,7 @@ export async function listOnlineFansView(userId: string, input: { creatorId: str
         reads.push({ creatorId, fans: [], reason: SESSION_EXPIRED_LABEL, status: 401 });
         continue;
       }
-      const read = await sessions.readOnlineFans(account.id);
+      const read = await withAccountApi(account.id, () => sessions.readOnlineFans(account.id));
       console.info(`[fanlink:online] cuenta=${creatorId} fans=${read.fans.length} motivo=${read.reason ?? "ok"} status=${read.status ?? "sin"}`);
       reads.push({ creatorId, fans: read.fans, reason: read.reason, status: read.status });
     }
@@ -1104,7 +1104,7 @@ export async function listOnlineFansView(userId: string, input: { creatorId: str
   if (signedReadsBlocked(account)) {
     return { fans: [], reason: SESSION_EXPIRED_LABEL, notices: [`${input.creatorId}: ${SESSION_EXPIRED_LABEL}`], cap: ONLINE_FAN_CAP, send };
   }
-  const read = await sessions.readOnlineFans(account.id);
+  const read = await withAccountApi(account.id, () => sessions.readOnlineFans(account.id));
   console.info(`[fanlink:online] cuenta=${input.creatorId} fans=${read.fans.length} motivo=${read.reason ?? "ok"} status=${read.status ?? "sin"}`);
   const notices = read.status === 401 || read.reason === SESSION_EXPIRED_LABEL
     ? [`${input.creatorId}: ${SESSION_EXPIRED_LABEL}`]
