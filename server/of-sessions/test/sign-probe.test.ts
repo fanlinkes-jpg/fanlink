@@ -97,6 +97,48 @@ test("la sonda pide las dos rutas en GET, A y B, y solo imprime ruta, variante y
   assert.equal(clock, PROBE_GAP_MS * 3);
 });
 
+test("un 429 para la sonda: imprime esa línea y no sigue", async () => {
+  const dataDir = await tempDataDir();
+  const rules = parseSignRules({
+    static_param: "param",
+    format: "1:{}:{:x}:2",
+    checksum_indexes: [0, 1],
+    checksum_constants: [4, 6],
+    checksum_constant: 10,
+    app_token: "token",
+    remove_headers: ["user-id"],
+  });
+  assert.ok(rules);
+  const lines: string[] = [];
+  let calls = 0;
+  try {
+    await mkdir(path.join(dataDir, "sessions"));
+    const store = new AccountStore(path.join(dataDir, "accounts.json"));
+    await store.init();
+    const account = await store.create("Prueba", "3zk7kbr");
+    await writeEncryptedSession(path.join(dataDir, "sessions", `${account.id}.json`), storedState(), TEST_SESSION_KEY);
+    await executeSignProbe({
+      account: "3zk7kbr",
+      env: { FANLINK_SESSION_KEY: KEY, FANLINK_DATA_DIR: dataDir },
+      fetch: async () => {
+        calls += 1;
+        return new Response(null, { status: calls === 1 ? 200 : 429 });
+      },
+      sleep: async () => undefined,
+      now: () => 0,
+      stdout: (line) => lines.push(line),
+      rules,
+    });
+  } finally {
+    await removeDir(dataDir);
+  }
+  assert.equal(calls, 2);
+  assert.deepEqual(lines, [
+    "/api2/v2/users/me A 200",
+    "/api2/v2/users/me B 429",
+  ]);
+});
+
 test("sin FANLINK_SESSION_KEY la sonda no llama a OnlyFans", async () => {
   let called = false;
   await assert.rejects(

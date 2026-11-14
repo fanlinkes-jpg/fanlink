@@ -91,6 +91,7 @@ export async function executeSignProbe(input: {
       first = false;
       const status = await probeGet(input.fetch, route, probeHeaders(rules, route, auth, variant, input.now()));
       input.stdout(probeLine(route, variant, status));
+      if (status === 429) return;
     }
   }
 }
