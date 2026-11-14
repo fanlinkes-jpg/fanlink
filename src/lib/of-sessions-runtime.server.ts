@@ -1127,7 +1127,7 @@ export async function broadcastOnlineFansView(
     sleep: (ms) => new Promise((resolve) => {
       setTimeout(resolve, ms);
     }),
-    claim: (fanKey) => claimOnlineOutbound(sql, {
+    claim: (fanKey) => sql.isolate((pinned) => claimOnlineOutbound(pinned, {
       batchId,
       creatorId: input.creatorId,
       fanKey,
@@ -1136,7 +1136,7 @@ export async function broadcastOnlineFansView(
       priceCents: input.priceCents,
       mediaIds,
       nowMs: Date.now(),
-    }),
+    })),
     finish: (id, status, messageId, why) => finishOnlineOutbound(sql, id, status, messageId, why),
   });
 }
