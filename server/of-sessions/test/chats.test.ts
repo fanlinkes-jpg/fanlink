@@ -218,7 +218,7 @@ test("el simulador entrega el chat y solo avisa de mensajes nuevos", { timeout: 
   const pg = new PGlite();
   const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../migrations");
   try {
-    for (const name of ["0007_of_reads.sql", "0008_sync_schedule.sql", "0009_of_chats.sql", "0013_chat_price.sql", "0018_chat_preview.sql", "0019_chat_author.sql", "0020_chat_card.sql", "0021_fan_profile.sql", "0022_message_media.sql", "0024_outbound_schedule.sql", "0025_outbound_send.sql", "0026_chat_history.sql"]) {
+    for (const name of ["0007_of_reads.sql", "0008_sync_schedule.sql", "0009_of_chats.sql", "0013_chat_price.sql", "0018_chat_preview.sql", "0019_chat_author.sql", "0020_chat_card.sql", "0021_fan_profile.sql", "0022_message_media.sql", "0024_outbound_schedule.sql", "0025_outbound_send.sql", "0026_chat_history.sql", "0045_chat_unread_null.sql"]) {
       await pg.exec(await readFile(path.join(dir, name), "utf8"));
     }
     const sql: ReadSql = {
