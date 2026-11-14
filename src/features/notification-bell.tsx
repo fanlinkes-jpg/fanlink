@@ -3,14 +3,16 @@ import { Bell } from "lucide-react";
 import { Button, Field } from "@/components/ui";
 import {
   filterNotifications,
+  notificationBellCount,
   NOTIFICATION_TABS,
   TAB_LABEL,
-  unreadCount,
   SIN_DATOS,
+  type NotificationCounts,
   type NotificationRecord,
   type NotificationTab,
 } from "@/lib/notifications";
 import { listCreatorNotifications, markCreatorNotificationsRead, type NotificationListItem } from "@/lib/of-notifications";
+import { NotificationFanCard } from "@/features/notification-card";
 
 export type NotificationTarget = {
   creatorId: string;
@@ -39,6 +41,10 @@ export function NotificationBell({
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [role, setRole] = useState<"owner" | "member" | null>(null);
+  const [counts, setCounts] = useState<NotificationCounts | null>(null);
+  const [motivo, setMotivo] = useState<string | null>(null);
+  const [markOnOnlyfans, setMarkOnOnlyfans] = useState(false);
+  const [fanlinkUnread, setFanlinkUnread] = useState<number | null>(null);
 
   useEffect(() => {
     let stop = false;
@@ -50,8 +56,16 @@ export function NotificationBell({
         setSyncedAt(data.syncedAt);
         setNextCursor(data.nextCursor);
         setRole(data.role);
+        setCounts(data.counts);
+        setMotivo(data.motivo);
+        setMarkOnOnlyfans(data.markOnOnlyfans);
+        setFanlinkUnread(data.fanlinkUnread);
       } catch {
-        if (!stop) setItems(null);
+        if (!stop) {
+          setItems(null);
+          setFanlinkUnread(null);
+          setMotivo("no se pudo leer");
+        }
       }
     }
     void pull();
@@ -62,6 +76,18 @@ export function NotificationBell({
     };
   }, [creatorId]);
 
+  async function acknowledge(keys: string[] | null) {
+    const data = await markCreatorNotificationsRead({ data: { creatorId, keys } });
+    if (data.counts) setCounts(data.counts);
+    if (data.motivo) setMotivo(data.motivo);
+    setMarkOnOnlyfans(data.markOnOnlyfans);
+    setFanlinkUnread(data.fanlinkUnread);
+    const chosen = new Set(data.keys);
+    setItems((current) => (current ?? []).map((item) => (
+      chosen.has(item.key) ? { ...item, seen: true, ofUnread: data.cleared ? false : item.ofUnread } : item
+    )));
+  }
+
   async function loadMore() {
     if (!nextCursor) return;
     const data = await listCreatorNotifications({ data: { creatorId, cursor: nextCursor } });
@@ -69,20 +95,29 @@ export function NotificationBell({
     setNextCursor(data.nextCursor);
   }
 
-  const records = (items ?? []).map((item) => asRecord(creatorId, item));
-  const unread = items == null ? null : unreadCount(records);
+  const bell = notificationBellCount({
+    markOnOnlyfans,
+    counts: items == null ? null : counts,
+    fanlinkTotal: items == null ? null : fanlinkUnread,
+    role,
+  });
 
   return (
     <>
       <button
         type="button"
-        aria-label={unread == null ? "Notificaciones, sin datos" : `Notificaciones, ${unread} sin leer`}
-        onClick={() => setOpen(true)}
+        aria-label={bellLabel(bell, motivo)}
+        onClick={() => {
+          setOpen(true);
+          void acknowledge(null);
+        }}
         className="relative grid h-8 w-8 place-items-center rounded-lg border border-line bg-surface text-fg"
       >
         <Bell className="h-4 w-4" />
-        {unread != null && unread > 0 ? (
-          <span className="absolute -top-1 -right-1 min-w-4 rounded-full bg-danger px-1 text-[10px] font-semibold text-white">{unread}</span>
+        {bell.count == null ? (
+          <span className="absolute -top-2 -right-2 rounded bg-raised px-1 text-[9px] text-muted">{SIN_DATOS}</span>
+        ) : bell.count > 0 ? (
+          <span className="absolute -top-1 -right-1 min-w-4 rounded-full bg-danger px-1 text-[10px] font-semibold text-white">{bell.count}</span>
         ) : null}
       </button>
       {open ? (
@@ -91,11 +126,14 @@ export function NotificationBell({
           role={role}
           items={items}
           syncedAt={syncedAt}
+          counts={counts}
+          motivo={motivo}
           onClose={() => setOpen(false)}
           onChanged={setItems}
           onOpenThread={onOpenThread}
           nextCursor={nextCursor}
           onMore={() => void loadMore()}
+          onMark={(keys) => void acknowledge(keys)}
         />
       ) : null}
     </>
@@ -107,21 +145,27 @@ function NotificationPanel({
   role,
   items,
   syncedAt,
+  counts,
+  motivo,
   onClose,
   onChanged,
   onOpenThread,
   nextCursor,
   onMore,
+  onMark,
 }: {
   creatorId: string;
   role: "owner" | "member" | null;
   items: NotificationListItem[] | null;
   syncedAt: string | null;
+  counts: NotificationCounts | null;
+  motivo: string | null;
   onClose: () => void;
   onChanged: (items: NotificationListItem[]) => void;
   onOpenThread?: (target: NotificationTarget) => void;
   nextCursor: string | null;
   onMore: () => void;
+  onMark: (keys: string[] | null) => void;
 }) {
   const [tab, setTab] = useState<NotificationTab>("all");
   const [text, setText] = useState("");
@@ -131,14 +175,14 @@ function NotificationPanel({
   const filtered = filterNotifications(records, { tab, text, from, to });
   const shown = filtered.rows;
   const undated = filtered.undated;
-  const shownUnread = [...shown, ...undated].filter((row) => !row.seenAt).map((row) => row.key);
+  const shownUnread = [...shown, ...undated].flatMap((row) => {
+    const item = (items ?? []).find((entry) => entry.key === row.key);
+    return item && fresh(item) ? [row.key] : [];
+  });
 
-  async function mark(keys: string[]) {
+  function mark(keys: string[]) {
     if (keys.length === 0) return;
-    await markCreatorNotificationsRead({ data: { creatorId, keys } });
-    if (!items) return;
-    const chosen = new Set(keys);
-    onChanged(items.map((item) => (chosen.has(item.key) ? { ...item, seen: true } : item)));
+    onMark(keys);
   }
 
   return (
@@ -148,20 +192,20 @@ function NotificationPanel({
         <header className="flex items-center justify-between border-b border-line px-4 py-3">
           <div>
             <h2 className="font-display text-base font-semibold">Notificaciones</h2>
-            <p className="text-xs text-muted">{role === "owner" ? "Dueña" : role === "member" ? "Chatter" : SIN_DATOS} · lo ya escuchado de esta cuenta</p>
+            <p className="text-xs text-muted">{role === "owner" ? "Dueña" : role === "member" ? "Chatter" : SIN_DATOS} · {statusLine(motivo, syncedAt)}</p>
           </div>
           <Button type="button" variant="ghost" onClick={onClose}>Cerrar</Button>
         </header>
         <div className="space-y-3 border-b border-line px-4 py-3">
-          <div className="flex gap-1 overflow-auto">
+          <div className="flex flex-wrap gap-1">
             {NOTIFICATION_TABS.map((id) => (
               <button
                 key={id}
                 type="button"
                 onClick={() => setTab(id)}
-                className={`shrink-0 rounded-md px-2 py-1 text-xs ${tab === id ? "bg-primary text-primary-fg" : "bg-raised text-muted"}`}
+                className={`whitespace-nowrap rounded-md px-2 py-1 text-xs ${tab === id ? "bg-primary text-primary-fg" : "bg-raised text-muted"}`}
               >
-                {TAB_LABEL[id]}
+                {TAB_LABEL[id]} {pillCount(counts, id)}
               </button>
             ))}
           </div>
@@ -175,36 +219,26 @@ function NotificationPanel({
           </Button>
         </div>
         <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
-          {items == null || syncedAt == null ? (
-            <p className="text-sm text-muted">{SIN_DATOS}</p>
+          {items == null ? (
+            <p className="text-sm text-muted">{motivo && motivo !== "ok" ? motivoVisible(motivo) : SIN_DATOS}</p>
           ) : shown.length === 0 && undated.length === 0 ? (
-            <p className="text-sm text-muted">{items.length === 0 ? "Sin notificaciones" : "Ninguna con este filtro"}</p>
+            <p className="text-sm text-muted">{emptyLine(items.length, motivo, counts?.all ?? null)}</p>
           ) : (
             <ul className="space-y-2">
               {shown.map((row) => {
                 const item = items.find((entry) => entry.key === row.key);
                 if (!item) return null;
                 return (
-                  <li key={item.key} className="rounded-lg border border-line px-3 py-2 text-sm">
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="font-medium">{item.labels.title}{item.seen ? "" : " · nueva"}</p>
-                      <span className="shrink-0 text-xs text-muted">{item.labels.when}</span>
-                    </div>
-                    <p className="mt-1 text-muted">{item.labels.body}</p>
-                    {item.labels.amount ? <p className="mt-1 tabular-nums">{item.labels.amount}</p> : null}
-                    <div className="mt-2 flex gap-2">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        disabled={item.labels.destination === "none"}
-                        onClick={() => onOpenThread?.({ creatorId, fanKey: item.fanKey, threadKey: item.threadKey })}
-                      >
-                        {item.labels.destination === "none" ? SIN_DATOS : "Abrir"}
-                      </Button>
-                      {!item.seen ? (
-                        <Button type="button" variant="ghost" onClick={() => void mark([item.key])}>Marcar leída</Button>
-                      ) : null}
-                    </div>
+                  <li key={item.key} className="rounded-lg border border-line px-3 py-2">
+                    <NotificationFanCard
+                      item={item}
+                      handle={item.fanHandle}
+                      avatarUrl={item.avatarUrl}
+                      lists={item.lists}
+                      renew={item.renewAuto}
+                      onChat={item.labels.destination === "none" ? undefined : () => onOpenThread?.({ creatorId, fanKey: item.fanKey, threadKey: item.threadKey })}
+                      onMark={fresh(item) ? () => void mark([item.key]) : undefined}
+                    />
                   </li>
                 );
               })}
@@ -218,10 +252,14 @@ function NotificationPanel({
                   const item = items?.find((entry) => entry.key === row.key);
                   if (!item) return null;
                   return (
-                    <li key={item.key} className="rounded-lg border border-line px-3 py-2 text-sm">
-                      <p className="font-medium">{item.labels.title}</p>
-                      <p className="mt-1 text-muted">{item.labels.body}</p>
-                      <p className="mt-1 text-xs text-muted">{SIN_DATOS}</p>
+                    <li key={item.key} className="rounded-lg border border-line px-3 py-2">
+                      <NotificationFanCard
+                        item={item}
+                        handle={item.fanHandle}
+                        avatarUrl={item.avatarUrl}
+                        lists={item.lists}
+                        renew={item.renewAuto}
+                      />
                     </li>
                   );
                 })}
@@ -250,5 +288,50 @@ function asRecord(creatorId: string, item: NotificationListItem): NotificationRe
     occurredAt: item.occurredAt,
     pending: item.pending,
     seenAt: item.seen ? item.occurredAt ?? item.key : null,
+    ofUnread: item.ofUnread,
   };
+}
+
+function fresh(item: NotificationListItem): boolean {
+  if (item.seen) return false;
+  return item.ofUnread !== false;
+}
+
+function pillCount(counts: NotificationCounts | null, id: NotificationTab): string {
+  if (!counts || counts[id] == null) return SIN_DATOS;
+  return String(counts[id]);
+}
+
+function bellLabel(bell: { count: number | null; source: "onlyfans" | "fanlink" }, motivo: string | null): string {
+  const where = bell.source === "onlyfans" ? "OnlyFans" : "Fanlink";
+  if (bell.count == null) return `Notificaciones de ${where}, ${motivo && motivo !== "ok" ? motivoVisible(motivo) : SIN_DATOS}`;
+  return `Notificaciones de ${where}, ${bell.count} sin leer`;
+}
+
+function statusLine(motivo: string | null, syncedAt: string | null): string {
+  if (motivo && motivo !== "ok") return motivoVisible(motivo);
+  if (!syncedAt) return SIN_DATOS;
+  return "centro de notificaciones de esta cuenta";
+}
+
+function emptyLine(stored: number, motivo: string | null, unread: number | null): string {
+  if (motivo && motivo !== "ok" && motivo !== "sin notificaciones") return motivoVisible(motivo);
+  if (stored === 0 && unread != null && unread > 0) return "No se pudo leer";
+  if (motivo === "sin notificaciones" || stored === 0) return "Sin notificaciones";
+  return "Ninguna con este filtro";
+}
+
+function motivoVisible(motivo: string): string {
+  switch (motivo) {
+    case "firma rechazada":
+      return "Firma rechazada";
+    case "no se pudo leer":
+      return "No se pudo leer";
+    case "sin notificaciones":
+      return "Sin notificaciones";
+    case "sesión caída":
+      return "Sesión caída";
+    default:
+      return motivo.startsWith("se omite") ? motivo : "No se pudo leer";
+  }
 }

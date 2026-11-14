@@ -36,6 +36,7 @@ import type { MetricPeriod } from "@/lib/creator-metrics";
 import { formatCents } from "@/lib/format";
 import { listCreatorSessions, listDashboard } from "@/lib/of-sessions";
 import { useOfReads } from "@/lib/use-of-reads";
+import { rememberOpenThread } from "@/lib/open-thread";
 
 export function DashboardPage() {
   const creators = useCrm((s) => s.creators);
@@ -150,6 +151,7 @@ export function DashboardPage() {
               creatorId={selected}
               onOpenThread={(target) => {
                 setCreator(target.creatorId);
+                rememberOpenThread(target);
                 void navigate({ to: "/mensajes" });
               }}
             />

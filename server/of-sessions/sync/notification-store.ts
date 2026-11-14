@@ -12,6 +12,7 @@ import {
   NOTIFICATION_PAGE_SIZE,
   NOTIFICATION_RETENTION_DAYS,
   type ParsedNotification,
+  type NotificationCounts,
   type NotificationRecord,
 } from "../../../src/lib/notifications.ts";
 
@@ -30,27 +31,39 @@ const ORIGIN = "onlyfans";
 export async function saveNotificationRead(
   sql: NotificationSql,
   creatorId: string,
-  read: { items: ParsedNotification[]; reason: string | null; captured: boolean },
+  read: {
+    items: ParsedNotification[];
+    reason: string | null;
+    captured: boolean;
+    counts?: NotificationCounts | null;
+    status?: number | null;
+    motivo?: string | null;
+  },
   now = new Date(),
 ): Promise<void> {
   const syncedAt = now.toISOString();
-  const failed = !read.captured && Boolean(read.reason);
+  const failed = !read.captured && Boolean(read.reason || read.motivo);
+  const motivo = read.motivo ?? read.reason;
   await sql.query(
-    `insert into of_notification_sync (creator_id, last_attempt_at, consecutive_failures, last_status, last_reason)
-     values ($1, $2, $3, $4, $5)
+    `insert into of_notification_sync (
+       creator_id, last_attempt_at, consecutive_failures, last_status, last_reason, unread_counts, last_http_status
+     ) values ($1, $2, $3, $4, $5, $6::jsonb, $7)
      on conflict (creator_id) do update set
        last_attempt_at = excluded.last_attempt_at,
        consecutive_failures = case when $4 = 'ok' then 0 else of_notification_sync.consecutive_failures + 1 end,
        last_status = excluded.last_status,
-       last_reason = excluded.last_reason`,
-    [creatorId, syncedAt, failed ? 1 : 0, failed ? "error" : "ok", read.reason],
+       last_reason = excluded.last_reason,
+       unread_counts = coalesce(excluded.unread_counts, of_notification_sync.unread_counts),
+       last_http_status = coalesce(excluded.last_http_status, of_notification_sync.last_http_status)`,
+    [creatorId, syncedAt, failed ? 1 : 0, failed ? "error" : "ok", motivo, read.counts ? JSON.stringify(read.counts) : null, read.status ?? null],
   );
   for (const item of read.items) {
     await sql.query(
       `insert into of_notification (
          creator_id, notification_key, kind, body, fan_key, fan_name, thread_key,
-         amount_cents, occurred_at, pending, first_seen_at, synced_at, origin
-       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+         amount_cents, occurred_at, pending, first_seen_at, synced_at, origin, of_unread,
+         fan_handle, avatar_url, fan_lists, renew_auto, fan_seen_at, post_ref, post_link, post_text
+       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
        on conflict (creator_id, notification_key) do update set
          kind = case
            when of_notification.kind in ('agency', 'other')
@@ -68,7 +81,16 @@ export async function saveNotificationRead(
          amount_cents = coalesce(excluded.amount_cents, of_notification.amount_cents),
          occurred_at = coalesce(excluded.occurred_at, of_notification.occurred_at),
          pending = of_notification.pending or excluded.pending,
-         synced_at = excluded.synced_at`,
+         synced_at = excluded.synced_at,
+         of_unread = coalesce(excluded.of_unread, of_notification.of_unread),
+         fan_handle = coalesce(excluded.fan_handle, of_notification.fan_handle),
+         avatar_url = coalesce(excluded.avatar_url, of_notification.avatar_url),
+         fan_lists = coalesce(excluded.fan_lists, of_notification.fan_lists),
+         renew_auto = coalesce(excluded.renew_auto, of_notification.renew_auto),
+         fan_seen_at = coalesce(excluded.fan_seen_at, of_notification.fan_seen_at),
+         post_ref = coalesce(excluded.post_ref, of_notification.post_ref),
+         post_link = coalesce(excluded.post_link, of_notification.post_link),
+         post_text = coalesce(excluded.post_text, of_notification.post_text)`,
       [
         creatorId,
         item.key,
@@ -83,8 +105,20 @@ export async function saveNotificationRead(
         syncedAt,
         syncedAt,
         ORIGIN,
+        item.ofUnread ?? null,
+        item.fanHandle ?? null,
+        item.avatarUrl ?? null,
+        listsText(item.lists),
+        item.renewAuto ?? null,
+        item.fanSeenAt ?? null,
+        item.postRef ?? null,
+        item.postLink ?? null,
+        item.postText ?? null,
       ],
     );
+  }
+  if (read.counts?.all === 0) {
+    await sql.query("update of_notification set of_unread = false where creator_id = $1", [creatorId]);
   }
   const cutoff = new Date(now.getTime() - NOTIFICATION_RETENTION_DAYS * 86_400_000).toISOString();
   await sql.query(
@@ -150,9 +184,20 @@ export async function listNotificationRows(
     occurred_at: Date | string | null;
     pending: boolean | string;
     seen_at: Date | string | null;
+    of_unread: boolean | string | null;
+    fan_handle: string | null;
+    avatar_url: string | null;
+    fan_lists: string | null;
+    renew_auto: boolean | string | null;
+    fan_seen_at: Date | string | null;
+    post_ref: string | null;
+    post_link: string | null;
+    post_text: string | null;
   }>(
     `select n.notification_key, n.kind, n.body, n.fan_key, n.fan_name, n.thread_key,
-            n.amount_cents, n.occurred_at, n.pending, s.seen_at
+            n.amount_cents, n.occurred_at, n.pending, s.seen_at, n.of_unread,
+            n.fan_handle, n.avatar_url, n.fan_lists, n.renew_auto, n.fan_seen_at, n.post_ref,
+            n.post_link, n.post_text
      from of_notification n
      left join of_notification_seen s
        on s.creator_id = n.creator_id
@@ -181,6 +226,15 @@ export async function listNotificationRows(
         occurredAt: asIso(row.occurred_at),
         pending: row.pending === true || row.pending === "t" || row.pending === "true",
         seenAt: asIso(row.seen_at),
+        ofUnread: row.of_unread == null ? null : row.of_unread === true || row.of_unread === "t" || row.of_unread === "true",
+        fanHandle: row.fan_handle,
+        avatarUrl: row.avatar_url,
+        lists: listsOf(row.fan_lists),
+        renewAuto: boolOrNull(row.renew_auto),
+        fanSeenAt: asIso(row.fan_seen_at),
+        postRef: row.post_ref,
+        postLink: row.post_link,
+        postText: row.post_text,
       },
     ];
   });
@@ -190,14 +244,41 @@ export async function listNotificationRows(
   return { rows: page, nextCursor };
 }
 
-export async function notificationSyncedAt(sql: NotificationSql, creatorId: string): Promise<string | null> {
-  const rows = await sql.query<{ last_attempt_at: Date | string | null; last_status: string }>(
-    "select last_attempt_at, last_status from of_notification_sync where creator_id = $1",
+export type NotificationSyncState = {
+  syncedAt: string | null;
+  motivo: string | null;
+  status: number | null;
+  counts: NotificationCounts | null;
+  ok: boolean;
+};
+
+export async function notificationSyncState(sql: NotificationSql, creatorId: string): Promise<NotificationSyncState> {
+  const rows = await sql.query<{
+    last_attempt_at: Date | string | null;
+    last_status: string;
+    last_reason: string | null;
+    last_http_status: number | string | null;
+    unread_counts: NotificationCounts | string | null;
+  }>(
+    "select last_attempt_at, last_status, last_reason, last_http_status, unread_counts from of_notification_sync where creator_id = $1",
     [creatorId],
   );
   const row = rows[0];
-  if (!row || row.last_status !== "ok") return null;
-  return asIso(row.last_attempt_at);
+  if (!row) return { syncedAt: null, motivo: null, status: null, counts: null, ok: false };
+  const ok = row.last_status === "ok";
+  return {
+    syncedAt: asIso(row.last_attempt_at),
+    motivo: row.last_reason,
+    status: row.last_http_status == null ? null : Number(row.last_http_status),
+    counts: ok ? asCounts(row.unread_counts) : null,
+    ok,
+  };
+}
+
+export async function notificationSyncedAt(sql: NotificationSql, creatorId: string): Promise<string | null> {
+  const state = await notificationSyncState(sql, creatorId);
+  if (!state.ok) return null;
+  return state.syncedAt;
 }
 
 export async function listNotificationMeta(sql: NotificationSql): Promise<NotificationSyncMeta[]> {
@@ -218,15 +299,29 @@ export async function notificationPageFor(
   cursor?: string | null,
 ) {
   if (!canReadCreatorNotifications(access, creatorId)) {
-    return { role: access.role, syncedAt: null as string | null, items: [] as NotificationListRow[], nextCursor: null as string | null };
+    return {
+      role: access.role,
+      syncedAt: null as string | null,
+      items: [] as NotificationListRow[],
+      nextCursor: null as string | null,
+      counts: null as NotificationCounts | null,
+      motivo: null as string | null,
+      status: null as number | null,
+      fanlinkUnread: null as number | null,
+    };
   }
-  const [page, syncedAt] = await Promise.all([
+  const [page, sync, fanlinkUnread] = await Promise.all([
     listNotificationRows(sql, creatorId, access.userId, { cursor, role: access.role }),
-    notificationSyncedAt(sql, creatorId),
+    notificationSyncState(sql, creatorId),
+    countFanlinkUnread(sql, creatorId, access.userId, access.role),
   ]);
   return {
     role: access.role,
-    syncedAt,
+    syncedAt: sync.ok ? sync.syncedAt : null,
+    counts: sync.counts,
+    motivo: sync.motivo,
+    status: sync.status,
+    fanlinkUnread: await fanlinkBubble(sql, creatorId, sync, fanlinkUnread),
     nextCursor: page.nextCursor,
     items: page.rows.flatMap((row) => {
       const labels = notificationLabels(row, access.role);
@@ -244,6 +339,15 @@ export async function notificationPageFor(
           occurredAt: row.occurredAt,
           pending: row.pending,
           seen: Boolean(row.seenAt),
+          ofUnread: row.ofUnread ?? null,
+          fanHandle: row.fanHandle ?? null,
+          avatarUrl: row.avatarUrl ?? null,
+          lists: row.lists ?? null,
+          renewAuto: row.renewAuto ?? null,
+          fanSeenAt: row.fanSeenAt ?? null,
+          postRef: row.postRef ?? null,
+          postLink: row.postLink ?? null,
+          postText: row.postText ?? null,
           labels,
         },
       ];
@@ -263,8 +367,128 @@ export type NotificationListRow = {
   occurredAt: string | null;
   pending: boolean;
   seen: boolean;
+  ofUnread: boolean | null;
+  fanHandle: string | null;
+  avatarUrl: string | null;
+  lists: string[] | null;
+  renewAuto: boolean | null;
+  fanSeenAt: string | null;
+  postRef: string | null;
+  postLink: string | null;
+  postText: string | null;
   labels: NonNullable<ReturnType<typeof notificationLabels>>;
 };
+
+/** Un 429 no borra el total si ya hay avisos guardados. Otra caída, sin lista, sigue en null. */
+async function fanlinkBubble(
+  sql: NotificationSql,
+  creatorId: string,
+  sync: NotificationSyncState,
+  unread: number,
+): Promise<number | null> {
+  if (sync.ok) return unread;
+  if (sync.status !== 429) return null;
+  const stored = await sql.query<{ n: number }>(
+    "select 1 as n from of_notification where creator_id = $1 limit 1",
+    [creatorId],
+  );
+  return stored.length > 0 ? unread : null;
+}
+
+/** No leídas de Fanlink en toda la cuenta, no solo la página cargada. */
+export async function countFanlinkUnread(
+  sql: NotificationSql,
+  creatorId: string,
+  userId: string,
+  role: "owner" | "member",
+): Promise<number> {
+  const kinds = role === "member" ? chatterVisibleKinds() : [...NOTIFICATION_KINDS];
+  const rows = await sql.query<{ n: string | number }>(
+    `select count(*)::int as n
+     from of_notification n
+     left join of_notification_seen s
+       on s.creator_id = n.creator_id
+      and s.notification_key = n.notification_key
+      and s.user_id = $2
+     where n.creator_id = $1
+       and n.kind = any($3::text[])
+       and s.seen_at is null
+       and n.of_unread is distinct from false`,
+    [creatorId, userId, kinds],
+  );
+  return Number(rows[0]?.n ?? 0);
+}
+
+function boolOrNull(value: boolean | string | null): boolean | null {
+  if (value == null) return null;
+  if (value === true || value === "t" || value === "true") return true;
+  if (value === false || value === "f" || value === "false") return false;
+  return null;
+}
+
+function listsText(lists: string[] | null | undefined): string | null {
+  if (lists == null) return null;
+  return lists.join("\n");
+}
+
+function listsOf(value: string | null): string[] | null {
+  if (value == null) return null;
+  if (value === "") return [];
+  return value.split("\n").filter((item) => item.length > 0);
+}
+
+function asCounts(value: NotificationCounts | string | null): NotificationCounts | null {
+  if (!value) return null;
+  const parsed = typeof value === "string" ? safeJson(value) : value;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const raw = parsed as Partial<Record<keyof NotificationCounts, unknown>>;
+  const counts: NotificationCounts = {
+    all: countOrNull(raw.all),
+    subscriptions: countOrNull(raw.subscriptions),
+    purchases: countOrNull(raw.purchases),
+    tips: countOrNull(raw.tips),
+    tags: countOrNull(raw.tags),
+    comments: countOrNull(raw.comments),
+    mentions: countOrNull(raw.mentions),
+    likes: countOrNull(raw.likes),
+    promotions: countOrNull(raw.promotions),
+    onlyfans: countOrNull(raw.onlyfans),
+  };
+  return Object.values(counts).some((item) => item != null) ? counts : null;
+}
+
+function countOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : null;
+}
+
+function safeJson(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+export async function markableNotifications(
+  sql: NotificationSql,
+  access: { userId: string; role: "owner" | "member"; creatorIds: string[] },
+  creatorId: string,
+  keys: string[] | null,
+): Promise<Array<{ key: string; kind: NotificationRecord["kind"] }>> {
+  if (!canReadCreatorNotifications(access, creatorId)) {
+    throw new WorkspaceAccessError("No tienes esa cuenta.");
+  }
+  const rows = keys == null
+    ? await sql.query<{ notification_key: string; kind: string }>(
+      "select notification_key, kind from of_notification where creator_id = $1 limit 500",
+      [creatorId],
+    ).then((found) => found.flatMap((row) => {
+      const kind = asKind(row.kind);
+      return kind ? [{ key: row.notification_key, kind }] : [];
+    }))
+    : await notificationKinds(sql, creatorId, keys);
+  return rows.filter((row) => access.role === "owner" || !isOwnerOnlyKind(row.kind));
+}
 
 export async function markNotificationPage(
   sql: NotificationSql,

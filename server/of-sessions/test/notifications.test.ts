@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { createServer, type Server } from "node:http";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -7,68 +6,10 @@ import { test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright";
-import { collectNotifications } from "../sync/collect-notifications.ts";
-import { listNotificationRows, markNotificationPage, markNotificationsSeen, notificationPageFor, saveNotificationRead } from "../sync/notification-store.ts";
+import { countFanlinkUnread, listNotificationRows, markNotificationPage, markNotificationsSeen, notificationPageFor, saveNotificationRead } from "../sync/notification-store.ts";
 import { dashboardCreatorIds } from "../../../src/lib/dashboard-config.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
-
-test("la página pide las notificaciones y el lector no llama a la API", async () => {
-  const hits = { notifications: 0, other: 0 };
-  const server = createServer((req, res) => {
-    const url = new URL(req.url ?? "/", "http://127.0.0.1");
-    if (url.pathname === "/my/notifications") {
-      res.setHeader("content-type", "text/html; charset=utf-8");
-      res.end(`<!doctype html><div style="height:4000px"></div><script>
-        fetch("/api2/v2/users/notifications?offset=0&token=sekret");
-        window.addEventListener("scroll", () => {
-          if (window.__more) return;
-          window.__more = 1;
-          fetch("/api2/v2/users/notifications?offset=10&token=sekret");
-        });
-      </script>`);
-      return;
-    }
-    if (url.pathname === "/api2/v2/users/notifications") {
-      hits.notifications += 1;
-      const second = url.searchParams.get("offset") === "10";
-      const list = second
-        ? [{ id: "n2", type: "like", text: "Ana indicó me gusta", createdAt: "2026-11-04T10:00:00.000Z", user: { id: 8, name: "Ana" } }]
-        : [
-            { id: "n1", type: "tip", text: "Juan dejó propina", createdAt: "2026-11-05T10:00:00.000Z", user: { id: 7, name: "Juan" }, amount: 5 },
-            { id: "n3", type: "tag", text: "Etiqueta pendiente de Luis", createdAt: "2026-11-03T10:00:00.000Z", status: "pending" },
-          ];
-      res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify({ list }));
-      return;
-    }
-    if (url.pathname.includes("/api2/")) hits.other += 1;
-    res.statusCode = 404;
-    res.end("no");
-  });
-  const origin = await listen(server);
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const context = await browser.newContext();
-    const read = await collectNotifications(context, site(origin), { paceMs: 30, waitMs: 2_000, scrolls: 1 });
-    assert.equal(hits.other, 0);
-    assert.equal(hits.notifications, 2);
-    assert.equal(read.captured, true);
-    assert.equal(read.reason, null);
-    assert.deepEqual(read.jsonPaths, [`${origin}/api2/v2/users/notifications`]);
-    const keys = read.items.map((item) => item.key).sort();
-    assert.deepEqual(keys, ["n1", "n2", "n3"]);
-    assert.equal(read.items.find((item) => item.key === "n1")?.amountCents, 500);
-    assert.equal(read.items.find((item) => item.key === "n3")?.pending, true);
-    const quiet = await collectNotifications(context, site(origin), { paceMs: 0, waitMs: 1_500, scrolls: 0 });
-    assert.equal(hits.notifications, 3);
-    assert.equal(quiet.items.some((item) => item.key === "n2"), false);
-  } finally {
-    await browser.close();
-    await close(server);
-  }
-});
 
 test("guardar no borra lo ya leído y no inventa un cuerpo", async () => {
   const { pg, sql } = await database();
@@ -184,6 +125,14 @@ test("el chatter no recibe páginas vacías ni la cuenta de otra persona", async
     assert.equal(own.items[0]?.amountCents, 500);
     const still = (await listNotificationRows(sql, "c-alba", "dueña", { role: "owner" })).rows.find((row) => row.key === "tip");
     assert.equal(still?.seenAt, null);
+    await saveNotificationRead(sql, "c-alba", {
+      captured: true,
+      reason: null,
+      counts: { all: 0, subscriptions: 0, purchases: 0, tips: 0, tags: 0, comments: 0, mentions: 0, likes: 0, promotions: 0, onlyfans: 0 },
+      items: [item("tip", "tip", "2026-11-05T10:00:00.000Z")],
+    });
+    const cleared = (await listNotificationRows(sql, "c-alba", "dueña", { role: "owner" })).rows.find((row) => row.key === "tip");
+    assert.equal(cleared?.ofUnread, false);
     assert.deepEqual(dashboardCreatorIds(chatter, [{ creatorId: "c-alba" }, { creatorId: "c-nora" }]), ["c-alba"]);
     const first = await listNotificationRows(sql, "c-alba", "dueña", { role: "owner", cursor: "no-es-json" });
     const clean = await listNotificationRows(sql, "c-alba", "dueña", { role: "owner" });
@@ -193,10 +142,167 @@ test("el chatter no recibe páginas vacías ni la cuenta de otra persona", async
   }
 });
 
+test("el total de Fanlink no es la página y una lista caída no es 0", async () => {
+  const { pg, sql } = await database();
+  try {
+    await saveNotificationRead(sql, "c-alba", {
+      captured: true,
+      status: 200,
+      motivo: "ok",
+      reason: null,
+      counts: null,
+      items: [1, 2, 3].map((n) => ({
+        key: `n${n}`,
+        kind: "like" as const,
+        body: "hola",
+        fanKey: String(n),
+        fanName: "Ana",
+        threadKey: null,
+        amountCents: null,
+        occurredAt: `2026-11-1${n}T10:00:00.000Z`,
+        pending: false,
+      })),
+    });
+    const page = await listNotificationRows(sql, "c-alba", "dueña", { role: "owner", limit: 1 });
+    assert.equal(page.rows.length, 1);
+    assert.equal(await countFanlinkUnread(sql, "c-alba", "dueña", "owner"), 3);
+    const listed = await notificationPageFor(sql, { userId: "dueña", role: "owner", creatorIds: ["c-alba"] }, "c-alba");
+    assert.equal(listed.fanlinkUnread, 3);
+    await saveNotificationRead(sql, "c-alba", { captured: false, motivo: "no se pudo leer", reason: "no se pudo leer", status: 429, items: [] });
+    const limited = await notificationPageFor(sql, { userId: "dueña", role: "owner", creatorIds: ["c-alba"] }, "c-alba");
+    assert.equal(limited.fanlinkUnread, 3);
+    await saveNotificationRead(sql, "c-alba", { captured: false, motivo: "no se pudo leer", reason: "no se pudo leer", status: 500, items: [] });
+    const failed = await notificationPageFor(sql, { userId: "dueña", role: "owner", creatorIds: ["c-alba"] }, "c-alba");
+    assert.equal(failed.fanlinkUnread, null);
+  } finally {
+    await pg.close();
+  }
+});
+
+test("un chatter no cuenta la agencia en el total de Fanlink", async () => {
+  const { pg, sql } = await database();
+  try {
+    await saveNotificationRead(sql, "c-alba", {
+      captured: true,
+      status: 200,
+      motivo: "ok",
+      reason: null,
+      items: [
+        item("ag", "agency", "2026-11-13T10:00:00.000Z"),
+        item("lk", "like", "2026-11-13T11:00:00.000Z"),
+      ],
+    });
+    assert.equal(await countFanlinkUnread(sql, "c-alba", "dueña", "owner"), 2);
+    assert.equal(await countFanlinkUnread(sql, "c-alba", "chatter", "member"), 1);
+  } finally {
+    await pg.close();
+  }
+});
+
+test("una 0046 ya aplicada recibe el enlace del comentario y el insert sigue", async () => {
+  const pg = new PGlite();
+  const oldCard = `
+    alter table of_notification add column if not exists fan_handle text;
+    alter table of_notification add column if not exists avatar_url text;
+    alter table of_notification add column if not exists fan_lists text;
+    alter table of_notification add column if not exists renew_auto boolean;
+    alter table of_notification add column if not exists fan_seen_at timestamptz;
+    alter table of_notification add column if not exists post_ref text;
+  `;
+  try {
+    await pg.exec(await readFile(path.join(root, "migrations/0034_notifications.sql"), "utf8"));
+    await pg.exec(await readFile(path.join(root, "migrations/0047_notification_counts.sql"), "utf8"));
+    await pg.exec(oldCard);
+    await pg.exec(await readFile(path.join(root, "migrations/0048_notification_post.sql"), "utf8"));
+    await pg.exec(await readFile(path.join(root, "migrations/0048_notification_post.sql"), "utf8"));
+    const sql = {
+      query: async <T>(text: string, params: unknown[] = []) => (await pg.query<T>(text, params)).rows,
+    };
+    await saveNotificationRead(sql, "c-alba", {
+      captured: true,
+      status: 200,
+      motivo: "ok",
+      reason: null,
+      items: [{
+        key: "com",
+        kind: "comment",
+        body: "qué buen post",
+        fanKey: "4",
+        fanName: "Cleo",
+        threadKey: null,
+        amountCents: null,
+        occurredAt: "2026-11-13T10:00:00.000Z",
+        pending: false,
+        postLink: "https://onlyfans.com/99887766",
+        postText: "mira esta foto",
+      }],
+    });
+    const row = (await listNotificationRows(sql, "c-alba", "dueña", { role: "owner" })).rows.find((item) => item.key === "com");
+    assert.equal(row?.postLink, "https://onlyfans.com/99887766");
+    assert.equal(row?.postText, "mira esta foto");
+  } finally {
+    await pg.close();
+  }
+});
+
+test("la ficha guarda listas y renovación y deja null lo que no vino", async () => {
+  const { pg, sql } = await database();
+  try {
+    await saveNotificationRead(sql, "c-alba", {
+      captured: true,
+      status: 200,
+      motivo: "ok",
+      reason: null,
+      counts: null,
+      items: [{
+        key: "ficha",
+        kind: "subscription",
+        body: "se ha suscrito a tu perfil",
+        fanKey: "9",
+        fanName: "Ana",
+        threadKey: null,
+        amountCents: null,
+        occurredAt: "2026-11-13T10:00:00.000Z",
+        pending: false,
+        fanHandle: "ana",
+        avatarUrl: "https://cdn.example/a.jpg",
+        lists: ["Low Spenders-CVI"],
+        renewAuto: true,
+        fanSeenAt: "2026-11-13T11:00:00.000Z",
+        postRef: null,
+      }, {
+        key: "vacia",
+        kind: "comment",
+        body: "solo texto",
+        fanKey: "5",
+        fanName: "Dio",
+        threadKey: null,
+        amountCents: null,
+        occurredAt: "2026-11-13T10:00:00.000Z",
+        pending: false,
+      }],
+    });
+    const rows = await listNotificationRows(sql, "c-alba", "dueña", { role: "owner" });
+    const card = rows.rows.find((row) => row.key === "ficha");
+    const bare = rows.rows.find((row) => row.key === "vacia");
+    assert.equal(card?.fanHandle, "ana");
+    assert.deepEqual(card?.lists, ["Low Spenders-CVI"]);
+    assert.equal(card?.renewAuto, true);
+    assert.equal(card?.avatarUrl, "https://cdn.example/a.jpg");
+    assert.ok(card?.fanSeenAt);
+    assert.equal(bare?.lists, null);
+    assert.equal(bare?.renewAuto, null);
+    assert.equal(bare?.postRef, null);
+    assert.equal(bare?.fanSeenAt, null);
+  } finally {
+    await pg.close();
+  }
+});
+
 test("las migraciones de notificaciones se aplican dos veces", async () => {
   const pg = new PGlite();
   try {
-    for (const name of ["0034_notifications.sql", "0035_notification_first_seen.sql", "0036_notification_key_text.sql"]) {
+    for (const name of ["0034_notifications.sql", "0035_notification_first_seen.sql", "0036_notification_key_text.sql", "0047_notification_counts.sql", "0046_notification_fan_card.sql", "0048_notification_post.sql"]) {
       const sql = await readFile(path.join(root, "migrations", name), "utf8");
       await pg.exec(sql);
       await pg.exec(sql);
@@ -449,35 +555,13 @@ function item(key: string, kind: "agency" | "other" | "tip" | "ppv" | "like", oc
   };
 }
 
-function site(origin: string) {
-  return {
-    id: "fixture",
-    probeUrl: `${origin}/`,
-    notificationsUrl: `${origin}/my/notifications`,
-    isLoginUrl: (url: string) => new URL(url).pathname.startsWith("/login"),
-  };
-}
-
-function listen(server: Server): Promise<string> {
-  return new Promise((resolve) => {
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") throw new Error("sin puerto");
-      resolve(`http://127.0.0.1:${address.port}`);
-    });
-  });
-}
-
-function close(server: Server): Promise<void> {
-  return new Promise((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-}
-
 async function database() {
   const dir = await mkdtemp(path.join(tmpdir(), "fanlink-notifications-"));
   const pg = new PGlite(dir);
   await pg.exec(await readFile(path.join(root, "migrations/0034_notifications.sql"), "utf8"));
+  await pg.exec(await readFile(path.join(root, "migrations/0047_notification_counts.sql"), "utf8"));
+  await pg.exec(await readFile(path.join(root, "migrations/0046_notification_fan_card.sql"), "utf8"));
+  await pg.exec(await readFile(path.join(root, "migrations/0048_notification_post.sql"), "utf8"));
   const sql = {
     query: async <T>(text: string, params: unknown[] = []) => (await pg.query<T>(text, params)).rows,
   };

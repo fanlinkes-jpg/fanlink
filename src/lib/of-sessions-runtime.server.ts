@@ -22,6 +22,8 @@ import { parseAccountProxy, proxyLabel, readAccountProxy, removeAccountProxy, wr
 import { syncAssignments } from "../../server/of-sessions/metrics/assignments.ts";
 import { dashboardViewFor } from "../../server/of-sessions/metrics/dashboard.ts";
 import { apiListStep, passApiListAccounts, shouldReadApiList } from "../../server/of-sessions/sync/api-list-cycle.ts";
+import { passNotificationAccounts } from "../../server/of-sessions/sync/notification-cycle.ts";
+import type { NotificationPace } from "../../server/of-sessions/sync/api-list-pace.ts";
 import { accountPause, blockKind, listAccountPauses, noteAccountBlock } from "../../server/of-sessions/sync/backoff.ts";
 import { presentTeamMetrics } from "../../server/of-sessions/metrics/present-team.ts";
 import { creatorIdsForReads } from "@/lib/dashboard-config";
@@ -51,9 +53,8 @@ import { liveViewGate } from "../../server/of-sessions/live/desk.ts";
 import { issueLiveTicket } from "../../server/of-sessions/live/tickets.ts";
 import { listFanProfiles, saveFanProfile } from "../../server/of-sessions/sync/fan-profile.ts";
 import { listFanNotes, saveFanNote } from "../../server/of-sessions/sync/fan-note.ts";
-import { NOTIFICATION_INTERVAL_MIN } from "@/lib/notifications";
 import { intervalMinFromEnv, startSyncLoop, type ScheduleAccount } from "../../server/of-sessions/sync/schedule.ts";
-import { listNotificationMeta, saveNotificationRead } from "../../server/of-sessions/sync/notification-store.ts";
+import { saveNotificationRead } from "../../server/of-sessions/sync/notification-store.ts";
 import {
   listCreatorReads,
   listSyncMeta,
@@ -70,7 +71,7 @@ const globalRef = globalThis as typeof globalThis & {
   __ofSessionManager__?: Promise<SessionManager>;
   __ofSyncLoop__?: { stop: () => void };
   __ofChatLoop__?: { stop: () => void };
-  __ofNotificationLoop__?: { stop: () => void };
+  __ofNotificationLoop__?: boolean;
   __ofApiList__?: boolean;
 };
 
@@ -227,6 +228,7 @@ function accountForCreator(creatorId: string): string | null {
 }
 
 const creatorAccounts = new Map<string, string>();
+const notificationPace = new Map<string, NotificationPace>();
 const creatorUsers = new Map<string, string | null>();
 
 export async function rememberCreatorAccounts(): Promise<void> {
@@ -372,44 +374,31 @@ function bootNotificationLoop(sessions: SessionManager): void {
   if (process.env.FANLINK_SYNC_ENABLED === "false") return;
   if (process.execArgv.includes("--test")) return;
   if (globalRef.__ofNotificationLoop__) return;
-  globalRef.__ofNotificationLoop__ = startSyncLoop({
-    intervalMin: async () => NOTIFICATION_INTERVAL_MIN,
-    inProgressIds: () => new Set(sessions.readingIds()),
-    accounts: () => notificationScheduleAccounts(sessions),
-    marginMinMs: 20_000,
-    marginMaxMs: 60_000,
-    firstDelayMs: 90_000,
-    sync: async (accountId) => {
-      const read = await sessions.readNotifications(accountId);
-      if (read.alreadyRunning) return;
-      if (read.loginRequired) await sessions.markLoginRequired(accountId);
-      const account = (await sessions.listAccounts()).find((item) => item.id === accountId);
-      if (!account?.creatorId) return;
-      await saveNotificationRead(await getSql(), account.creatorId, read);
-    },
-  });
-}
-
-async function notificationScheduleAccounts(sessions: SessionManager): Promise<ScheduleAccount[]> {
-  const [accounts, meta] = await Promise.all([sessions.listAccounts(), listNotificationMeta(await getSql())]);
-  const byCreator = new Map(meta.map((row) => [row.creatorId, row]));
-  const intervalMs = NOTIFICATION_INTERVAL_MIN * 60_000;
-  return accounts.flatMap((account) => {
-    if (!account.creatorId) return [];
-    const state = byCreator.get(account.creatorId);
-    const pause = accountPause(account.id);
-    return [
-      {
-        accountId: account.id,
-        creatorId: account.creatorId,
-        status: account.status,
-        identityState: account.identityState,
-        hasStorageState: account.hasStorageState,
-        consecutiveFailures: state?.consecutiveFailures ?? 0,
-        lastAttemptAt: pause ? new Date(pause.until - intervalMs).toISOString() : state?.lastAttemptAt ?? null,
-      },
-    ];
-  });
+  globalRef.__ofNotificationLoop__ = true;
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const skipNoted = new Set<string>();
+  void (async () => {
+    await sleep(5_000);
+    while (true) {
+      try {
+        await passNotificationAccounts({
+          accounts: await sessions.listAccounts(),
+          noted: skipNoted,
+          pace: notificationPace,
+          now: () => Date.now(),
+          read: (account) => sessions.readNotificationsDirect(account.id),
+          finish: async (account, read) => {
+            if (!account.creatorId) return;
+            await saveNotificationRead(await getSql(), account.creatorId, read);
+          },
+          onBlock: (accountId, reason) => noteAccountBlock(accountId, reason),
+        });
+      } catch {
+        console.info("[fanlink:notif] creator=- ruta=lista n=0 motivo=no se pudo leer status=");
+      }
+      await sleep(15_000);
+    }
+  })();
 }
 
 async function chatScheduleAccounts(sessions: SessionManager): Promise<ScheduleAccount[]> {
