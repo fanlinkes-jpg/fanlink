@@ -25,7 +25,6 @@ import { apiListStep, passApiListAccounts, shouldReadApiList } from "../../serve
 import { passNotificationAccounts } from "../../server/of-sessions/sync/notification-cycle.ts";
 import type { NotificationPace } from "../../server/of-sessions/sync/api-list-pace.ts";
 import { accountSessionNotices, deriveConnectedFromLastRead, SESSION_EXPIRED_LABEL, signedReadsBlocked } from "../../server/of-sessions/sync/session-link.ts";
-import { mergeOnlineAccounts } from "../../server/of-sessions/sync/online-fans.ts";
 import { accountPause, blockKind, listAccountPauses, noteAccountBlock } from "../../server/of-sessions/sync/backoff.ts";
 import { presentTeamMetrics } from "../../server/of-sessions/metrics/present-team.ts";
 import { creatorIdsForReads } from "@/lib/dashboard-config";
@@ -41,19 +40,20 @@ import { captureChatListPage, captureOlderMessages } from "../../server/of-sessi
 import { openWorkPage } from "../../server/of-sessions/sessions/work-page.ts";
 import { type VaultFile } from "../../server/of-sessions/sync/vault-listen.ts";
 import { readChatVaultView as readVaultPage, type VaultReadDeps } from "../../server/of-sessions/sync/vault-read.ts";
-import { ONLINE_FAN_CAP } from "@/lib/online-fan-row";
-import { fetchSignedOnlineFans, type OnlineFan } from "../../server/of-sessions/sync/online-fans.ts";
+import { fetchSignedOnlineFans } from "../../server/of-sessions/sync/online-fans.ts";
 import { sessionForApi } from "../../server/of-sessions/sync/of-chat-api.ts";
+import { withAccountApi } from "../../server/of-sessions/sync/api-list-pace.ts";
+import { bindSignedViews, listOnlineFansView, markChatOpenedView, readVisibleFanSpendView } from "../../server/of-sessions/sync/signed-views.ts";
+
+export { listOnlineFansView, markChatOpenedView, readVisibleFanSpendView };
 import { loadSignRules } from "../../server/of-sessions/sync/of-sign.ts";
 import { prepareVaultSend } from "../../server/of-sessions/sync/vault-store.ts";
-import { withAccountApi } from "../../server/of-sessions/sync/api-list-pace.ts";
-import { canSeeOnlineFans, cancelOnlineBroadcast, emptyOnlineBroadcast, onlineBroadcastGate, refuseOnlineBroadcast, sendOnlineBroadcast, visibleOnlineCreatorIds, type OnlineBroadcastResult } from "../../server/of-sessions/send/online-broadcast.ts";
+import { canSeeOnlineFans, cancelOnlineBroadcast, emptyOnlineBroadcast, onlineBroadcastGate, refuseOnlineBroadcast, sendOnlineBroadcast, type OnlineBroadcastResult } from "../../server/of-sessions/send/online-broadcast.ts";
 import { claimOnlineOutbound, finishOnlineOutbound, noteStaleOnlineSends, resolveStaleOnlineSend } from "../../server/of-sessions/send/online-claim.ts";
 import { normalizeFanMenuRequest, runFanMenuOnPage, type FanMenuResult } from "../../server/of-sessions/sync/fan-menu.ts";
 import { chatPageUrl } from "../../server/of-sessions/sync/chats.ts";
 import { sendPace } from "../../server/of-sessions/send/gate.ts";
 import { chatSendGate, publicSendReason, type SendAccount } from "../../server/of-sessions/send/gate.ts";
-import { markOpenedChat, markOpenRejected, markReadGate } from "../../server/of-sessions/sync/mark-read.ts";
 import type { SendChatHooks } from "../../server/of-sessions/send/chat-message.ts";
 import { composeChat } from "../../server/of-sessions/send/compose.ts";
 import { liveViewGate } from "../../server/of-sessions/live/desk.ts";
@@ -474,6 +474,8 @@ async function accessFor(userId: string) {
   const sql = await getSql();
   return ensureStaff(sql, userId, !authConfigured && userId === DEV_USER_ID);
 }
+
+bindSignedViews({ accessFor, sessions: getOfSessionManager, sql: getSql });
 
 function assertCreatorOperator(userIdAccess: Awaited<ReturnType<typeof accessFor>>, creatorId: string): void {
   if (!canOperateCreator(userIdAccess, creatorId, "equipo")) {
@@ -1058,59 +1060,6 @@ export async function readChatVaultView(
   });
 }
 
-export async function listOnlineFansView(userId: string, input: { creatorId: string }): Promise<{ fans: OnlineFan[]; reason: string | null; notices: string[]; cap: number; send: { enabled: boolean; reason: string | null } }> {
-  const access = await accessFor(userId);
-  if (input.creatorId !== "all" && !canSeeOnlineFans(access, input.creatorId)) {
-    throw new WorkspaceAccessError("No tienes acceso para operar la sesión de esa creadora.");
-  }
-  if (input.creatorId === "all" && access.role !== "owner" && !access.perms.includes("mensajes")) {
-    return { fans: [], reason: "Sin datos", notices: [], cap: ONLINE_FAN_CAP, send: { enabled: false, reason: "Sin datos" } };
-  }
-  const sessions = await getOfSessionManager();
-  const accounts = await sessions.listAccounts();
-  const known = accounts.flatMap((account) => account.creatorId ? [account.creatorId] : []);
-  const wanted = visibleOnlineCreatorIds(access, input.creatorId, known);
-  if (wanted.length === 0) return { fans: [], reason: "Sin datos", notices: [], cap: ONLINE_FAN_CAP, send: { enabled: false, reason: "Sin datos" } };
-  await noteStaleOnlineSends(await getSql(), Date.now());
-  if (input.creatorId === "all") {
-    const reads = [];
-    for (const creatorId of wanted) {
-      const account = accounts.find((item) => item.creatorId === creatorId);
-      if (!account || signedReadsBlocked(account)) {
-        reads.push({ creatorId, fans: [], reason: SESSION_EXPIRED_LABEL, status: 401 });
-        continue;
-      }
-      const read = await sessions.readOnlineFans(account.id);
-      console.info(`[fanlink:online] cuenta=${creatorId} fans=${read.fans.length} motivo=${read.reason ?? "ok"} status=${read.status ?? "sin"}`);
-      reads.push({ creatorId, fans: read.fans, reason: read.reason, status: read.status });
-    }
-    const merged = mergeOnlineAccounts(reads);
-    const reason = merged.fans.length === 0
-      ? merged.notices[0] ?? reads.find((read) => read.reason)?.reason ?? "Nadie en línea"
-      : null;
-    return { fans: merged.fans, reason, notices: merged.notices, cap: ONLINE_FAN_CAP, send: { enabled: false, reason: "Elige una cuenta" } };
-  }
-  const account = accounts.find((item) => item.creatorId === input.creatorId);
-  if (!account) return { fans: [], reason: "Sin datos", notices: [], cap: ONLINE_FAN_CAP, send: { enabled: false, reason: "Sin datos" } };
-  const gate = onlineBroadcastGate(process.env, {
-    creatorId: account.creatorId,
-    accountId: account.id,
-    handle: account.identityHandle,
-    userId: account.identityUserId,
-    label: account.label,
-  });
-  const send = { enabled: gate.allowed, reason: gate.allowed ? null : gate.reason };
-  if (signedReadsBlocked(account)) {
-    return { fans: [], reason: SESSION_EXPIRED_LABEL, notices: [`${input.creatorId}: ${SESSION_EXPIRED_LABEL}`], cap: ONLINE_FAN_CAP, send };
-  }
-  const read = await sessions.readOnlineFans(account.id);
-  console.info(`[fanlink:online] cuenta=${input.creatorId} fans=${read.fans.length} motivo=${read.reason ?? "ok"} status=${read.status ?? "sin"}`);
-  const notices = read.status === 401 || read.reason === SESSION_EXPIRED_LABEL
-    ? [`${input.creatorId}: ${SESSION_EXPIRED_LABEL}`]
-    : [];
-  return { fans: read.fans, reason: read.reason, notices, cap: ONLINE_FAN_CAP, send };
-}
-
 export async function cancelOnlineBroadcastView(
   userId: string,
   input: { creatorId: string; batchId: string },
@@ -1231,49 +1180,6 @@ export async function runFanChatMenuView(userId: string, input: { creatorId: str
   }, { wait: true });
   if (!ran.ok) return { ok: false, reason: "OnlyFans está ocupado con otra lectura.", lists: [] };
   return ran.value;
-}
-
-export async function markChatOpenedView(userId: string, input: { creatorId: string; threadKey: string }): Promise<{ marked: boolean }> {
-  const access = await accessFor(userId);
-  if (access.role !== "owner" && !access.perms.includes("mensajes")) {
-    throw new WorkspaceAccessError("No tienes permiso para escribir.");
-  }
-  const creatorId = parseCreatorId(input.creatorId);
-  const sessions = await getOfSessionManager();
-  const account = (await sessions.listAccounts()).find((item) => item.creatorId === creatorId);
-  if (!account) return { marked: false };
-  if (markOpenRejected(account.identityState, accountPause(account.id) != null)) return { marked: false };
-  const fields = sendAccount(account);
-  if (!markReadGate(process.env.FANLINK_CHAT_MARK_READ, process.env.FANLINK_SEND_ALLOW_ACCOUNTS, fields).allowed) {
-    return { marked: false };
-  }
-  const epoch = sessions.sessionGeneration(account.id);
-  let state;
-  try {
-    state = await sessions.readStorageState(account.id);
-  } catch {
-    return { marked: false };
-  }
-  const auth = sessionForApi(state, Date.now());
-  if ("reason" in auth) return { marked: false };
-  const rules = await loadSignRules(fetch, Date.now());
-  const result = await markOpenedChat({
-    accountId: account.id,
-    creatorId,
-    threadKey: input.threadKey,
-    flag: process.env.FANLINK_CHAT_MARK_READ,
-    allowlist: process.env.FANLINK_SEND_ALLOW_ACCOUNTS,
-    account: fields,
-    sql: await getSql(),
-    fetch,
-    now: () => Date.now(),
-    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-    rules,
-    auth,
-    log: (line) => console.info(line),
-    onSessionRejected: () => sessions.noteApiSessionRejected(account.id, epoch),
-  });
-  return { marked: result.status != null && result.status >= 200 && result.status < 300 };
 }
 
 export async function loadOlderMessagesView(userId: string, input: { creatorId: string; threadKey: string }): Promise<{ ok: boolean }> {

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AtSign, Bell, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, RefreshCw, ScrollText, Send, Type } from "lucide-react";
-import { broadcastOnlineFans, cancelOnlineBroadcast, chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, markChatOpened, readChatVault, recordChatOutbound, resolveOnlineOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
+import { broadcastOnlineFans, cancelOnlineBroadcast, chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, markChatOpened, readChatVault, readVisibleFanSpend, recordChatOutbound, resolveOnlineOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
 import { OnlineFansPanel, type OnlineBroadcastPayload } from "@/features/online-fans-panel";
 import type { OnlineFanRow } from "@/lib/online-fan-row";
 import { unreadChatRow, unreadTotalFor } from "../../server/of-sessions/sync/unread-chats.ts";
@@ -31,6 +31,8 @@ import {
   type OutboundSend,
 } from "@/lib/send-queue";
 import { spendTone } from "@/lib/spend-tiers";
+import { rowSpendCents } from "@/lib/row-spend";
+import { FanSpendLabel } from "@/lib/fan-spend-label";
 import { useInboxSelection } from "@/lib/inbox-selection";
 import { ChatMediaPlayer } from "@/features/chat-media-player";
 import { VAULT_THUMB_MISSING, vaultMediaSrc } from "@/lib/chat-media";
@@ -197,6 +199,7 @@ export function RealChatsPage() {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [filter, setFilter] = useState<InboxPill>("todos");
+  const [fetchedSpend, setFetchedSpend] = useState<Record<string, number | null>>({});
   const [onlineOpen, setOnlineOpen] = useState(false);
   const [onlineBusy, setOnlineBusy] = useState(false);
   const [onlineFans, setOnlineFans] = useState<OnlineFanRow[]>([]);
@@ -474,6 +477,52 @@ export function RealChatsPage() {
   const selected = inbox.selected;
   const visible = inbox.visible;
   const fanCards = useChatFanCards(visible);
+  const spendAsked = useRef("");
+  const spendTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const [spendTick, setSpendTick] = useState(0);
+  const spendCreator = creatorId === "all" ? selected?.creatorId ?? null : creatorId;
+  const spendCardIds = visible.flatMap((thread) => {
+    if (!spendCreator || thread.creatorId !== spendCreator || !thread.fanKey) return [];
+    const card = chatFanCardFor(fanCards.fans, thread.creatorId, thread.fanKey)?.spentCents ?? null;
+    return card == null ? [] : [thread.fanKey];
+  });
+  const spendMissing = visible.flatMap((thread) => {
+    if (!spendCreator || thread.creatorId !== spendCreator || !thread.fanKey || !/^\d{1,20}$/.test(thread.fanKey)) return [];
+    const card = chatFanCardFor(fanCards.fans, thread.creatorId, thread.fanKey)?.spentCents ?? null;
+    const fetched = fetchedSpend[`${thread.creatorId}:${thread.fanKey}`];
+    if (rowSpendCents(thread.spentCents, card, fetched === undefined ? null : fetched) != null) return [];
+    if (fetched !== undefined) return [];
+    return [thread.fanKey];
+  });
+  const spendIds = [...new Set(spendMissing)].slice(0, 10).sort();
+  const spendKey = spendCreator ? `${spendCreator}:${spendIds.join(",")}:${[...new Set(spendCardIds)].sort().join(",")}` : "";
+  useEffect(() => {
+    if (!spendCreator || spendIds.length === 0) return;
+    if (spendAsked.current === spendKey) return;
+    spendAsked.current = spendKey;
+    const ids = spendIds;
+    const creator = spendCreator;
+    void readVisibleFanSpend({ data: { creatorId: creator, fanIds: ids, cardIds: spendCardIds } }).then((result) => {
+      if (result.retryAfterMs > 0) {
+        spendAsked.current = "";
+        if (spendTimer.current) clearTimeout(spendTimer.current);
+        spendTimer.current = setTimeout(() => setSpendTick((tick) => tick + 1), result.retryAfterMs);
+      }
+      setFetchedSpend((current) => {
+        const next = { ...current };
+        for (const id of ids) {
+          if (!(id in result.byFan)) continue;
+          next[`${creator}:${id}`] = result.byFan[id] ?? null;
+        }
+        return next;
+      });
+    }).catch(() => {
+      spendAsked.current = "";
+    });
+  }, [spendKey, spendTick]);
+  useEffect(() => () => {
+    if (spendTimer.current) clearTimeout(spendTimer.current);
+  }, []);
   const messages = (data?.messages ?? [])
     .filter((message) => message.creatorId === selected?.creatorId && message.threadKey === selected?.threadKey)
     .sort((left, right) => left.sentAt.localeCompare(right.sentAt));
@@ -1070,9 +1119,11 @@ export function RealChatsPage() {
                     ) : (
                       <span className="grid h-10 w-10 place-items-center rounded-full bg-[#eef2ff] text-sm">{fanTitle(thread).slice(0, 1)}</span>
                     )}
-                    <span className="text-[10px] font-medium" style={{ color: spendTone(thread.spentCents ?? chatFanCardFor(fanCards.fans, thread.creatorId, thread.fanKey)?.spentCents ?? null).color ?? "#6d7585" }}>
-                      {spendTone(thread.spentCents ?? chatFanCardFor(fanCards.fans, thread.creatorId, thread.fanKey)?.spentCents ?? null).label}
-                    </span>
+                    <FanSpendLabel
+                      thread={thread.spentCents}
+                      card={chatFanCardFor(fanCards.fans, thread.creatorId, thread.fanKey)?.spentCents ?? null}
+                      fetched={thread.fanKey ? fetchedSpend[`${thread.creatorId}:${thread.fanKey}`] ?? null : null}
+                    />
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-1">

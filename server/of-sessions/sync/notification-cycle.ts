@@ -1,5 +1,5 @@
 import type { NotificationPace } from "./api-list-pace.ts";
-import { planNotificationPull, withAccountChatReader } from "./api-list-pace.ts";
+import { planNotificationPull, withAccountApi } from "./api-list-pace.ts";
 import { accountPause } from "./backoff.ts";
 import { shouldReadApiList, type ApiListAccount } from "./api-list-cycle.ts";
 import { notificationLogLine, type CollectedNotifications } from "./of-notifications-api.ts";
@@ -39,7 +39,7 @@ export async function passNotificationAccounts<T extends ApiListAccount>(input: 
       log(notificationLogLine({ creatorId: account.creatorId ?? "-", route: "lista", count: 0, motivo: `se omite (${why})`, status: null }));
       continue;
     }
-    await withAccountChatReader(account.id, async () => {
+    await withAccountApi(account.id, async () => {
       const plan = planNotificationPull(input.pace.get(account.id), input.now());
       if (!plan.head) return;
       input.pace.set(account.id, plan.next);

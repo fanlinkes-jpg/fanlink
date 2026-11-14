@@ -69,6 +69,14 @@ export function useInboxSelection<T extends InboxThread>(input: {
     setSelectedId(firstId);
   }, [firstId]);
 
+  const threadIds = input.threads.map((thread) => thread.id).join("\0");
+  useEffect(() => {
+    if (!selectedId) return;
+    if (input.threads.some((thread) => thread.id === selectedId)) return;
+    pinned.current = true;
+    setSelectedId(null);
+  }, [selectedId, threadIds]);
+
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
   useEffect(() => {

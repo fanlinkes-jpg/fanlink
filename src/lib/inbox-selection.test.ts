@@ -169,6 +169,59 @@ test("la marca espera 800 ms a la vista y no ocupa el lector; salir o tapar la p
   }
 });
 
+test("al cambiar de cuenta se suelta el hilo fijado y no queda seleccionado", async () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  const posts: string[] = [];
+  const view = await mount({
+    threads: [row("a", 1, "2026-11-14T00:00:02.000Z"), row("b", 1, "2026-11-14T00:00:01.000Z")],
+    filter: "todos",
+    posts,
+  });
+  try {
+    assert.equal(text("selected"), "a");
+    await view.show({
+      threads: [row("c", 3, "2026-11-14T00:00:09.000Z"), row("d", 2, "2026-11-14T00:00:08.000Z")],
+      filter: "todos",
+      posts,
+    });
+    await act(async () => {
+      mock.timers.tick(MARK_SEEN_MS);
+    });
+    assert.equal(text("selected"), "");
+    assert.deepEqual(posts, []);
+  } finally {
+    await view.close();
+    mock.timers.reset();
+  }
+});
+
+test("abrir un aviso elige ese hilo y no marca los demás", async () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  const posts: string[] = [];
+  const view = await mount({
+    threads: [
+      row("a", 2, "2026-11-14T00:00:03.000Z"),
+      row("b", 4, "2026-11-14T00:00:02.000Z"),
+      row("n", 5, "2026-11-14T00:00:01.000Z"),
+    ],
+    filter: "todos",
+    posts,
+  });
+  try {
+    await act(async () => {
+      document.getElementById("go-n")?.click();
+    });
+    await act(async () => {
+      mock.timers.tick(MARK_SEEN_MS);
+    });
+    assert.equal(text("selected"), "n");
+    assert.deepEqual(posts, ["n"]);
+  } finally {
+    await view.close();
+    mock.timers.reset();
+  }
+});
+
 test("las flechas no cambian el hilo si el foco está en el compositor", async () => {
   mock.timers.enable({ apis: ["setTimeout"] });
   const posts: string[] = [];
@@ -225,6 +278,10 @@ function InboxBody(props: {
       id: "go-d",
       onClick: () => view.choose({ id: "d" }),
     }, "aviso"),
+    createElement("button", {
+      id: "go-n",
+      onClick: () => view.choose({ id: "n" }),
+    }, "notificación"),
     createElement("div", { id: "composer", contentEditable: "true", role: "textbox", suppressContentEditableWarning: true }, "hola"),
   );
 }

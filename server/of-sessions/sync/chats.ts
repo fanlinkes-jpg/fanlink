@@ -277,49 +277,7 @@ export function mergeMessages(current: ChatMessage[], incoming: ChatMessage[]): 
   return [...map.values()].slice(0, 200);
 }
 
-/** `users/list` es un mapa id → ficha, no un array. */
-/** Solo `totalSumm` (o el equivalente). Si no viene, null: no se suma el desglose ni se inventa un 0. */
-export function directorySpentCents(record: Record<string, unknown>): number | null {
-  const card = readFanSpend(record);
-  const source = nested(record.subscribedOnData) ?? nested(record.subscribedByData) ?? record;
-  const direct = money(source.totalSumm ?? source.spent ?? source.totalSpent);
-  if (direct == null) return null;
-  return card?.spentCents ?? direct;
-}
-
-export function directorySpendById(value: unknown): Map<string, number | null> {
-  const rows: Array<{ id: string; spentCents: number | null }> = [];
-  collectDirectorySpend(value, null, rows, 0);
-  const map = new Map<string, number | null>();
-  for (const row of rows) if (!map.has(row.id)) map.set(row.id, row.spentCents);
-  return map;
-}
-
-export function fillThreadSpend(
-  threads: ChatThread[],
-  spendById: ReadonlyMap<string, number | null>,
-): { threads: ChatThread[]; filled: number; stillNull: number } {
-  const pending = new Set(threads.flatMap((thread) => thread.spentCents == null && thread.fanKey ? [thread.fanKey] : []));
-  let filled = 0;
-  let stillNull = 0;
-  for (const id of pending) {
-    if (!spendById.has(id)) continue;
-    if (spendById.get(id) == null) stillNull += 1;
-    else filled += 1;
-  }
-  if (filled === 0) return { threads, filled, stillNull };
-  return {
-    filled,
-    stillNull,
-    threads: threads.map((thread) => {
-      if (thread.spentCents != null || !thread.fanKey) return thread;
-      const spend = spendById.get(thread.fanKey);
-      if (spend == null) return thread;
-      return { ...thread, spentCents: spend };
-    }),
-  };
-}
-
+/** `users/list` es un mapa id → ficha, no un array. No se usa para el gasto. */
 export function parseUsersDirectory(value: unknown): ChatUser[] {
   const rows: ChatUser[] = [];
   collectUsers(value, null, rows, 0);
@@ -746,8 +704,7 @@ function readFanSpend(
   const tipsCents = money(source.tipsSumm ?? source.tipsSum);
   const postsCents = money(source.postsSumm ?? source.postsSum);
   const messagesCents = money(source.messagesSumm ?? source.messagesSum);
-  const parts = [subscribesCents, tipsCents, postsCents, messagesCents].filter((value): value is number => value != null);
-  const spentCents = money(source.totalSumm ?? source.spent ?? source.totalSpent) ?? (parts.length ? parts.reduce((sum, value) => sum + value, 0) : null);
+  const spentCents = money(source.totalSumm ?? source.spent ?? source.totalSpent);
   const avatarUrl = clean(record.avatar, 400);
   const online = onlineFlag(record.isOnline) ?? onlineFlag(record.online);
   const subPriceCents = money(source.price ?? source.subscribePrice ?? source.regularPrice);
@@ -755,6 +712,7 @@ function readFanSpend(
   const renewRaw = source.autoRenew ?? source.renewedAuto ?? record.autoRenew;
   const renewAuto = renewRaw === true || renewRaw === false ? renewRaw : null;
   const card = { spentCents, subscribesCents, tipsCents, postsCents, messagesCents, avatarUrl, online, subPriceCents, subExpiresAt, renewAuto };
+  const parts = [subscribesCents, tipsCents, postsCents, messagesCents].filter((value) => value != null);
   if (spentCents == null && parts.length === 0 && !avatarUrl && online == null && subPriceCents == null && !subExpiresAt && renewAuto == null) return null;
   return card;
 }
@@ -855,36 +813,6 @@ function visibleText(value: unknown, max: number): string | null {
     .trim();
   if (!text) return null;
   return text.slice(0, max);
-}
-
-function collectDirectorySpend(
-  value: unknown,
-  fallbackId: string | null,
-  rows: Array<{ id: string; spentCents: number | null }>,
-  depth: number,
-): void {
-  if (!value || typeof value !== "object" || depth > 2 || rows.length > 500) return;
-  if (Array.isArray(value)) {
-    for (const item of value.slice(0, 500)) collectDirectorySpend(item, null, rows, depth + 1);
-    return;
-  }
-  const record = value as Record<string, unknown>;
-  const id = clean(record.id, 40) ?? fallbackId;
-  const spend = directorySpentCents(record);
-  const named = Boolean(handle(record.username ?? record.handle) || clean(record.name ?? record.displayName, 80) || clean(record.id, 40));
-  if (id && (named || spend != null || nested(record.subscribedOnData) || nested(record.subscribedByData))) {
-    rows.push({ id, spentCents: spend });
-    if (named || spend != null) return;
-  }
-  const nestedList = record.list ?? record.users ?? record.items;
-  if (Array.isArray(nestedList)) {
-    collectDirectorySpend(nestedList, null, rows, depth + 1);
-    return;
-  }
-  for (const [key, child] of Object.entries(record)) {
-    if (!child || typeof child !== "object" || Array.isArray(child)) continue;
-    collectDirectorySpend(child, /^\d+$/.test(key) ? key : null, rows, depth + 1);
-  }
 }
 
 function collectUsers(value: unknown, fallbackId: string | null, rows: ChatUser[], depth: number): void {
