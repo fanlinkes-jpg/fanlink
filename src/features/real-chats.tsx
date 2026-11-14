@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { AtSign, Bell, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, MessageCircle, RefreshCw, ScrollText, Send, Type } from "lucide-react";
 import { chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, readChatVault, recordChatOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
 import { unreadChatRow, unreadTotalFor } from "../../server/of-sessions/sync/unread-chats.ts";
+import { inboxPillCounts, matchesInboxPill, tipThreads, type InboxPill } from "../../server/of-sessions/sync/chat-pills.ts";
 import { listCreatorNotifications, markCreatorNotificationsRead, type NotificationListItem } from "@/lib/of-notifications";
 import { kindLabel } from "@/lib/notifications";
 import { useCrm, type VaultItem } from "@/lib/crm";
@@ -213,7 +214,7 @@ export function RealChatsPage() {
   const [error, setError] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const [filter, setFilter] = useState<"todos" | "propinas">("todos");
+  const [filter, setFilter] = useState<InboxPill>("todos");
   const [onlineOpen, setOnlineOpen] = useState(false);
   const [onlineBusy, setOnlineBusy] = useState(false);
   const [onlineFans, setOnlineFans] = useState<Array<{ fanKey: string; fanName: string | null; fanHandle: string | null }>>([]);
@@ -401,8 +402,17 @@ export function RealChatsPage() {
   const threads = (data?.threads ?? []).filter(
     (thread) => creatorId === "all" || thread.creatorId === creatorId,
   );
+  const accountMessages = (data?.messages ?? []).filter(
+    (message) => creatorId === "all" || message.creatorId === creatorId,
+  );
+  const pills = inboxPillCounts({
+    status: error ? "error" : data ? "ready" : "loading",
+    threads,
+    messages: data ? accountMessages : null,
+  });
+  const tipped = tipThreads(accountMessages);
   const ordered = [...threads]
-    .filter((thread) => filter !== "propinas" || (thread.tipsCents != null && thread.tipsCents > 0))
+    .filter((thread) => matchesInboxPill(thread, filter, tipped))
     .sort((left, right) => (right.lastMessageAt ?? "").localeCompare(left.lastMessageAt ?? ""));
   const selected =
     ordered.find((thread) => `${thread.creatorId}:${thread.threadKey}` === selectedKey)
@@ -961,7 +971,15 @@ export function RealChatsPage() {
             })()}
           </div>
           <div className="flex gap-2">
-            <button type="button" onClick={() => setFilter("propinas")} className={`rounded-full px-3 py-1 text-xs ${filter === "propinas" ? "bg-[#3b6cff] text-white" : "bg-[#f3f4f6] text-[#6d7585]"}`}>Con propinas</button>
+            {([
+              ["todos", "Todos", pills.todos],
+              ["sin-leer", "Sin leer", pills.sinLeer],
+              ["propinas", "Con propinas", pills.propinas],
+            ] as const).map(([id, label, count]) => (
+              <button key={id} type="button" onClick={() => setFilter(id)} className={`rounded-full px-3 py-1 text-xs ${filter === id ? "bg-[#3b6cff] text-white" : "bg-[#f3f4f6] text-[#6d7585]"}`} aria-pressed={filter === id}>
+                {label} {count == null ? "· Sin datos" : count}
+              </button>
+            ))}
             {marks.hidden.length > 0 ? (
               <button type="button" onClick={() => setShowHidden((open) => !open)} className={`rounded-full px-3 py-1 text-xs ${showHidden ? "bg-[#3b6cff] text-white" : "bg-[#f3f4f6] text-[#6d7585]"}`}>Ocultos {marks.hidden.length}</button>
             ) : null}

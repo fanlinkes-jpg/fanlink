@@ -407,7 +407,7 @@ function threadFrom(record: Record<string, unknown>, accountId: string | null): 
   if (!threadKey || (!fanKey && !fanHandle && !fanName)) return null;
   if (!fanKey && !clean(record.id, 40) && !clean(record.threadId, 40) && !looksLikeThread) return null;
   const excerpt = excerptOf(visibleText(last?.text ?? last?.body ?? record.excerpt, 500));
-  const spend = readFanSpend(user) ?? emptySpend();
+  const spend = mergeSpend(readFanSpend(user), readFanSpend(chatSpend(record))) ?? emptySpend();
   const lastFromUserId = clean(nested(last?.fromUser)?.id, 40);
   return {
     threadKey,
@@ -666,6 +666,31 @@ function seenFlag(record: Record<string, unknown>): boolean | null {
   if (typeof record.isOpened === "boolean") return record.isOpened;
   if (typeof record.isNew === "boolean") return !record.isNew;
   return null;
+}
+
+function chatSpend(record: Record<string, unknown>): Record<string, unknown> | null {
+  const nestedSpend = nested(record.subscribedOnData) ?? nested(record.subscribedByData);
+  return nestedSpend ? { subscribedOnData: nestedSpend } : null;
+}
+
+function mergeSpend(
+  left: ReturnType<typeof readFanSpend>,
+  right: ReturnType<typeof readFanSpend>,
+): ReturnType<typeof readFanSpend> {
+  if (!left) return right;
+  if (!right) return left;
+  return {
+    spentCents: left.spentCents ?? right.spentCents,
+    subscribesCents: left.subscribesCents ?? right.subscribesCents,
+    tipsCents: left.tipsCents ?? right.tipsCents,
+    postsCents: left.postsCents ?? right.postsCents,
+    messagesCents: left.messagesCents ?? right.messagesCents,
+    avatarUrl: left.avatarUrl ?? right.avatarUrl,
+    online: left.online ?? right.online,
+    subPriceCents: left.subPriceCents ?? right.subPriceCents,
+    subExpiresAt: left.subExpiresAt ?? right.subExpiresAt,
+    renewAuto: left.renewAuto ?? right.renewAuto,
+  };
 }
 
 function readFanSpend(

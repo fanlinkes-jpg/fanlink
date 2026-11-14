@@ -200,6 +200,16 @@ test("el último mensaje abre el hilo y el gasto sale de la ficha, sin inventarl
     { ...named[1]!, unread: 2, lastMessageAt: "2026-11-05T10:00:00.000Z" },
   ]);
   assert.equal(opened[0]?.unread, 2);
+  const onTheChat = parseChatList({
+    list: [{
+      withUser: { id: 11, name: "Lara" },
+      subscribedOnData: { totalSumm: 9.5, tipsSumm: 1.5 },
+      unreadMessagesCount: 0,
+      lastMessage: { id: 1, text: "x", createdAt: "2026-11-05T10:00:00.000Z", fromUser: { id: 11 } },
+    }],
+  }, accountId);
+  assert.equal(onTheChat[0]?.spentCents, 950);
+  assert.equal(onTheChat[0]?.tipsCents, 150);
   const bare = parseChatList({ list: [{ withUser: { id: 1 }, unreadMessagesCount: 0, lastMessage: { id: 1, text: "x", createdAt: "2026-11-05T10:00:00.000Z", fromUser: { id: 1 } } }] }, accountId);
   assert.equal(bare[0]?.spentCents, null);
   assert.equal(applyAccountId(bare, [], accountId).threads[0]?.lastFromFan, true);
