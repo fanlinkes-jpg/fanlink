@@ -61,10 +61,35 @@ export function liveRequestAllowed(raw: string, method = "GET", typing = false):
     return false;
   }
   if (path.includes("..") || path.includes("\\")) return false;
-  if (LIVE_WRITES.has(method.toUpperCase()) && /\/chats\/[^/]+\/messages\/read\/?$/.test(path)) return false;
+  if (isChatReadWrite(method, path)) return false;
   if (liveBootPath(path)) return method.toUpperCase() === "GET" || method.toUpperCase() === "HEAD";
   if (!liveHostPathAllowed(host, path)) return false;
   return !liveWriteBlocked(method, path, typing);
+}
+
+/** POST que marca el hilo como leído. Tampoco sale con el modo de escritura. */
+export function isChatReadWrite(method: string, raw: string): boolean {
+  if (!LIVE_WRITES.has(method.toUpperCase())) return false;
+  const path = requestPath(raw);
+  if (!path) return false;
+  return /\/chats\/[^/]+\/messages\/read\/?$/.test(path) || /\/chats\/(?:[^/]+\/)?mark-as-read\/?$/.test(path);
+}
+
+function requestPath(raw: string): string | null {
+  const bare = raw.startsWith("/") ? raw : "";
+  if (bare) {
+    const cut = bare.split("?")[0]?.split("#")[0] ?? bare;
+    try {
+      return decodeURIComponent(cut).toLowerCase();
+    } catch {
+      return null;
+    }
+  }
+  try {
+    return decodeURIComponent(new URL(raw).pathname).toLowerCase();
+  } catch {
+    return null;
+  }
 }
 
 function liveChallengeHost(host: string): boolean {

@@ -1,17 +1,63 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { chromium } from "playwright";
 import { PGlite } from "@electric-sql/pglite";
-import { parseChatList } from "../sync/chats.ts";
+import { parseChatList, type ChatThread } from "../sync/chats.ts";
+import { collectChats } from "../sync/collect-chats.ts";
+import { watchPage } from "../sync/inbox-watch.ts";
 import { pauseWaitReason } from "../sync/backoff.ts";
 import { liveRequestAllowed } from "../live/desk.ts";
-import { saveChatRead } from "../sync/chat-store.ts";
+import { clearUnreadMarks, noteUnreadMarked, saveChatRead } from "../sync/chat-store.ts";
+import type { SiteAdapter } from "../sessions/site.ts";
 import type { ReadSql } from "../sync/store.ts";
 import { noteMissingUnread, unreadAfterListRead, unreadChatRow, unreadTotalFor } from "../sync/unread-chats.ts";
 
 const at = "2026-11-12T00:00:00.000Z";
+
+function storedThread(key: string, unread: number): ChatThread {
+  return {
+    threadKey: key,
+    fanKey: key,
+    fanHandle: null,
+    fanName: `Fan ${key}`,
+    lastMessageAt: "2026-11-13T00:00:00.000Z",
+    excerpt: "hola",
+    unread,
+    lastFromUserId: null,
+    lastFromFan: true,
+    spentCents: null,
+    subscribesCents: null,
+    tipsCents: null,
+    postsCents: null,
+    messagesCents: null,
+    avatarUrl: null,
+    online: null,
+    subPriceCents: null,
+    subExpiresAt: null,
+    renewAuto: null,
+  };
+}
+
+function localSite(origin: string): SiteAdapter {
+  return {
+    id: "local",
+    origin,
+    hostname: "127.0.0.1",
+    loginUrl: `${origin}/login`,
+    probeUrl: `${origin}/`,
+    chatsUrl: `${origin}/my/chats`,
+    requiredCookies: ["auth_id", "sess"],
+    isDashboardUrl: () => true,
+    isLoginUrl: (url) => url.includes("/login"),
+    isAuthenticated: () => true,
+    assertRequestUrl: () => undefined,
+  };
+}
 
 function chat(id: string, unread?: number) {
   const row: Record<string, unknown> = {
@@ -62,8 +108,9 @@ test("un hilo por debajo de la posición 60 con unread antiguo no entra en el to
     { creatorId: "3zk7kbr", threadKey: "61", unread: 7 },
   ];
   const next = unreadAfterListRead(stored, listed);
-  assert.equal(next.find((thread) => thread.threadKey === "61")?.unread, null);
-  assert.equal(unreadTotalFor("ready", next, "3zk7kbr"), 2);
+  assert.equal(next.find((thread) => thread.threadKey === "1")?.unread, 3);
+  assert.equal(next.find((thread) => thread.threadKey === "61")?.unread, 7);
+  assert.equal(unreadTotalFor("ready", next, "3zk7kbr"), 3);
 });
 
 test("una pausa que no es un 400 no dice que OnlyFans rechazó la firma", () => {
@@ -112,6 +159,7 @@ test("un hilo nacido de un mensaje no se inventa los no leídos y la lista borra
   await saveChatRead(sql, "3zk7kbr", {
     reason: null,
     jsonPaths: [],
+    list: "full",
     threads: Array.from({ length: 60 }, (_, index) => ({
       threadKey: String(index + 1),
       fanKey: String(index + 1),
@@ -136,15 +184,158 @@ test("un hilo nacido de un mensaje no se inventa los no leídos y la lista borra
     messages: [],
   });
   const old = await sql.query<{ unread: number | null }>("select unread from of_chat_thread where thread_key = '61'");
-  assert.equal(old[0]?.unread, null);
+  assert.equal(old[0]?.unread, 7);
   const fresh = await sql.query<{ n: number }>("select count(*)::int as n from of_chat_thread where creator_id = '3zk7kbr' and unread > 0");
-  assert.equal(Number(fresh[0]?.n), 2);
+  assert.equal(Number(fresh[0]?.n), 3);
   await pg.close();
+});
+
+test("una cabecera de 20 no borra el unread de un hilo que no vino", async () => {
+  const pg = new PGlite();
+  const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../migrations");
+  for (const name of ["0007_of_reads.sql", "0008_sync_schedule.sql", "0009_of_chats.sql", "0013_chat_price.sql", "0018_chat_preview.sql", "0019_chat_author.sql", "0020_chat_card.sql", "0021_fan_profile.sql", "0022_message_media.sql", "0024_outbound_schedule.sql", "0025_outbound_send.sql", "0026_chat_history.sql", "0045_chat_unread_null.sql"]) {
+    await pg.exec(await readFile(path.join(dir, name), "utf8"));
+  }
+  const sql: ReadSql = {
+    async query<T>(text: string, params?: unknown[]): Promise<T[]> {
+      const result = await pg.query<T>(text, params);
+      return result.rows;
+    },
+  };
+  const thirty = Array.from({ length: 30 }, (_, index) => storedThread(String(index + 1), index + 1 === 25 ? 3 : 0));
+  await saveChatRead(sql, "3zk7kbr", { reason: null, jsonPaths: [], list: "full", threads: thirty, messages: [] });
+  const head = Array.from({ length: 20 }, (_, index) => storedThread(String(index + 1), 0));
+  await saveChatRead(sql, "3zk7kbr", { reason: null, jsonPaths: [], list: "head", threads: head, messages: [] });
+  const kept = await sql.query<{ unread: number | null }>("select unread from of_chat_thread where thread_key = '25'");
+  assert.equal(kept[0]?.unread, 3);
+  await sql.query("update of_chat_thread set unread = 4 where thread_key = '30'");
+  await saveChatRead(sql, "3zk7kbr", {
+    reason: null,
+    jsonPaths: [],
+    list: "full",
+    threads: [storedThread("25", 0)],
+    messages: [],
+  });
+  const readOnOf = await sql.query<{ unread: number | null }>("select unread from of_chat_thread where thread_key = '25'");
+  assert.equal(readOnOf[0]?.unread, 0);
+  const outside = await sql.query<{ unread: number | null }>("select unread from of_chat_thread where thread_key = '30'");
+  assert.equal(outside[0]?.unread, 4);
+  await pg.close();
+});
+
+test("una lista empezada antes de marcar leído no repone el número", async () => {
+  const pg = new PGlite();
+  const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../migrations");
+  for (const name of ["0007_of_reads.sql", "0008_sync_schedule.sql", "0009_of_chats.sql", "0013_chat_price.sql", "0018_chat_preview.sql", "0019_chat_author.sql", "0020_chat_card.sql", "0021_fan_profile.sql", "0022_message_media.sql", "0024_outbound_schedule.sql", "0025_outbound_send.sql", "0026_chat_history.sql", "0045_chat_unread_null.sql"]) {
+    await pg.exec(await readFile(path.join(dir, name), "utf8"));
+  }
+  const sql: ReadSql = {
+    async query<T>(text: string, params?: unknown[]): Promise<T[]> {
+      const result = await pg.query<T>(text, params);
+      return result.rows;
+    },
+  };
+  try {
+    await saveChatRead(sql, "3zk7kbr", { reason: null, jsonPaths: [], list: "full", threads: [storedThread("25", 3)], messages: [] });
+    const markedAt = Date.parse("2026-11-14T00:00:02.000Z");
+    noteUnreadMarked("3zk7kbr", "25", markedAt);
+    await sql.query("update of_chat_thread set unread = 0 where thread_key = '25'");
+    await saveChatRead(sql, "3zk7kbr", {
+      reason: null,
+      jsonPaths: [],
+      list: "full",
+      startedAt: "2026-11-14T00:00:01.000Z",
+      threads: [storedThread("25", 3)],
+      messages: [],
+    });
+    const stale = await sql.query<{ unread: number | null }>("select unread from of_chat_thread where thread_key = '25'");
+    assert.equal(stale[0]?.unread, 0);
+    await saveChatRead(sql, "3zk7kbr", {
+      reason: null,
+      jsonPaths: [],
+      list: "full",
+      startedAt: "2026-11-14T00:00:03.000Z",
+      threads: [storedThread("25", 3)],
+      messages: [],
+    });
+    const pending = await sql.query<{ unread: number | null }>("select unread from of_chat_thread where thread_key = '25'");
+    assert.equal(pending[0]?.unread, 0);
+    await saveChatRead(sql, "3zk7kbr", {
+      reason: null,
+      jsonPaths: [],
+      list: "full",
+      startedAt: "2026-11-14T00:00:04.000Z",
+      threads: [storedThread("25", 0)],
+      messages: [],
+    });
+    const confirmed = await sql.query<{ unread: number | null }>("select unread from of_chat_thread where thread_key = '25'");
+    assert.equal(confirmed[0]?.unread, 0);
+  } finally {
+    clearUnreadMarks();
+    await pg.close();
+  }
+});
+
+test("el respaldo que abre el hilo no manda mark-as-read", { timeout: 60_000 }, async () => {
+  const seen: string[] = [];
+  const server = createServer((req, res) => {
+    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    seen.push(`${req.method} ${url.pathname}`);
+    if (url.pathname === "/api2/v2/users/me") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ id: 42, username: "crea", name: "Crea" }));
+      return;
+    }
+    if (url.pathname === "/api2/v2/chats") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        list: [{
+          withUser: { id: 7, name: "Fan" },
+          unreadMessagesCount: 1,
+        }],
+      }));
+      return;
+    }
+    if (url.pathname === "/api2/v2/chats/7/messages") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        list: [{ id: 2, text: "hola", createdAt: "2026-11-05T10:00:00.000Z", fromUser: { id: 7 } }],
+      }));
+      return;
+    }
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(`<!doctype html><html><body><script>
+      void fetch("/api2/v2/users/me");
+      void fetch("/api2/v2/chats");
+      void fetch("/api2/v2/chats/7/messages");
+      void fetch("/api2/v2/chats/7/mark-as-read", { method: "POST" });
+      void fetch("/api2/v2/chats/mark-as-read", { method: "POST" });
+    </script></body></html>`);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const port = (server.address() as AddressInfo).port;
+  const origin = `http://127.0.0.1:${port}`;
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const context = await browser.newContext();
+    await collectChats(context, localSite(origin), { paceMs: 50, waitMs: 200 });
+    const page = await context.newPage();
+    await watchPage(page, () => "7").goto(`${origin}/my/chats/chat/7`);
+    await page.close();
+    assert.equal(seen.includes("GET /my/chats"), true);
+    assert.equal(seen.includes("GET /my/chats/chat/7"), true);
+    assert.equal(seen.some((line) => line.includes("mark-as-read")), false);
+  } finally {
+    await browser.close();
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
 });
 
 test("ni la vista en directo ni un POST de leído salen hacia OnlyFans", () => {
   const read = "https://onlyfans.com/api2/v2/chats/7/messages/read";
   assert.equal(liveRequestAllowed(read, "POST", false), false);
   assert.equal(liveRequestAllowed(read, "POST", true), false);
+  assert.equal(liveRequestAllowed("https://onlyfans.com/api2/v2/chats/7/mark-as-read", "POST", true), false);
+  assert.equal(liveRequestAllowed("https://onlyfans.com/api2/v2/chats/mark-as-read", "POST", true), false);
   assert.equal(liveRequestAllowed("https://onlyfans.com/api2/v2/chats/7/messages", "GET", false), true);
 });

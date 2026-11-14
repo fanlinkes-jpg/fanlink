@@ -2,7 +2,7 @@
 
 export type InboxPill = "todos" | "sin-leer" | "propinas";
 
-export type PillThread = { threadKey: string; unread: number | null };
+export type PillThread = { threadKey: string; unread: number | null; tipsCents?: number | null };
 
 export type PillMessage = { threadKey: string; eventKind?: "compra" | "propina" | null };
 
@@ -17,17 +17,24 @@ export function inboxPillCounts(input: {
   const todos = input.threads.length;
   const unreadKnown = input.threads.some((thread) => thread.unread != null);
   const sinLeer = unreadKnown ? input.threads.filter((thread) => thread.unread != null && thread.unread > 0).length : null;
-  if (input.messages == null) return { todos, sinLeer, propinas: null };
-  const tipped = tipThreads(input.messages);
+  const tipped = tipThreads(input.messages, input.threads);
+  const propinasKnown = input.messages != null || input.threads.some((thread) => thread.tipsCents != null);
   return {
     todos,
     sinLeer,
-    propinas: input.threads.filter((thread) => tipped.has(thread.threadKey)).length,
+    propinas: propinasKnown ? input.threads.filter((thread) => tipped.has(thread.threadKey)).length : null,
   };
 }
 
-export function tipThreads(messages: readonly PillMessage[]): Set<string> {
-  return new Set(messages.filter((message) => message.eventKind === "propina").map((message) => message.threadKey));
+export function tipThreads(messages: readonly PillMessage[] | null, threads: readonly PillThread[] = []): Set<string> {
+  const keys = new Set<string>();
+  for (const message of messages ?? []) {
+    if (message.eventKind === "propina") keys.add(message.threadKey);
+  }
+  for (const thread of threads) {
+    if (thread.tipsCents != null && thread.tipsCents > 0) keys.add(thread.threadKey);
+  }
+  return keys;
 }
 
 export function matchesInboxPill(thread: PillThread, pill: InboxPill, tipped: ReadonlySet<string>): boolean {

@@ -74,6 +74,17 @@ export FANLINK_SEND_PER_MINUTE=4
 
 Solo esa cuenta (el id `9ikis52` o el handle `@bigpoppa1111`, el que tenga guardado la ficha o la comprobación) puede salir de verdad. El servidor rechaza cualquier otra aunque la petición llegue igual. Hace falta el perfil de Chromium de Conectar. El envío abre `/my/chats/chat/{id}`, escribe en la caja y pulsa Send; el precio pasa por el modal nativo. No llama `api2` firmado. En el CRM la burbuja sale al instante, antes de esa espera. Si OnlyFans no devuelve el mensaje propio, el borrador queda en error: se puede reintentar a mano con el mismo id. Un envío ya marcado como enviado no se reintenta aunque hayan pasado 30 segundos. «Pendiente de confirmar» se muestra y no se reintenta; la dueña puede marcarlo como revisado, sin volver a mandarlo. Si el navegador ya se abrió y algo falla antes de confirmar, queda «Pendiente de confirmar» para no mandarlo dos veces. La clave anti-duplicado incluye al autor. Con los flags apagados el botón no se pulsa, Enter no encola y no se abre el navegador. No hace falta ninguna variable nueva y no cambia `FANLINK_SESSION_KEY`. Mientras el navegador tenga envíos en cola que aún no están confirmados en el servidor, cerrar la pestaña avisa: no se crea la fila al encolar. Cambiar de sección no tira esa cola. Un usuario vacío mientras la sesión carga tampoco. `reset()` solo corre si el cierre de sesión ha salido bien. Un envío que sigue vivo renueva su lease (`claimed_at` y el id del proceso, migración `0043_outbound_lease.sql`) y no se da por fallido aunque tarde más de 3 minutos. Si el proceso deja de latir, pasa a «Pendiente de confirmar» y no se reintenta. `0043` solo añade esas dos columnas, se puede volver a aplicar y no borra filas. El error de otro chatter no frena el hilo. La bóveda, en cada clic, pide como mucho 100 carpetas y 40 medios (`/api2/v2/vault/lists` y `/api2/v2/vault/media`). Es lectura, no el camino de Send, que no llama a `api2`. Si falla, se muestra el error y no se pulsa el compositor. Un medio comprado no se candado.
 
+## 5b. Marcar leído al abrir un hilo
+
+Apagado si no se define. No usa `FANLINK_ENABLE_SEND` y no cambia `FANLINK_SESSION_KEY`.
+
+```bash
+export FANLINK_CHAT_MARK_READ=true
+export FANLINK_SEND_ALLOW_ACCOUNTS=9ikis52,@bigpoppa1111
+```
+
+Solo un clic que abre el hilo en el CRM manda `POST /api2/v2/chats/{id}/mark-as-read`, firmado con la regla actual, sin cuerpo y sin la ruta masiva. La cuenta tiene que estar en `FANLINK_SEND_ALLOW_ACCOUNTS`. Con el flag apagado, o con otra cuenta, no sale ningún POST. La lista, el respaldo de Chromium y la vista en directo siguen sin poder marcar leído. Un 200 pone `unread` a 0 y la negrita desaparece para todos los chatters. Un fallo deja el número como estaba. Si el chat se lee en OnlyFans, la siguiente lista firmada que traiga ese hilo con 0 lo deja en 0 aquí; no hay otro sondeo. Una lista que empezó antes de ese POST no repone el número viejo. Un hilo que la lista no trae conserva el suyo. El log es `ruta=mark-as-read status=` y no lleva ids ni tokens. Abrir otra vez un hilo que ya está en 0 no repite el POST.
+
 ## 6. Bandeja
 
 Mensajes es la bandeja del CRM. No se monta la página de OnlyFans dentro del chat. Con el directo apagado, o en este proceso de despliegue (el socket solo existe con `npm run dev`), esa bandeja sigue siendo la pantalla. No se borra hasta que el directo funcione aquí.

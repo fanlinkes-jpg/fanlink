@@ -48,7 +48,7 @@ import { hasLiveCookies } from "./site.ts";
 import { collectCreatorRead, type CollectedRead } from "../sync/collect.ts";
 import type { TxCursor } from "../sync/parse.ts";
 import { accountPause, noteAccountBlock, pauseWaitReason } from "../sync/backoff.ts";
-import { chatPaceOf, planChatPull, rememberChatPace, withAccountChatReader } from "../sync/api-list-pace.ts";
+import { chatPaceOf, planChatPull, rememberChatPace, withAccountApi } from "../sync/api-list-pace.ts";
 import { fetchSignedChats, type SignedChatOptions } from "../sync/of-chat-api.ts";
 import { collectChats, type CollectedChats } from "../sync/collect-chats.ts";
 import { collectNotifications, type CollectedNotifications } from "../sync/collect-notifications.ts";
@@ -551,6 +551,7 @@ export class SessionManager {
         signatureRejected: read.signatureRejected,
         retryAfterMs: read.retryAfterMs,
         rotatedCookies: read.rotatedCookies,
+        list: pull?.list ?? "full",
       };
     } catch (error) {
       const missing = error instanceof Error && "code" in error && error.code === "ENOENT";
@@ -603,7 +604,7 @@ export class SessionManager {
 
   private readThroughPace(accountId: string, part: "all" | "list", openThreadKeys: string[], openBrowser: boolean): Promise<CollectedChats> {
     const empty: CollectedChats = { threads: [], messages: [], reason: null, jsonPaths: [] };
-    return withAccountChatReader(accountId, async () => {
+    return withAccountApi(accountId, async () => {
       const account = await this.options.store.get(accountId);
       if (account.identityState === "mismatch") {
         return { ...empty, reason: "Lecturas bloqueadas: la sesión guardada es de otra cuenta." };
@@ -625,6 +626,7 @@ export class SessionManager {
         return { ...empty, reason: "la lista firmada espera el ritmo" };
       }
       rememberChatPace(accountId, plan.next);
+      const startedAt = new Date(now).toISOString();
       try {
         const direct = await this.readChatsDirect(accountId, keys, {
           list: plan.list,
@@ -632,13 +634,14 @@ export class SessionManager {
           messagePageCap: 1,
         }, account.creatorId);
         const answered = direct.reason == null || direct.threads.length > 0 || direct.messages.length > 0;
-        if (!openBrowser || direct.sessionRejected || answered || keepsBrowserClosed(direct.reason)) return direct;
-        return await this.withSession(accountId, (context) =>
+        if (!openBrowser || direct.sessionRejected || answered || keepsBrowserClosed(direct.reason)) return { ...direct, startedAt };
+        const fallback = await this.withSession(accountId, (context) =>
           collectChats(context, this.options.site, {
             paceMs: this.options.config.syncPaceMs,
             waitMs: this.options.config.identityWaitMs,
           }),
         );
+        return { ...fallback, startedAt };
       } catch (error) {
         return { ...empty, reason: publicErrorMessage(error, "no se pudo abrir la sesión") };
       }

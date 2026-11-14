@@ -1,8 +1,8 @@
 /**
  * No leídos de `/api2/v2/chats`. Sale de `unreadMessagesCount` (o `unread`).
  * Si el campo no viene, no se guarda un 0: la fila no se pone en negrita
- * y el log nombra a la creadora. Abrir el hilo en el CRM no llama a
- * OnlyFans para marcarlo leído.
+ * y el log nombra a la creadora. Marcar leído en OnlyFans al abrir el hilo
+ * solo sale si FANLINK_CHAT_MARK_READ está encendido.
  */
 
 export function unreadCountOf(record: Record<string, unknown>): number | null {
@@ -41,7 +41,7 @@ export function unreadTotalFor(
   return rows.filter((thread) => (thread.unread ?? 0) > 0).length;
 }
 
-/** La última lista firmada manda. Lo que no vino en ella deja de contar. */
+/** Lo que esta lectura trae se pisa, también un 0. Lo que no trae se queda. */
 export function unreadAfterListRead<T extends { threadKey: string; unread: number | null }>(
   stored: readonly T[],
   listed: readonly { threadKey: string; unread: number | null }[],
@@ -49,8 +49,8 @@ export function unreadAfterListRead<T extends { threadKey: string; unread: numbe
   const fresh = new Map(listed.map((thread) => [thread.threadKey, thread.unread]));
   return stored.map((thread) => (
     fresh.has(thread.threadKey)
-      ? { ...thread, unread: fresh.get(thread.threadKey) ?? null }
-      : { ...thread, unread: null }
+      ? { ...thread, unread: fresh.get(thread.threadKey) ?? thread.unread }
+      : thread
   ));
 }
 

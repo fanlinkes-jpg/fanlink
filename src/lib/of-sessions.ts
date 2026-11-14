@@ -314,6 +314,14 @@ export const chatSendAccess = createServerFn({ method: "GET" })
     return chatSendAccessView(context.userId);
   });
 
+export const markChatOpened = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string; threadKey: string }) => input)
+  .handler(async ({ context, data }): Promise<{ marked: boolean }> => {
+    const { markChatOpenedView } = await import("./of-sessions-runtime.server");
+    return markChatOpenedView(context.userId, data);
+  });
+
 export const loadOlderMessages = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((input: { creatorId: string; threadKey: string }) => input)

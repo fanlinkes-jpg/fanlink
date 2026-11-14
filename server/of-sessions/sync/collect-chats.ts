@@ -1,5 +1,6 @@
 import type { BrowserContext, Page } from "playwright";
 import { closeIfIdle } from "../live/pages.ts";
+import { blockChatRead } from "./inbox-watch.ts";
 import { isCurrentUserResponseUrl, isLoginChallengeUrl, jsonUrlWithoutSecrets, usersMeVerdict } from "../identity.ts";
 import { messages } from "../messages.ts";
 import type { SiteAdapter } from "../sessions/site.ts";
@@ -43,6 +44,8 @@ export type CollectedChats = {
   retryAfterMs?: number;
   /** Set-Cookie parseadas. Persistirlas es el encargo 1-1; aquí no se escriben. */
   rotatedCookies?: StorageCookie[];
+  /** `head` es solo la primera página. No anula el unread de los hilos que faltan. */
+  list?: "full" | "head" | "none";
 };
 
 /**
@@ -82,6 +85,7 @@ export async function collectChats(
   let page: Page | undefined;
   try {
     page = await context.newPage();
+    await blockChatRead(page);
     if (!site.chatsUrl) {
       return { threads: [], messages: [], reason: "sin respuesta de chats", jsonPaths: [] };
     }

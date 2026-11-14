@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AtSign, Bell, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, MessageCircle, RefreshCw, ScrollText, Send, Type } from "lucide-react";
-import { chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, readChatVault, recordChatOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
+import { chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, markChatOpened, readChatVault, recordChatOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
+import { markReadOnOpen } from "@/lib/mark-read-open";
 import { unreadChatRow, unreadTotalFor } from "../../server/of-sessions/sync/unread-chats.ts";
 import { inboxPillCounts, matchesInboxPill, tipThreads, type InboxPill } from "../../server/of-sessions/sync/chat-pills.ts";
 import { listCreatorNotifications, markCreatorNotificationsRead, type NotificationListItem } from "@/lib/of-notifications";
@@ -357,7 +358,7 @@ export function RealChatsPage() {
       || (item.fanKey != null && (row.fanKey === item.fanKey || row.threadKey === item.fanKey || row.fanHandle?.replace(/^@/, "") === item.fanKey))
     ));
     if (!thread) return;
-    setSelectedKey(`${thread.creatorId}:${thread.threadKey}`);
+    chooseThread(thread);
     setNotesOpen(false);
   }
 
@@ -395,7 +396,7 @@ export function RealChatsPage() {
   function openOnlineFan(fanKey: string) {
     const creator = creatorId === "all" ? selected?.creatorId ?? null : creatorId;
     const thread = threads.find((row) => (creator == null || row.creatorId === creator) && (row.fanKey === fanKey || row.threadKey === fanKey));
-    if (thread) setSelectedKey(`${thread.creatorId}:${thread.threadKey}`);
+    if (thread) chooseThread(thread);
     setOnlineOpen(false);
   }
 
@@ -410,7 +411,7 @@ export function RealChatsPage() {
     threads,
     messages: data ? accountMessages : null,
   });
-  const tipped = tipThreads(accountMessages);
+  const tipped = tipThreads(accountMessages, threads);
   const ordered = [...threads]
     .filter((thread) => matchesInboxPill(thread, filter, tipped))
     .sort((left, right) => (right.lastMessageAt ?? "").localeCompare(left.lastMessageAt ?? ""));
@@ -788,6 +789,14 @@ export function RealChatsPage() {
     });
   }
 
+  function chooseThread(thread: { creatorId: string; threadKey: string; unread: number | null }) {
+    setSelectedKey(`${thread.creatorId}:${thread.threadKey}`);
+    if (!markReadOnOpen("click", thread.unread)) return;
+    void markChatOpened({ data: { creatorId: thread.creatorId, threadKey: thread.threadKey } }).then((result) => {
+      if (result.marked) void refresh();
+    }).catch(() => undefined);
+  }
+
   function fanNickname(creatorId: string, fanKey: string | null): string | null {
     if (!fanKey) return null;
     return (data?.profiles ?? []).find((item) => item.creatorId === creatorId && item.fanKey === fanKey)?.nickname ?? null;
@@ -1006,7 +1015,7 @@ export function RealChatsPage() {
               <li key={`${thread.creatorId}:${thread.threadKey}`}>
                 <button
                   type="button"
-                  onClick={() => setSelectedKey(`${thread.creatorId}:${thread.threadKey}`)}
+                  onClick={() => chooseThread(thread)}
                   className={`flex w-full gap-3 px-3 py-3 text-left ${selected?.threadKey === thread.threadKey && selected.creatorId === thread.creatorId ? "bg-[#f4f7ff]" : ""}`}
                 >
                   <span className="flex w-12 shrink-0 flex-col items-center gap-1">

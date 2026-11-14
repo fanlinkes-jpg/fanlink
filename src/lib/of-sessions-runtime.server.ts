@@ -42,6 +42,9 @@ import { normalizeFanMenuRequest, runFanMenuOnPage, type FanMenuResult } from ".
 import { chatPageUrl } from "../../server/of-sessions/sync/chats.ts";
 import { sendPace } from "../../server/of-sessions/send/gate.ts";
 import { chatSendGate, publicSendReason, type SendAccount } from "../../server/of-sessions/send/gate.ts";
+import { markOpenedChat, markReadGate } from "../../server/of-sessions/sync/mark-read.ts";
+import { loadSignRules } from "../../server/of-sessions/sync/of-sign.ts";
+import { sessionForApi } from "../../server/of-sessions/sync/of-chat-api.ts";
 import type { SendChatHooks } from "../../server/of-sessions/send/chat-message.ts";
 import { composeChat } from "../../server/of-sessions/send/compose.ts";
 import { liveViewGate } from "../../server/of-sessions/live/desk.ts";
@@ -1044,6 +1047,46 @@ export async function runFanChatMenuView(userId: string, input: { creatorId: str
   }, { wait: true });
   if (!ran.ok) return { ok: false, reason: "OnlyFans está ocupado con otra lectura.", lists: [] };
   return ran.value;
+}
+
+export async function markChatOpenedView(userId: string, input: { creatorId: string; threadKey: string }): Promise<{ marked: boolean }> {
+  const access = await accessFor(userId);
+  if (access.role !== "owner" && !access.perms.includes("mensajes")) {
+    throw new WorkspaceAccessError("No tienes permiso para escribir.");
+  }
+  const creatorId = parseCreatorId(input.creatorId);
+  const sessions = await getOfSessionManager();
+  const account = (await sessions.listAccounts()).find((item) => item.creatorId === creatorId);
+  if (!account) return { marked: false };
+  const fields = sendAccount(account);
+  if (!markReadGate(process.env.FANLINK_CHAT_MARK_READ, process.env.FANLINK_SEND_ALLOW_ACCOUNTS, fields).allowed) {
+    return { marked: false };
+  }
+  let state;
+  try {
+    state = await sessions.readStorageState(account.id);
+  } catch {
+    return { marked: false };
+  }
+  const auth = sessionForApi(state, Date.now());
+  if ("reason" in auth) return { marked: false };
+  const rules = await loadSignRules(fetch, Date.now());
+  const result = await markOpenedChat({
+    accountId: account.id,
+    creatorId,
+    threadKey: input.threadKey,
+    flag: process.env.FANLINK_CHAT_MARK_READ,
+    allowlist: process.env.FANLINK_SEND_ALLOW_ACCOUNTS,
+    account: fields,
+    sql: await getSql(),
+    fetch,
+    now: () => Date.now(),
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    rules,
+    auth,
+    log: (line) => console.info(line),
+  });
+  return { marked: result.status === 200 };
 }
 
 export async function loadOlderMessagesView(userId: string, input: { creatorId: string; threadKey: string }): Promise<{ ok: boolean }> {

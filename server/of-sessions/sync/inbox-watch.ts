@@ -1,4 +1,5 @@
 import type { BrowserContext, Page } from "playwright";
+import { isChatReadWrite } from "../live/desk.ts";
 import { openWorkPage } from "../sessions/work-page.ts";
 import { closeIfIdle } from "../live/pages.ts";
 import { chatPageUrl, classifyChatPath, isUsersDirectoryUrl, parseChatList, parseChatMessages, parsePreviewMessages, parseUsersDirectory, type ChatMessage, type ChatThread, type ChatUser } from "./chats.ts";
@@ -219,9 +220,17 @@ async function pullSigned(input: {
   }
 }
 
+export async function blockChatRead(page: Page): Promise<void> {
+  await page.route("**/*", (route) => {
+    if (isChatReadWrite(route.request().method(), route.request().url())) return route.abort();
+    return route.continue();
+  });
+}
+
 export function watchPage(page: Page, threadKey: () => string, accountUserId: () => string | null = () => null): WatchSession {
   return {
     async goto(url: string) {
+      await blockChatRead(page);
       const same = page.url().split("?")[0] === url.split("?")[0];
       const pending = page.waitForResponse(
         (response) => classifyChatPath(response.url()) !== "other" && response.status() < 400,
@@ -234,13 +243,7 @@ export function watchPage(page: Page, threadKey: () => string, accountUserId: ()
       return response?.status() ?? 0;
     },
     listen({ onMessages, onThreads, onUsers, onBlock }) {
-      void page.route("**/*", (route) => {
-        const request = route.request();
-        if (request.method().toUpperCase() === "POST" && /\/messages\/read\/?(?:\?|$)/.test(request.url())) {
-          return route.abort();
-        }
-        return route.continue();
-      });
+      void blockChatRead(page);
       page.on("websocket", (socket) => {
         socket.on("framereceived", (frame) => {
           const text = typeof frame.payload === "string" ? frame.payload : frame.payload.toString("utf8");

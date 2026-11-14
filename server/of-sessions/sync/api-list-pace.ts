@@ -60,6 +60,11 @@ export function clearAccountChatPace(): void {
   lastRequestAt.clear();
 }
 
+/** Una llamada firmada a la vez por cuenta. La lista y marcar leído pasan por aquí. */
+export function withAccountApi<T>(accountId: string, run: () => Promise<T>): Promise<T> {
+  return withAccountChatReader(accountId, run);
+}
+
 /** Una lectura firmada a la vez por cuenta. La siguiente espera a la anterior. */
 export function withAccountChatReader<T>(accountId: string, run: () => Promise<T>): Promise<T> {
   const prev = tails.get(accountId) ?? Promise.resolve();
