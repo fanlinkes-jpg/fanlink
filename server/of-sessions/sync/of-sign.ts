@@ -90,20 +90,24 @@ async function downloadSignRules(fetchImpl: typeof fetch, now: number): Promise<
 }
 
 /**
- * Firma una ruta. El tiempo va en milisegundos, como en 3064d53.
+ * Firma una ruta. El tiempo va en milisegundos.
  *
  * Checksum = suma de charCode(hash[i]) para i en checksum_indexes, más
  * checksum_constant. No se suman checksum_constants: checksum_constant ya
- * es esa suma (DATAHOARDERS/dynamic-rules 48c8c17, 974 = 974).
+ * es esa suma (DATAHOARDERS/dynamic-rules 48c8c17, 974 = 974). Con el id
+ * real en el cuarto campo, esa suma es la de 3064d53.
  *
- * Ruta con query (todas las de api2 que usamos): el cuarto campo es el id
- * real y la cabecera user-id se manda. Así lo hace UltimaScraperAPI
- * authenticator.py create_signed_headers (si hay query, id real y user-id)
- * y OF-Scraper request.py (user-id de la cuenta dentro del mensaje).
- * remove_headers solo quita user-id en rutas sin query; entonces se firma con 0.
+ * 3064d53 mete el id real en el hash y manda la cabecera user-id en todas
+ * las rutas. OF-Scraper create_login_sign firma con el auth_id real.
+ * remove_headers de DATAHOARDERS no distingue si la ruta lleva query.
  *
- * El 401 intermitente visto en el Mac con este algoritmo es de la sesión
- * (rotación de sess), no de esta fórmula.
+ * El corte de esta rama es otro, y no viene de 3064d53: en una ruta con
+ * query se firma el id real y se manda user-id; en una ruta sin query, si
+ * remove_headers incluye user-id, se firma con 0 y no se manda esa cabecera.
+ * `npm run probe:sign` lo compara en el Mac. Aquí no se cambia el corte.
+ *
+ * El 401 intermitente visto en el Mac con el checksum de 3064d53 es de la
+ * sesión (rotación de sess), no de la suma.
  */
 export function signOnlyfans(rules: SignRules, pathWithQuery: string, userId: string, timeMs: number): { sign: string; time: string } {
   const time = String(timeMs);

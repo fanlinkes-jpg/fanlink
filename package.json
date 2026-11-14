@@ -19,6 +19,7 @@
     "preview:stop": "node scripts/preview.mjs stop",
     "typecheck": "tsc --noEmit",
     "check:auth": "node scripts/check-auth-invariant.mjs",
+    "probe:sign": "node --experimental-strip-types server/of-sessions/sync/sign-probe.ts",
     "test": "node --test 'scripts/**/*.test.mjs' && node --experimental-strip-types --test 'server/of-sessions/test/*.test.ts' 'server/of-sessions/metrics/*.test.ts' 'server/of-sessions/campaigns/*.test.ts' 'server/of-sessions/notify/*.test.ts' 'src/lib/*.test.ts' 'src/lib/mass/*.test.ts'",
     "lint": "eslint .",
     "format": "prettier --write ."

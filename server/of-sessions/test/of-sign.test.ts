@@ -48,7 +48,7 @@ test("una ruta con query firma el id real y no suma checksum_constants", () => {
   assert.equal(headers.sign.includes("secret"), false);
 });
 
-test("sin query, remove_headers quita user-id y la firma usa 0", () => {
+test("sin query, esta rama quita user-id y firma con 0", () => {
   const rules = parseSignRules(rulesJson());
   assert.ok(rules);
   const path = "/api2/v2/chats";
