@@ -240,6 +240,34 @@ test("el aviso de una cuenta omitida vuelve cuando regresa y se cae otra vez", a
   assert.equal(lines.filter((line) => line.includes("se omite")).length, 2);
 });
 
+test("una sesión rechazada se omite y el log lo dice", async () => {
+  const lines: string[] = [];
+  let reads = 0;
+  await passNotificationAccounts({
+    accounts: [{
+      id: "acc",
+      creatorId: "9ikis52",
+      status: "active",
+      identityState: "verified",
+      hasStorageState: true,
+      sessionRejected: true,
+      connection: "login_required",
+    }],
+    noted: new Set(),
+    pace: new Map(),
+    now: () => 1,
+    read: async () => {
+      reads += 1;
+      return fetchSignedNotifications(state(), deps([], () => json(200, { list: [], hasMore: false, all: 0, newTagsCount: 0 })));
+    },
+    finish: async () => undefined,
+    onBlock: () => undefined,
+    log: (line) => lines.push(line),
+  });
+  assert.equal(reads, 0);
+  assert.equal(lines[0], "[fanlink:notif] creator=9ikis52 ruta=lista n=0 motivo=se omite (sesión rechazada) status=");
+});
+
 test("el bucle no pausa por un 400 del contador, sí por 429 y 401 se queda en la lista", async () => {
   clearAccountPauses();
   clearAccountChatPace();

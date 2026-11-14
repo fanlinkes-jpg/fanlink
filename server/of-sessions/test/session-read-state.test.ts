@@ -224,6 +224,108 @@ test("un 401 sin confirmar no repite users/me en cada lectura del panel", async 
   }
 });
 
+test("un 401 de notificaciones que empezó antes de Reconectar no marca la sesión nueva", async () => {
+  clearSignRulesCache();
+  clearAccountPauses();
+  const dataDir = await tempDataDir();
+  let launches = 0;
+  let release = () => undefined as void;
+  let entered = () => undefined as void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const started = new Promise<void>((resolve) => { entered = resolve; });
+  const created = await createSessionRuntime({
+    config: testConfig(dataDir, { openLoginOnInvalidate: false }),
+    site: onlyFansSite,
+    browserFactory: closedBrowser(() => { launches += 1; }),
+    displayEnv: testDisplay,
+    fetch: (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("dynamic-rules")) return Response.json(RULES);
+      entered();
+      await gate;
+      return new Response("{}", { status: 401, headers: { "content-type": "application/json" } });
+    }) as typeof fetch,
+  });
+  try {
+    const account = await created.store.create("Avisos", "3zk7kbr");
+    await writeEncryptedSession(path.join(dataDir, "sessions", `${account.id}.json`), storedState(), TEST_SESSION_KEY);
+    await created.store.update(account.id, { hasStorageState: true, status: "active", connection: "live", sessionRejected: false });
+    const epoch = created.sessions.sessionGeneration(account.id);
+    const pending = created.sessions.readNotificationsDirect(account.id);
+    await started;
+    created.sessions.rotateSessionEpoch(account.id);
+    await created.store.update(account.id, { connection: "live", status: "active", sessionRejected: false });
+    release();
+    await pending;
+    await created.sessions.noteApiSessionRejected(account.id, epoch);
+    const stored = await created.sessions.getAccount(account.id);
+    assert.equal(stored.sessionRejected, false);
+    assert.equal(stored.connection, "live");
+    assert.equal(launches, 0);
+    await created.sessions.noteApiSessionRejected(account.id);
+    assert.equal((await created.sessions.getAccount(account.id)).sessionRejected, true);
+  } finally {
+    release();
+    clearSignRulesCache();
+    clearAccountPauses();
+    await created.close();
+    await removeDir(dataDir);
+  }
+});
+
+test("el margen de users/me es por cuenta y Reconectar lo borra", async () => {
+  clearSignRulesCache();
+  clearAccountPauses();
+  const dataDir = await tempDataDir();
+  let launches = 0;
+  let usersMe = 0;
+  let clock = 1_700_000_000_000;
+  const created = await createSessionRuntime({
+    config: testConfig(dataDir, { openLoginOnInvalidate: false }),
+    site: onlyFansSite,
+    browserFactory: closedBrowser(() => { launches += 1; }),
+    displayEnv: testDisplay,
+    now: () => new Date(clock),
+    fetch: (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("dynamic-rules")) return Response.json(RULES);
+      if (url.includes("/users/me")) {
+        usersMe += 1;
+        return Response.json({ isAuth: true, id: 42, username: "creadora" });
+      }
+      if (url.includes("subscriptions/subscribers")) return new Response("no", { status: 401 });
+      return new Response("no", { status: 500 });
+    }) as typeof fetch,
+  });
+  try {
+    const first = await created.store.create("Una", "9ikis52");
+    const second = await created.store.create("Otra", "3zk7kbr");
+    for (const account of [first, second]) {
+      await writeEncryptedSession(path.join(dataDir, "sessions", `${account.id}.json`), storedState(), TEST_SESSION_KEY);
+      await created.store.update(account.id, { hasStorageState: true, status: "active", connection: "live", sessionRejected: false });
+    }
+    await created.sessions.readOnlineFans(first.id);
+    await created.sessions.readOnlineFans(first.id);
+    assert.equal(usersMe, 1);
+    await created.sessions.readOnlineFans(second.id);
+    await created.sessions.readOnlineFans(second.id);
+    assert.equal(usersMe, 2);
+    created.sessions.rotateSessionEpoch(first.id);
+    await created.sessions.readOnlineFans(first.id);
+    assert.equal(usersMe, 3);
+    await created.sessions.readOnlineFans(second.id);
+    assert.equal(usersMe, 3);
+    assert.equal((await created.sessions.getAccount(first.id)).sessionRejected, false);
+    assert.equal((await created.sessions.getAccount(second.id)).sessionRejected, false);
+    assert.equal(launches, 0);
+  } finally {
+    clearSignRulesCache();
+    clearAccountPauses();
+    await created.close();
+    await removeDir(dataDir);
+  }
+});
+
 test("un 429 de fans no abre Chromium", async () => {
   const stored = await onlineCase((url) => {
     if (url.includes("subscriptions/subscribers")) return new Response("slow", { status: 429, headers: { "retry-after": "2" } });

@@ -425,6 +425,7 @@ export class SessionManager {
       status: null,
       retryAfterMs: 0,
     };
+    const epoch = this.sessionGeneration(accountId);
     try {
       const account = await this.options.store.get(accountId);
       if (account.identityState === "mismatch") {
@@ -439,7 +440,7 @@ export class SessionManager {
         accountId,
       });
       if (read.sessionRejected) {
-        await this.markApiSessionRejected(accountId, read.reason ?? messages.loginRequired).catch(() => undefined);
+        await this.recordSignedRead(accountId, 401, read.reason ?? messages.loginRequired, epoch).catch(() => undefined);
       }
       if (read.signatureRejected) {
         await this.noteSignatureRejected(accountId).catch(() => undefined);
@@ -673,22 +674,13 @@ export class SessionManager {
     });
   }
 
-  async noteApiSessionRejected(accountId: string): Promise<void> {
-    await this.markApiSessionRejected(accountId, "OnlyFans ha rechazado la sesión (401). Pulsa Reconectar.");
+  async noteApiSessionRejected(accountId: string, readEpoch?: number): Promise<void> {
+    await this.markApiSessionRejected(accountId, "OnlyFans ha rechazado la sesión (401). Pulsa Reconectar.", readEpoch);
   }
 
-  /** 401 de mark-as-read. Expirada, o Pendiente de login si la ventana ya está abierta. */
-  private async markApiSessionRejected(accountId: string, reason: string): Promise<void> {
-    const loginAlreadyOpen = this.loginTasks.has(accountId);
-    const visible = reason.replace(/cookie|set-cookie|authorization|sess=/gi, "[omitido]").slice(0, 180);
-    await this.options.store.update(accountId, {
-      status: loginAlreadyOpen ? "pending_login" : "expired",
-      connection: "login_required",
-      sessionRejected: true,
-      loginInProgress: loginAlreadyOpen,
-      lastError: visible,
-      lastCheckedAt: this.now().toISOString(),
-    });
+  /** 401 de mark-as-read o de la lista de avisos. Usa la generación copiada al empezar. */
+  private async markApiSessionRejected(accountId: string, reason: string, readEpoch?: number): Promise<void> {
+    await this.recordSignedRead(accountId, 401, reason, readEpoch ?? this.sessionGeneration(accountId));
   }
 
   /**

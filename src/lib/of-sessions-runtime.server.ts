@@ -1253,6 +1253,7 @@ export async function markChatOpenedView(userId: string, input: { creatorId: str
   const auth = sessionForApi(state, Date.now());
   if ("reason" in auth) return { marked: false };
   const rules = await loadSignRules(fetch, Date.now());
+  const epoch = sessions.sessionGeneration(account.id);
   const result = await markOpenedChat({
     accountId: account.id,
     creatorId,
@@ -1267,7 +1268,7 @@ export async function markChatOpenedView(userId: string, input: { creatorId: str
     rules,
     auth,
     log: (line) => console.info(line),
-    onSessionRejected: () => sessions.noteApiSessionRejected(account.id),
+    onSessionRejected: () => sessions.noteApiSessionRejected(account.id, epoch),
   });
   return { marked: result.status != null && result.status >= 200 && result.status < 300 };
 }

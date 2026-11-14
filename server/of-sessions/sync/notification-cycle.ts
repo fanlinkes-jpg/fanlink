@@ -27,11 +27,15 @@ export async function passNotificationAccounts<T extends ApiListAccount>(input: 
       if (accountPause(account.id, input.now())) continue;
       if (input.noted.has(account.id)) continue;
       input.noted.add(account.id);
-      const why = account.hasStorageState === false
-        ? "sin sesión guardada"
-        : account.identityState === "mismatch"
-          ? "no coincide"
-          : account.status;
+      const why = account.sessionRejected
+        ? "sesión rechazada"
+        : account.connection === "login_required"
+          ? "login requerido"
+          : account.hasStorageState === false
+            ? "sin sesión guardada"
+            : account.identityState === "mismatch"
+              ? "no coincide"
+              : account.status;
       log(notificationLogLine({ creatorId: account.creatorId ?? "-", route: "lista", count: 0, motivo: `se omite (${why})`, status: null }));
       continue;
     }

@@ -159,7 +159,7 @@ test("en todas las cuentas un 401 no esconde los fans del 200", () => {
     { creatorId: "9ikis52", fans: [], reason: SESSION_EXPIRED_LABEL, status: 401 },
     {
       creatorId: "3zk7kbr",
-      fans: [{ fanKey: "7", fanName: "Duchamp", fanHandle: "duchampprivate", avatarUrl: null }],
+      fans: [{ fanKey: "7", fanName: "Duchamp", fanHandle: "duchampprivate", avatarUrl: null, spentCents: null, currency: null, online: true, lists: [] }],
       reason: null,
       status: 200,
     },
