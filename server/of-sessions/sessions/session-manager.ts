@@ -15,6 +15,7 @@ import {
   identityFromStateCandidates,
   isCurrentUserResponseUrl,
   isLoginChallengeUrl,
+  usersMeKeepsSession,
   usersMeVerdict,
   jsonUrlWithoutSecrets,
   judgeIdentityMatch,
@@ -50,6 +51,7 @@ import type { TxCursor } from "../sync/parse.ts";
 import { accountPause, noteAccountBlock, pauseWaitReason } from "../sync/backoff.ts";
 import { chatPaceOf, planChatPull, rememberChatPace, withAccountApi } from "../sync/api-list-pace.ts";
 import { fetchSignedChats, type SignedChatOptions } from "../sync/of-chat-api.ts";
+import { applySignedRead, signedReadsBlocked, SESSION_EXPIRED_LABEL } from "../sync/session-link.ts";
 import { collectChats, type CollectedChats } from "../sync/collect-chats.ts";
 import { dispatchNotificationMark, fetchSignedNotifications, type CollectedNotifications, type MarkNotificationsResult } from "../sync/of-notifications-api.ts";
 import { notificationMarkReadGate } from "../send/gate.ts";
@@ -509,6 +511,10 @@ export class SessionManager {
     options?: { budgetMs?: number; read?: (page: Page, signal: AbortSignal) => Promise<OnlineRead>; fetch?: typeof fetch },
   ): Promise<OnlineRead> {
     assertAccountId(accountId);
+    const stored = await this.options.store.get(accountId);
+    if (signedReadsBlocked(stored)) {
+      return { fans: [], reason: SESSION_EXPIRED_LABEL, status: 401, sessionRejected: true };
+    }
     if (this.loginTasks.has(accountId)) {
       return { fans: [], reason: "Esperando a que termine Conectar.", status: null };
     }
@@ -518,9 +524,13 @@ export class SessionManager {
     if (this.options.site.id === "onlyfans" && !options?.read) {
       try {
         const signed = await fetchSignedOnlineFans(await this.readStorageState(accountId), {
-          fetch: options?.fetch ?? fetch,
+          fetch: options?.fetch ?? this.options.fetch ?? fetch,
           now: () => this.now().getTime(),
         });
+        if (signed.status === 401) {
+          await this.recordSignedRead(accountId, 401, signed.reason).catch(() => undefined);
+          return { ...signed, fans: [], reason: SESSION_EXPIRED_LABEL, sessionRejected: true };
+        }
         if (signed.fallback === false || signed.reason !== "No se pudo leer.") return signed;
       } catch {
         // Sin JSON firmado se prueba la página.
@@ -589,7 +599,9 @@ export class SessionManager {
         creatorId,
       }, { openThreadKeys, ...pull });
       if (read.sessionRejected) {
-        await this.markApiSessionRejected(accountId, read.reason ?? messages.loginRequired).catch(() => undefined);
+        await this.recordSignedRead(accountId, 401, read.reason).catch(() => undefined);
+      } else if (read.accepted) {
+        await this.recordSignedRead(accountId, 200).catch(() => undefined);
       }
       if (read.signatureRejected || read.retryAfterMs > 0) {
         noteAccountBlock(accountId, read.signatureRejected ? "400" : "429");
@@ -638,6 +650,7 @@ export class SessionManager {
     await this.markApiSessionRejected(accountId, "OnlyFans ha rechazado la sesión (401). Pulsa Reconectar.");
   }
 
+  /** 401 de mark-as-read. Expirada, o Pendiente de login si la ventana ya está abierta. */
   private async markApiSessionRejected(accountId: string, reason: string): Promise<void> {
     const loginAlreadyOpen = this.loginTasks.has(accountId);
     const visible = reason.replace(/cookie|set-cookie|authorization|sess=/gi, "[omitido]").slice(0, 180);
@@ -647,6 +660,23 @@ export class SessionManager {
       sessionRejected: true,
       loginInProgress: loginAlreadyOpen,
       lastError: visible,
+      lastCheckedAt: this.now().toISOString(),
+    });
+  }
+
+  /**
+   * Un 200 deja la conexión en Aceptada. No borra `sessionRejected`.
+   * Un 401 lo marca si aún no lo estaba. No abre Chromium.
+   */
+  async recordSignedRead(accountId: string, httpStatus: number, reason?: string | null): Promise<Account> {
+    const account = await this.options.store.get(accountId);
+    const patch = applySignedRead(account, httpStatus, {
+      loginAlreadyOpen: this.loginTasks.has(accountId),
+      reason,
+    });
+    if (!patch) return account;
+    return this.options.store.update(accountId, {
+      ...patch,
       lastCheckedAt: this.now().toISOString(),
     });
   }
@@ -921,8 +951,7 @@ export class SessionManager {
             if (!isCurrentUserResponseUrl(response.url())) return;
             try {
               const verdict = usersMeVerdict(JSON.parse(await response.text()) as unknown);
-              if (verdict.kind === "logged_in") sawLoggedInUser = true;
-              if (verdict.kind === "guest") sawLoggedInUser = false;
+              sawLoggedInUser = usersMeKeepsSession(verdict);
             } catch {
               // Una respuesta que no es el usuario actual no decide el login.
             }
@@ -1226,14 +1255,10 @@ export class SessionManager {
         return;
       }
       const verdict = usersMeVerdict(JSON.parse(raw) as unknown);
-      if (verdict.kind === "guest") {
-        notes.guest = true;
+      if (verdict.kind !== "logged_in" || !usersMeKeepsSession(verdict)) {
         notes.usersMeMissingUsername = true;
         notes.identities.splice(0, notes.identities.length);
-        return;
-      }
-      if (verdict.kind !== "logged_in") {
-        notes.usersMeMissingUsername = true;
+        if (verdict.kind === "guest" && verdict.authRejected) notes.guest = true;
         return;
       }
       notes.guest = false;

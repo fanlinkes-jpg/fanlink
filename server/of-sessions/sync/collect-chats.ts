@@ -1,7 +1,7 @@
 import type { BrowserContext, Page } from "playwright";
 import { closeIfIdle } from "../live/pages.ts";
 import { blockChatRead } from "./inbox-watch.ts";
-import { isCurrentUserResponseUrl, isLoginChallengeUrl, jsonUrlWithoutSecrets, usersMeVerdict } from "../identity.ts";
+import { isCurrentUserResponseUrl, isLoginChallengeUrl, jsonUrlWithoutSecrets, usersMeKeepsSession, usersMeVerdict } from "../identity.ts";
 import { messages } from "../messages.ts";
 import type { SiteAdapter } from "../sessions/site.ts";
 import type { StorageCookie } from "../sessions/storage-state.ts";
@@ -236,7 +236,7 @@ async function observe(
       const rawUser = await response.text();
       if (rawUser.length <= 1_500_000) {
         const verdict = usersMeVerdict(JSON.parse(rawUser) as unknown);
-        if (verdict.kind === "logged_in") {
+        if (usersMeKeepsSession(verdict) && verdict.kind === "logged_in") {
           notes.sawLoggedIn = true;
           notes.loginRequired = false;
           if (verdict.identity.userId) {
@@ -245,7 +245,7 @@ async function observe(
             notes.threads = refreshed.threads;
             notes.messages = refreshed.messages;
           }
-        } else if (verdict.kind === "guest") {
+        } else {
           notes.sawLoggedIn = false;
           notes.loginRequired = true;
         }
