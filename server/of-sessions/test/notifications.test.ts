@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { listNotificationRows, markNotificationPage, markNotificationsSeen, notificationPageFor, saveNotificationRead } from "../sync/notification-store.ts";
+import { countFanlinkUnread, listNotificationRows, markNotificationPage, markNotificationsSeen, notificationPageFor, saveNotificationRead } from "../sync/notification-store.ts";
 import { dashboardCreatorIds } from "../../../src/lib/dashboard-config.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -142,6 +142,40 @@ test("el chatter no recibe páginas vacías ni la cuenta de otra persona", async
   }
 });
 
+test("el total de Fanlink no es la página y una lista caída no es 0", async () => {
+  const { pg, sql } = await database();
+  try {
+    await saveNotificationRead(sql, "c-alba", {
+      captured: true,
+      status: 200,
+      motivo: "ok",
+      reason: null,
+      counts: null,
+      items: [1, 2, 3].map((n) => ({
+        key: `n${n}`,
+        kind: "like" as const,
+        body: "hola",
+        fanKey: String(n),
+        fanName: "Ana",
+        threadKey: null,
+        amountCents: null,
+        occurredAt: `2026-11-1${n}T10:00:00.000Z`,
+        pending: false,
+      })),
+    });
+    const page = await listNotificationRows(sql, "c-alba", "dueña", { role: "owner", limit: 1 });
+    assert.equal(page.rows.length, 1);
+    assert.equal(await countFanlinkUnread(sql, "c-alba", "dueña", "owner"), 3);
+    const listed = await notificationPageFor(sql, { userId: "dueña", role: "owner", creatorIds: ["c-alba"] }, "c-alba");
+    assert.equal(listed.fanlinkUnread, 3);
+    await saveNotificationRead(sql, "c-alba", { captured: false, motivo: "no se pudo leer", reason: "no se pudo leer", items: [] });
+    const failed = await notificationPageFor(sql, { userId: "dueña", role: "owner", creatorIds: ["c-alba"] }, "c-alba");
+    assert.equal(failed.fanlinkUnread, null);
+  } finally {
+    await pg.close();
+  }
+});
+
 test("la ficha guarda listas y renovación y deja null lo que no vino", async () => {
   const { pg, sql } = await database();
   try {
@@ -199,7 +233,7 @@ test("la ficha guarda listas y renovación y deja null lo que no vino", async ()
 test("las migraciones de notificaciones se aplican dos veces", async () => {
   const pg = new PGlite();
   try {
-    for (const name of ["0034_notifications.sql", "0035_notification_first_seen.sql", "0036_notification_key_text.sql", "0044_notification_counts.sql", "0046_notification_fan_card.sql"]) {
+    for (const name of ["0034_notifications.sql", "0035_notification_first_seen.sql", "0036_notification_key_text.sql", "0047_notification_counts.sql", "0046_notification_fan_card.sql"]) {
       const sql = await readFile(path.join(root, "migrations", name), "utf8");
       await pg.exec(sql);
       await pg.exec(sql);
@@ -456,7 +490,7 @@ async function database() {
   const dir = await mkdtemp(path.join(tmpdir(), "fanlink-notifications-"));
   const pg = new PGlite(dir);
   await pg.exec(await readFile(path.join(root, "migrations/0034_notifications.sql"), "utf8"));
-  await pg.exec(await readFile(path.join(root, "migrations/0044_notification_counts.sql"), "utf8"));
+  await pg.exec(await readFile(path.join(root, "migrations/0047_notification_counts.sql"), "utf8"));
   await pg.exec(await readFile(path.join(root, "migrations/0046_notification_fan_card.sql"), "utf8"));
   const sql = {
     query: async <T>(text: string, params: unknown[] = []) => (await pg.query<T>(text, params)).rows,

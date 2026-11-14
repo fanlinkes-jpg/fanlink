@@ -233,15 +233,13 @@ test("filtra por pestaña, texto y fechas, y cuenta no leídas", () => {
   assert.equal(counts?.tags, null);
   assert.equal(counts?.onlyfans, 2);
   assert.equal(parseNotificationCounts({ all: 1 })?.purchases, null);
-  const bellRows = [
-    record("ag", { kind: "agency", ofUnread: true }),
-    record("tip", { kind: "tip", ofUnread: true }),
-  ];
-  assert.equal(notificationBellCount({ markOnOnlyfans: true, counts, rows: bellRows, role: "owner" }).count, 4);
-  assert.equal(notificationBellCount({ markOnOnlyfans: true, counts, rows: bellRows, role: "member" }).count, 6);
-  assert.equal(notificationBellCount({ markOnOnlyfans: false, counts, rows: bellRows, role: "member" }).count, 1);
-  assert.equal(notificationBellCount({ markOnOnlyfans: false, counts, rows: bellRows, role: "owner" }).count, 2);
-  assert.equal(notificationBellCount({ markOnOnlyfans: false, counts, rows: [record("ag", { kind: "agency", seenAt: "2026-11-13T00:00:00.000Z", ofUnread: true })], role: "owner" }).count, 0);
+  assert.equal(notificationBellCount({ markOnOnlyfans: true, counts, fanlinkTotal: null, role: "owner" }).count, 4);
+  assert.equal(notificationBellCount({ markOnOnlyfans: true, counts, fanlinkTotal: null, role: "member" }).count, 4);
+  assert.equal(notificationBellCount({ markOnOnlyfans: true, counts: null, fanlinkTotal: 3, role: "owner" }).count, null);
+  assert.equal(notificationBellCount({ markOnOnlyfans: false, counts, fanlinkTotal: null, role: "member" }).count, null);
+  assert.equal(notificationBellCount({ markOnOnlyfans: false, counts, fanlinkTotal: null, role: "owner" }).count, null);
+  assert.equal(notificationBellCount({ markOnOnlyfans: false, counts: null, fanlinkTotal: 0, role: "owner" }).count, 0);
+  assert.equal(notificationBellCount({ markOnOnlyfans: false, counts, fanlinkTotal: 8, role: "member" }).count, 8);
   assert.equal(ofReadType("agency"), null);
   assert.equal(ofReadType("other"), null);
   assert.equal(ofReadType("tip"), "tip");
@@ -329,11 +327,24 @@ test("un comentario guarda el texto y la publicación si vienen", () => {
   assert.equal(withPost[0]?.kind, "comment");
   assert.equal(tabOf(withPost[0]!.kind), "comments");
   assert.equal(withPost[0]?.body, "qué buen post");
-  assert.equal(withPost[0]?.postRef, "99887766");
-  const bare = parseNotificationPayload({
-    list: [{ id: "com2", type: "commented", text: "solo texto", user: { id: 5, name: "Dio" } }],
+  assert.equal(withPost[0]?.postLink, "https://onlyfans.com/99887766");
+  assert.equal(withPost[0]?.postText, null);
+  const withText = parseNotificationPayload({
+    list: [{
+      id: "com-texto",
+      type: "commented",
+      text: "qué buen post",
+      replacePairs: { "{POST_TEXT}": "mira esta foto" },
+      user: { id: 8, name: "Luz" },
+    }],
   });
-  assert.equal(bare[0]?.postRef, null);
+  assert.equal(withText[0]?.postText, "mira esta foto");
+  assert.equal(withText[0]?.postLink, null);
+  const bare = parseNotificationPayload({
+    list: [{ id: "com2", type: "commented", text: "solo texto", postId: "99887766", user: { id: 5, name: "Dio" } }],
+  });
+  assert.equal(bare[0]?.postLink, null);
+  assert.equal(bare[0]?.postText, null);
   assert.equal(bare[0]?.body, "solo texto");
 });
 

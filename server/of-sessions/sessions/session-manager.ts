@@ -51,7 +51,7 @@ import { accountPause, noteAccountBlock, pauseWaitReason } from "../sync/backoff
 import { chatPaceOf, planChatPull, rememberChatPace, withAccountApi } from "../sync/api-list-pace.ts";
 import { fetchSignedChats, type SignedChatOptions } from "../sync/of-chat-api.ts";
 import { collectChats, type CollectedChats } from "../sync/collect-chats.ts";
-import { fetchSignedNotifications, markSignedNotificationsRead, type CollectedNotifications, type MarkNotificationsResult } from "../sync/of-notifications-api.ts";
+import { dispatchNotificationMark, fetchSignedNotifications, type CollectedNotifications, type MarkNotificationsResult } from "../sync/of-notifications-api.ts";
 import { fetchSignedOnlineFans, readOnlineSubscribers, type OnlineFan, type OnlineRead } from "../sync/online-fans.ts";
 import {
   judgeStorageState,
@@ -402,6 +402,10 @@ export class SessionManager {
       retryAfterMs: 0,
     };
     try {
+      const account = await this.options.store.get(accountId);
+      if (account.identityState === "mismatch") {
+        return { ...empty, reason: "Lecturas bloqueadas: la sesión guardada es de otra cuenta.", motivo: "no se pudo leer" };
+      }
       const state = await this.readStorageState(accountId);
       const read = await fetchSignedNotifications(state, {
         fetch: this.options.fetch ?? fetch,
@@ -428,14 +432,28 @@ export class SessionManager {
   /** Marca en OnlyFans dentro del lector de la cuenta y relee el contador. */
   markNotificationsOnOnlyfans(accountId: string, scope: { all: boolean; types: string[] }): Promise<MarkNotificationsResult> {
     return withAccountChatReader(accountId, async () => {
+      const account = await this.options.store.get(accountId);
       const state = await this.readStorageState(accountId);
-      return markSignedNotificationsRead(state, {
-        fetch: this.options.fetch ?? fetch,
-        now: () => this.now().getTime(),
-        sleep: this.options.sleep ?? ((ms) => delay(ms)),
-        minGapMs: 300,
-        accountId,
-      }, scope);
+      return dispatchNotificationMark({
+        flag: process.env.FANLINK_NOTIF_MARK_READ,
+        allowlist: process.env.FANLINK_SEND_ALLOW_ACCOUNTS,
+        account: {
+          creatorId: account.creatorId,
+          accountId: account.id,
+          handle: account.identityHandle,
+          userId: account.identityUserId,
+          label: account.label,
+        },
+        state,
+        deps: {
+          fetch: this.options.fetch ?? fetch,
+          now: () => this.now().getTime(),
+          sleep: this.options.sleep ?? ((ms) => delay(ms)),
+          minGapMs: 300,
+          accountId,
+        },
+        scope,
+      });
     });
   }
 

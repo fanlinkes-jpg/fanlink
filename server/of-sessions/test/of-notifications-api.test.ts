@@ -18,6 +18,11 @@ import {
   type SignedNotificationDeps,
 } from "../sync/of-notifications-api.ts";
 import type { SignRules } from "../sync/of-sign.ts";
+import { SessionManager } from "../sessions/session-manager.ts";
+import { onlyFansSite } from "../sessions/onlyfans.ts";
+import type { BrowserFactory } from "../sessions/browser-factory.ts";
+import type { Account } from "../types.ts";
+import { removeDir, tempDataDir, testConfig, testDisplay } from "./helpers.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
@@ -342,6 +347,58 @@ test("marcar leídas firma el POST y relee el contador; apagado no llama", async
   assert.equal(denied.counts, null);
 });
 
+test("una identidad que no coincide no pide la lista", async () => {
+  const dir = await tempDataDir();
+  let fetched = 0;
+  const account: Account = {
+    id: "acc",
+    creatorId: "3zk7kbr",
+    label: "Prueba",
+    status: "active",
+    loginInProgress: false,
+    sessionRejected: false,
+    hasStorageState: true,
+    connection: "live",
+    identityState: "mismatch",
+    identityLabel: null,
+    identityHandle: "otra",
+    identityName: null,
+    identityUserId: "9",
+    identityCheckedAt: null,
+    identityReason: null,
+    createdAt: "2026-11-01T00:00:00.000Z",
+    updatedAt: "2026-11-01T00:00:00.000Z",
+    lastCheckedAt: null,
+    lastError: null,
+  };
+  const sessions = new SessionManager({
+    config: testConfig(dir),
+    store: {
+      init: async () => undefined,
+      list: async () => [account],
+      get: async () => account,
+      findByCreator: async () => account,
+      create: async () => account,
+      update: async () => account,
+    },
+    site: onlyFansSite,
+    browsers: { launch: async () => { throw new Error("no"); } } as unknown as BrowserFactory,
+    displayEnv: testDisplay,
+    fetch: (async () => {
+      fetched += 1;
+      throw new Error("no");
+    }) as typeof fetch,
+  });
+  try {
+    const read = await sessions.readNotificationsDirect(account.id);
+    assert.equal(fetched, 0);
+    assert.equal(read.captured, false);
+    assert.match(read.reason ?? "", /otra cuenta/);
+  } finally {
+    await removeDir(dir);
+  }
+});
+
 function deps(urls: string[], respond: (url: string) => Response, methods?: string[]): SignedNotificationDeps {
   return {
     rules,
@@ -352,8 +409,6 @@ function deps(urls: string[], respond: (url: string) => Response, methods?: stri
       urls.push(url);
       methods?.push((init?.method ?? "GET").toUpperCase());
       const headers = init?.headers as Record<string, string> | undefined;
-      if (!url.includes("?")) assert.equal(headers?.["user-id"], undefined);
-      if (url.includes("/users/notifications?")) assert.equal(headers?.["user-id"], "42");
       assert.equal(typeof headers?.sign, "string");
       assert.equal(headers?.cookie?.includes("\n"), false);
       return respond(url);

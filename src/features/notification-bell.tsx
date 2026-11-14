@@ -44,6 +44,7 @@ export function NotificationBell({
   const [counts, setCounts] = useState<NotificationCounts | null>(null);
   const [motivo, setMotivo] = useState<string | null>(null);
   const [markOnOnlyfans, setMarkOnOnlyfans] = useState(false);
+  const [fanlinkUnread, setFanlinkUnread] = useState<number | null>(null);
 
   useEffect(() => {
     let stop = false;
@@ -58,9 +59,11 @@ export function NotificationBell({
         setCounts(data.counts);
         setMotivo(data.motivo);
         setMarkOnOnlyfans(data.markOnOnlyfans);
+        setFanlinkUnread(data.fanlinkUnread);
       } catch {
         if (!stop) {
           setItems(null);
+          setFanlinkUnread(null);
           setMotivo("no se pudo leer");
         }
       }
@@ -78,6 +81,7 @@ export function NotificationBell({
     if (data.counts) setCounts(data.counts);
     if (data.motivo) setMotivo(data.motivo);
     setMarkOnOnlyfans(data.markOnOnlyfans);
+    setFanlinkUnread(data.fanlinkUnread);
     const chosen = new Set(data.keys);
     setItems((current) => (current ?? []).map((item) => (
       chosen.has(item.key) ? { ...item, seen: true, ofUnread: data.cleared ? false : item.ofUnread } : item
@@ -91,7 +95,12 @@ export function NotificationBell({
     setNextCursor(data.nextCursor);
   }
 
-  const bell = notificationBellCount({ markOnOnlyfans, counts, rows: (items ?? []).map((item) => asRecord(creatorId, item)), role });
+  const bell = notificationBellCount({
+    markOnOnlyfans,
+    counts: items == null ? null : counts,
+    fanlinkTotal: items == null ? null : fanlinkUnread,
+    role,
+  });
 
   return (
     <>
@@ -105,7 +114,9 @@ export function NotificationBell({
         className="relative grid h-8 w-8 place-items-center rounded-lg border border-line bg-surface text-fg"
       >
         <Bell className="h-4 w-4" />
-        {bell.count != null && bell.count > 0 ? (
+        {bell.count == null ? (
+          <span className="absolute -top-2 -right-2 rounded bg-raised px-1 text-[9px] text-muted">{SIN_DATOS}</span>
+        ) : bell.count > 0 ? (
           <span className="absolute -top-1 -right-1 min-w-4 rounded-full bg-danger px-1 text-[10px] font-semibold text-white">{bell.count}</span>
         ) : null}
       </button>

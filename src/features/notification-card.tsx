@@ -59,7 +59,10 @@ export function NotificationFanCard({
           </p>
         ) : null}
         {text ? <p className="mt-1 text-[#1c2333]">{text}</p> : null}
-        {item.kind === "comment" && item.postRef ? <p className="mt-1 text-xs text-[#6d7585]">Publicación {item.postRef}</p> : null}
+        {item.kind === "comment" && item.postText ? <p className="mt-1 text-xs text-[#6d7585]">{item.postText}</p> : null}
+        {item.kind === "comment" && item.postLink ? (
+          <a href={item.postLink} className="mt-1 block truncate text-xs text-[#1890d4]" target="_blank" rel="noreferrer">{item.postLink}</a>
+        ) : null}
         {item.labels.amount ? <p className="mt-1 tabular-nums text-[#1c2333]">{item.labels.amount}</p> : null}
         {stamp ? <p className="mt-1 text-xs text-[#8b909a]">{stamp}</p> : null}
         {onMark ? (

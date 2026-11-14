@@ -24,6 +24,8 @@ export type NotificationListItem = {
   renewAuto: boolean | null;
   fanSeenAt: string | null;
   postRef: string | null;
+  postLink: string | null;
+  postText: string | null;
   labels: NotificationLabels;
 };
 
@@ -36,6 +38,7 @@ export type NotificationList = {
   motivo: string | null;
   status: number | null;
   markOnOnlyfans: boolean;
+  fanlinkUnread: number | null;
 };
 
 export type NotificationMarkResult = {
@@ -45,6 +48,7 @@ export type NotificationMarkResult = {
   motivo: string | null;
   cleared: boolean;
   markOnOnlyfans: boolean;
+  fanlinkUnread: number | null;
 };
 
 export const listCreatorNotifications = createServerFn({ method: "GET" })
@@ -69,29 +73,23 @@ export const markCreatorNotificationsRead = createServerFn({ method: "POST" })
     const { getSql } = await import("@/lib/db");
     const { ensureStaff } = await import("@/lib/workspace-store");
     const { DEV_USER_ID, authConfigured } = await import("@/lib/auth/verify.server");
-    const { markableNotifications, markNotificationsSeen, saveNotificationRead } = await import("../../server/of-sessions/sync/notification-store.ts");
+    const { markableNotifications, markNotificationsSeen, saveNotificationRead, countFanlinkUnread, notificationSyncState } = await import("../../server/of-sessions/sync/notification-store.ts");
     const { visibleMarkScope } = await import("@/lib/notifications");
     const { notificationLogLine } = await import("../../server/of-sessions/sync/of-notifications-api.ts");
     const { getOfSessionManager } = await import("@/lib/of-sessions-runtime.server");
-    const { notificationMarkReadGate } = await import("../../server/of-sessions/send/gate.ts");
     const sql = await getSql();
     const devMode = !authConfigured && context.userId === DEV_USER_ID;
     const access = await ensureStaff(sql, context.userId, devMode);
     const visible = await markableNotifications(sql, access, data.creatorId, data.keys);
     const updated = await markNotificationsSeen(sql, data.creatorId, access.userId, visible.map((row) => row.key));
     const scope = visibleMarkScope(visible.map((row) => row.kind), access.role, data.keys == null);
+    const sync = await notificationSyncState(sql, data.creatorId);
+    const fanlinkUnread = sync.ok ? await countFanlinkUnread(sql, data.creatorId, access.userId, access.role) : null;
     const sessions = await getOfSessionManager();
     const account = (await sessions.listAccounts()).find((item) => item.creatorId === data.creatorId);
-    const allowed = account ? notificationMarkReadGate(process.env.FANLINK_NOTIF_MARK_READ, process.env.FANLINK_SEND_ALLOW_ACCOUNTS, {
-      creatorId: account.creatorId,
-      accountId: account.id,
-      handle: account.identityHandle,
-      userId: account.identityUserId,
-      label: account.label,
-    }).allowed : false;
-    if (!account || !allowed) {
+    if (!account) {
       console.info(notificationLogLine({ creatorId: data.creatorId, route: "marcar", count: 0, motivo: "marcado apagado", status: null }));
-      return { updated, keys: visible.map((row) => row.key), counts: null, motivo: "marcado apagado", cleared: false, markOnOnlyfans: false };
+      return { updated, keys: visible.map((row) => row.key), counts: null, motivo: "marcado apagado", cleared: false, markOnOnlyfans: false, fanlinkUnread };
     }
     const marked = await sessions.markNotificationsOnOnlyfans(account.id, scope);
     for (const route of marked.routes) {
@@ -107,7 +105,8 @@ export const markCreatorNotificationsRead = createServerFn({ method: "POST" })
       counts: marked.counts,
       motivo: marked.motivo,
       cleared,
-      markOnOnlyfans: true,
+      markOnOnlyfans: marked.motivo !== "marcado apagado",
+      fanlinkUnread,
     };
   });
 

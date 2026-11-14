@@ -97,6 +97,8 @@ export type ParsedNotification = {
   fanSeenAt?: string | null;
   /** id de la publicación, solo si el JSON lo trae. */
   postRef?: string | null;
+  postLink?: string | null;
+  postText?: string | null;
 };
 
 export type NotificationRecord = ParsedNotification & {
@@ -406,35 +408,29 @@ const CHATTER_COUNT_TABS = [
 /**
  * Único sitio de la burbuja.
  * Con el marcado en OnlyFans encendido, el número es el de OnlyFans y baja
- * cuando la relectura del contador lo dice. Apagado, son las no leídas de
- * Fanlink: abrir el panel las marca aquí y el número baja. Un chatter no
- * suma agencia ni otros.
+ * cuando la relectura del contador lo dice. Un chatter no pasa de `all`.
+ * Apagado, el total lo cuenta el servidor. Null si la lista no cargó.
  */
 export function notificationBellCount(input: {
   markOnOnlyfans: boolean;
   counts: NotificationCounts | null;
-  rows: NotificationRecord[];
+  /** Total de Fanlink en el servidor. Null si la lista no cargó: la burbuja dice «Sin datos», no 0. */
+  fanlinkTotal: number | null;
   role: "owner" | "member" | null;
 }): { count: number | null; source: "onlyfans" | "fanlink" } {
   if (!input.markOnOnlyfans) {
-    return { count: fanlinkUnread(input.rows, input.role), source: "fanlink" };
+    return { count: input.fanlinkTotal, source: "fanlink" };
   }
   return { count: onlyfansUnread(input.counts, input.role), source: "onlyfans" };
-}
-
-function fanlinkUnread(rows: NotificationRecord[], role: "owner" | "member" | null): number {
-  return rows.filter((row) => {
-    if (role === "member" && isOwnerOnlyKind(row.kind)) return false;
-    if (row.seenAt) return false;
-    return row.ofUnread !== false;
-  }).length;
 }
 
 function onlyfansUnread(counts: NotificationCounts | null, role: "owner" | "member" | null): number | null {
   if (!counts) return null;
   if (role === "member") {
     const present = CHATTER_COUNT_TABS.map((tab) => counts[tab]).filter((item): item is number => item != null);
-    return present.length === 0 ? null : present.reduce((sum, item) => sum + item, 0);
+    if (present.length === 0) return null;
+    const sum = present.reduce((total, item) => total + item, 0);
+    return counts.all == null ? sum : Math.min(counts.all, sum);
   }
   return counts.all;
 }
@@ -606,6 +602,8 @@ function notificationFrom(record: Record<string, unknown>, options: ParseNotific
     renewAuto: card.renewAuto,
     fanSeenAt: card.fanSeenAt,
     postRef: card.postRef,
+    postLink: card.postLink,
+    postText: card.postText,
   };
 }
 
@@ -652,15 +650,20 @@ function fanCard(record: Record<string, unknown>): {
   renewAuto: boolean | null;
   fanSeenAt: string | null;
   postRef: string | null;
+  postLink: string | null;
+  postText: string | null;
 } {
   const user = nested(record, ["user", "fromUser", "relatedUser", "subscriber"]);
+  const post = postOf(record);
   return {
     fanHandle: (user ? firstString(user, ["username"]) : null) ?? firstString(record, ["username"]),
     avatarUrl: user ? avatarOf(user) : null,
     lists: user ? readFanLists(user) : null,
     renewAuto: user ? readRenew(user) : null,
     fanSeenAt: user ? firstTime(user, ["lastSeen"]) : null,
-    postRef: postRefOf(record),
+    postRef: post.id,
+    postLink: post.link,
+    postText: post.text,
   };
 }
 
@@ -704,17 +707,25 @@ function readRenew(user: Record<string, unknown>): boolean | null {
   return typeof raw === "boolean" ? raw : null;
 }
 
-function postRefOf(record: Record<string, unknown>): string | null {
-  const direct = firstString(record, ["postId", "post_id"]);
-  if (direct) return direct;
+function postOf(record: Record<string, unknown>): { id: string | null; link: string | null; text: string | null } {
+  const nestedPost = record.post ?? record.entity;
+  const post = nestedPost && typeof nestedPost === "object" && !Array.isArray(nestedPost)
+    ? nestedPost as Record<string, unknown>
+    : null;
+  let link = (post ? firstString(post, ["link", "url", "postLink"]) : null) ?? firstString(record, ["postLink", "postUrl", "post_link"]);
+  let text = (post ? firstString(post, ["text", "rawText", "body"]) : null) ?? firstString(record, ["postText", "post_text"]);
   const pairs = record.replacePairs;
-  if (!pairs || typeof pairs !== "object" || Array.isArray(pairs)) return null;
-  for (const [key, value] of Object.entries(pairs as Record<string, unknown>)) {
-    if (typeof value !== "string" || !/POST/i.test(key)) continue;
-    const match = /(\d{5,})/.exec(value);
-    if (match?.[1]) return match[1];
+  if (pairs && typeof pairs === "object" && !Array.isArray(pairs)) {
+    for (const [key, value] of Object.entries(pairs as Record<string, unknown>)) {
+      if (typeof value !== "string" || !/POST/i.test(key)) continue;
+      const clean = value.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+      if (!clean) continue;
+      if (/^https?:\/\//i.test(clean)) link ??= clean;
+      else if (!/^\d+$/.test(clean)) text ??= clean;
+    }
   }
-  return null;
+  const id = firstString(record, ["postId", "post_id"]) ?? (link ? /(\d{5,})/.exec(link)?.[1] ?? null : null);
+  return { id, link, text };
 }
 
 /**
@@ -859,6 +870,8 @@ function fillGaps(previous: ParsedNotification, incoming: ParsedNotification): P
     renewAuto: incoming.renewAuto ?? previous.renewAuto ?? null,
     fanSeenAt: incoming.fanSeenAt ?? previous.fanSeenAt ?? null,
     postRef: incoming.postRef ?? previous.postRef ?? null,
+    postLink: incoming.postLink ?? previous.postLink ?? null,
+    postText: incoming.postText ?? previous.postText ?? null,
   };
 }
 
