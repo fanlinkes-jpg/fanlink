@@ -86,8 +86,9 @@ export function OnlineFansPanel({
     }
   }
 
+  // 22rem se salía de la columna de 340px y el overflow cortaba el bocadillo.
   return (
-    <div className="absolute left-0 top-full z-30 mt-1 flex max-h-[28rem] w-[22rem] flex-col overflow-hidden rounded-xl border border-[#e6e8ee] bg-white shadow-lg">
+    <div className="absolute left-0 top-full z-30 mt-1 flex max-h-[28rem] w-[20rem] max-w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-xl border border-[#e6e8ee] bg-white shadow-lg">
       <div className="flex items-center gap-2 border-b border-[#e6e8ee] px-3 py-2">
         <p className="min-w-0 flex-1 text-[11px] uppercase tracking-wide text-[#6d7585]">Colecciones · Todo · En línea</p>
         <button type="button" aria-label="Actualizar fans en línea" className="rounded-md p-1 text-[#2456c7] hover:bg-[#eef2ff]" onClick={onRefresh}>
@@ -107,11 +108,11 @@ export function OnlineFansPanel({
         </select>
         <span className="text-[11px] text-[#6d7585]">{visible.length}</span>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
         {busy ? <p className="px-3 py-3 text-xs text-[#6d7585]">Leyendo Colecciones, pestaña Todo, filtro En línea…</p> : null}
         {!busy && note ? <p className="px-3 py-2 text-xs text-[#6d7585]">{note}</p> : null}
         {visible.map((fan) => (
-          <div key={fan.fanKey} className="flex items-center gap-2 px-3 py-2">
+          <div key={fan.fanKey} className="flex min-w-0 items-center gap-2 overflow-hidden py-2 pl-3 pr-4">
             <span className="relative h-8 w-8 shrink-0">
               {fan.avatarUrl ? (
                 <img src={fan.avatarUrl} alt="" className="h-8 w-8 rounded-full object-cover" />
@@ -121,12 +122,14 @@ export function OnlineFansPanel({
               {fan.online ? <span className="absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border border-white bg-[#1f9d55]" /> : null}
             </span>
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm font-medium">{fan.fanName ?? fan.fanHandle ?? "Sin datos"}</span>
-              <span className="block truncate text-[11px] text-[#6d7585]">{spendLabel(fan.spentCents, fan.currency)}</span>
+              <span className="block min-w-0 truncate text-sm font-medium">{fan.fanName ?? fan.fanHandle ?? "Sin datos"}</span>
+              <span className="block min-w-0 truncate text-[11px] text-[#6d7585]">{spendLabel(fan.spentCents, fan.currency)}</span>
             </span>
-            <button type="button" aria-label={`Abrir chat de ${fan.fanName ?? fan.fanHandle ?? "fan"}`} className="rounded-md p-1 text-[#2456c7] hover:bg-[#eef2ff]" onClick={() => onOpenChat(fan.fanKey)}>
-              <MessageCircle className="h-4 w-4" />
-            </button>
+            <div className="shrink-0">
+              <button type="button" aria-label={`Abrir chat de ${fan.fanName ?? fan.fanHandle ?? "fan"}`} className="shrink-0 rounded-md p-1 text-[#2456c7] hover:bg-[#eef2ff]" onClick={() => onOpenChat(fan.fanKey)}>
+                <MessageCircle className="h-4 w-4" />
+              </button>
+            </div>
           </div>
         ))}
       </div>
