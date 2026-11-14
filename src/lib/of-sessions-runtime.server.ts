@@ -16,10 +16,12 @@ import { AccountStore } from "../../server/of-sessions/store/account-store.ts";
 import { DbAccountStore } from "../../server/of-sessions/store/db-account-store.ts";
 import { createMirroringStore } from "../../server/of-sessions/store/mirroring-store.ts";
 import type { Account } from "../../server/of-sessions/types.ts";
+import type { CollectedChats } from "../../server/of-sessions/sync/collect-chats.ts";
 import type { CreatorChatList, CreatorReadList, CreatorReadView, CreatorSessionView } from "./of-sessions.ts";
 import { parseAccountProxy, proxyLabel, readAccountProxy, removeAccountProxy, writeAccountProxy } from "../../server/of-sessions/proxy.ts";
 import { syncAssignments } from "../../server/of-sessions/metrics/assignments.ts";
 import { dashboardViewFor } from "../../server/of-sessions/metrics/dashboard.ts";
+import { apiListStep, passApiListAccounts, shouldReadApiList } from "../../server/of-sessions/sync/api-list-cycle.ts";
 import { accountPause, blockKind, listAccountPauses, noteAccountBlock } from "../../server/of-sessions/sync/backoff.ts";
 import { presentTeamMetrics } from "../../server/of-sessions/metrics/present-team.ts";
 import { creatorIdsForReads } from "@/lib/dashboard-config";
@@ -40,6 +42,9 @@ import { normalizeFanMenuRequest, runFanMenuOnPage, type FanMenuResult } from ".
 import { chatPageUrl } from "../../server/of-sessions/sync/chats.ts";
 import { sendPace } from "../../server/of-sessions/send/gate.ts";
 import { chatSendGate, publicSendReason, type SendAccount } from "../../server/of-sessions/send/gate.ts";
+import { markOpenedChat, markOpenRejected, markReadGate } from "../../server/of-sessions/sync/mark-read.ts";
+import { loadSignRules } from "../../server/of-sessions/sync/of-sign.ts";
+import { sessionForApi } from "../../server/of-sessions/sync/of-chat-api.ts";
 import type { SendChatHooks } from "../../server/of-sessions/send/chat-message.ts";
 import { composeChat } from "../../server/of-sessions/send/compose.ts";
 import { liveViewGate } from "../../server/of-sessions/live/desk.ts";
@@ -199,17 +204,15 @@ export function kickInboxWatch(): void {
       console.info(`[fanlink:chat] escucha pausada cuenta=${accountId} motivo=${reason} espera=${delay}`);
       return delay;
     },
-    pullList: async (accountId) => {
+    pullList: async (accountId, openThreadKeys) => {
       const sessions = await getOfSessionManager();
-      const read = await sessions.readChatsDirect(accountId);
       const account = (await sessions.listAccounts()).find((item) => item.id === accountId);
-      if (!account?.creatorId || read.threads.length === 0) {
-        if (read.reason) console.info(`[fanlink:chat] api lista creator=${account?.creatorId?.trim() || "sin ficha"} ${read.reason}`);
-        return false;
-      }
-      await saveChatRead(await getSql(), account.creatorId, read);
-      console.info(`[fanlink:chat] api lista creator=${account.creatorId} hilos=${read.threads.length} mensajes=${read.messages.length}`);
-      return true;
+      if (!account || !shouldReadApiList(account, false)) return false;
+      const pause = accountPause(accountId);
+      if (pause) return { ok: false, waitMs: Math.max(200, pause.until - Date.now()) };
+      const read = await sessions.readPacedChats(accountId, "all", openThreadKeys);
+      if (read.reason?.includes("espera el ritmo")) return true;
+      return finishApiRead(account, read);
     },
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -294,28 +297,43 @@ async function pullOlder(sessions: SessionManager, accountId: string, creatorId:
   return "saved";
 }
 
+async function finishApiRead(account: Account, read: CollectedChats): Promise<boolean | { ok: false; waitMs: number }> {
+  const step = apiListStep(account, {
+    threadCount: read.threads.length,
+    messageCount: read.messages.length,
+    reason: read.reason,
+    sessionRejected: read.sessionRejected === true,
+    signatureRejected: read.signatureRejected === true,
+    retryAfterMs: read.retryAfterMs ?? 0,
+  });
+  if (step.save && account.creatorId) await saveChatRead(await getSql(), account.creatorId, read);
+  if (step.backoff) {
+    const existing = accountPause(account.id);
+    const delay = existing ? Math.max(200, existing.until - Date.now()) : noteAccountBlock(account.id, read.signatureRejected ? "400" : "429");
+    console.info(`${step.line} espera=${delay}`);
+    return { ok: false, waitMs: delay };
+  }
+  console.info(step.line);
+  return step.save;
+}
+
 function bootApiListLoop(sessions: SessionManager): void {
   if (process.env.FANLINK_SYNC_ENABLED === "false") return;
   if (process.execArgv.includes("--test")) return;
   if (globalRef.__ofApiList__) return;
   globalRef.__ofApiList__ = true;
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const skipNoted = new Set<string>();
   void (async () => {
     await sleep(5_000);
     while (true) {
       try {
-        for (const account of await sessions.listAccounts()) {
-          if (!account.creatorId || account.identityState === "mismatch") continue;
-          const read = await sessions.readChatsDirect(account.id);
-          if (read.threads.length === 0) {
-            console.info(`[fanlink:chat] api lista creator=${account.creatorId} ${read.reason ?? "sin hilos"}`);
-            continue;
-          }
-          await saveChatRead(await getSql(), account.creatorId, read);
-          console.info(`[fanlink:chat] api lista creator=${account.creatorId} hilos=${read.threads.length} mensajes=${read.messages.length}`);
-        }
+        await passApiListAccounts(sessions, await sessions.listAccounts(), skipNoted, async (account, read) => {
+          await finishApiRead(account, read);
+        });
       } catch (error) {
-        console.info(`[fanlink:chat] api lista: ${error instanceof Error ? error.message.slice(0, 120) : "error"}`);
+        const text = error instanceof Error ? error.message.slice(0, 120) : "error";
+        console.info(`[fanlink:chat] api lista creator=- account=-: ${text}`);
       }
       await sleep(15_000);
     }
@@ -1029,6 +1047,48 @@ export async function runFanChatMenuView(userId: string, input: { creatorId: str
   }, { wait: true });
   if (!ran.ok) return { ok: false, reason: "OnlyFans está ocupado con otra lectura.", lists: [] };
   return ran.value;
+}
+
+export async function markChatOpenedView(userId: string, input: { creatorId: string; threadKey: string }): Promise<{ marked: boolean }> {
+  const access = await accessFor(userId);
+  if (access.role !== "owner" && !access.perms.includes("mensajes")) {
+    throw new WorkspaceAccessError("No tienes permiso para escribir.");
+  }
+  const creatorId = parseCreatorId(input.creatorId);
+  const sessions = await getOfSessionManager();
+  const account = (await sessions.listAccounts()).find((item) => item.creatorId === creatorId);
+  if (!account) return { marked: false };
+  if (markOpenRejected(account.identityState, accountPause(account.id) != null)) return { marked: false };
+  const fields = sendAccount(account);
+  if (!markReadGate(process.env.FANLINK_CHAT_MARK_READ, process.env.FANLINK_SEND_ALLOW_ACCOUNTS, fields).allowed) {
+    return { marked: false };
+  }
+  let state;
+  try {
+    state = await sessions.readStorageState(account.id);
+  } catch {
+    return { marked: false };
+  }
+  const auth = sessionForApi(state, Date.now());
+  if ("reason" in auth) return { marked: false };
+  const rules = await loadSignRules(fetch, Date.now());
+  const result = await markOpenedChat({
+    accountId: account.id,
+    creatorId,
+    threadKey: input.threadKey,
+    flag: process.env.FANLINK_CHAT_MARK_READ,
+    allowlist: process.env.FANLINK_SEND_ALLOW_ACCOUNTS,
+    account: fields,
+    sql: await getSql(),
+    fetch,
+    now: () => Date.now(),
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    rules,
+    auth,
+    log: (line) => console.info(line),
+    onSessionRejected: () => sessions.noteApiSessionRejected(account.id),
+  });
+  return { marked: result.status != null && result.status >= 200 && result.status < 300 };
 }
 
 export async function loadOlderMessagesView(userId: string, input: { creatorId: string; threadKey: string }): Promise<{ ok: boolean }> {

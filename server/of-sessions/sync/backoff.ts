@@ -22,12 +22,30 @@ type Pause = { until: number; reason: string; attempt: number };
 
 const pauses = new Map<string, Pause>();
 
+/** Pausa fija, por ejemplo el Retry-After de un 429. */
+export function pauseAccountFor(accountId: string, reason: string, delayMs: number, now = Date.now()): number {
+  const prev = pauses.get(accountId);
+  const attempt = prev && prev.until > now ? prev.attempt + 1 : 0;
+  const delay = Math.max(0, Math.round(delayMs));
+  pauses.set(accountId, { until: now + delay, reason, attempt });
+  return delay;
+}
+
 export function noteAccountBlock(accountId: string, reason: string, now = Date.now(), random: () => number = Math.random): number {
   const prev = pauses.get(accountId);
   const attempt = prev && prev.until > now ? prev.attempt + 1 : 0;
   const delay = backoffDelayMs(attempt, random);
   pauses.set(accountId, { until: now + delay, reason, attempt });
   return delay;
+}
+
+/** Un 400 es la firma. Un 429 u otra pausa dice la causa y los segundos. */
+export function pauseWaitReason(pause: { reason: string; until: number }, now: number): { reason: string; signatureRejected: boolean } {
+  if (pause.reason === "400") {
+    return { reason: "OnlyFans rechazó la firma", signatureRejected: true };
+  }
+  const seconds = Math.max(1, Math.ceil((pause.until - now) / 1000));
+  return { reason: `pausa por ${pause.reason} (espera ${seconds} s)`, signatureRejected: false };
 }
 
 export function accountPause(accountId: string, now = Date.now()): Pause | null {

@@ -52,6 +52,7 @@ test("flujo completo contra el simulador: conectar, comprobar, sincronizar, chat
       "0024_outbound_schedule.sql",
       "0025_outbound_send.sql",
       "0026_chat_history.sql",
+      "0045_chat_unread_null.sql",
     ]) {
       await pg.exec(await readFile(path.join(dir, name), "utf8"));
     }

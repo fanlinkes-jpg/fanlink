@@ -6,6 +6,7 @@
  * FANLINK_SEND_ALLOW_ACCOUNTS. Los masivos siguen apagados.
  */
 import { sectionFailure, type SectionOutcome } from "./parse.ts";
+import { higherUnread, unreadCountOf } from "./unread-chats.ts";
 
 export type ChatThread = {
   threadKey: string;
@@ -14,11 +15,13 @@ export type ChatThread = {
   fanName: string | null;
   lastMessageAt: string | null;
   excerpt: string | null;
-  unread: number;
+  /** Null si la lista firmada no trajo `unreadMessagesCount`. No es un cero. */
+  unread: number | null;
   /** Id de fromUser del último mensaje. No es un chatter del CRM. */
   lastFromUserId: string | null;
   /** True si lo escribió el fan, false si salió de la cuenta, null si no se sabe. */
   lastFromFan: boolean | null;
+  /** Céntimos de `subscribedOnData.totalSumm`, en dólares. 0 es un gasto real. Null si el campo no vino. */
   spentCents: number | null;
   subscribesCents: number | null;
   tipsCents: number | null;
@@ -115,7 +118,7 @@ export function threadsToOpen(
   return [...threads]
     .sort((left, right) => {
       if (unreadFirst) {
-        const unread = Number(right.unread > 0) - Number(left.unread > 0);
+        const unread = Number((right.unread ?? 0) > 0) - Number((left.unread ?? 0) > 0);
         if (unread !== 0) return unread;
       }
       return (right.lastMessageAt ?? "").localeCompare(left.lastMessageAt ?? "");
@@ -231,7 +234,7 @@ function combineThread(left: ChatThread, right: ChatThread): ChatThread {
     fanName: newer.fanName ?? older.fanName,
     lastMessageAt: newer.lastMessageAt ?? older.lastMessageAt,
     excerpt: newer.excerpt ?? older.excerpt,
-    unread: Math.max(left.unread, right.unread),
+    unread: higherUnread(left.unread, right.unread),
     lastFromUserId: newer.lastFromUserId ?? older.lastFromUserId,
     lastFromFan: newer.lastFromFan ?? older.lastFromFan,
     spentCents: newer.spentCents ?? older.spentCents,
@@ -275,6 +278,48 @@ export function mergeMessages(current: ChatMessage[], incoming: ChatMessage[]): 
 }
 
 /** `users/list` es un mapa id → ficha, no un array. */
+/** Solo `totalSumm` (o el equivalente). Si no viene, null: no se suma el desglose ni se inventa un 0. */
+export function directorySpentCents(record: Record<string, unknown>): number | null {
+  const card = readFanSpend(record);
+  const source = nested(record.subscribedOnData) ?? nested(record.subscribedByData) ?? record;
+  const direct = money(source.totalSumm ?? source.spent ?? source.totalSpent);
+  if (direct == null) return null;
+  return card?.spentCents ?? direct;
+}
+
+export function directorySpendById(value: unknown): Map<string, number | null> {
+  const rows: Array<{ id: string; spentCents: number | null }> = [];
+  collectDirectorySpend(value, null, rows, 0);
+  const map = new Map<string, number | null>();
+  for (const row of rows) if (!map.has(row.id)) map.set(row.id, row.spentCents);
+  return map;
+}
+
+export function fillThreadSpend(
+  threads: ChatThread[],
+  spendById: ReadonlyMap<string, number | null>,
+): { threads: ChatThread[]; filled: number; stillNull: number } {
+  const pending = new Set(threads.flatMap((thread) => thread.spentCents == null && thread.fanKey ? [thread.fanKey] : []));
+  let filled = 0;
+  let stillNull = 0;
+  for (const id of pending) {
+    if (!spendById.has(id)) continue;
+    if (spendById.get(id) == null) stillNull += 1;
+    else filled += 1;
+  }
+  if (filled === 0) return { threads, filled, stillNull };
+  return {
+    filled,
+    stillNull,
+    threads: threads.map((thread) => {
+      if (thread.spentCents != null || !thread.fanKey) return thread;
+      const spend = spendById.get(thread.fanKey);
+      if (spend == null) return thread;
+      return { ...thread, spentCents: spend };
+    }),
+  };
+}
+
 export function parseUsersDirectory(value: unknown): ChatUser[] {
   const rows: ChatUser[] = [];
   collectUsers(value, null, rows, 0);
@@ -405,7 +450,7 @@ function threadFrom(record: Record<string, unknown>, accountId: string | null): 
   if (!threadKey || (!fanKey && !fanHandle && !fanName)) return null;
   if (!fanKey && !clean(record.id, 40) && !clean(record.threadId, 40) && !looksLikeThread) return null;
   const excerpt = excerptOf(visibleText(last?.text ?? last?.body ?? record.excerpt, 500));
-  const spend = readFanSpend(user) ?? emptySpend();
+  const spend = mergeSpend(readFanSpend(user), readFanSpend(chatSpend(record))) ?? emptySpend();
   const lastFromUserId = clean(nested(last?.fromUser)?.id, 40);
   return {
     threadKey,
@@ -414,7 +459,7 @@ function threadFrom(record: Record<string, unknown>, accountId: string | null): 
     fanName,
     lastMessageAt: iso(last?.createdAt ?? last?.created_at ?? record.lastMessageAt ?? record.at),
     excerpt,
-    unread: count(record.unreadMessagesCount ?? record.unread),
+    unread: unreadCountOf(record),
     lastFromUserId,
     lastFromFan: fromFanFlag(lastFromUserId, fanKey, accountId),
     ...spend,
@@ -447,13 +492,13 @@ function fanGroup(thread: FanRow): string {
 }
 
 function preferFanRow<T extends FanRow>(left: T, right: T): T {
-  const rank = (row: FanRow) => (row.threadKey === row.fanKey ? 4 : 0) + (row.unread > 0 ? 2 : 0) + (row.excerpt ? 1 : 0);
+  const rank = (row: FanRow) => (row.threadKey === row.fanKey ? 4 : 0) + ((row.unread ?? 0) > 0 ? 2 : 0) + (row.excerpt ? 1 : 0);
   const primary = rank(right) > rank(left) ? right : left;
   const other = primary === left ? right : left;
   const lastMessageAt = (right.lastMessageAt ?? "") > (left.lastMessageAt ?? "") ? right.lastMessageAt : left.lastMessageAt;
   return {
     ...primary,
-    unread: Math.max(left.unread, right.unread),
+    unread: higherUnread(left.unread, right.unread),
     excerpt: primary.excerpt ?? other.excerpt,
     lastMessageAt,
   };
@@ -465,7 +510,7 @@ type FanRow = {
   fanKey: string | null;
   fanHandle: string | null;
   fanName: string | null;
-  unread: number;
+  unread: number | null;
   excerpt: string | null;
   lastMessageAt: string | null;
 };
@@ -666,6 +711,31 @@ function seenFlag(record: Record<string, unknown>): boolean | null {
   return null;
 }
 
+function chatSpend(record: Record<string, unknown>): Record<string, unknown> | null {
+  const nestedSpend = nested(record.subscribedOnData) ?? nested(record.subscribedByData);
+  return nestedSpend ? { subscribedOnData: nestedSpend } : null;
+}
+
+function mergeSpend(
+  left: ReturnType<typeof readFanSpend>,
+  right: ReturnType<typeof readFanSpend>,
+): ReturnType<typeof readFanSpend> {
+  if (!left) return right;
+  if (!right) return left;
+  return {
+    spentCents: left.spentCents ?? right.spentCents,
+    subscribesCents: left.subscribesCents ?? right.subscribesCents,
+    tipsCents: left.tipsCents ?? right.tipsCents,
+    postsCents: left.postsCents ?? right.postsCents,
+    messagesCents: left.messagesCents ?? right.messagesCents,
+    avatarUrl: left.avatarUrl ?? right.avatarUrl,
+    online: left.online ?? right.online,
+    subPriceCents: left.subPriceCents ?? right.subPriceCents,
+    subExpiresAt: left.subExpiresAt ?? right.subExpiresAt,
+    renewAuto: left.renewAuto ?? right.renewAuto,
+  };
+}
+
 function readFanSpend(
   record: Record<string, unknown> | null,
 ): Pick<ChatThread, "spentCents" | "subscribesCents" | "tipsCents" | "postsCents" | "messagesCents" | "avatarUrl" | "online" | "subPriceCents" | "subExpiresAt" | "renewAuto"> | null {
@@ -785,6 +855,36 @@ function visibleText(value: unknown, max: number): string | null {
     .trim();
   if (!text) return null;
   return text.slice(0, max);
+}
+
+function collectDirectorySpend(
+  value: unknown,
+  fallbackId: string | null,
+  rows: Array<{ id: string; spentCents: number | null }>,
+  depth: number,
+): void {
+  if (!value || typeof value !== "object" || depth > 2 || rows.length > 500) return;
+  if (Array.isArray(value)) {
+    for (const item of value.slice(0, 500)) collectDirectorySpend(item, null, rows, depth + 1);
+    return;
+  }
+  const record = value as Record<string, unknown>;
+  const id = clean(record.id, 40) ?? fallbackId;
+  const spend = directorySpentCents(record);
+  const named = Boolean(handle(record.username ?? record.handle) || clean(record.name ?? record.displayName, 80) || clean(record.id, 40));
+  if (id && (named || spend != null || nested(record.subscribedOnData) || nested(record.subscribedByData))) {
+    rows.push({ id, spentCents: spend });
+    if (named || spend != null) return;
+  }
+  const nestedList = record.list ?? record.users ?? record.items;
+  if (Array.isArray(nestedList)) {
+    collectDirectorySpend(nestedList, null, rows, depth + 1);
+    return;
+  }
+  for (const [key, child] of Object.entries(record)) {
+    if (!child || typeof child !== "object" || Array.isArray(child)) continue;
+    collectDirectorySpend(child, /^\d+$/.test(key) ? key : null, rows, depth + 1);
+  }
 }
 
 function collectUsers(value: unknown, fallbackId: string | null, rows: ChatUser[], depth: number): void {

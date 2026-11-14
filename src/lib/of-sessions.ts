@@ -129,7 +129,7 @@ export type CreatorChatList = {
     fanName: string | null;
     lastMessageAt: string | null;
     excerpt: string | null;
-    unread: number;
+    unread: number | null;
     lastFromFan: boolean | null;
     spentCents: number | null;
     subscribesCents: number | null;
@@ -312,6 +312,14 @@ export const chatSendAccess = createServerFn({ method: "GET" })
   .handler(async ({ context }): Promise<{ creatorIds: string[] }> => {
     const { chatSendAccessView } = await import("./of-sessions-runtime.server");
     return chatSendAccessView(context.userId);
+  });
+
+export const markChatOpened = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string; threadKey: string }) => input)
+  .handler(async ({ context, data }): Promise<{ marked: boolean }> => {
+    const { markChatOpenedView } = await import("./of-sessions-runtime.server");
+    return markChatOpenedView(context.userId, data);
   });
 
 export const loadOlderMessages = createServerFn({ method: "POST" })

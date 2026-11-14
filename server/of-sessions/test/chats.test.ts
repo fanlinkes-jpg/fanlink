@@ -8,7 +8,8 @@ import { createSessionRuntime } from "../runtime.ts";
 import { applyAccountId, applyUserDirectory, chatFailureReason, chatIntervalMinFromEnv, chatPageUrl, classifyChatPath, collapseFans, mergeMessages, mergeThreads, newFanEvents, parseChatList, parseChatMessages, parsePreviewMessages, parseUsersDirectory, previewSender, threadsToOpen } from "../sync/chats.ts";
 import { preferOutcome } from "../sync/parse.ts";
 import { shapeSummary } from "../sync/shape.ts";
-import { saveChatRead } from "../sync/chat-store.ts";
+import { listChats, saveChatRead } from "../sync/chat-store.ts";
+import { spendTone } from "../../../src/lib/spend-tiers.ts";
 import type { ReadSql } from "../sync/store.ts";
 import { startFixture } from "./fixture-site.ts";
 import { completeFixtureLogin, recordingFactory, removeDir, tempDataDir, testConfig, testDisplay } from "./helpers.ts";
@@ -200,9 +201,92 @@ test("el último mensaje abre el hilo y el gasto sale de la ficha, sin inventarl
     { ...named[1]!, unread: 2, lastMessageAt: "2026-11-05T10:00:00.000Z" },
   ]);
   assert.equal(opened[0]?.unread, 2);
+  const onTheChat = parseChatList({
+    list: [{
+      withUser: { id: 11, name: "Lara" },
+      subscribedOnData: { totalSumm: 9.5, tipsSumm: 1.5 },
+      unreadMessagesCount: 0,
+      lastMessage: { id: 1, text: "x", createdAt: "2026-11-05T10:00:00.000Z", fromUser: { id: 11 } },
+    }],
+  }, accountId);
+  assert.equal(onTheChat[0]?.spentCents, 950);
+  assert.equal(onTheChat[0]?.tipsCents, 150);
   const bare = parseChatList({ list: [{ withUser: { id: 1 }, unreadMessagesCount: 0, lastMessage: { id: 1, text: "x", createdAt: "2026-11-05T10:00:00.000Z", fromUser: { id: 1 } } }] }, accountId);
   assert.equal(bare[0]?.spentCents, null);
+  assert.equal(spendTone(bare[0]?.spentCents ?? null).label, "Sin datos");
   assert.equal(applyAccountId(bare, [], accountId).threads[0]?.lastFromFan, true);
+});
+
+const CHAT_SCHEMA = ["0007_of_reads.sql", "0008_sync_schedule.sql", "0009_of_chats.sql", "0013_chat_price.sql", "0018_chat_preview.sql", "0019_chat_author.sql", "0020_chat_card.sql", "0021_fan_profile.sql", "0022_message_media.sql", "0024_outbound_schedule.sql", "0025_outbound_send.sql", "0026_chat_history.sql", "0045_chat_unread_null.sql"];
+
+function ofChat(id: number, spend: Record<string, unknown> | null) {
+  return {
+    list: [{
+      withUser: { id, name: `Fan ${id}` },
+      ...(spend ? { subscribedOnData: spend } : {}),
+      unreadMessagesCount: 0,
+      lastMessage: { id, text: "hola", createdAt: "2026-11-05T10:00:00.000Z", fromUser: { id } },
+    }],
+  };
+}
+
+async function withChatDb(run: (sql: ReadSql) => Promise<void>): Promise<void> {
+  const pg = new PGlite();
+  const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../migrations");
+  try {
+    for (const name of CHAT_SCHEMA) await pg.exec(await readFile(path.join(dir, name), "utf8"));
+    const sql: ReadSql = {
+      async query<T>(text: string, params?: unknown[]): Promise<T[]> {
+        const result = await pg.query<T>(text, params);
+        return result.rows;
+      },
+    };
+    await run(sql);
+  } finally {
+    await pg.close();
+  }
+}
+
+test("un totalSumm 0 se guarda como 0 y la fila pone $0.00", async () => {
+  const onTheChat = parseChatList(ofChat(8, { totalSumm: 0 }), "42");
+  const asText = parseChatList(ofChat(8, { totalSumm: "0.00" }), "42");
+  const onTheUser = parseChatList({
+    list: [{
+      withUser: { id: 8, name: "Fan 8", subscribedOnData: { totalSumm: 0 } },
+      unreadMessagesCount: 0,
+      lastMessage: { id: 8, text: "hola", createdAt: "2026-11-05T10:00:00.000Z", fromUser: { id: 8 } },
+    }],
+  }, "42");
+  assert.equal(onTheChat[0]?.spentCents, 0);
+  assert.equal(asText[0]?.spentCents, 0);
+  assert.equal(onTheUser[0]?.spentCents, 0);
+  assert.equal(spendTone(0).label, "$0.00");
+  await withChatDb(async (sql) => {
+    await saveChatRead(sql, "c-cero", { reason: null, jsonPaths: [], threads: onTheChat, messages: [] });
+    const stored = (await listChats(sql, ["c-cero"])).threads.find((row) => row.threadKey === "8");
+    assert.equal(stored?.spentCents, 0);
+    assert.equal(spendTone(stored?.spentCents ?? null).label, "$0.00");
+    await saveChatRead(sql, "c-cero", {
+      reason: "no se pudo leer",
+      jsonPaths: [],
+      threads: onTheChat.map((thread) => ({ ...thread, spentCents: null })),
+      messages: [],
+    });
+    const kept = (await listChats(sql, ["c-cero"])).threads.find((row) => row.threadKey === "8");
+    assert.equal(kept?.spentCents, 0);
+  });
+});
+
+test("si el gasto no viene, el store queda en null y la fila pone Sin datos", async () => {
+  const parsed = parseChatList(ofChat(1, null), "42");
+  assert.equal(parsed[0]?.spentCents, null);
+  assert.equal(spendTone(null).label, "Sin datos");
+  await withChatDb(async (sql) => {
+    await saveChatRead(sql, "c-vacio", { reason: "no se pudo leer", jsonPaths: [], threads: parsed, messages: [] });
+    const stored = (await listChats(sql, ["c-vacio"])).threads.find((row) => row.threadKey === "1");
+    assert.equal(stored?.spentCents, null);
+    assert.equal(spendTone(stored?.spentCents ?? null).label, "Sin datos");
+  });
 });
 
 test("el simulador entrega el chat y solo avisa de mensajes nuevos", { timeout: 60_000 }, async () => {
@@ -218,7 +302,7 @@ test("el simulador entrega el chat y solo avisa de mensajes nuevos", { timeout: 
   const pg = new PGlite();
   const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../migrations");
   try {
-    for (const name of ["0007_of_reads.sql", "0008_sync_schedule.sql", "0009_of_chats.sql", "0013_chat_price.sql", "0018_chat_preview.sql", "0019_chat_author.sql", "0020_chat_card.sql", "0021_fan_profile.sql", "0022_message_media.sql", "0024_outbound_schedule.sql", "0025_outbound_send.sql", "0026_chat_history.sql"]) {
+    for (const name of ["0007_of_reads.sql", "0008_sync_schedule.sql", "0009_of_chats.sql", "0013_chat_price.sql", "0018_chat_preview.sql", "0019_chat_author.sql", "0020_chat_card.sql", "0021_fan_profile.sql", "0022_message_media.sql", "0024_outbound_schedule.sql", "0025_outbound_send.sql", "0026_chat_history.sql", "0045_chat_unread_null.sql"]) {
       await pg.exec(await readFile(path.join(dir, name), "utf8"));
     }
     const sql: ReadSql = {

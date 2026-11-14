@@ -5,6 +5,28 @@ import type { ReadSql } from "./store.ts";
 
 const ORIGIN = "onlyfans";
 const RECENT_MESSAGES = 60;
+const markedReadAt = new Map<string, number>();
+
+/** El POST de marcar leído ganó. Las lecturas empezadas antes no reponen el número. */
+export function noteUnreadMarked(creatorId: string, threadKey: string, atMs: number): void {
+  markedReadAt.set(`${creatorId}\0${threadKey}`, atMs);
+}
+
+export function clearUnreadMarks(): void {
+  markedReadAt.clear();
+}
+
+function keepMarkedUnread(creatorId: string, threadKey: string, startedAt: string | undefined, _incoming: number | null): boolean {
+  const key = `${creatorId}\0${threadKey}`;
+  const marked = markedReadAt.get(key);
+  if (marked == null || !startedAt) return false;
+  const started = Date.parse(startedAt);
+  if (!Number.isFinite(started) || started >= marked) {
+    markedReadAt.delete(key);
+    return false;
+  }
+  return true;
+}
 
 export type StoredThread = ChatThread & { creatorId: string; syncedAt: string };
 export type StoredChatMessage = ChatMessage & {
@@ -25,7 +47,16 @@ export type ChatMeta = {
 export async function saveChatRead(
   sql: ReadSql,
   creatorId: string,
-  read: { threads: ChatThread[]; messages: ChatMessage[]; reason: string | null; jsonPaths: string[] },
+  read: {
+    threads: ChatThread[];
+    messages: ChatMessage[];
+    reason: string | null;
+    jsonPaths: string[];
+    /** `head` es la primera página. Solo se pisan los hilos que vienen en `threads`. */
+    list?: "full" | "head" | "none";
+    /** Momento en que empezó la lectura. Una lista anterior a marcar leído no repone el número. */
+    startedAt?: string;
+  },
   now = new Date(),
 ): Promise<FanMessageEvent[]> {
   const syncedAt = now.toISOString();
@@ -64,7 +95,7 @@ export async function saveChatRead(
              when of_chat_thread.last_message_at is null or excluded.last_message_at >= of_chat_thread.last_message_at then excluded.excerpt
              else of_chat_thread.excerpt
            end,
-           unread = excluded.unread,
+           unread = case when $23::boolean then of_chat_thread.unread else excluded.unread end,
            synced_at = excluded.synced_at,
            last_from_fan = case
              when excluded.last_message_at is null then of_chat_thread.last_from_fan
@@ -105,6 +136,7 @@ export async function saveChatRead(
           thread.subExpiresAt,
           thread.renewAuto,
           thread.lists?.length ? thread.lists.join("\n") : null,
+          keepMarkedUnread(creatorId, thread.threadKey, read.startedAt, thread.unread),
         ],
       );
     }
@@ -190,7 +222,7 @@ export async function saveChatRead(
           message.fanKey,
           message.sentAt,
           (message.body || "").replace(/\s+/g, " ").trim().slice(0, 180),
-          message.fromFan ? 1 : 0,
+          null,
           syncedAt,
           ORIGIN,
           message.fromFan,
@@ -314,7 +346,7 @@ export async function listChats(
       fanName: row.fan_name,
       lastMessageAt: iso(row.last_message_at),
       excerpt: row.excerpt,
-      unread: Number(row.unread ?? 0),
+      unread: row.unread == null || row.unread === "" ? null : Number(row.unread),
       lastFromUserId: null,
       lastFromFan: flagOrNull(row.last_from_fan),
       spentCents: centsOrNull(row.spent_cents),

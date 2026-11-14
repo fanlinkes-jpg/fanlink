@@ -1,7 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AtSign, Bell, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, MessageCircle, RefreshCw, ScrollText, Send, Type } from "lucide-react";
-import { chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, readChatVault, recordChatOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
+import { chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, markChatOpened, readChatVault, recordChatOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
+import { unreadChatRow, unreadTotalFor } from "../../server/of-sessions/sync/unread-chats.ts";
+import { inboxPillCounts, matchesInboxPill, tipThreads, type InboxPill } from "../../server/of-sessions/sync/chat-pills.ts";
 import { listCreatorNotifications, markCreatorNotificationsRead, type NotificationListItem } from "@/lib/of-notifications";
 import { kindLabel } from "@/lib/notifications";
 import { useCrm, type VaultItem } from "@/lib/crm";
@@ -24,6 +26,7 @@ import {
   type OutboundSend,
 } from "@/lib/send-queue";
 import { spendTone } from "@/lib/spend-tiers";
+import { useInboxSelection } from "@/lib/inbox-selection";
 import { ChatMediaPlayer } from "@/features/chat-media-player";
 import { VAULT_THUMB_MISSING, vaultMediaSrc } from "@/lib/chat-media";
 import { VaultBrowser } from "@/features/vault-browser";
@@ -210,9 +213,8 @@ export function RealChatsPage() {
   const user = useCurrentUser();
   const [data, setData] = useState<CreatorChatList | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const [filter, setFilter] = useState<"todos" | "propinas">("todos");
+  const [filter, setFilter] = useState<InboxPill>("todos");
   const [onlineOpen, setOnlineOpen] = useState(false);
   const [onlineBusy, setOnlineBusy] = useState(false);
   const [onlineFans, setOnlineFans] = useState<Array<{ fanKey: string; fanName: string | null; fanHandle: string | null }>>([]);
@@ -355,7 +357,7 @@ export function RealChatsPage() {
       || (item.fanKey != null && (row.fanKey === item.fanKey || row.threadKey === item.fanKey || row.fanHandle?.replace(/^@/, "") === item.fanKey))
     ));
     if (!thread) return;
-    setSelectedKey(`${thread.creatorId}:${thread.threadKey}`);
+    chooseThread(thread);
     setNotesOpen(false);
   }
 
@@ -393,25 +395,35 @@ export function RealChatsPage() {
   function openOnlineFan(fanKey: string) {
     const creator = creatorId === "all" ? selected?.creatorId ?? null : creatorId;
     const thread = threads.find((row) => (creator == null || row.creatorId === creator) && (row.fanKey === fanKey || row.threadKey === fanKey));
-    if (thread) setSelectedKey(`${thread.creatorId}:${thread.threadKey}`);
+    if (thread) chooseThread(thread);
     setOnlineOpen(false);
   }
 
   const threads = (data?.threads ?? []).filter(
     (thread) => creatorId === "all" || thread.creatorId === creatorId,
   );
-  const ordered = [...threads]
-    .filter((thread) => filter !== "propinas" || (thread.tipsCents != null && thread.tipsCents > 0))
-    .sort((left, right) => (right.lastMessageAt ?? "").localeCompare(left.lastMessageAt ?? ""));
-  const selected =
-    ordered.find((thread) => `${thread.creatorId}:${thread.threadKey}` === selectedKey)
-    ?? ordered.find((thread) => !marks.hidden.includes(threadMark(thread.creatorId, thread.threadKey)))
-    ?? ordered[0]
-    ?? null;
-  const visible = ordered.filter((thread) => {
-    const id = threadMark(thread.creatorId, thread.threadKey);
-    return showHidden || !marks.hidden.includes(id) || (selected != null && id === threadMark(selected.creatorId, selected.threadKey));
+  const accountMessages = (data?.messages ?? []).filter(
+    (message) => creatorId === "all" || message.creatorId === creatorId,
+  );
+  const pills = inboxPillCounts({
+    status: error ? "error" : data ? "ready" : "loading",
+    threads,
+    messages: data ? accountMessages : null,
   });
+  const tipped = tipThreads(accountMessages, threads);
+  const inbox = useInboxSelection({
+    threads: threads.map((thread) => ({ ...thread, id: `${thread.creatorId}:${thread.threadKey}` })),
+    matches: (thread) => matchesInboxPill(thread, filter, tipped),
+    hidden: (thread) => marks.hidden.includes(threadMark(thread.creatorId, thread.threadKey)),
+    showHidden,
+    onMark: (thread) => {
+      void markChatOpened({ data: { creatorId: thread.creatorId, threadKey: thread.threadKey } }).then((result) => {
+        if (result.marked) void refresh();
+      }).catch(() => undefined);
+    },
+  });
+  const selected = inbox.selected;
+  const visible = inbox.visible;
   const fanCards = useChatFanCards(visible);
   const messages = (data?.messages ?? [])
     .filter((message) => message.creatorId === selected?.creatorId && message.threadKey === selected?.threadKey)
@@ -419,6 +431,14 @@ export function RealChatsPage() {
   const meta = data?.meta.find((item) => item.creatorId === selected?.creatorId);
   const running = selected ? data?.runningCreatorIds.includes(selected.creatorId) : false;
   const canForce = teamAccess?.role === "owner" && selected != null;
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (dialog != null || insightsOpen) return;
+      inbox.onArrow(event);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [dialog, insightsOpen, inbox.onArrow]);
   useEffect(() => {
     if (dialog == null) return;
     const onKey = (event: KeyboardEvent) => {
@@ -777,6 +797,10 @@ export function RealChatsPage() {
     });
   }
 
+  function chooseThread(thread: { creatorId: string; threadKey: string }) {
+    inbox.choose({ id: `${thread.creatorId}:${thread.threadKey}` });
+  }
+
   function fanNickname(creatorId: string, fanKey: string | null): string | null {
     if (!fanKey) return null;
     return (data?.profiles ?? []).find((item) => item.creatorId === creatorId && item.fanKey === fanKey)?.nickname ?? null;
@@ -798,11 +822,11 @@ export function RealChatsPage() {
     const next = { ...marks, [kind]: has ? marks[kind].filter((item) => item !== id) : [...marks[kind], id] };
     saveMarks(next);
     if (kind === "hidden" && !has) {
-      const other = ordered.find((thread) => {
+      const other = visible.find((thread) => {
         const mark = threadMark(thread.creatorId, thread.threadKey);
         return mark !== id && !next.hidden.includes(mark);
       });
-      if (other) setSelectedKey(`${other.creatorId}:${other.threadKey}`);
+      if (other) inbox.choose({ id: `${other.creatorId}:${other.threadKey}` });
     }
     setFanMenu(false);
   }
@@ -952,9 +976,23 @@ export function RealChatsPage() {
               {creators.map((creator) => <option key={creator.id} value={creator.id}>{creator.name}</option>)}
             </select>
             <span className="shrink-0 text-[10px] text-[#6d7585]">Más recientes</span>
+            {(() => {
+              const total = unreadTotalFor(data ? "ready" : "loading", data?.threads ?? [], creatorId);
+              if (total == null) return <span className="shrink-0 text-[10px] text-[#6d7585]" title="Sin datos">Sin datos</span>;
+              if (total === 0) return null;
+              return <span className="shrink-0 rounded-full bg-[#3b6cff] px-1.5 text-[10px] font-semibold text-white" aria-label={`${total} chats sin leer`}>{total}</span>;
+            })()}
           </div>
           <div className="flex gap-2">
-            <button type="button" onClick={() => setFilter("propinas")} className={`rounded-full px-3 py-1 text-xs ${filter === "propinas" ? "bg-[#3b6cff] text-white" : "bg-[#f3f4f6] text-[#6d7585]"}`}>Con propinas</button>
+            {([
+              ["todos", "Todos", pills.todos],
+              ["sin-leer", "Sin leer", pills.sinLeer],
+              ["propinas", "Con propinas", pills.propinas],
+            ] as const).map(([id, label, count]) => (
+              <button key={id} type="button" onClick={() => setFilter(id)} className={`rounded-full px-3 py-1 text-xs ${filter === id ? "bg-[#3b6cff] text-white" : "bg-[#f3f4f6] text-[#6d7585]"}`} aria-pressed={filter === id}>
+                {label} {count == null ? "· Sin datos" : count}
+              </button>
+            ))}
             {marks.hidden.length > 0 ? (
               <button type="button" onClick={() => setShowHidden((open) => !open)} className={`rounded-full px-3 py-1 text-xs ${showHidden ? "bg-[#3b6cff] text-white" : "bg-[#f3f4f6] text-[#6d7585]"}`}>Ocultos {marks.hidden.length}</button>
             ) : null}
@@ -975,11 +1013,13 @@ export function RealChatsPage() {
           <p className="px-4 py-8 text-sm text-[#6d7585]">{threads.length === 0 ? emptyChatsLabel(data) : "Sin datos"}</p>
         ) : (
           <ul>
-            {visible.map((thread) => (
+            {visible.map((thread) => {
+              const unread = unreadChatRow(thread.unread);
+              return (
               <li key={`${thread.creatorId}:${thread.threadKey}`}>
                 <button
                   type="button"
-                  onClick={() => setSelectedKey(`${thread.creatorId}:${thread.threadKey}`)}
+                  onClick={() => chooseThread(thread)}
                   className={`flex w-full gap-3 px-3 py-3 text-left ${selected?.threadKey === thread.threadKey && selected.creatorId === thread.creatorId ? "bg-[#f4f7ff]" : ""}`}
                 >
                   <span className="flex w-12 shrink-0 flex-col items-center gap-1">
@@ -988,26 +1028,27 @@ export function RealChatsPage() {
                     ) : (
                       <span className="grid h-10 w-10 place-items-center rounded-full bg-[#eef2ff] text-sm">{fanTitle(thread).slice(0, 1)}</span>
                     )}
-                    <span className="text-[10px] font-medium" style={{ color: spendTone(thread.spentCents).color ?? "#6d7585" }}>
-                      {spendTone(thread.spentCents).label}
+                    <span className="text-[10px] font-medium" style={{ color: spendTone(thread.spentCents ?? chatFanCardFor(fanCards.fans, thread.creatorId, thread.fanKey)?.spentCents ?? null).color ?? "#6d7585" }}>
+                      {spendTone(thread.spentCents ?? chatFanCardFor(fanCards.fans, thread.creatorId, thread.fanKey)?.spentCents ?? null).label}
                     </span>
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-1">
-                      <span className="truncate text-sm font-medium">{fanTitle(thread)}</span>
+                      <span className={`truncate text-sm ${unread.bold ? "font-bold text-[#1d2433]" : "font-medium"}`}>{fanTitle(thread)}</span>
                       {creatorId === "all" ? <span className="shrink-0 rounded bg-[#f3f4f6] px-1 text-[10px] text-[#6d7585]">{creators.find((creator) => creator.id === thread.creatorId)?.name ?? "Cuenta"}</span> : null}
-                      {thread.unread > 0 && !marks.muted.includes(threadMark(thread.creatorId, thread.threadKey)) ? <span className="rounded bg-[#e7f0ff] px-1 text-[10px] font-semibold text-[#2456c7]">NEW</span> : null}
+                      {unread.badge != null && !marks.muted.includes(threadMark(thread.creatorId, thread.threadKey)) ? <span className="shrink-0 rounded-full bg-[#3b6cff] px-1.5 text-[10px] font-semibold text-white" aria-label={`${unread.badge} sin leer`}>{unread.badge}</span> : null}
                       {thread.online === false ? <span className="rounded bg-[#f3f4f6] px-1 text-[10px] text-[#6d7585]">OFF</span> : null}
                     </span>
                     <span className="block truncate text-xs text-[#6d7585]">{thread.fanHandle ? `@${thread.fanHandle.replace(/^@/, "")}` : "Sin datos"}</span>
                     <span className="mt-1 flex items-baseline justify-between gap-2 text-xs text-[#6d7585]">
-                      <span className="truncate">{thread.excerpt ?? "Sin datos"}</span>
+                      <span className={`truncate ${unread.bold ? "font-bold text-[#1d2433]" : ""}`}>{thread.excerpt ?? "Sin datos"}</span>
                       <span className="shrink-0">{thread.lastMessageAt ? madridClock(thread.lastMessageAt) : "Sin datos"}</span>
                     </span>
                   </span>
                 </button>
               </li>
-            ))}
+              );
+            })}
           </ul>
         )}
         </div>

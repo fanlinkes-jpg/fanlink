@@ -1,4 +1,5 @@
 import type { BrowserContext, Page } from "playwright";
+import { isChatReadWrite } from "../live/desk.ts";
 import { openWorkPage } from "../sessions/work-page.ts";
 import { closeIfIdle } from "../live/pages.ts";
 import { chatPageUrl, classifyChatPath, isUsersDirectoryUrl, parseChatList, parseChatMessages, parsePreviewMessages, parseUsersDirectory, type ChatMessage, type ChatThread, type ChatUser } from "./chats.ts";
@@ -7,6 +8,13 @@ import { FALLBACK_RELOAD_MS, nextFallbackThread, WATCH_IDLE_MS, type WatchedThre
 
 /** La lista se vuelve a pedir. Si no, un chat nuevo no entra en la bandeja. */
 export const LIST_RELOAD_MS = 15_000;
+
+/**
+ * Cada cuánto se mira si toca pedir la primera página de los hilos abiertos.
+ * La lista no se pagina en este tick: la primera página va cada 15 s y la
+ * completa cada 2 min, en api-list-pace.ts.
+ */
+export const OPEN_CYCLE_MS = 2_000;
 
 export type WatchTarget = {
   accountId: string;
@@ -42,7 +50,11 @@ export async function runInboxWatch(input: {
   saveUsers?: (creatorId: string, users: ChatUser[]) => Promise<void>;
   /** Devuelve los milisegundos de la pausa de la cuenta. La pestaña espera eso, no un fijo de 15 s. */
   onBlock: (accountId: string, reason: string) => number;
-  pullList?: (accountId: string) => Promise<boolean>;
+  /**
+   * Primero los hilos abiertos (`openThreadKeys`, aunque no estén entre los 5
+   * primeros) y después la lista. `waitMs` es la pausa de un 429.
+   */
+  pullList?: (accountId: string, openThreadKeys: string[]) => Promise<boolean | { ok: boolean; waitMs?: number }>;
   onNavigate?: (threadKey: string | null) => void;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
@@ -92,9 +104,14 @@ export async function runInboxWatch(input: {
     }
     if (!session || accountId !== target.accountId) {
       if (input.pullList) {
-        const ok = await input.pullList(target.accountId).catch(() => false);
-        if (ok) lastUsefulAt = input.now();
-        await input.sleep(ok ? 5_000 : 15_000);
+        const pulled = await pullSigned(input, target);
+        if (pulled.waitMs > 0) {
+          blockedUntil = input.now() + pulled.waitMs;
+          await input.sleep(200);
+          continue;
+        }
+        if (pulled.ok) lastUsefulAt = input.now();
+        await input.sleep(pulled.ok ? OPEN_CYCLE_MS : LIST_RELOAD_MS);
         continue;
       }
       await shut();
@@ -147,8 +164,13 @@ export async function runInboxWatch(input: {
     const listAge = lastListReloadAt == null ? 0 : now - lastListReloadAt;
     const listDue = session != null && lastListReloadAt != null && listAge >= LIST_RELOAD_MS;
     if (listDue && input.pullList) {
-      const ok = await input.pullList(accountId ?? target.accountId).catch(() => false);
-      if (ok) {
+      const pulled = await pullSigned(input, target);
+      if (pulled.waitMs > 0) {
+        blockedUntil = input.now() + pulled.waitMs;
+        await input.sleep(200);
+        continue;
+      }
+      if (pulled.ok) {
         lastListReloadAt = input.now();
         lastUsefulAt = input.now();
         await input.sleep(200);
@@ -184,9 +206,38 @@ export async function runInboxWatch(input: {
   await shut();
 }
 
+async function pullSigned(input: {
+  pullList?: (accountId: string, openThreadKeys: string[]) => Promise<boolean | { ok: boolean; waitMs?: number }>;
+}, target: WatchTarget): Promise<{ ok: boolean; waitMs: number }> {
+  if (!input.pullList) return { ok: false, waitMs: 0 };
+  const keys = target.threads.map((thread) => thread.threadKey).filter((key) => key.length > 0);
+  try {
+    const value = await input.pullList(target.accountId, keys);
+    if (typeof value === "boolean") return { ok: value, waitMs: 0 };
+    return { ok: value.ok, waitMs: Math.max(0, value.waitMs ?? 0) };
+  } catch {
+    return { ok: false, waitMs: 0 };
+  }
+}
+
+const chatReadArmed = new WeakMap<Page, Promise<void>>();
+
+/** Una sola vez por página. Los goto siguientes no vuelven a registrar la ruta. */
+export function blockChatRead(page: Page): Promise<void> {
+  const armed = chatReadArmed.get(page);
+  if (armed) return armed;
+  const job = page.route("**/*", (route) => {
+    if (isChatReadWrite(route.request().method(), route.request().url())) return route.abort();
+    return route.continue();
+  }).then(() => undefined);
+  chatReadArmed.set(page, job);
+  return job;
+}
+
 export function watchPage(page: Page, threadKey: () => string, accountUserId: () => string | null = () => null): WatchSession {
   return {
     async goto(url: string) {
+      await blockChatRead(page);
       const same = page.url().split("?")[0] === url.split("?")[0];
       const pending = page.waitForResponse(
         (response) => classifyChatPath(response.url()) !== "other" && response.status() < 400,
@@ -199,6 +250,7 @@ export function watchPage(page: Page, threadKey: () => string, accountUserId: ()
       return response?.status() ?? 0;
     },
     listen({ onMessages, onThreads, onUsers, onBlock }) {
+      void blockChatRead(page);
       page.on("websocket", (socket) => {
         socket.on("framereceived", (frame) => {
           const text = typeof frame.payload === "string" ? frame.payload : frame.payload.toString("utf8");
