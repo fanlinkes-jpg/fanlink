@@ -607,6 +607,20 @@ function notificationFrom(record: Record<string, unknown>, options: ParseNotific
   };
 }
 
+/** Solo un https de onlyfans.com (o www) se puede pintar como enlace. */
+export function onlyfansPostLink(value: string | null): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:") return null;
+    if (url.username || url.password) return null;
+    if (url.hostname !== "onlyfans.com" && url.hostname !== "www.onlyfans.com") return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 /** La frase inglesa de suscripción se enseña en español. El resto se deja como viene. */
 export function spanishNotificationText(body: string | null): string | null {
   if (!body) return null;

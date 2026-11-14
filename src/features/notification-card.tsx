@@ -1,18 +1,6 @@
 import { MessageCircle } from "lucide-react";
 import type { NotificationListItem } from "@/lib/of-notifications";
-import { isRecentFan, notificationStamp, renewLabel, spanishNotificationText } from "@/lib/notifications";
-
-function onlyfansPostLink(value: string | null): string | null {
-  if (!value) return null;
-  try {
-    const url = new URL(value);
-    if (url.protocol !== "https:") return null;
-    if (url.hostname !== "onlyfans.com" && url.hostname !== "www.onlyfans.com") return null;
-    return url.toString();
-  } catch {
-    return null;
-  }
-}
+import { isRecentFan, notificationStamp, onlyfansPostLink, renewLabel, spanishNotificationText } from "@/lib/notifications";
 
 export function NotificationFanCard({
   item,

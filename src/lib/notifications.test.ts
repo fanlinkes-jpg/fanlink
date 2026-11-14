@@ -18,6 +18,7 @@ import {
   isRecentFan,
   notificationStamp,
   renewLabel,
+  onlyfansPostLink,
   spanishNotificationText,
   relativeNotificationWhen,
   redactedNotificationUrl,
@@ -346,6 +347,17 @@ test("un comentario guarda el texto y la publicación si vienen", () => {
   assert.equal(bare[0]?.postLink, null);
   assert.equal(bare[0]?.postText, null);
   assert.equal(bare[0]?.body, "solo texto");
+  assert.equal(onlyfansPostLink("https://onlyfans.com/99887766"), "https://onlyfans.com/99887766");
+  assert.equal(onlyfansPostLink("https://www.onlyfans.com/99887766"), "https://www.onlyfans.com/99887766");
+  for (const hostile of [
+    "https://onlyfans.com.evil.com/99887766",
+    "http://onlyfans.com/99887766",
+    "javascript:alert(1)",
+    "//onlyfans.com/99887766",
+    "//evil.com",
+  ]) {
+    assert.equal(onlyfansPostLink(hostile), null, hostile);
+  }
 });
 
 test("lastSeen de hace días no cuenta como reciente", () => {
