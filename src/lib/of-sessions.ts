@@ -205,6 +205,12 @@ export type CreatorChatList = {
     salaryCents: number | null;
     lastPayDate: string | null;
   }>;
+  accounts: Array<{
+    creatorId: string;
+    sessionRejected: boolean;
+    connection: "not_checked" | "live" | "rejected" | "inconclusive" | "login_required";
+  }>;
+  sessionNotices: string[];
 };
 
 export const listCreatorReads = createServerFn({ method: "GET" })

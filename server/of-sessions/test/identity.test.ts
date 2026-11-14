@@ -9,6 +9,7 @@ import {
   identityFromUserJson,
   isCurrentUserResponseUrl,
   isLoginChallengeUrl,
+  usersMeKeepsSession,
   usersMeVerdict,
   jsonUrlWithoutSecrets,
   judgeIdentityMatch,
@@ -53,10 +54,16 @@ test("el DOM solo aporta identidad si el adaptador declaró selector", () => {
 test("users/me de invitado no es una cuenta logueada", () => {
   assert.equal(usersMeVerdict({ isAuth: false, id: 0 }).kind, "guest");
   assert.equal(usersMeVerdict({ id: 1, ip: "1.2.3.4" }).kind, "guest");
-  assert.equal(usersMeVerdict({ id: 5, name: "Sin handle" }).kind, "unknown");
-  assert.equal(usersMeVerdict({ isAuth: true, id: 9, username: "bigpoppa1111", name: "Big" }).kind, "logged_in");
-  const loggedIn = usersMeVerdict({ id: 9, username: "creadora", name: "Creadora" });
-  assert.equal(loggedIn.kind === "logged_in" ? loggedIn.identity.username : null, "creadora");
+  assert.equal(usersMeVerdict({ id: 5, name: "Sin handle" }).kind, "guest");
+  assert.equal(usersMeVerdict({ isAuth: false, id: 42, username: "creadora" }).kind, "guest");
+  assert.equal(usersMeVerdict({ isAuth: true, username: "creadora" }).kind, "guest");
+  assert.equal(usersMeVerdict({ isAuth: true, id: 0, username: "creadora" }).kind, "guest");
+  assert.equal(usersMeKeepsSession(usersMeVerdict({ isAuth: false })), false);
+  const loggedIn = usersMeVerdict({ isAuth: true, id: 9, username: "bigpoppa1111", name: "Big" });
+  assert.equal(loggedIn.kind, "logged_in");
+  assert.equal(usersMeKeepsSession(loggedIn), true);
+  const fixture = usersMeVerdict({ id: 9, username: "creadora", name: "Creadora" });
+  assert.equal(fixture.kind === "logged_in" ? fixture.identity.username : null, "creadora");
 });
 
 test("acepta /users/me con prefijo y query, y la ruta guardada no lleva secretos", () => {

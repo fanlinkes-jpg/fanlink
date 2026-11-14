@@ -13,10 +13,12 @@ import {
   ONLINE_SUBSCRIBERS_PATH,
   fetchSignedOnlineFans,
   onlineFansFromPayload,
+  mergeOnlineAccounts,
   onlineReadFromPayload,
   readOnlineSubscribers,
   subscribersResponse,
 } from "../sync/online-fans.ts";
+import { SESSION_EXPIRED_LABEL } from "../sync/session-link.ts";
 
 test("el filtro en línea se reconoce y solo entran los que están conectados", () => {
   assert.equal(subscribersResponse("https://onlyfans.com/api2/v2/subscriptions/subscribers?type=active&filter[online]=1"), "online");
@@ -58,10 +60,14 @@ test("el filtro en línea se reconoce y solo entran los que están conectados", 
   assert.deepEqual(nested.fans.map((fan) => fan.fanHandle), ["duchampprivate"]);
   assert.equal(onlineReadFromPayload(200, { data: { list: [] } }).reason, "Nadie en línea");
   assert.equal(onlineReadFromPayload(200, { ok: true }).reason, "No se pudo leer.");
-  assert.equal(onlineReadFromPayload(401, { list: [] }).reason, "OnlyFans ha rechazado la firma");
+  assert.equal(onlineReadFromPayload(401, { list: [] }).reason, SESSION_EXPIRED_LABEL);
+  assert.equal(onlineReadFromPayload(401, { list: [] }).sessionRejected, true);
+  assert.equal(onlineReadFromPayload(400, { list: [] }).reason, "OnlyFans ha rechazado la firma");
+  assert.equal(onlineReadFromPayload(400, { list: [] }).signatureRejected, true);
+  assert.notEqual(onlineReadFromPayload(401, { list: [] }).reason, onlineReadFromPayload(400, { list: [] }).reason);
 });
 
-test("api2 firmada cuenta la lista filtrada, el 401 es la firma y el 200 vacío no es un fallo", async () => {
+test("api2 firmada cuenta la lista filtrada, el 401 es la sesión y el 200 vacío no es un fallo", async () => {
   const rules = parseSignRules({
     static_param: "param",
     format: "1:{}:{:x}:2",
@@ -100,9 +106,27 @@ test("api2 firmada cuenta la lista filtrada, el 401 es la firma y el 200 vacío 
     rules,
     fetch: async () => new Response("no", { status: 401 }),
   });
-  assert.equal(denied.reason, "OnlyFans ha rechazado la firma");
+  assert.equal(denied.reason, SESSION_EXPIRED_LABEL);
+  assert.equal(denied.sessionRejected, true);
   assert.equal(denied.fans.length, 0);
   assert.equal(denied.status, 401);
+  const signature = await fetchSignedOnlineFans(state, {
+    now: () => 1,
+    rules,
+    fetch: async () => new Response("no", { status: 400 }),
+  });
+  assert.equal(signature.reason, "OnlyFans ha rechazado la firma");
+  assert.equal(signature.signatureRejected, true);
+  assert.equal(signature.sessionRejected, undefined);
+  const limited = await fetchSignedOnlineFans(state, {
+    now: () => 1,
+    rules,
+    fetch: async () => new Response("slow", { status: 429, headers: { "retry-after": "3" } }),
+  });
+  assert.equal(limited.status, 429);
+  assert.equal(limited.fallback, false);
+  assert.equal(limited.retryAfterMs, 3_000);
+  assert.equal(limited.sessionRejected, undefined);
 
   const empty = await fetchSignedOnlineFans(state, {
     now: () => 1,
@@ -128,6 +152,20 @@ test("api2 firmada cuenta la lista filtrada, el 401 es la firma y el 200 vacío 
   assert.equal(unmarked.status, 200);
   assert.equal(unmarked.reason, null);
   assert.equal(unmarked.fans.length, 2);
+});
+
+test("en todas las cuentas un 401 no esconde los fans del 200", () => {
+  const merged = mergeOnlineAccounts([
+    { creatorId: "9ikis52", fans: [], reason: SESSION_EXPIRED_LABEL, status: 401 },
+    {
+      creatorId: "3zk7kbr",
+      fans: [{ fanKey: "7", fanName: "Duchamp", fanHandle: "duchampprivate", avatarUrl: null, spentCents: null, currency: null, online: true, lists: [] }],
+      reason: null,
+      status: 200,
+    },
+  ]);
+  assert.deepEqual(merged.fans.map((fan) => fan.fanHandle), ["duchampprivate"]);
+  assert.deepEqual(merged.notices, [`9ikis52: ${SESSION_EXPIRED_LABEL}`]);
 });
 
 test("un 200 filtrado sin isOnline cuenta las filas", () => {

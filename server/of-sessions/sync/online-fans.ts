@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { ONLINE_FAN_CAP } from "../../../src/lib/online-fan-row.ts";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
+import { SESSION_EXPIRED_LABEL } from "./session-link.ts";
 import { sessionForApi, signedHeaders } from "./of-chat-api.ts";
 import { loadSignRules, readJsonBody, type SignRules } from "./of-sign.ts";
 
@@ -24,6 +25,19 @@ export type OnlineRead = {
   status: number | null;
   /** false: la firma no pudo ni empezar. No se abre Chromium para taparlo. */
   fallback?: boolean;
+  /** 401. El llamador marca sessionRejected y no abre Chromium. */
+  sessionRejected?: boolean;
+  /** 400. No es una sesión caducada. */
+  signatureRejected?: boolean;
+  /** 429. Cero si no hay que esperar. Con valor, no se abre Chromium. */
+  retryAfterMs?: number;
+};
+
+export type OnlineAccountRead = {
+  creatorId: string;
+  fans: OnlineFan[];
+  reason: string | null;
+  status: number | null;
 };
 
 /** La misma petición que Colecciones → Todo → Filtros → En línea. No es la lista «Fans». */
@@ -69,10 +83,19 @@ export function subscribersResponse(url: string): "online" | "all" | null {
   return null;
 }
 
-/** 200 con lista vacía es «Nadie en línea». Sin lista reconocible no es un cero. */
+/**
+ * 200 con lista vacía es «Nadie en línea». Un 401 es la sesión y un 400 es
+ * la firma: no se mezclan, y ninguno de los dos es un cero.
+ */
 export function onlineReadFromPayload(status: number, payload: unknown): OnlineRead {
-  if (status === 401 || status === 400) {
-    return { fans: [], reason: "OnlyFans ha rechazado la firma", status };
+  if (status === 401) {
+    return { fans: [], reason: SESSION_EXPIRED_LABEL, status, sessionRejected: true };
+  }
+  if (status === 400) {
+    return { fans: [], reason: "OnlyFans ha rechazado la firma", status, signatureRejected: true };
+  }
+  if (status === 429) {
+    return { fans: [], reason: "OnlyFans respondió 429", status, fallback: false, retryAfterMs: 15_000 };
   }
   if (status !== 200) return { fans: [], reason: "No se pudo leer.", status };
   const rows = listOf(payload);
@@ -108,10 +131,14 @@ export async function fetchSignedOnlineFans(
   } catch {
     return { fans: [], reason: "No se pudo leer.", status: null };
   }
-  if (response.status === 401 || response.status === 400) {
-    return { fans: [], reason: "OnlyFans ha rechazado la firma", status: response.status };
+  if (response.status === 429) {
+    const paced = onlineReadFromPayload(429, null);
+    return { ...paced, retryAfterMs: retryAfterMs(response), fallback: false };
   }
-  if (!response.ok) return { fans: [], reason: "No se pudo leer.", status: response.status };
+  if (response.status === 401 || response.status === 400) {
+    return onlineReadFromPayload(response.status, null);
+  }
+  if (!response.ok) return { fans: [], reason: "No se pudo leer.", status: response.status, fallback: false };
   try {
     return onlineReadFromPayload(response.status, await readJsonBody(response));
   } catch (error) {
@@ -173,6 +200,40 @@ export async function readOnlineSubscribers(page: Page, signal?: AbortSignal, ur
   } finally {
     page.off("response", onResponse);
   }
+}
+
+/**
+ * Todas las cuentas: el 401 de una no esconde los fans de las que responden 200.
+ * El aviso lleva el id de esa cuenta.
+ */
+export function mergeOnlineAccounts(reads: readonly OnlineAccountRead[]): { fans: OnlineFan[]; notices: string[] } {
+  const fans: OnlineFan[] = [];
+  const notices: string[] = [];
+  const seen = new Set<string>();
+  for (const read of reads) {
+    if (read.status === 401 || read.reason === SESSION_EXPIRED_LABEL) {
+      notices.push(`${read.creatorId}: ${SESSION_EXPIRED_LABEL}`);
+      continue;
+    }
+    if (read.fans.length === 0 && read.reason && read.reason !== "Nadie en línea") {
+      notices.push(`${read.creatorId}: ${read.reason}`);
+      continue;
+    }
+    for (const fan of read.fans) {
+      const key = `${read.creatorId}:${fan.fanKey}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      fans.push(fan);
+    }
+  }
+  return { fans, notices };
+}
+
+function retryAfterMs(response: Response): number {
+  const header = response.headers.get("retry-after");
+  const seconds = Number(header);
+  if (header && Number.isFinite(seconds) && seconds >= 0) return Math.min(Math.round(seconds * 1000), 30 * 60_000);
+  return 15_000;
 }
 
 function listOf(payload: unknown): unknown[] | null {

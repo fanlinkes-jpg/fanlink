@@ -1,12 +1,17 @@
 import type { SessionManager } from "../sessions/session-manager.ts";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
-import { fetchSignedVault } from "./of-chat-api.ts";
+import { noteAccountBlock } from "./backoff.ts";
+import { fetchSignedVault, type SignedVaultRead } from "./of-chat-api.ts";
+import { SESSION_EXPIRED_LABEL } from "./session-link.ts";
 import type { ReadSql } from "./store.ts";
 import { openProfileThumbs } from "./vault-owner.ts";
 import { persistVaultRead } from "./vault-store.ts";
 import { rememberVaultThumbs, type ThumbBrowser } from "./vault-thumbs.ts";
 
-export type VaultReadSessions = Pick<SessionManager, "listAccounts" | "readStorageState" | "borrowProfile">;
+export type VaultReadSessions = Pick<SessionManager, "listAccounts" | "readStorageState" | "borrowProfile"> & {
+  sessionGeneration?: (accountId: string) => number;
+  noteRouteRejection?: (accountId: string, reason: string | null, readEpoch?: number) => Promise<boolean>;
+};
 
 export type VaultReadDeps = {
   fetch: typeof fetch;
@@ -31,10 +36,19 @@ export async function readChatVaultView(
   const list = input.listId || "all";
   const offset = input.offset ?? 0;
   const now = deps.now ?? (() => Date.now());
-  const payloads = await fetchSignedVault(state, { fetch: deps.fetch, now }, list, offset);
-  const saved = await persistVaultRead(deps.sql, input.creatorId, payloads, { listId: list, offset });
+  const epoch = deps.sessions.sessionGeneration?.(account.id);
+  const read = await fetchSignedVault(state, { fetch: deps.fetch, now }, list, offset);
+  console.info(`[fanlink:vault] creator=${input.creatorId} status=${read.status ?? "sin"}`);
+  const blocked = vaultAuthReason(read);
+  if (blocked) {
+    if (read.sessionRejected) await deps.sessions.noteRouteRejection?.(account.id, read.reason, epoch)?.catch(() => undefined);
+    if (read.signatureRejected) noteAccountBlock(account.id, "400");
+    if (read.retryAfterMs > 0) noteAccountBlock(account.id, "429");
+    return { items: [], reason: blocked };
+  }
+  const saved = await persistVaultRead(deps.sql, input.creatorId, read.payloads, { listId: list, offset });
   console.info(`[fanlink:vault] api medios=${saved.length} fotos=${saved.filter((item) => item.preview).length}`);
-  if (saved.length === 0) return { items: [], reason: "No se ha podido leer la bóveda." };
+  if (saved.length === 0) return { items: [], reason: read.reason ?? "No se ha podido leer la bóveda." };
   await rememberPageThumbs({ ...deps, now }, account.id, input.creatorId, saved, state, list, offset);
   return {
     items: saved.map((item) => ({ id: item.id, title: item.title, kind: item.kind })),
@@ -59,9 +73,17 @@ async function rememberPageThumbs(
     now: deps.now(),
     refreshPage: async () => {
       const again = await fetchSignedVault(state, { fetch: deps.fetch, now: deps.now }, list, offset);
-      const next = await persistVaultRead(deps.sql, creatorId, again, { listId: list, offset });
+      if (again.sessionRejected || again.signatureRejected || again.retryAfterMs > 0) return saved;
+      const next = await persistVaultRead(deps.sql, creatorId, again.payloads, { listId: list, offset });
       return next.length > 0 ? next : saved;
     },
     openBrowser: deps.openBrowser ?? (() => openProfileThumbs(deps.sessions, accountId)),
   });
+}
+
+function vaultAuthReason(read: SignedVaultRead): string | null {
+  if (read.sessionRejected) return SESSION_EXPIRED_LABEL;
+  if (read.signatureRejected) return "OnlyFans ha rechazado la firma";
+  if (read.retryAfterMs > 0) return "OnlyFans respondió 429";
+  return null;
 }

@@ -21,7 +21,7 @@ test("la comprobación no convierte las cookies en la conexión y lee la identid
     await created.sessions.whenLoginSettled(account.id);
     const stored = await created.sessions.getAccount(account.id);
     assert.equal(stored.status, "active");
-    assert.equal(stored.connection, "not_checked");
+    assert.equal(stored.connection, "live");
     assert.equal(stored.identityState, "unavailable");
 
     const live = await created.sessions.inspectConnection(account.id, "@Creadora");

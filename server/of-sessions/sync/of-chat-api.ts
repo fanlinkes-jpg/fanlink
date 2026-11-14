@@ -4,7 +4,9 @@ import { backoffDelayMs } from "./backoff.ts";
 import { directorySpendById, fillThreadSpend, mergeMessages, mergeThreads, parseChatList, parseChatMessages, parsePreviewMessages, type ChatMessage, type ChatThread } from "./chats.ts";
 import { awaitAccountGap, REQUEST_GAP_MS } from "./api-list-pace.ts";
 import { noteMissingUnread } from "./unread-chats.ts";
+import { usersMeKeepsSession, usersMeVerdict } from "../identity.ts";
 import { loadSignRules, signedUserId, signOnlyfans, type SignRules } from "./of-sign.ts";
+import { SESSION_EXPIRED_LABEL } from "./session-link.ts";
 
 const HOST = "onlyfans.com";
 
@@ -34,6 +36,8 @@ export type SignedChats = {
    * Este módulo no toca data/sessions ni FANLINK_SESSION_KEY.
    */
   rotatedCookies: StorageCookie[];
+  /** Hubo al menos un HTTP 200. Un 401 no cuenta como lectura buena. */
+  accepted?: boolean;
 };
 
 export type SignedChatOptions = {
@@ -105,10 +109,12 @@ export async function fetchSignedChats(state: StorageStateFile, deps: SignedChat
   let messages: ChatMessage[] = [];
   const rotatedCookies: StorageCookie[] = [];
   let lastRequestAt = 0;
+  let accepted = false;
 
   let failure: string | null = null;
   const take = (page: JsonPage): SignedChats | null => {
     rotatedCookies.push(...page.rotatedCookies);
+    if (page.ok && page.status === 200) accepted = true;
     if (!fatalPage(page)) return null;
     return {
       threads,
@@ -118,6 +124,7 @@ export async function fetchSignedChats(state: StorageStateFile, deps: SignedChat
       signatureRejected: page.signatureRejected,
       retryAfterMs: page.retryAfterMs,
       rotatedCookies,
+      accepted,
     };
   };
 
@@ -192,19 +199,37 @@ export async function fetchSignedChats(state: StorageStateFile, deps: SignedChat
     signatureRejected: false,
     retryAfterMs: 0,
     rotatedCookies,
+    accepted,
   };
 }
 
+export type SignedVaultRead = {
+  payloads: unknown[];
+  status: number | null;
+  reason: string | null;
+  sessionRejected: boolean;
+  signatureRejected: boolean;
+  retryAfterMs: number;
+};
+
 /**
- * Las mismas dos rutas de siempre, una vez cada una. No relee miniaturas:
- * eso es el encargo de la bóveda, no el de la lista de chats.
+ * Las mismas dos rutas de siempre, una vez cada una. No relee miniaturas.
+ * El estado HTTP sale en el resultado: un 401 no es una lista vacía.
  */
 export async function fetchSignedVault(state: StorageStateFile, deps: {
   fetch: typeof fetch;
   now: () => number;
-}, listId = "all", offset = 0): Promise<unknown[]> {
+}, listId = "all", offset = 0): Promise<SignedVaultRead> {
+  const empty: SignedVaultRead = {
+    payloads: [],
+    status: null,
+    reason: null,
+    sessionRejected: false,
+    signatureRejected: false,
+    retryAfterMs: 0,
+  };
   const auth = sessionForApi(state, deps.now());
-  if ("reason" in auth) return [];
+  if ("reason" in auth) return { ...empty, reason: auth.reason };
   const rules = await loadSignRules(deps.fetch, deps.now());
   const list = listId.trim().slice(0, 80) || "all";
   const skip = Number.isFinite(offset) && offset > 0 ? Math.min(2_000, Math.floor(offset)) : 0;
@@ -213,11 +238,37 @@ export async function fetchSignedVault(state: StorageStateFile, deps: {
     `/api2/v2/vault/media?limit=40&offset=${skip}&field=recent&sort=desc&list=${encodeURIComponent(list)}`,
   ];
   const payloads: unknown[] = [];
+  let status: number | null = null;
   for (const path of paths) {
     const read = await getJson(deps.fetch, path, signedHeaders(rules, path, auth, deps.now()), deps.now());
+    status = read.status;
+    if (read.sessionRejected) {
+      return { payloads, status: 401, reason: SESSION_EXPIRED_LABEL, sessionRejected: true, signatureRejected: false, retryAfterMs: 0 };
+    }
+    if (read.signatureRejected) {
+      return { payloads, status: 400, reason: "OnlyFans ha rechazado la firma", sessionRejected: false, signatureRejected: true, retryAfterMs: 0 };
+    }
+    if (read.retryAfterMs > 0) {
+      return { payloads, status: 429, reason: "OnlyFans respondió 429", sessionRejected: false, signatureRejected: false, retryAfterMs: read.retryAfterMs };
+    }
     if (read.ok) payloads.push(read.body);
+    else return { ...empty, status: read.status, reason: read.reason };
   }
-  return payloads;
+  return { ...empty, payloads, status, reason: payloads.length === 0 ? "No se ha podido leer la bóveda." : null };
+}
+
+/** users/me firmado. Un 200 de invitado no es una sesión válida. No escribe el estado. */
+export async function fetchSignedUsersMe(state: StorageStateFile, deps: {
+  fetch: typeof fetch;
+  now: () => number;
+}): Promise<{ status: number | null; guest: boolean }> {
+  const auth = sessionForApi(state, deps.now());
+  if ("reason" in auth) return { status: null, guest: false };
+  const rules = await loadSignRules(deps.fetch, deps.now());
+  const page = await getJson(deps.fetch, "/api2/v2/users/me", signedHeaders(rules, "/api2/v2/users/me", auth, deps.now()), deps.now());
+  if (page.status === 401) return { status: 401, guest: true };
+  if (!page.ok) return { status: page.status, guest: false };
+  return { status: page.status, guest: !usersMeKeepsSession(usersMeVerdict(page.body)) };
 }
 
 type JsonPage = {
@@ -334,7 +385,7 @@ function fatalPage(page: JsonPage): boolean {
 }
 
 function emptySigned(reason: string | null): SignedChats {
-  return { threads: [], messages: [], reason, sessionRejected: false, signatureRejected: false, retryAfterMs: 0, rotatedCookies: [] };
+  return { threads: [], messages: [], reason, sessionRejected: false, signatureRejected: false, retryAfterMs: 0, rotatedCookies: [], accepted: false };
 }
 
 function listCapOf(options: SignedChatOptions): number {

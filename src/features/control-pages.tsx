@@ -5,6 +5,7 @@ import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recha
 import { isLast24h, money, timeAgo } from "@/lib/format";
 import { messageValue, useCrm, type Platform, type Role } from "@/lib/crm";
 import { CONNECTION_LABEL, IDENTITY_STATE_LABEL, SESSION_STATUS_LABEL, sessionActionLabel, type SessionStatus } from "@/lib/of-sessions";
+import { SESSION_EXPIRED_LABEL, signedReadsBlocked } from "../../server/of-sessions/sync/session-link.ts";
 import { hasPerm } from "@/lib/access-policy";
 import { listTeam, updateStaffAccess, updateStaffAlert } from "@/lib/workspace";
 import { useCreatorSessions } from "@/lib/use-creator-sessions";
@@ -834,6 +835,7 @@ export function CreatorsPage() {
                   </td>
                   <td className="border-b border-[#f4f5f7] px-4 py-3">
                     <span className="text-xs text-[#6d7585]">{live ? CONNECTION_LABEL[live.connection] : "Sin comprobar"}</span>
+                    {live && signedReadsBlocked(live) ? <span className="mt-1 block text-[10px] text-[#8a5a12]">{SESSION_EXPIRED_LABEL}</span> : null}
                   </td>
                   <td className="border-b border-[#f4f5f7] px-4 py-3">
                     <span className="text-xs" title={live?.identityReason ?? identityTitle(live)}>

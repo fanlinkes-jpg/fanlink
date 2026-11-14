@@ -40,7 +40,7 @@ export type IdentityNotes = {
 
 export type UsersMeVerdict =
   | { kind: "logged_in"; identity: ReadIdentity }
-  | { kind: "guest" }
+  | { kind: "guest"; authRejected: boolean }
   | { kind: "unknown" };
 
 const USERNAME_MAX = 80;
@@ -113,30 +113,24 @@ export function isLoginChallengeUrl(url: string): boolean {
 }
 
 /**
- * users/me de invitado no tiene username, o trae isAuth/isGuest en falso.
- * Eso no es una identidad pendiente: la sesión no vale para OnlyFans.
+ * users/me con HTTP 200 no basta. Si `isAuth` viene y no es true, o falta
+ * el id o el username, es la respuesta de invitado: la sesión está caducada.
+ * Un cuerpo con id y username y sin el campo `isAuth` sigue siendo una
+ * cuenta (el sitio de prueba no manda ese campo).
  */
 export function usersMeVerdict(value: unknown): UsersMeVerdict {
   if (!value || typeof value !== "object" || Array.isArray(value)) return { kind: "unknown" };
   const record = value as Record<string, unknown>;
   const user = userRecord(value) ?? record;
-  if (isGuest(user) || isGuest(record)) return { kind: "guest" };
+  if (authFlagRejects(user) || authFlagRejects(record)) return { kind: "guest", authRejected: true };
   const identity = identityFromUserJson(value);
-  if (!identity?.username) {
-    if (
-      "isAuth" in record ||
-      "isAuth" in user ||
-      "isAuthenticated" in record ||
-      "isAuthenticated" in user ||
-      "ip" in record ||
-      "isGuest" in record ||
-      "guest" in record
-    ) {
-      return { kind: "guest" };
-    }
-    return { kind: "unknown" };
-  }
+  if (!identity?.username || !identity.userId || identity.userId === "0") return { kind: "guest", authRejected: false };
   return { kind: "logged_in", identity };
+}
+
+/** Solo `logged_in` es una sesión. Invitado y cuerpo ilegible no validan la cuenta. */
+export function usersMeKeepsSession(verdict: UsersMeVerdict): boolean {
+  return verdict.kind === "logged_in";
 }
 
 export function identityFailureReason(notes: IdentityNotes): string {
@@ -151,8 +145,9 @@ export function identityFailureReason(notes: IdentityNotes): string {
   return reason.slice(0, REASON_MAX);
 }
 
-function isGuest(record: Record<string, unknown>): boolean {
-  if (record.isAuth === false || record.isAuthenticated === false) return true;
+function authFlagRejects(record: Record<string, unknown>): boolean {
+  if ("isAuth" in record && record.isAuth !== true) return true;
+  if ("isAuthenticated" in record && record.isAuthenticated !== true) return true;
   if (record.isGuest === true || record.guest === true) return true;
   return false;
 }

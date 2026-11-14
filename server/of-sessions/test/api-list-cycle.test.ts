@@ -122,6 +122,39 @@ test("al volver a omitir una cuenta que ya se leía, el aviso sale otra vez", as
   clearAccountPauses();
 });
 
+test("una cuenta rechazada o en login_required no se pide", async () => {
+  clearAccountPauses();
+  const rejected: ApiListAccount = {
+    id: "acc-no",
+    creatorId: "9ikis52",
+    status: "expired",
+    identityState: "unavailable",
+    hasStorageState: true,
+    sessionRejected: true,
+    connection: "login_required",
+  };
+  const stale: ApiListAccount = {
+    id: "acc-stale",
+    creatorId: "otra",
+    status: "active",
+    identityState: "verified",
+    hasStorageState: true,
+    sessionRejected: false,
+    connection: "login_required",
+  };
+  let calls = 0;
+  await passApiListAccounts({
+    async readPacedChats() {
+      calls += 1;
+      return collected({ threadCount: 1, messageCount: 1, reason: null, ...quiet });
+    },
+  }, [rejected, stale], new Set(), async () => {
+    throw new Error("no debía leer");
+  });
+  assert.equal(calls, 0);
+  clearAccountPauses();
+});
+
 function reader(readOf: (account: ApiListAccount) => ApiListRead) {
   return {
     async readPacedChats(accountId: string) {
