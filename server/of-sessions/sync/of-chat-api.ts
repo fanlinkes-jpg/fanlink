@@ -1,7 +1,7 @@
 import { BROWSER_FINGERPRINT } from "../sessions/browser-factory.ts";
 import { domainMatches, isCookieUnexpired, type StorageCookie, type StorageStateFile } from "../sessions/storage-state.ts";
 import { backoffDelayMs } from "./backoff.ts";
-import { mergeMessages, mergeThreads, parseChatList, parseChatMessages, parsePreviewMessages, type ChatMessage, type ChatThread } from "./chats.ts";
+import { directorySpendById, fillThreadSpend, mergeMessages, mergeThreads, parseChatList, parseChatMessages, parsePreviewMessages, type ChatMessage, type ChatThread } from "./chats.ts";
 import { awaitAccountGap, REQUEST_GAP_MS } from "./api-list-pace.ts";
 import { noteMissingUnread } from "./unread-chats.ts";
 import { loadSignRules, signedUserId, signOnlyfans, type SignRules } from "./of-sign.ts";
@@ -60,6 +60,7 @@ export type SignedChatDeps = {
   accountId?: string;
   /** Solo para el log si falta unreadMessagesCount. No entra en el motivo. */
   creatorId?: string | null;
+  log?: (line: string) => void;
 };
 
 export function sessionForApi(state: StorageStateFile, nowMs: number): { cookie: string; userId: string; xBc: string } | { reason: string } {
@@ -171,6 +172,15 @@ export async function fetchSignedChats(state: StorageStateFile, deps: SignedChat
     }
   }
 
+  if (threads.length > 0) {
+    const filled = await fillMissingSpend(request, threads, deps.creatorId ?? null, deps.log);
+    threads = filled.threads;
+    if (filled.page) {
+      const stopped = take(filled.page);
+      if (stopped) return { ...stopped, threads };
+    }
+  }
+
   const nothing = threads.length === 0 && messages.length === 0;
   noteMissingUnread(deps.creatorId, threads.filter((thread) => thread.unread == null).length);
   return {
@@ -274,6 +284,48 @@ async function getJson(fetchImpl: typeof fetch, pathWithQuery: string, headers: 
   } catch {
     return { ok: false, body: null, reason: "OnlyFans no devolvió JSON", status: response.status, sessionRejected: false, signatureRejected: false, retryAfterMs: 0, rotatedCookies };
   }
+}
+
+const SPEND_BATCH = 10;
+const spendAsked = new Set<string>();
+
+export function clearSpendAsks(): void {
+  spendAsked.clear();
+}
+
+/** Tandas de como mucho 10. El hueco entre peticiones lo pone `request`, que ya espera el ritmo. */
+async function fillMissingSpend(
+  request: (path: string) => Promise<JsonPage>,
+  threads: ChatThread[],
+  creatorId: string | null,
+  log: ((line: string) => void) | undefined,
+): Promise<{ threads: ChatThread[]; page?: JsonPage }> {
+  const ids = [...new Set(threads.flatMap((thread) => {
+    if (thread.spentCents != null || !thread.fanKey || !/^\d{1,20}$/.test(thread.fanKey)) return [];
+    if (spendAsked.has(`${creatorId ?? ""}\0${thread.fanKey}`)) return [];
+    return [thread.fanKey];
+  }))];
+  if (ids.length === 0) return { threads };
+  let requested = 0;
+  let filled = 0;
+  let stillNull = 0;
+  let current = threads;
+  for (let index = 0; index < ids.length; index += SPEND_BATCH) {
+    const batch = ids.slice(index, index + SPEND_BATCH);
+    const path = `/api2/v2/users/list?${batch.map((id) => `r[]=${id}`).join("&")}`;
+    const page = await request(path);
+    if (!page.ok) return { threads: current, page };
+    for (const id of batch) spendAsked.add(`${creatorId ?? ""}\0${id}`);
+    const found = directorySpendById(page.body);
+    for (const id of batch) if (!found.has(id)) found.set(id, null);
+    const applied = fillThreadSpend(current, found);
+    current = applied.threads;
+    filled += applied.filled;
+    stillNull += applied.stillNull;
+    requested += batch.length;
+  }
+  (log ?? console.info)(`[fanlink:spend] creator=${creatorId ?? ""} requested=${requested} filled=${filled} still null=${stillNull}`);
+  return { threads: current };
 }
 
 function fatalPage(page: JsonPage): boolean {

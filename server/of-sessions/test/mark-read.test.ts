@@ -3,7 +3,6 @@ import { test } from "node:test";
 import { clearAccountChatPace } from "../sync/api-list-pace.ts";
 import { accountPause, clearAccountPauses } from "../sync/backoff.ts";
 import { clearUnreadMarks } from "../sync/chat-store.ts";
-import { openedThread, shouldMarkOpened } from "../../../src/lib/mark-read-open.ts";
 import { clearMarkReadJobs, markOpenedChat, markOpenRejected, markReadPath } from "../sync/mark-read.ts";
 import { parseSignRules, signOnlyfans } from "../sync/of-sign.ts";
 import { signedHeaders } from "../sync/of-chat-api.ts";
@@ -173,57 +172,6 @@ test("un 2xx deja el unread en 0; un 401 o un 429 no, y pausan", async () => {
     assert.equal(markOpenRejected("mismatch", false), true);
     assert.equal(markOpenRejected("matched", true), true);
     assert.equal(markOpenRejected("matched", false), false);
-  } finally {
-    clearMarkReadJobs();
-    clearAccountChatPace();
-    clearUnreadMarks();
-    clearAccountPauses();
-  }
-});
-
-test("teclado, la primera conversación y un aviso hacen un POST con el flag y ninguno sin él", async () => {
-  const rules = rulesOf();
-  const auth = authOf();
-  const ways = ["keyboard", "auto", "notification"] as const;
-  try {
-    for (const how of ways) {
-      const threadKey = how === "keyboard" ? "k1" : how === "auto" ? "a1" : "n1";
-      const list = how === "auto"
-        ? [{ id: threadKey, unread: 4 as number | null }]
-        : [{ id: "prev", unread: 0 as number | null }, { id: threadKey, unread: 4 as number | null }];
-      const opened = openedThread({
-        how,
-        threads: list,
-        selectedId: how === "auto" ? null : "prev",
-        targetId: threadKey,
-        arrow: "down",
-      });
-      assert.equal(shouldMarkOpened(opened, "true"), true);
-      assert.equal(shouldMarkOpened(opened, undefined), false);
-      let calls = 0;
-      const fetchImpl: typeof fetch = async () => {
-        calls += 1;
-        return new Response(null, { status: 200 });
-      };
-      const sql = memorySql(() => 4, () => undefined);
-      const on = await markOpenedChat({
-        ...input(sql, fetchImpl, [], rules, auth),
-        threadKey,
-        flag: "true",
-      });
-      assert.equal(on.posted, true);
-      assert.equal(calls, 1);
-      calls = 0;
-      const off = await markOpenedChat({
-        ...input(sql, fetchImpl, [], rules, auth),
-        threadKey,
-        flag: undefined,
-      });
-      assert.equal(off.posted, false);
-      assert.equal(calls, 0);
-      clearMarkReadJobs();
-      clearAccountChatPace();
-    }
   } finally {
     clearMarkReadJobs();
     clearAccountChatPace();

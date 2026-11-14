@@ -9,7 +9,7 @@ import type { StorageStateFile } from "../sessions/storage-state.ts";
 import { apiListStep, passApiListAccounts } from "../sync/api-list-cycle.ts";
 import { clearAccountChatPace, OPEN_PULL_MS, planChatPull, chatPaceOf, rememberChatPace } from "../sync/api-list-pace.ts";
 import { clearAccountPauses, accountPause } from "../sync/backoff.ts";
-import { fetchSignedChats } from "../sync/of-chat-api.ts";
+import { clearSpendAsks, fetchSignedChats } from "../sync/of-chat-api.ts";
 import { clearSignRulesCache } from "../sync/of-sign.ts";
 import { runInboxWatch } from "../sync/inbox-watch.ts";
 import { removeDir, tempDataDir, TEST_SESSION_KEY, testConfig, testDisplay } from "./helpers.ts";
@@ -27,6 +27,7 @@ const RULES = {
 test("veinte hilos abiertos se quedan cerca de 150 peticiones por minuto", async () => {
   clearSignRulesCache();
   clearAccountChatPace();
+  clearSpendAsks();
   let now = 1_700_000_000_000;
   let requests = 0;
   const openKeys = Array.from({ length: 20 }, (_, index) => String(index + 1));

@@ -26,6 +26,7 @@ import {
   type OutboundSend,
 } from "@/lib/send-queue";
 import { spendTone } from "@/lib/spend-tiers";
+import { useInboxSelection } from "@/lib/inbox-selection";
 import { ChatMediaPlayer } from "@/features/chat-media-player";
 import { VAULT_THUMB_MISSING, vaultMediaSrc } from "@/lib/chat-media";
 import { VaultBrowser } from "@/features/vault-browser";
@@ -212,7 +213,6 @@ export function RealChatsPage() {
   const user = useCurrentUser();
   const [data, setData] = useState<CreatorChatList | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [filter, setFilter] = useState<InboxPill>("todos");
   const [onlineOpen, setOnlineOpen] = useState(false);
@@ -411,18 +411,19 @@ export function RealChatsPage() {
     messages: data ? accountMessages : null,
   });
   const tipped = tipThreads(accountMessages, threads);
-  const ordered = [...threads]
-    .filter((thread) => matchesInboxPill(thread, filter, tipped))
-    .sort((left, right) => (right.lastMessageAt ?? "").localeCompare(left.lastMessageAt ?? ""));
-  const selected =
-    ordered.find((thread) => `${thread.creatorId}:${thread.threadKey}` === selectedKey)
-    ?? ordered.find((thread) => !marks.hidden.includes(threadMark(thread.creatorId, thread.threadKey)))
-    ?? ordered[0]
-    ?? null;
-  const visible = ordered.filter((thread) => {
-    const id = threadMark(thread.creatorId, thread.threadKey);
-    return showHidden || !marks.hidden.includes(id) || (selected != null && id === threadMark(selected.creatorId, selected.threadKey));
+  const inbox = useInboxSelection({
+    threads: threads.map((thread) => ({ ...thread, id: `${thread.creatorId}:${thread.threadKey}` })),
+    matches: (thread) => matchesInboxPill(thread, filter, tipped),
+    hidden: (thread) => marks.hidden.includes(threadMark(thread.creatorId, thread.threadKey)),
+    showHidden,
+    onMark: (thread) => {
+      void markChatOpened({ data: { creatorId: thread.creatorId, threadKey: thread.threadKey } }).then((result) => {
+        if (result.marked) void refresh();
+      }).catch(() => undefined);
+    },
   });
+  const selected = inbox.selected;
+  const visible = inbox.visible;
   const fanCards = useChatFanCards(visible);
   const messages = (data?.messages ?? [])
     .filter((message) => message.creatorId === selected?.creatorId && message.threadKey === selected?.threadKey)
@@ -430,33 +431,14 @@ export function RealChatsPage() {
   const meta = data?.meta.find((item) => item.creatorId === selected?.creatorId);
   const running = selected ? data?.runningCreatorIds.includes(selected.creatorId) : false;
   const canForce = teamAccess?.role === "owner" && selected != null;
-  const openedKey = selected ? `${selected.creatorId}:${selected.threadKey}` : null;
-  const markedOpen = useRef<string | null>(null);
-  useEffect(() => {
-    if (!selected || !openedKey) return;
-    if (markedOpen.current === openedKey) return;
-    markedOpen.current = openedKey;
-    if (selected.unread === 0) return;
-    void markChatOpened({ data: { creatorId: selected.creatorId, threadKey: selected.threadKey } }).then((result) => {
-      if (result.marked) void refresh();
-    }).catch(() => undefined);
-  }, [openedKey, selected?.unread]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-      const target = event.target;
-      if (target instanceof HTMLElement && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
       if (dialog != null || insightsOpen) return;
-      const index = visible.findIndex((thread) => thread.creatorId === selected?.creatorId && thread.threadKey === selected?.threadKey);
-      const step = event.key === "ArrowDown" ? 1 : -1;
-      const next = visible[index + step];
-      if (!next) return;
-      event.preventDefault();
-      setSelectedKey(`${next.creatorId}:${next.threadKey}`);
+      inbox.onArrow(event);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [visible, selected, dialog, insightsOpen]);
+  }, [dialog, insightsOpen, inbox.onArrow]);
   useEffect(() => {
     if (dialog == null) return;
     const onKey = (event: KeyboardEvent) => {
@@ -816,7 +798,7 @@ export function RealChatsPage() {
   }
 
   function chooseThread(thread: { creatorId: string; threadKey: string }) {
-    setSelectedKey(`${thread.creatorId}:${thread.threadKey}`);
+    inbox.choose({ id: `${thread.creatorId}:${thread.threadKey}` });
   }
 
   function fanNickname(creatorId: string, fanKey: string | null): string | null {
@@ -840,11 +822,11 @@ export function RealChatsPage() {
     const next = { ...marks, [kind]: has ? marks[kind].filter((item) => item !== id) : [...marks[kind], id] };
     saveMarks(next);
     if (kind === "hidden" && !has) {
-      const other = ordered.find((thread) => {
+      const other = visible.find((thread) => {
         const mark = threadMark(thread.creatorId, thread.threadKey);
         return mark !== id && !next.hidden.includes(mark);
       });
-      if (other) setSelectedKey(`${other.creatorId}:${other.threadKey}`);
+      if (other) inbox.choose({ id: `${other.creatorId}:${other.threadKey}` });
     }
     setFanMenu(false);
   }
@@ -1046,8 +1028,8 @@ export function RealChatsPage() {
                     ) : (
                       <span className="grid h-10 w-10 place-items-center rounded-full bg-[#eef2ff] text-sm">{fanTitle(thread).slice(0, 1)}</span>
                     )}
-                    <span className="text-[10px] font-medium" style={{ color: spendTone(thread.spentCents).color ?? "#6d7585" }}>
-                      {spendTone(thread.spentCents).label}
+                    <span className="text-[10px] font-medium" style={{ color: spendTone(thread.spentCents ?? chatFanCardFor(fanCards.fans, thread.creatorId, thread.fanKey)?.spentCents ?? null).color ?? "#6d7585" }}>
+                      {spendTone(thread.spentCents ?? chatFanCardFor(fanCards.fans, thread.creatorId, thread.fanKey)?.spentCents ?? null).label}
                     </span>
                   </span>
                   <span className="min-w-0 flex-1">
