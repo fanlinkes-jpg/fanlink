@@ -2,6 +2,18 @@ import { MessageCircle } from "lucide-react";
 import type { NotificationListItem } from "@/lib/of-notifications";
 import { isRecentFan, notificationStamp, renewLabel, spanishNotificationText } from "@/lib/notifications";
 
+function onlyfansPostLink(value: string | null): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:") return null;
+    if (url.hostname !== "onlyfans.com" && url.hostname !== "www.onlyfans.com") return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 export function NotificationFanCard({
   item,
   handle,
@@ -24,6 +36,7 @@ export function NotificationFanCard({
   const stamp = notificationStamp(item.occurredAt);
   const recent = isRecentFan(item.fanSeenAt, Date.now());
   const renewText = renewLabel(renew);
+  const postLink = item.kind === "comment" ? onlyfansPostLink(item.postLink) : null;
   const canChat = Boolean(onChat) && Boolean(item.fanKey || item.threadKey);
   const initial = (name ?? handle ?? item.labels.title).slice(0, 1).toUpperCase();
   return (
@@ -60,8 +73,8 @@ export function NotificationFanCard({
         ) : null}
         {text ? <p className="mt-1 text-[#1c2333]">{text}</p> : null}
         {item.kind === "comment" && item.postText ? <p className="mt-1 text-xs text-[#6d7585]">{item.postText}</p> : null}
-        {item.kind === "comment" && item.postLink ? (
-          <a href={item.postLink} className="mt-1 block truncate text-xs text-[#1890d4]" target="_blank" rel="noreferrer">{item.postLink}</a>
+        {postLink ? (
+          <a href={postLink} className="mt-1 block truncate text-xs text-[#1890d4]" target="_blank" rel="noreferrer">{postLink}</a>
         ) : null}
         {item.labels.amount ? <p className="mt-1 tabular-nums text-[#1c2333]">{item.labels.amount}</p> : null}
         {stamp ? <p className="mt-1 text-xs text-[#8b909a]">{stamp}</p> : null}

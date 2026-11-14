@@ -347,6 +347,72 @@ test("marcar leídas firma el POST y relee el contador; apagado no llama", async
   assert.equal(denied.counts, null);
 });
 
+test("con el flag apagado no se lee la sesión ni se llama a OnlyFans", async () => {
+  const dir = await tempDataDir();
+  const previousFlag = process.env.FANLINK_NOTIF_MARK_READ;
+  const previousAllow = process.env.FANLINK_SEND_ALLOW_ACCOUNTS;
+  delete process.env.FANLINK_NOTIF_MARK_READ;
+  delete process.env.FANLINK_SEND_ALLOW_ACCOUNTS;
+  let fetched = 0;
+  const account: Account = {
+    id: "11111111-1111-4111-8111-111111111111",
+    creatorId: "3zk7kbr",
+    label: "Prueba",
+    status: "active",
+    loginInProgress: false,
+    sessionRejected: false,
+    hasStorageState: false,
+    connection: "live",
+    identityState: "verified",
+    identityLabel: null,
+    identityHandle: "3zk7kbr",
+    identityName: null,
+    identityUserId: "42",
+    identityCheckedAt: null,
+    identityReason: null,
+    createdAt: "2026-11-01T00:00:00.000Z",
+    updatedAt: "2026-11-01T00:00:00.000Z",
+    lastCheckedAt: null,
+    lastError: null,
+  };
+  const sessions = new SessionManager({
+    config: testConfig(dir),
+    store: {
+      init: async () => undefined,
+      list: async () => [account],
+      get: async () => account,
+      findByCreator: async () => account,
+      create: async () => account,
+      update: async () => account,
+    },
+    site: onlyFansSite,
+    browsers: { launch: async () => { throw new Error("no"); } } as unknown as BrowserFactory,
+    displayEnv: testDisplay,
+    fetch: (async () => {
+      fetched += 1;
+      throw new Error("no");
+    }) as typeof fetch,
+  });
+  try {
+    const marked = await sessions.markNotificationsOnOnlyfans(account.id, { all: true, types: [] });
+    assert.equal(fetched, 0);
+    assert.equal(marked.wrote, false);
+    assert.equal(marked.motivo, "marcado apagado");
+    account.identityState = "mismatch";
+    process.env.FANLINK_NOTIF_MARK_READ = "true";
+    process.env.FANLINK_SEND_ALLOW_ACCOUNTS = "3zk7kbr";
+    const blocked = await sessions.markNotificationsOnOnlyfans(account.id, { all: true, types: [] });
+    assert.equal(fetched, 0);
+    assert.equal(blocked.motivo, "no se pudo leer");
+  } finally {
+    if (previousFlag == null) delete process.env.FANLINK_NOTIF_MARK_READ;
+    else process.env.FANLINK_NOTIF_MARK_READ = previousFlag;
+    if (previousAllow == null) delete process.env.FANLINK_SEND_ALLOW_ACCOUNTS;
+    else process.env.FANLINK_SEND_ALLOW_ACCOUNTS = previousAllow;
+    await removeDir(dir);
+  }
+});
+
 test("una identidad que no coincide no pide la lista", async () => {
   const dir = await tempDataDir();
   let fetched = 0;
@@ -409,6 +475,12 @@ function deps(urls: string[], respond: (url: string) => Response, methods?: stri
       urls.push(url);
       methods?.push((init?.method ?? "GET").toUpperCase());
       const headers = init?.headers as Record<string, string> | undefined;
+      const path = new URL(url).pathname;
+      if (!url.includes("?")) assert.equal(headers?.["user-id"], undefined);
+      if (url.includes("/users/notifications?")) assert.equal(headers?.["user-id"], "42");
+      if (path === "/api2/v2/users/notifications/read" || path.startsWith("/api2/v2/users/notifications/read/")) {
+        assert.equal(headers?.["user-id"], undefined);
+      }
       assert.equal(typeof headers?.sign, "string");
       assert.equal(headers?.cookie?.includes("\n"), false);
       return respond(url);

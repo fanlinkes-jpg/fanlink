@@ -321,7 +321,7 @@ export async function notificationPageFor(
     counts: sync.counts,
     motivo: sync.motivo,
     status: sync.status,
-    fanlinkUnread: sync.ok ? fanlinkUnread : null,
+    fanlinkUnread: await fanlinkBubble(sql, creatorId, sync, fanlinkUnread),
     nextCursor: page.nextCursor,
     items: page.rows.flatMap((row) => {
       const labels = notificationLabels(row, access.role);
@@ -378,6 +378,22 @@ export type NotificationListRow = {
   postText: string | null;
   labels: NonNullable<ReturnType<typeof notificationLabels>>;
 };
+
+/** Un 429 no borra el total si ya hay avisos guardados. Otra caída, sin lista, sigue en null. */
+async function fanlinkBubble(
+  sql: NotificationSql,
+  creatorId: string,
+  sync: NotificationSyncState,
+  unread: number,
+): Promise<number | null> {
+  if (sync.ok) return unread;
+  if (sync.status !== 429) return null;
+  const stored = await sql.query<{ n: number }>(
+    "select 1 as n from of_notification where creator_id = $1 limit 1",
+    [creatorId],
+  );
+  return stored.length > 0 ? unread : null;
+}
 
 /** No leídas de Fanlink en toda la cuenta, no solo la página cargada. */
 export async function countFanlinkUnread(

@@ -168,9 +168,78 @@ test("el total de Fanlink no es la página y una lista caída no es 0", async ()
     assert.equal(await countFanlinkUnread(sql, "c-alba", "dueña", "owner"), 3);
     const listed = await notificationPageFor(sql, { userId: "dueña", role: "owner", creatorIds: ["c-alba"] }, "c-alba");
     assert.equal(listed.fanlinkUnread, 3);
-    await saveNotificationRead(sql, "c-alba", { captured: false, motivo: "no se pudo leer", reason: "no se pudo leer", items: [] });
+    await saveNotificationRead(sql, "c-alba", { captured: false, motivo: "no se pudo leer", reason: "no se pudo leer", status: 429, items: [] });
+    const limited = await notificationPageFor(sql, { userId: "dueña", role: "owner", creatorIds: ["c-alba"] }, "c-alba");
+    assert.equal(limited.fanlinkUnread, 3);
+    await saveNotificationRead(sql, "c-alba", { captured: false, motivo: "no se pudo leer", reason: "no se pudo leer", status: 500, items: [] });
     const failed = await notificationPageFor(sql, { userId: "dueña", role: "owner", creatorIds: ["c-alba"] }, "c-alba");
     assert.equal(failed.fanlinkUnread, null);
+  } finally {
+    await pg.close();
+  }
+});
+
+test("un chatter no cuenta la agencia en el total de Fanlink", async () => {
+  const { pg, sql } = await database();
+  try {
+    await saveNotificationRead(sql, "c-alba", {
+      captured: true,
+      status: 200,
+      motivo: "ok",
+      reason: null,
+      items: [
+        item("ag", "agency", "2026-11-13T10:00:00.000Z"),
+        item("lk", "like", "2026-11-13T11:00:00.000Z"),
+      ],
+    });
+    assert.equal(await countFanlinkUnread(sql, "c-alba", "dueña", "owner"), 2);
+    assert.equal(await countFanlinkUnread(sql, "c-alba", "chatter", "member"), 1);
+  } finally {
+    await pg.close();
+  }
+});
+
+test("una 0046 ya aplicada recibe el enlace del comentario y el insert sigue", async () => {
+  const pg = new PGlite();
+  const oldCard = `
+    alter table of_notification add column if not exists fan_handle text;
+    alter table of_notification add column if not exists avatar_url text;
+    alter table of_notification add column if not exists fan_lists text;
+    alter table of_notification add column if not exists renew_auto boolean;
+    alter table of_notification add column if not exists fan_seen_at timestamptz;
+    alter table of_notification add column if not exists post_ref text;
+  `;
+  try {
+    await pg.exec(await readFile(path.join(root, "migrations/0034_notifications.sql"), "utf8"));
+    await pg.exec(await readFile(path.join(root, "migrations/0047_notification_counts.sql"), "utf8"));
+    await pg.exec(oldCard);
+    await pg.exec(await readFile(path.join(root, "migrations/0048_notification_post.sql"), "utf8"));
+    await pg.exec(await readFile(path.join(root, "migrations/0048_notification_post.sql"), "utf8"));
+    const sql = {
+      query: async <T>(text: string, params: unknown[] = []) => (await pg.query<T>(text, params)).rows,
+    };
+    await saveNotificationRead(sql, "c-alba", {
+      captured: true,
+      status: 200,
+      motivo: "ok",
+      reason: null,
+      items: [{
+        key: "com",
+        kind: "comment",
+        body: "qué buen post",
+        fanKey: "4",
+        fanName: "Cleo",
+        threadKey: null,
+        amountCents: null,
+        occurredAt: "2026-11-13T10:00:00.000Z",
+        pending: false,
+        postLink: "https://onlyfans.com/99887766",
+        postText: "mira esta foto",
+      }],
+    });
+    const row = (await listNotificationRows(sql, "c-alba", "dueña", { role: "owner" })).rows.find((item) => item.key === "com");
+    assert.equal(row?.postLink, "https://onlyfans.com/99887766");
+    assert.equal(row?.postText, "mira esta foto");
   } finally {
     await pg.close();
   }
@@ -233,7 +302,7 @@ test("la ficha guarda listas y renovación y deja null lo que no vino", async ()
 test("las migraciones de notificaciones se aplican dos veces", async () => {
   const pg = new PGlite();
   try {
-    for (const name of ["0034_notifications.sql", "0035_notification_first_seen.sql", "0036_notification_key_text.sql", "0047_notification_counts.sql", "0046_notification_fan_card.sql"]) {
+    for (const name of ["0034_notifications.sql", "0035_notification_first_seen.sql", "0036_notification_key_text.sql", "0047_notification_counts.sql", "0046_notification_fan_card.sql", "0048_notification_post.sql"]) {
       const sql = await readFile(path.join(root, "migrations", name), "utf8");
       await pg.exec(sql);
       await pg.exec(sql);
@@ -492,6 +561,7 @@ async function database() {
   await pg.exec(await readFile(path.join(root, "migrations/0034_notifications.sql"), "utf8"));
   await pg.exec(await readFile(path.join(root, "migrations/0047_notification_counts.sql"), "utf8"));
   await pg.exec(await readFile(path.join(root, "migrations/0046_notification_fan_card.sql"), "utf8"));
+  await pg.exec(await readFile(path.join(root, "migrations/0048_notification_post.sql"), "utf8"));
   const sql = {
     query: async <T>(text: string, params: unknown[] = []) => (await pg.query<T>(text, params)).rows,
   };

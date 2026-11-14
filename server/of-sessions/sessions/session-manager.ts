@@ -52,6 +52,7 @@ import { chatPaceOf, planChatPull, rememberChatPace, withAccountApi } from "../s
 import { fetchSignedChats, type SignedChatOptions } from "../sync/of-chat-api.ts";
 import { collectChats, type CollectedChats } from "../sync/collect-chats.ts";
 import { dispatchNotificationMark, fetchSignedNotifications, type CollectedNotifications, type MarkNotificationsResult } from "../sync/of-notifications-api.ts";
+import { notificationMarkReadGate } from "../send/gate.ts";
 import { fetchSignedOnlineFans, readOnlineSubscribers, type OnlineFan, type OnlineRead } from "../sync/online-fans.ts";
 import {
   judgeStorageState,
@@ -430,9 +431,29 @@ export class SessionManager {
   }
 
   /** Marca en OnlyFans dentro del lector de la cuenta y relee el contador. */
-  markNotificationsOnOnlyfans(accountId: string, scope: { all: boolean; types: string[] }): Promise<MarkNotificationsResult> {
+  async markNotificationsOnOnlyfans(accountId: string, scope: { all: boolean; types: string[] }): Promise<MarkNotificationsResult> {
+    const quiet: MarkNotificationsResult = {
+      wrote: false,
+      motivo: "marcado apagado",
+      counts: null,
+      routes: [{ route: "marcar", status: null, motivo: "marcado apagado", count: 0 }],
+      retryAfterMs: 0,
+      sessionRejected: false,
+      signatureRejected: false,
+    };
+    const account = await this.options.store.get(accountId);
+    if (account.identityState === "mismatch") {
+      return { ...quiet, motivo: "no se pudo leer", routes: [{ route: "marcar", status: null, motivo: "no se pudo leer", count: 0 }] };
+    }
+    const gate = notificationMarkReadGate(process.env.FANLINK_NOTIF_MARK_READ, process.env.FANLINK_SEND_ALLOW_ACCOUNTS, {
+      creatorId: account.creatorId,
+      accountId: account.id,
+      handle: account.identityHandle,
+      userId: account.identityUserId,
+      label: account.label,
+    });
+    if (!gate.allowed) return quiet;
     return withAccountChatReader(accountId, async () => {
-      const account = await this.options.store.get(accountId);
       const state = await this.readStorageState(accountId);
       return dispatchNotificationMark({
         flag: process.env.FANLINK_NOTIF_MARK_READ,

@@ -6,5 +6,3 @@ alter table of_notification add column if not exists fan_lists text;
 alter table of_notification add column if not exists renew_auto boolean;
 alter table of_notification add column if not exists fan_seen_at timestamptz;
 alter table of_notification add column if not exists post_ref text;
-alter table of_notification add column if not exists post_link text;
-alter table of_notification add column if not exists post_text text;
