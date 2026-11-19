@@ -18,8 +18,8 @@ import { listCreatorChats, listTeamMetrics, setCreatorProxy, type TeamMetricView
 import { PLATFORMS } from "@/features/growth-pages";
 import { Badge, Button, Field, Panel, Select } from "@/components/ui";
 
-export function AnalyticsPage() {
-  const [view, setView] = useState<"creadoras" | "equipo" | "fans">("creadoras");
+export function AnalyticsPage({ initialView }: { initialView?: "creadoras" | "equipo" | "fans" } = {}) {
+  const [view, setView] = useState<"creadoras" | "equipo" | "fans">(initialView ?? "creadoras");
   const [period, setPeriod] = useState<MetricPeriod>("month");
   const [teamRows, setTeamRows] = useState<TeamMetricView[]>([]);
   const [chatOkCreators, setChatOkCreators] = useState<string[]>([]);
@@ -488,7 +488,7 @@ function Metric({ label, value, hint }: { label: string; value: string; hint: st
   );
 }
 
-function ProxyForm({ creatorId, label, onSaved }: { creatorId: string; label: string | null; onSaved: () => void }) {
+export function ProxyForm({ creatorId, label, onSaved }: { creatorId: string; label: string | null; onSaved: () => void }) {
   const [server, setServer] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");

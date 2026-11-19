@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AdministrarRouteImport } from './routes/administrar'
 import { Route as AjustesRouteImport } from './routes/ajustes'
 import { Route as AnaliticaRouteImport } from './routes/analitica'
 import { Route as AuditoriaRouteImport } from './routes/auditoria'
@@ -23,17 +24,24 @@ import { Route as GuionesRouteImport } from './routes/guiones'
 import { Route as ListasRouteImport } from './routes/listas'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as MensajesRouteImport } from './routes/mensajes'
+import { Route as ProxysRouteImport } from './routes/proxys'
 import { Route as VaultRouteImport } from './routes/vault'
 import { Route as ApiChatLiveRouteImport } from './routes/api/chat-live'
 import { Route as ApiChatMediaRouteImport } from './routes/api/chat-media'
 import { Route as ApiVaultMediaRouteImport } from './routes/api/vault-media'
 import { Route as ApiVaultQueryRouteImport } from './routes/api/vault-query'
 import { Route as ApiVaultSendRouteImport } from './routes/api/vault-send'
+import { Route as ProximamenteSeccionRouteImport } from './routes/proximamente.$seccion'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdministrarRoute = AdministrarRouteImport.update({
+  id: '/administrar',
+  path: '/administrar',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AjustesRoute = AjustesRouteImport.update({
@@ -101,6 +109,11 @@ const MensajesRoute = MensajesRouteImport.update({
   path: '/mensajes',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ProxysRoute = ProxysRouteImport.update({
+  id: '/proxys',
+  path: '/proxys',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const VaultRoute = VaultRouteImport.update({
   id: '/vault',
   path: '/vault',
@@ -131,6 +144,11 @@ const ApiVaultSendRoute = ApiVaultSendRouteImport.update({
   path: '/api/vault-send',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ProximamenteSeccionRoute = ProximamenteSeccionRouteImport.update({
+  id: '/proximamente/$seccion',
+  path: '/proximamente/$seccion',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
   path: '/api/auth/$',
@@ -139,6 +157,7 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/administrar': typeof AdministrarRoute
   '/ajustes': typeof AjustesRoute
   '/analitica': typeof AnaliticaRoute
   '/auditoria': typeof AuditoriaRoute
@@ -152,16 +171,19 @@ export interface FileRoutesByFullPath {
   '/listas': typeof ListasRoute
   '/login': typeof LoginRoute
   '/mensajes': typeof MensajesRoute
+  '/proxys': typeof ProxysRoute
   '/vault': typeof VaultRoute
   '/api/chat-live': typeof ApiChatLiveRoute
   '/api/chat-media': typeof ApiChatMediaRoute
   '/api/vault-media': typeof ApiVaultMediaRoute
   '/api/vault-query': typeof ApiVaultQueryRoute
   '/api/vault-send': typeof ApiVaultSendRoute
+  '/proximamente/$seccion': typeof ProximamenteSeccionRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/administrar': typeof AdministrarRoute
   '/ajustes': typeof AjustesRoute
   '/analitica': typeof AnaliticaRoute
   '/auditoria': typeof AuditoriaRoute
@@ -175,17 +197,20 @@ export interface FileRoutesByTo {
   '/listas': typeof ListasRoute
   '/login': typeof LoginRoute
   '/mensajes': typeof MensajesRoute
+  '/proxys': typeof ProxysRoute
   '/vault': typeof VaultRoute
   '/api/chat-live': typeof ApiChatLiveRoute
   '/api/chat-media': typeof ApiChatMediaRoute
   '/api/vault-media': typeof ApiVaultMediaRoute
   '/api/vault-query': typeof ApiVaultQueryRoute
   '/api/vault-send': typeof ApiVaultSendRoute
+  '/proximamente/$seccion': typeof ProximamenteSeccionRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/administrar': typeof AdministrarRoute
   '/ajustes': typeof AjustesRoute
   '/analitica': typeof AnaliticaRoute
   '/auditoria': typeof AuditoriaRoute
@@ -199,18 +224,21 @@ export interface FileRoutesById {
   '/listas': typeof ListasRoute
   '/login': typeof LoginRoute
   '/mensajes': typeof MensajesRoute
+  '/proxys': typeof ProxysRoute
   '/vault': typeof VaultRoute
   '/api/chat-live': typeof ApiChatLiveRoute
   '/api/chat-media': typeof ApiChatMediaRoute
   '/api/vault-media': typeof ApiVaultMediaRoute
   '/api/vault-query': typeof ApiVaultQueryRoute
   '/api/vault-send': typeof ApiVaultSendRoute
+  '/proximamente/$seccion': typeof ProximamenteSeccionRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/administrar'
     | '/ajustes'
     | '/analitica'
     | '/auditoria'
@@ -224,16 +252,19 @@ export interface FileRouteTypes {
     | '/listas'
     | '/login'
     | '/mensajes'
+    | '/proxys'
     | '/vault'
     | '/api/chat-live'
     | '/api/chat-media'
     | '/api/vault-media'
     | '/api/vault-query'
     | '/api/vault-send'
+    | '/proximamente/$seccion'
     | '/api/auth/$'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/administrar'
     | '/ajustes'
     | '/analitica'
     | '/auditoria'
@@ -247,16 +278,19 @@ export interface FileRouteTypes {
     | '/listas'
     | '/login'
     | '/mensajes'
+    | '/proxys'
     | '/vault'
     | '/api/chat-live'
     | '/api/chat-media'
     | '/api/vault-media'
     | '/api/vault-query'
     | '/api/vault-send'
+    | '/proximamente/$seccion'
     | '/api/auth/$'
   id:
     | '__root__'
     | '/'
+    | '/administrar'
     | '/ajustes'
     | '/analitica'
     | '/auditoria'
@@ -270,17 +304,20 @@ export interface FileRouteTypes {
     | '/listas'
     | '/login'
     | '/mensajes'
+    | '/proxys'
     | '/vault'
     | '/api/chat-live'
     | '/api/chat-media'
     | '/api/vault-media'
     | '/api/vault-query'
     | '/api/vault-send'
+    | '/proximamente/$seccion'
     | '/api/auth/$'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AdministrarRoute: typeof AdministrarRoute
   AjustesRoute: typeof AjustesRoute
   AnaliticaRoute: typeof AnaliticaRoute
   AuditoriaRoute: typeof AuditoriaRoute
@@ -294,12 +331,14 @@ export interface RootRouteChildren {
   ListasRoute: typeof ListasRoute
   LoginRoute: typeof LoginRoute
   MensajesRoute: typeof MensajesRoute
+  ProxysRoute: typeof ProxysRoute
   VaultRoute: typeof VaultRoute
   ApiChatLiveRoute: typeof ApiChatLiveRoute
   ApiChatMediaRoute: typeof ApiChatMediaRoute
   ApiVaultMediaRoute: typeof ApiVaultMediaRoute
   ApiVaultQueryRoute: typeof ApiVaultQueryRoute
   ApiVaultSendRoute: typeof ApiVaultSendRoute
+  ProximamenteSeccionRoute: typeof ProximamenteSeccionRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
 }
 
@@ -310,6 +349,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/administrar': {
+      id: '/administrar'
+      path: '/administrar'
+      fullPath: '/administrar'
+      preLoaderRoute: typeof AdministrarRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/ajustes': {
@@ -403,6 +449,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MensajesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/proxys': {
+      id: '/proxys'
+      path: '/proxys'
+      fullPath: '/proxys'
+      preLoaderRoute: typeof ProxysRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/vault': {
       id: '/vault'
       path: '/vault'
@@ -445,6 +498,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiVaultSendRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/proximamente/$seccion': {
+      id: '/proximamente/$seccion'
+      path: '/proximamente/$seccion'
+      fullPath: '/proximamente/$seccion'
+      preLoaderRoute: typeof ProximamenteSeccionRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/auth/$': {
       id: '/api/auth/$'
       path: '/api/auth/$'
@@ -457,6 +517,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AdministrarRoute: AdministrarRoute,
   AjustesRoute: AjustesRoute,
   AnaliticaRoute: AnaliticaRoute,
   AuditoriaRoute: AuditoriaRoute,
@@ -470,12 +531,14 @@ const rootRouteChildren: RootRouteChildren = {
   ListasRoute: ListasRoute,
   LoginRoute: LoginRoute,
   MensajesRoute: MensajesRoute,
+  ProxysRoute: ProxysRoute,
   VaultRoute: VaultRoute,
   ApiChatLiveRoute: ApiChatLiveRoute,
   ApiChatMediaRoute: ApiChatMediaRoute,
   ApiVaultMediaRoute: ApiVaultMediaRoute,
   ApiVaultQueryRoute: ApiVaultQueryRoute,
   ApiVaultSendRoute: ApiVaultSendRoute,
+  ProximamenteSeccionRoute: ProximamenteSeccionRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
 }
 export const routeTree = rootRouteImport

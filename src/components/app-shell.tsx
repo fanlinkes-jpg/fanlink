@@ -3,15 +3,22 @@ import { listCreatorChats } from "@/lib/of-sessions";
 import { unreadTotalFor } from "../../server/of-sessions/sync/unread-chats.ts";
 import { useEffect, useState, type ReactNode } from "react";
 import {
+  Archive,
+  Banknote,
   BarChart3,
-  CalendarClock,
+  Bell,
+  ClipboardList,
   Contact,
+  CreditCard,
+  FilePlus,
+  FileText,
+  Folder,
   Home,
   Languages,
+  LayoutDashboard,
   LayoutGrid,
   Link2,
   ListFilter,
-  LogIn,
   Menu,
   MessageCircle,
   MessagesSquare,
@@ -28,120 +35,101 @@ import {
 } from "lucide-react";
 import { Toaster } from "sonner";
 import { cn } from "@/lib/cn";
-import { useCrm, type Perm } from "@/lib/crm";
-import { hasPerm } from "@/lib/access-policy";
+import { useCrm } from "@/lib/crm";
+import {
+  canAccessPath,
+  navRoleFromAccess,
+  pathMatchesNavLink,
+  visibleNavBlocks,
+  type NavBlock,
+  type NavLink,
+} from "@/lib/nav-config";
 import { SessionSync } from "@/components/session-sync";
 import { UserButton } from "@/lib/auth/gates";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { installChatSendTransport } from "@/lib/chat-send-bind";
 import { chatSendSession } from "@/lib/chat-send-session";
 
-type Item = { href: string; label: string; icon: LucideIcon; perm?: Perm };
-
-const MENUS: { id: string; icon: LucideIcon; label: string; items: Item[] }[] = [
-  {
-    id: "apps",
-    icon: LayoutGrid,
-    label: "Aplicaciones",
-    items: [
-      { href: "/", label: "Inicio", icon: Home },
-      { href: "/conectar", label: "Conectar cuenta", icon: LogIn },
-      { href: "/mensajes", label: "Consola de mensajes", icon: MessageCircle, perm: "mensajes" },
-      { href: "/vault", label: "Bóveda", icon: Vault, perm: "vault" },
-      { href: "/analitica", label: "Estadísticas", icon: BarChart3, perm: "analitica" },
-      { href: "/ajustes", label: "Ajustes de la cuenta", icon: Settings, perm: "ajustes" },
-    ],
-  },
-  {
-    id: "informes",
-    icon: BarChart3,
-    label: "Informes",
-    items: [
-      { href: "/analitica", label: "Informes de creador", icon: UserRound, perm: "analitica" },
-      { href: "/equipo", label: "Informes de empleados", icon: Contact, perm: "equipo" },
-      { href: "/analitica", label: "Informes de fans", icon: Users, perm: "analitica" },
-      { href: "/auditoria", label: "Message dashboard", icon: BarChart3, perm: "analitica" },
-    ],
-  },
-  {
-    id: "crecimiento",
-    icon: Sparkles,
-    label: "Crecimiento",
-    items: [
-      { href: "/campanas", label: "Mensajes inteligentes", icon: Sparkles, perm: "campanas" },
-      { href: "/listas", label: "Listas inteligentes", icon: ListFilter, perm: "campanas" },
-      { href: "/automatizaciones", label: "Auto-seguir", icon: Workflow, perm: "campanas" },
-      { href: "/vault", label: "Vault Pro", icon: Vault, perm: "vault" },
-      { href: "/guiones", label: "Guiones", icon: ScrollText, perm: "campanas" },
-      { href: "/enlaces", label: "Enlaces", icon: Link2, perm: "campanas" },
-      { href: "/ajustes", label: "Palabras prohibidas", icon: Shield, perm: "ajustes" },
-    ],
-  },
-  {
-    id: "creadoras",
-    icon: UserRound,
-    label: "Creadoras",
-    items: [{ href: "/creadoras", label: "Administrar creadoras", icon: UserRound, perm: "equipo" }],
-  },
-  {
-    id: "equipo",
-    icon: Contact,
-    label: "Empleados",
-    items: [
-      { href: "/equipo", label: "Administrar empleados", icon: Contact, perm: "equipo" },
-      { href: "/equipo", label: "Turnario", icon: CalendarClock, perm: "equipo" },
-    ],
-  },
-];
-
-const HINTS: Record<string, string> = {
-  Inicio: "Centro de mando",
-  "Conectar cuenta": "Login de la creadora",
-  "Nuevo post": "Publicar desde el vault",
-  Notificaciones: "Avisos de la bandeja",
-  "Consola de mensajes": "Bandeja de cada sesión",
-  Bóveda: "Archivos de la cuenta",
-  Archivo: "Mensajes revisados",
-  Colecciones: "Carpetas del vault",
-  "Estados de cuenta": "Cierre e ingresos",
-  Estadísticas: "Rendimiento",
-  Banco: "Cobros y saldo",
-  "Mi perfil": "Datos de la agencia",
-  "Ajustes de la cuenta": "Traducción y precios",
-  "Informes de creador": "Por cuenta",
-  "Informes de empleados": "Por chatter",
-  "Informes de fans": "Gasto y riesgo",
-  "Message dashboard": "Calidad de la bandeja",
-  "Mensajes inteligentes": "Masivos por precio",
-  "Listas inteligentes": "Segmentos de fans",
-  "Auto-seguir": "Reglas automáticas",
-  "Vault Pro": "Ranking de sets",
-  Guiones: "Textos del equipo",
-  "Promoción de perfil": "Pruebas y campañas",
-  "Enlaces de prueba": "Acceso gratuito",
-  "Enlaces": "Pruebas y clics",
-  "Palabras prohibidas": "Filtro de envío",
-  "Descubre creadoras": "Cuentas de la agencia",
-  Solicitudes: "Pendientes del equipo",
-  "Programa S4S": "Intercambio",
-  "Configuración de S4S": "Reglas del programa",
-  "Administrar creadoras": "Fichas y plataformas",
-  "Proxy personalizado": "IP de cada cuenta",
-  "Administrar empleados": "Roles y permisos",
-  Turnario: "Mañana, noche y libre",
+const BLOCK_ICONS: Record<string, LucideIcon> = {
+  dashboard: LayoutDashboard,
+  operativa: LayoutGrid,
+  chat: MessagesSquare,
+  informes: BarChart3,
+  "funciones-inteligentes": Sparkles,
+  administrar: Users,
+  proxys: Shield,
+  "ajustes-app": Settings,
 };
 
-function MenuFlyout({ title, items, onPick }: { title: string; items: Item[]; onPick: () => void }) {
+const ITEM_ICONS: Record<string, LucideIcon> = {
+  "operativa-inicio": Home,
+  "nuevo-post": FilePlus,
+  notificaciones: Bell,
+  mensajes: MessageCircle,
+  boveda: Vault,
+  archivo: Archive,
+  colecciones: Folder,
+  "estados-cuenta": ClipboardList,
+  estadisticas: BarChart3,
+  banco: Banknote,
+  "mi-perfil": UserRound,
+  "ajustes-of": Settings,
+  "release-forms": FileText,
+  "informes-creador": UserRound,
+  "informes-empleados": Contact,
+  "informes-fans": Users,
+  "panel-mensajes": MessagesSquare,
+  "mensajes-masivos": Sparkles,
+  "listas-inteligentes": ListFilter,
+  "auto-seguir": Workflow,
+  "vault-pro": Vault,
+  guiones: ScrollText,
+  "promocion-perfil": Sparkles,
+  "enlaces-prueba": Link2,
+  "enlaces-seguimiento": Link2,
+  cuenta: Settings,
+  facturacion: CreditCard,
+};
+
+function NavRouteLink({
+  item,
+  className,
+  onClick,
+  children,
+  ...rest
+}: {
+  item: NavLink;
+  className?: string;
+  onClick?: () => void;
+  "aria-label"?: string;
+  title?: string;
+  children: ReactNode;
+}) {
+  return (
+    <Link
+      to={item.to as never}
+      params={(item.params ?? {}) as never}
+      search={(item.search ?? {}) as never}
+      onClick={onClick}
+      className={className}
+      {...rest}
+    >
+      {children}
+    </Link>
+  );
+}
+
+function MenuFlyout({ title, items, onPick }: { title: string; items: NavLink[]; onPick: () => void }) {
   return (
     <div className="max-h-[70vh] w-80 overflow-auto rounded-2xl border border-[#e6e8ee] bg-[#eef0f4] p-2 shadow-xl">
       <p className="mb-2 rounded-xl bg-[#1d2433] px-3 py-2 text-[11px] font-semibold tracking-[0.14em] text-white uppercase">{title}</p>
       <div className="space-y-1.5">
         {items.map((item) => {
-          const ItemIcon = item.icon;
+          const ItemIcon = ITEM_ICONS[item.id] ?? LayoutGrid;
           return (
-            <Link
-              key={item.label}
-              to={item.href}
+            <NavRouteLink
+              key={item.id}
+              item={item}
               onClick={onPick}
               className="flex items-center gap-3 rounded-xl border border-[#e6e8ee] bg-white px-3 py-2 hover:border-[#3b6cff]"
             >
@@ -150,9 +138,9 @@ function MenuFlyout({ title, items, onPick }: { title: string; items: Item[]; on
               </span>
               <span className="min-w-0">
                 <span className="block text-sm font-semibold leading-tight text-[#1c2333]">{item.label}</span>
-                <span className="block text-xs text-[#6d7585]">{HINTS[item.label]}</span>
+                <span className="block text-xs text-[#6d7585]">{item.comingSoon ? "Próximamente" : item.hint}</span>
               </span>
-            </Link>
+            </NavRouteLink>
           );
         })}
       </div>
@@ -209,12 +197,9 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
   }, [user?.id, isPending]);
 
   const unreadChats = useUnreadChats(creatorId);
-  const allowed = (items: Item[]) => items.filter((item) => hasPerm(teamAccess, item.perm ?? "mensajes") || !item.perm);
-  const currentOk = MENUS.flatMap((m) => m.items).every((item) => {
-    const active = item.href === "/" ? path === "/" : path.startsWith(item.href);
-    if (!active || !item.perm) return true;
-    return hasPerm(teamAccess, item.perm);
-  });
+  const navRole = navRoleFromAccess(teamAccess);
+  const blocks = visibleNavBlocks(navRole, teamAccess);
+  const currentOk = canAccessPath(path, navRole, teamAccess);
 
   return (
     <>
@@ -240,7 +225,7 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
           setTranslate={setTranslate}
           workspaceNotice={workspaceNotice}
           teamAccess={teamAccess}
-          allowed={allowed}
+          blocks={blocks}
           currentOk={currentOk}
           unreadChats={unreadChats}
         >
@@ -300,7 +285,7 @@ function ShellFrame({
   setTranslate,
   workspaceNotice,
   teamAccess,
-  allowed,
+  blocks,
   currentOk,
   unreadChats,
 }: {
@@ -322,7 +307,7 @@ function ShellFrame({
   setTranslate: (value: boolean) => void;
   workspaceNotice: string | null;
   teamAccess: { displayName: string; devMode: boolean };
-  allowed: (items: Item[]) => Item[];
+  blocks: NavBlock[];
   currentOk: boolean;
   unreadChats: number | null;
 }) {
@@ -331,44 +316,50 @@ function ShellFrame({
     <div className="flex h-dvh max-h-dvh min-h-0 overflow-hidden bg-bg text-fg">
       <aside className="relative z-50 hidden w-14 shrink-0 flex-col items-center gap-1 border-r border-line bg-surface py-3 md:flex">
         <Logo className="mb-2" />
-          <Link
-          to="/mensajes"
-          aria-label={unreadLabel(unreadChats, "Consola de mensajes")}
-          title={unreadChats == null ? "Sin datos" : undefined}
-          className={cn(
-            "relative grid h-10 w-10 place-items-center rounded-xl",
-            path.startsWith("/mensajes") ? "bg-[#3b6cff] text-white" : "bg-[#eef2ff] text-[#3b6cff]",
-          )}
-        >
-          <MessagesSquare className="h-5 w-5" />
-          {unreadChats != null && unreadChats > 0 ? <span className="absolute -top-1 -right-1 min-w-4 rounded-full bg-danger px-1 text-[10px] font-semibold text-white">{unreadChats}</span> : null}
-        </Link>
-        {MENUS.map((group) => {
-          const Icon = group.icon;
-          const open = menu === group.id;
+        {blocks.map((block) => {
+          if (block.kind === "link") {
+            const Icon = BLOCK_ICONS[block.id] ?? LayoutGrid;
+            const active = pathMatchesNavLink(path, block);
+            const isChat = block.id === "chat";
+            return (
+              <NavRouteLink
+                key={block.id}
+                item={block}
+                aria-label={isChat ? unreadLabel(unreadChats, block.label) : block.label}
+                title={isChat && unreadChats == null ? "Sin datos" : undefined}
+                className={cn(
+                  "relative grid h-10 w-10 place-items-center rounded-xl",
+                  active ? "bg-[#3b6cff] text-white" : "text-muted hover:bg-raised",
+                )}
+              >
+                <Icon className="h-5 w-5" />
+                {isChat && unreadChats != null && unreadChats > 0 ? <span className="absolute -top-1 -right-1 min-w-4 rounded-full bg-danger px-1 text-[10px] font-semibold text-white">{unreadChats}</span> : null}
+              </NavRouteLink>
+            );
+          }
+          const Icon = BLOCK_ICONS[block.id] ?? LayoutGrid;
+          const open = menu === block.id;
+          const active = block.items.some((item) => pathMatchesNavLink(path, item));
           return (
-            <div key={group.id} className="relative">
+            <div key={block.id} className="relative">
               <button
-                aria-label={group.label}
-                onClick={() => setMenu(open ? null : group.id)}
+                aria-label={block.label}
+                onClick={() => setMenu(open ? null : block.id)}
                 className={cn(
                   "grid h-10 w-10 place-items-center rounded-xl text-muted hover:bg-raised",
-                  open && "bg-primary/10 text-primary",
+                  (open || active) && "bg-primary/10 text-primary",
                 )}
               >
                 <Icon className="h-5 w-5" />
               </button>
               {open && (
                 <div className="absolute top-0 left-12 z-50">
-                  <MenuFlyout title={group.label} items={allowed(group.items)} onPick={() => setMenu(null)} />
+                  <MenuFlyout title={block.label} items={block.items} onPick={() => setMenu(null)} />
                 </div>
               )}
             </div>
           );
         })}
-        <Link to="/ajustes" aria-label="Ajustes" className="mt-auto grid h-10 w-10 place-items-center rounded-xl text-muted hover:bg-raised">
-          <Settings className="h-5 w-5" />
-        </Link>
       </aside>
 
       {mobile && (
@@ -379,9 +370,13 @@ function ShellFrame({
               <p className="font-display text-sm font-semibold">Fanlink</p>
               <button onClick={() => setMobile(false)} aria-label="Cerrar"><X className="h-4 w-4" /></button>
             </div>
-            {MENUS.map((group) => (
-              <div key={group.id} className="mb-3">
-                <MenuFlyout title={group.label} items={allowed(group.items)} onPick={() => setMobile(false)} />
+            {blocks.map((block) => (
+              <div key={block.id} className="mb-3">
+                {block.kind === "group" ? (
+                  <MenuFlyout title={block.label} items={block.items} onPick={() => setMobile(false)} />
+                ) : (
+                  <MenuFlyout title={block.label} items={[block]} onPick={() => setMobile(false)} />
+                )}
               </div>
             ))}
           </div>
