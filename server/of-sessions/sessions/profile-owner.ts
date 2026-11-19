@@ -15,6 +15,8 @@ type Slot = {
   exclusive: boolean;
   /** Hay un login esperando a que las lecturas suelten el perfil. No se cierra todavía. */
   yielding: boolean;
+  /** Chromium visible del live view: no se reutiliza un contexto headless de lecturas. */
+  visible: boolean;
 };
 
 export type ProfileLease = {
@@ -25,6 +27,7 @@ export type ProfileLease = {
 export type ProfileHooks = {
   openShared: (accountId: string) => Promise<BrowserContext>;
   openExclusive: (accountId: string) => Promise<BrowserContext>;
+  openVisible: (accountId: string) => Promise<BrowserContext>;
   persist: (accountId: string, context: BrowserContext) => Promise<void>;
   closeContext: (context: BrowserContext) => Promise<void>;
   isStopped: () => boolean;
@@ -54,6 +57,9 @@ export class ProfileOwner {
       if (current?.exclusive || current?.yielding) {
         throw new SessionPendingError(messages.loginInProgress);
       }
+      if (current?.visible) {
+        throw new SessionPendingError(messages.liveViewInProgress);
+      }
       if (current) {
         current.users += 1;
         return current;
@@ -69,6 +75,7 @@ export class ProfileOwner {
         token: Symbol(accountId),
         exclusive: false,
         yielding: false,
+        visible: false,
       };
       this.slots.set(accountId, created);
       return created;
@@ -81,6 +88,66 @@ export class ProfileOwner {
    * espera a que suelten el perfil y, hasta entonces, las nuevas reciben
    * un error. El cierre y el lanzamiento van dentro del cerrojo.
    */
+  /**
+   * Vista nativa. Espera a que las lecturas suelten el perfil headless,
+   * lo cierra y abre el mismo directorio en modo visible. Si la vista
+   * ya tiene ese Chromium, lo reutiliza. No comparte la ventana de Conectar.
+   */
+  async leaseVisible(accountId: string): Promise<ProfileLease> {
+    try {
+      for (;;) {
+        if (this.hooks.isStopped()) throw new Error(messages.loginCancelled);
+        const reused = await this.withLock(accountId, async () => {
+          const current = this.slots.get(accountId);
+          if (current?.exclusive) {
+            throw new SessionPendingError(messages.loginInProgress);
+          }
+          if (current?.visible) {
+            current.users += 1;
+            current.yielding = false;
+            return current;
+          }
+          if (current) current.yielding = true;
+          return null;
+        });
+        if (reused) return this.hand(accountId, reused);
+        await this.waitUntilIdle(accountId, profileIdleMs(), "El perfil sigue ocupado. No se ha abierto la vista nativa.");
+        const opened = await this.withLock(accountId, async () => {
+          const current = this.slots.get(accountId);
+          if (current?.exclusive) {
+            throw new SessionPendingError(messages.loginInProgress);
+          }
+          if (current?.visible) {
+            current.users += 1;
+            current.yielding = false;
+            return current;
+          }
+          if (current && current.users > 0) return null;
+          await this.dropSlot(accountId);
+          const context = await this.hooks.openVisible(accountId);
+          if (this.hooks.isStopped()) {
+            await this.hooks.closeContext(context);
+            throw new Error(messages.loginCancelled);
+          }
+          const created: Slot = {
+            context,
+            users: 1,
+            token: Symbol(accountId),
+            exclusive: false,
+            yielding: false,
+            visible: true,
+          };
+          this.slots.set(accountId, created);
+          return created;
+        });
+        if (opened) return this.hand(accountId, opened);
+      }
+    } catch (error) {
+      await this.clearYield(accountId);
+      throw error;
+    }
+  }
+
   async login(accountId: string): Promise<ProfileLease> {
     this.armLoginGate(accountId);
     try {
@@ -106,6 +173,7 @@ export class ProfileOwner {
             token: Symbol(accountId),
             exclusive: true,
             yielding: false,
+            visible: false,
           };
           this.slots.set(accountId, created);
           return created;
@@ -194,7 +262,11 @@ export class ProfileOwner {
     }
   }
 
-  private async waitUntilIdle(accountId: string, timeoutMs: number): Promise<void> {
+  private async waitUntilIdle(
+    accountId: string,
+    timeoutMs: number,
+    timeoutMessage = "El perfil sigue ocupado. No se ha abierto Conectar.",
+  ): Promise<void> {
     const boxed = await this.withLock(accountId, async () => {
       const slot = this.slots.get(accountId);
       if (!slot || slot.users === 0) return null;
@@ -214,7 +286,7 @@ export class ProfileOwner {
     if (timer) clearTimeout(timer);
     if (outcome === "idle") return;
     this.notifyIdle(accountId);
-    throw new SessionPendingError("El perfil sigue ocupado. No se ha abierto Conectar.");
+    throw new SessionPendingError(timeoutMessage);
   }
 
   private notifyIdle(accountId: string): void {

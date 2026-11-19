@@ -37,6 +37,7 @@ type Room = {
   release: (() => Promise<void>) | null;
   controlTimer: ReturnType<typeof setTimeout> | null;
   idle: ReturnType<typeof setTimeout> | null;
+  notice: string;
 };
 
 const rooms = new Map<string, Room>();
@@ -82,7 +83,7 @@ export async function stopLiveRooms(): Promise<void> {
 
 async function borrowAccount(accountId: string): Promise<{ context: BrowserContext; release: () => Promise<void> }> {
   const { getOfSessionManager } = await import("../../../src/lib/of-sessions-runtime.server.ts");
-  return (await getOfSessionManager()).borrowProfile(accountId);
+  return (await getOfSessionManager()).borrowLiveProfile(accountId);
 }
 
 /** El ticket llega en el primer mensaje, no en la URL. */
@@ -141,6 +142,7 @@ export async function joinLive(socket: WebSocket, ticketId: string): Promise<voi
   const viewer: Viewer = { socket, userId: ticket.userId, role: claimed.role, stamps: [] };
   room.viewers.push(viewer);
   sendJson(socket, statusOf(room, viewer.role));
+  if (room.notice) sendJson(socket, { type: "notice", reason: room.notice });
   if (claimed.role === "control") {
     console.info(liveLog("control", { accountId: room.accountId, userId: ticket.userId, fps: liveFps(process.env.FANLINK_LIVE_FPS) }));
     armControlTimer(room);
@@ -212,6 +214,7 @@ async function openFreshRoom(ticket: LiveTicket, key: string): Promise<Room> {
     release: null,
     controlTimer: null,
     idle: null,
+    notice: "",
   };
   rooms.set(key, room);
   noteLiveHold(ticket.accountId);
@@ -240,6 +243,12 @@ async function openFreshRoom(ticket: LiveTicket, key: string): Promise<Room> {
       onFile: () => {
         const controller = room.viewers.find((viewer) => viewer.role === "control" && liveTypingEnabled());
         if (controller) sendJson(controller.socket, { type: "file" });
+      },
+      onNotice: (reason) => {
+        room.notice = reason;
+        for (const viewer of room.viewers) {
+          sendJson(viewer.socket, { type: "notice", reason });
+        }
       },
       onOwnMessage: (message) => {
         const holder = room.holder;

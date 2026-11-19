@@ -39,6 +39,7 @@ import {
   type ManagedBrowser,
 } from "./browser-factory.ts";
 import { assertLoginDisplay } from "./display.ts";
+import { liveViewHeadless } from "../live/headless.ts";
 import { openWorkPage } from "./work-page.ts";
 import { closeIfIdle } from "../live/pages.ts";
 import { readAccountProxy } from "../proxy.ts";
@@ -112,6 +113,7 @@ export class SessionManager {
     this.profiles = new ProfileOwner({
       openShared: (accountId) => this.newRestoredContext(accountId),
       openExclusive: (accountId) => this.launchLoginContext(accountId),
+      openVisible: (accountId) => this.newLiveContext(accountId),
       persist: (accountId, context) => this.rememberProfile(accountId, context),
       closeContext: (context) => this.forgetContext(context),
       isStopped: () => this.closed,
@@ -312,6 +314,15 @@ export class SessionManager {
   async borrowProfile(accountId: string): Promise<{ context: BrowserContext; release: () => Promise<void> }> {
     await this.assertUsable(accountId);
     return this.profiles.lease(accountId);
+  }
+
+  /**
+   * Misma cuenta, perfil y proxy que las lecturas, pero en el modo visible
+   * de Conectar. No cambia el Chromium headless de las lecturas en segundo plano.
+   */
+  async borrowLiveProfile(accountId: string): Promise<{ context: BrowserContext; release: () => Promise<void> }> {
+    await this.assertUsable(accountId);
+    return this.profiles.leaseVisible(accountId);
   }
 
   /**
@@ -1362,6 +1373,48 @@ export class SessionManager {
       const headless = this.options.config.headlessWork;
       const proxy = await this.accountProxy(accountId);
       console.info(`[fanlink:navegador] perfil=${accountId} headless=${String(headless)} proxy=${proxy ? "si" : "no"}`);
+      const context = await this.options.browsers.launchPersistentContext(profile, {
+        headless,
+        proxy,
+      });
+      this.openContexts.add(context);
+      try {
+        await this.seedPersistentProfile(context, accountId);
+      } catch (error) {
+        await this.forgetContext(context);
+        throw error;
+      }
+      return context;
+    }
+    const browser = await this.backgroundBrowser();
+    const plainPath = await this.materializePlainStorage(accountId);
+    try {
+      const context = await browser.newContext({ storageState: plainPath, proxy: await this.accountProxy(accountId) });
+      this.openContexts.add(context);
+      return context;
+    } finally {
+      await rm(plainPath, { force: true });
+    }
+  }
+
+  /**
+   * Vista nativa: el mismo perfil persistente y proxy que Conectar, con
+   * headless según liveViewHeadless (visible en un Mac). Siembra la sesión
+   * cifrada; no usa headlessWork.
+   */
+  private async newLiveContext(accountId: string): Promise<BrowserContext> {
+    const headless = liveViewHeadless(process.env, this.options.displayEnv);
+    if (!headless) assertLoginDisplay(false, this.options.displayEnv);
+    const profile = this.profileDir(accountId);
+    let profileExists = false;
+    try {
+      profileExists = (await stat(profile)).isDirectory();
+    } catch {
+      profileExists = false;
+    }
+    if (profileExists) {
+      const proxy = await this.accountProxy(accountId);
+      console.info(`[fanlink:navegador] vista=live perfil=${accountId} headless=${String(headless)} proxy=${proxy ? "si" : "no"}`);
       const context = await this.options.browsers.launchPersistentContext(profile, {
         headless,
         proxy,

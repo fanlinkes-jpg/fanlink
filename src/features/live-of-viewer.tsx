@@ -9,6 +9,7 @@ export function LiveOfViewer({ creatorId, section }: { creatorId: string; sectio
   const socketRef = useRef<WebSocket | null>(null);
   const statusRef = useRef<LiveStatus | null>(null);
   const [message, setMessage] = useState("Abriendo la página de OnlyFans…");
+  const [notice, setNotice] = useState("");
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
@@ -26,6 +27,7 @@ export function LiveOfViewer({ creatorId, section }: { creatorId: string; sectio
 
     const start = async () => {
       setReady(false);
+      setNotice("");
       setMessage("Abriendo la página de OnlyFans…");
       const result = await openLiveView({ data: { creatorId, section } }).catch(() => ({
         ok: false as const,
@@ -55,6 +57,10 @@ export function LiveOfViewer({ creatorId, section }: { creatorId: string; sectio
               setMessage(payload.reason || "La vista nativa se ha cerrado.");
               return;
             }
+            if (payload.type === "notice") {
+              setNotice(payload.reason?.trim() || "");
+              return;
+            }
             if (payload.type === "status" && payload.role) {
               statusRef.current = { type: "status", role: payload.role, send: Boolean(payload.send) };
             }
@@ -71,12 +77,12 @@ export function LiveOfViewer({ creatorId, section }: { creatorId: string; sectio
         image.onload = () => {
           if (frameUrl.current) URL.revokeObjectURL(frameUrl.current);
           frameUrl.current = next;
-          canvas.width = image.naturalWidth || 1100;
-          canvas.height = image.naturalHeight || 720;
+          canvas.width = image.naturalWidth || 1440;
+          canvas.height = image.naturalHeight || 900;
           const ctx = canvas.getContext("2d");
           ctx?.drawImage(image, 0, 0);
           setReady(true);
-          setMessage("");
+          setMessage((current) => (current === "Abriendo la página de OnlyFans…" ? "" : current));
         };
         image.onerror = () => URL.revokeObjectURL(next);
         image.src = next;
@@ -119,7 +125,13 @@ export function LiveOfViewer({ creatorId, section }: { creatorId: string; sectio
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-[#0c100f]">
-      {message ? <p className="shrink-0 px-4 py-2 text-sm text-white/80">{message}</p> : null}
+      {notice ? (
+        <p className="shrink-0 border-b border-amber-500/40 bg-amber-950/90 px-4 py-3 text-sm text-amber-100" role="alert">
+          {notice}
+        </p>
+      ) : message ? (
+        <p className="shrink-0 px-4 py-2 text-sm text-white/80">{message}</p>
+      ) : null}
       <canvas
         ref={canvasRef}
         tabIndex={0}

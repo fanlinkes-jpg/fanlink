@@ -7,6 +7,7 @@ export const messages = {
   cookiesExpired: "Las cookies de la sesión han caducado",
   noSession: "No hay sesión guardada",
   loginInProgress: "El login está en curso en la ventana del navegador",
+  liveViewInProgress: "La vista nativa está usando el perfil de esta cuenta.",
   displayRequired:
     "Hace falta un escritorio gráfico (variable DISPLAY) para abrir la ventana de login.",
   credentialsRejected:

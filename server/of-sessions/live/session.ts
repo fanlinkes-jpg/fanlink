@@ -5,6 +5,8 @@ import { openWorkPage } from "../sessions/work-page.ts";
 import { markLivePage } from "./pages.ts";
 import { deskCommand, liveControlAllowed, liveHistoryGuardSource, liveLog, liveQuality, liveRequestAllowed, liveSocketGuardSource, liveThreadClick, liveTypingEnabled, mapPointer, type DeskInput } from "./desk.ts";
 import { liveSectionPageUrl, type LiveSection } from "./sections.ts";
+import { BROWSER_FINGERPRINT } from "../sessions/browser-factory.ts";
+import { isLiveChallengeText, LIVE_CHALLENGE_NOTICE } from "./challenge.ts";
 
 export type LiveFrame = { jpeg: Buffer; width: number; height: number };
 
@@ -24,6 +26,7 @@ export async function startLiveCast(input: {
   onFrame: (frame: LiveFrame) => void;
   onFile: () => void;
   onOwnMessage: (message: { messageId: string; body: string; priceCents: number | null; sentAt: string }) => void;
+  onNotice?: (reason: string) => void;
 }): Promise<LiveCast> {
   const fps = liveFpsFromEnv();
   const quality = liveQuality(process.env.FANLINK_LIVE_QUALITY);
@@ -42,7 +45,8 @@ export async function startLiveCast(input: {
   const chatUrl = section === "chat"
     ? chatPageUrl("https://onlyfans.com/my/chats", input.threadKey, "onlyfans")
     : liveSectionPageUrl(section);
-  let viewport = { width: 1100, height: 720 };
+  const fingerprint = BROWSER_FINGERPRINT.viewport;
+  let viewport: { width: number; height: number } = { width: fingerprint.width, height: fingerprint.height };
   let cdp: CDPSession | null = null;
   let stopped = false;
   let fileWait: ((file: { name: string; mimeType: string; buffer: Buffer } | null) => void) | null = null;
@@ -108,8 +112,22 @@ export async function startLiveCast(input: {
     }).catch(() => undefined);
   };
   page.on("response", onResponse);
-  await page.setViewportSize(viewport);
+  const currentViewport = page.viewportSize();
+  if (!currentViewport || currentViewport.width !== viewport.width || currentViewport.height !== viewport.height) {
+    await page.setViewportSize(viewport);
+  }
+  const reportChallenge = () => {
+    void Promise.all([
+      page.title().catch(() => ""),
+      page.locator("body").innerText({ timeout: 2_000 }).catch(() => ""),
+    ]).then(([title, body]) => {
+      if (stopped) return;
+      input.onNotice?.(isLiveChallengeText(`${title}\n${body}`) ? LIVE_CHALLENGE_NOTICE : "");
+    });
+  };
   await page.goto(chatUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
+  reportChallenge();
+  const challengeTimer = setTimeout(reportChallenge, 16_000);
   let lastFrame = 0;
   let sawFrame = false;
   cdp.on("Page.screencastFrame", (event: { data: string; sessionId: number; metadata?: { deviceWidth?: number; deviceHeight?: number } }) => {
@@ -161,6 +179,7 @@ export async function startLiveCast(input: {
     async stop() {
       if (stopped) return;
       stopped = true;
+      clearTimeout(challengeTimer);
       console.info(liveLog("fin", { accountId: input.accountId }));
       await cdp?.send("Page.stopScreencast").catch(() => undefined);
       // La siguiente sala reutiliza esta página: no se apilan guardias ni escuchas de la anterior.
