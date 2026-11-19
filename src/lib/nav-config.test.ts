@@ -81,6 +81,8 @@ test("el rol de la dueña ve todos los bloques y la facturación", () => {
   assert.equal(linkIds("owner", ownerAccess).includes("facturacion"), true);
   assert.equal(linkIds("owner", ownerAccess).includes("administrar"), true);
   assert.equal(linkIds("owner", ownerAccess).includes("proxys"), true);
+  assert.equal(linkIds("owner", ownerAccess).includes("notificaciones"), true);
+  assert.equal(canAccessPath("/notificaciones", "owner", ownerAccess), true);
 });
 
 test("el mánager ve la agencia pero no la facturación", () => {
@@ -89,6 +91,7 @@ test("el mánager ve la agencia pero no la facturación", () => {
   assert.equal(ids("manager", ownerAccess).includes("administrar"), true);
   assert.equal(ids("manager", ownerAccess).includes("proxys"), true);
   assert.equal(seen.includes("facturacion"), false);
+  assert.equal(seen.includes("notificaciones"), false);
   assert.equal(seen.includes("cuenta"), true);
 });
 
@@ -107,8 +110,10 @@ test("el chatter no ve informes de agencia, administrar, proxys ni facturación"
   assert.equal(blocks.includes("operativa"), true);
   assert.equal(blocks.includes("chat"), true);
   assert.equal(seen.includes("mensajes"), true);
+  assert.equal(seen.includes("notificaciones"), false);
   assert.equal(seen.includes("estadisticas"), true);
   assert.equal(seen.includes("cuenta"), true);
+  assert.equal(canAccessPath("/notificaciones", "chatter", chatterAccess), false);
   assert.equal(canAccessPath("/administrar", "chatter", chatterAccess), false);
   assert.equal(canAccessPath("/proxys", "chatter", chatterAccess), false);
   assert.equal(canAccessPath("/proximamente/facturacion", "chatter", chatterAccess), false);
@@ -147,7 +152,6 @@ test("las secciones sin pantalla propia quedan como Próximamente", () => {
   assert.deepEqual(coming, [
     "operativa-inicio",
     "nuevo-post",
-    "notificaciones",
     "archivo",
     "colecciones",
     "estados-cuenta",

@@ -1,3 +1,5 @@
+import type { LiveSection } from "./sections.ts";
+
 export type LiveTicket = {
   userId: string;
   accountId: string;
@@ -5,6 +7,7 @@ export type LiveTicket = {
   threadKey: string;
   fanKey: string | null;
   accountUserId: string | null;
+  section: LiveSection;
 };
 
 const tickets = globalTickets();
@@ -17,9 +20,9 @@ function globalTickets(): Map<string, LiveTicket & { expires: number }> {
   return holder.__fanlinkLiveTickets;
 }
 
-export function issueLiveTicket(ticket: LiveTicket, now = Date.now()): string {
+export function issueLiveTicket(ticket: Omit<LiveTicket, "section"> & { section?: LiveSection }, now = Date.now()): string {
   const id = crypto.randomUUID();
-  tickets.set(id, { ...ticket, expires: now + 30_000 });
+  tickets.set(id, { ...ticket, section: ticket.section ?? "chat", expires: now + 30_000 });
   return id;
 }
 
