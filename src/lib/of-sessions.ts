@@ -409,7 +409,12 @@ export const queryVaultMirror = createServerFn({ method: "POST" })
 
 export const openLiveView = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { creatorId: string; threadKey: string; fanKey: string | null }) => input)
+  .validator((input: { creatorId: string; section?: string; threadKey?: string; fanKey?: string | null }) => ({
+    creatorId: input.creatorId,
+    section: input.section,
+    threadKey: input.threadKey,
+    fanKey: input.fanKey ?? null,
+  }))
   .handler(async ({ context, data }) => {
     const { openLiveViewTicket } = await import("./of-sessions-runtime.server");
     return openLiveViewTicket(context.userId, data);

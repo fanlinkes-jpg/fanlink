@@ -58,6 +58,7 @@ import type { SendChatHooks } from "../../server/of-sessions/send/chat-message.t
 import { composeChat } from "../../server/of-sessions/send/compose.ts";
 import { liveViewGate } from "../../server/of-sessions/live/desk.ts";
 import { issueLiveTicket } from "../../server/of-sessions/live/tickets.ts";
+import { liveViewSectionAccess } from "../../server/of-sessions/live/sections.ts";
 import { listFanProfiles, saveFanProfile } from "../../server/of-sessions/sync/fan-profile.ts";
 import { listFanNotes, saveFanNote } from "../../server/of-sessions/sync/fan-note.ts";
 import { intervalMinFromEnv, startSyncLoop, type ScheduleAccount } from "../../server/of-sessions/sync/schedule.ts";
@@ -1224,13 +1225,16 @@ export async function loadMoreChatsView(userId: string, input: { creatorId: stri
 
 export async function openLiveViewTicket(
   userId: string,
-  input: { creatorId: string; threadKey: string; fanKey: string | null },
+  input: { creatorId: string; section?: string; threadKey?: string; fanKey?: string | null },
 ): Promise<{ ok: boolean; ticket: string | null; reason: string | null }> {
   const access = await accessFor(userId);
+  const accessSection = liveViewSectionAccess(input.section ?? "chat", access.role);
+  if (!accessSection.ok) return { ok: false, ticket: null, reason: accessSection.reason };
+  const section = accessSection.section;
   if (access.role !== "owner" && !access.perms.includes("mensajes")) {
     throw new WorkspaceAccessError("No tienes permiso para escribir.");
   }
-  const threadKey = input.threadKey.trim() || "inbox";
+  const threadKey = (input.threadKey ?? "").trim() || (section === "notifications" ? "notifications" : "inbox");
   const sessions = await getOfSessionManager();
   const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
   if (!account) return { ok: false, ticket: null, reason: "Vista en directo desactivada" };
@@ -1241,8 +1245,9 @@ export async function openLiveViewTicket(
     accountId: account.id,
     creatorId: input.creatorId,
     threadKey,
-    fanKey: input.fanKey,
+    fanKey: input.fanKey ?? null,
     accountUserId: account.identityUserId,
+    section,
   });
   return { ok: true, ticket, reason: null };
 }

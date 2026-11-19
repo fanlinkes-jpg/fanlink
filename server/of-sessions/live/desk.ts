@@ -1,4 +1,5 @@
 import { accountOnAllowlist, allowTokens, type SendAccount } from "../send/gate.ts";
+import { liveSectionPrefixes, liveSectionPathAllowed, type LiveSection } from "./sections.ts";
 
 export type LiveRole = "control" | "view";
 
@@ -29,7 +30,6 @@ export function liveViewGate(
   return { allowed: true, reason: "" };
 }
 
-const LIVE_CHAT_PREFIXES = ["/my/chats", "/api2/v2/chats", "/api2/v2/messages"] as const;
 /** Sin esto la página se queda en el logo. Solo lectura. */
 const LIVE_BOOT_PREFIXES = ["/api2/v2/init", "/api2/v2/users/me", "/api2/v2/users/list"] as const;
 const LIVE_DENIED_SEGMENTS = [
@@ -42,7 +42,7 @@ const LIVE_API_HOST = /^(api\d*|ws\d*|socket)\.onlyfans\.com$/;
 const LIVE_WRITES = new Set(["POST", "PUT", "DELETE", "PATCH"]);
 
 /** Solo el chat y sus mensajes. En solo lectura no salen POST, PUT ni DELETE de mensajes, likes o PPV. */
-export function liveRequestAllowed(raw: string, method = "GET", typing = false): boolean {
+export function liveRequestAllowed(raw: string, method = "GET", typing = false, section: LiveSection = "chat"): boolean {
   if (raw.startsWith("data:") || raw.startsWith("blob:") || raw.startsWith("about:")) return true;
   let url: URL;
   try {
@@ -64,7 +64,14 @@ export function liveRequestAllowed(raw: string, method = "GET", typing = false):
   if (isChatReadWrite(method, path)) return false;
   if (liveBootPath(path)) return method.toUpperCase() === "GET" || method.toUpperCase() === "HEAD";
   if (!liveHostPathAllowed(host, path)) return false;
+  if (section !== "chat" && !liveSectionTrafficAllowed(host, path, section)) return false;
   return !liveWriteBlocked(method, path, typing);
+}
+
+function liveSectionTrafficAllowed(host: string, path: string, section: LiveSection): boolean {
+  if (LIVE_MEDIA_HOST.test(host)) return true;
+  if (path.startsWith("/ws") || path.startsWith("/socket")) return true;
+  return liveSectionPathAllowed(section, path);
 }
 
 /** POST que marca el hilo como leído. Tampoco sale con el modo de escritura. */
@@ -179,12 +186,13 @@ export function draftAfterPaste(body: string, text: string): string {
 }
 
 /** El mismo filtro, dentro de la página, para pushState, window.open y vistas que no cambian la ruta. */
-export function liveHistoryGuardSource(chatUrl = ""): string {
+export function liveHistoryGuardSource(chatUrl = "", section: LiveSection = "chat"): string {
   const allow = JSON.stringify({
-    prefixes: LIVE_CHAT_PREFIXES,
+    prefixes: liveSectionPrefixes(section),
     denied: LIVE_DENIED_SEGMENTS,
     media: LIVE_MEDIA_HOST.source,
     api: LIVE_API_HOST.source,
+    pageOnly: section !== "chat",
   });
   return `(() => {
     const allow = ${allow};
@@ -204,6 +212,9 @@ export function liveHistoryGuardSource(chatUrl = ""): string {
           return false;
         }
         if (parts.some((part) => allow.denied.includes(part))) return false;
+        if (allow.pageOnly) {
+          return allow.prefixes.some((prefix) => path === prefix || path.startsWith(prefix + "/"));
+        }
         return true;
       } catch { return false; }
     };
@@ -387,8 +398,9 @@ export const LIVE_MAX_VIEWERS = 4;
 export const LIVE_MAX_PAYLOAD = 1024 * 1024;
 export const LIVE_EVENTS_PER_SECOND = 40;
 
-export function liveRoomKey(accountId: string, threadKey: string): string {
-  return `${accountId}\n${threadKey}`;
+export function liveRoomKey(accountId: string, threadKey: string, section: LiveSection = "chat"): string {
+  if (section === "chat") return `${accountId}\n${threadKey}`;
+  return `${accountId}\n${section}\n${threadKey}`;
 }
 
 export function liveViewerAccepted(count: number, max = LIVE_MAX_VIEWERS): boolean {

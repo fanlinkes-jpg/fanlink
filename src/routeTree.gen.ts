@@ -24,6 +24,7 @@ import { Route as GuionesRouteImport } from './routes/guiones'
 import { Route as ListasRouteImport } from './routes/listas'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as MensajesRouteImport } from './routes/mensajes'
+import { Route as NotificacionesRouteImport } from './routes/notificaciones'
 import { Route as ProxysRouteImport } from './routes/proxys'
 import { Route as VaultRouteImport } from './routes/vault'
 import { Route as ApiChatLiveRouteImport } from './routes/api/chat-live'
@@ -109,6 +110,11 @@ const MensajesRoute = MensajesRouteImport.update({
   path: '/mensajes',
   getParentRoute: () => rootRouteImport,
 } as any)
+const NotificacionesRoute = NotificacionesRouteImport.update({
+  id: '/notificaciones',
+  path: '/notificaciones',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ProxysRoute = ProxysRouteImport.update({
   id: '/proxys',
   path: '/proxys',
@@ -171,6 +177,7 @@ export interface FileRoutesByFullPath {
   '/listas': typeof ListasRoute
   '/login': typeof LoginRoute
   '/mensajes': typeof MensajesRoute
+  '/notificaciones': typeof NotificacionesRoute
   '/proxys': typeof ProxysRoute
   '/vault': typeof VaultRoute
   '/api/chat-live': typeof ApiChatLiveRoute
@@ -197,6 +204,7 @@ export interface FileRoutesByTo {
   '/listas': typeof ListasRoute
   '/login': typeof LoginRoute
   '/mensajes': typeof MensajesRoute
+  '/notificaciones': typeof NotificacionesRoute
   '/proxys': typeof ProxysRoute
   '/vault': typeof VaultRoute
   '/api/chat-live': typeof ApiChatLiveRoute
@@ -224,6 +232,7 @@ export interface FileRoutesById {
   '/listas': typeof ListasRoute
   '/login': typeof LoginRoute
   '/mensajes': typeof MensajesRoute
+  '/notificaciones': typeof NotificacionesRoute
   '/proxys': typeof ProxysRoute
   '/vault': typeof VaultRoute
   '/api/chat-live': typeof ApiChatLiveRoute
@@ -252,6 +261,7 @@ export interface FileRouteTypes {
     | '/listas'
     | '/login'
     | '/mensajes'
+    | '/notificaciones'
     | '/proxys'
     | '/vault'
     | '/api/chat-live'
@@ -278,6 +288,7 @@ export interface FileRouteTypes {
     | '/listas'
     | '/login'
     | '/mensajes'
+    | '/notificaciones'
     | '/proxys'
     | '/vault'
     | '/api/chat-live'
@@ -304,6 +315,7 @@ export interface FileRouteTypes {
     | '/listas'
     | '/login'
     | '/mensajes'
+    | '/notificaciones'
     | '/proxys'
     | '/vault'
     | '/api/chat-live'
@@ -331,6 +343,7 @@ export interface RootRouteChildren {
   ListasRoute: typeof ListasRoute
   LoginRoute: typeof LoginRoute
   MensajesRoute: typeof MensajesRoute
+  NotificacionesRoute: typeof NotificacionesRoute
   ProxysRoute: typeof ProxysRoute
   VaultRoute: typeof VaultRoute
   ApiChatLiveRoute: typeof ApiChatLiveRoute
@@ -449,6 +462,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MensajesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/notificaciones': {
+      id: '/notificaciones'
+      path: '/notificaciones'
+      fullPath: '/notificaciones'
+      preLoaderRoute: typeof NotificacionesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/proxys': {
       id: '/proxys'
       path: '/proxys'
@@ -531,6 +551,7 @@ const rootRouteChildren: RootRouteChildren = {
   ListasRoute: ListasRoute,
   LoginRoute: LoginRoute,
   MensajesRoute: MensajesRoute,
+  NotificacionesRoute: NotificacionesRoute,
   ProxysRoute: ProxysRoute,
   VaultRoute: VaultRoute,
   ApiChatLiveRoute: ApiChatLiveRoute,
