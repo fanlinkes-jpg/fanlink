@@ -176,7 +176,7 @@ function liveFailureText(error: unknown): string {
 }
 
 async function ensureRoom(ticket: LiveTicket): Promise<Room> {
-  const key = liveRoomKey(ticket.accountId, ticket.threadKey);
+  const key = liveRoomKey(ticket.accountId, ticket.threadKey, ticket.section);
   const pending = opening.get(key);
   if (pending) {
     const room = await pending;
@@ -231,6 +231,7 @@ async function openFreshRoom(ticket: LiveTicket, key: string): Promise<Room> {
       threadKey: ticket.threadKey,
       fanKey: ticket.fanKey,
       accountUserId: ticket.accountUserId,
+      section: ticket.section,
       onFrame: (frame) => {
         for (const viewer of room.viewers) {
           if (viewer.socket.readyState === viewer.socket.OPEN) viewer.socket.send(frame.jpeg);

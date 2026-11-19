@@ -4,6 +4,7 @@ import { parseChatMessages } from "../sync/chats.ts";
 import { openWorkPage } from "../sessions/work-page.ts";
 import { markLivePage } from "./pages.ts";
 import { deskCommand, liveControlAllowed, liveHistoryGuardSource, liveLog, liveQuality, liveRequestAllowed, liveSocketGuardSource, liveThreadClick, liveTypingEnabled, mapPointer, type DeskInput } from "./desk.ts";
+import { liveSectionPageUrl, type LiveSection } from "./sections.ts";
 
 export type LiveFrame = { jpeg: Buffer; width: number; height: number };
 
@@ -19,15 +20,18 @@ export async function startLiveCast(input: {
   threadKey: string;
   fanKey: string | null;
   accountUserId: string | null;
+  section?: LiveSection;
   onFrame: (frame: LiveFrame) => void;
   onFile: () => void;
   onOwnMessage: (message: { messageId: string; body: string; priceCents: number | null; sentAt: string }) => void;
 }): Promise<LiveCast> {
   const fps = liveFpsFromEnv();
   const quality = liveQuality(process.env.FANLINK_LIVE_QUALITY);
+  const section: LiveSection = input.section ?? "chat";
+  const needle = section === "notifications" ? "/my/notifications" : "/my/chats";
   const open = input.context.pages().find((page) => {
     try {
-      return page.url().includes("/my/chats");
+      return page.url().includes(needle);
     } catch {
       return false;
     }
@@ -35,19 +39,21 @@ export async function startLiveCast(input: {
   const page = open ?? await openWorkPage(input.context);
   markLivePage(page);
   const typing = liveTypingEnabled();
-  const chatUrl = chatPageUrl("https://onlyfans.com/my/chats", input.threadKey, "onlyfans");
+  const chatUrl = section === "chat"
+    ? chatPageUrl("https://onlyfans.com/my/chats", input.threadKey, "onlyfans")
+    : liveSectionPageUrl(section);
   let viewport = { width: 1100, height: 720 };
   let cdp: CDPSession | null = null;
   let stopped = false;
   let fileWait: ((file: { name: string; mimeType: string; buffer: Buffer } | null) => void) | null = null;
   console.info(liveLog("inicio", { accountId: input.accountId, fps }));
-  await page.addInitScript({ content: liveHistoryGuardSource(chatUrl) });
+  await page.addInitScript({ content: liveHistoryGuardSource(chatUrl, section) });
   await page.addInitScript({ content: liveSocketGuardSource(typing) });
   cdp = await input.context.newCDPSession(page);
   await cdp.send("Network.enable").catch(() => undefined);
   await cdp.send("Network.setBypassServiceWorker", { bypass: true }).catch(() => undefined);
   const guardRoute = (route: Route) => {
-    if (liveRequestAllowed(route.request().url(), route.request().method(), typing)) return route.continue();
+    if (liveRequestAllowed(route.request().url(), route.request().method(), typing, section)) return route.continue();
     return route.abort();
   };
   await page.route("**/*", guardRoute);
@@ -64,7 +70,7 @@ export async function startLiveCast(input: {
     if (frame !== page.mainFrame() || goingHome) return;
     const url = frame.url();
     if (!url || url === "about:blank" || url.startsWith("chrome-error:")) return;
-    if (liveRequestAllowed(url)) return;
+    if (liveRequestAllowed(url, "GET", typing, section)) return;
     goingHome = true;
     void page.goto(chatUrl, { waitUntil: "domcontentloaded" }).catch(() => undefined).finally(() => {
       goingHome = false;

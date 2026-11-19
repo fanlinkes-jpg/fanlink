@@ -84,7 +84,7 @@ export const NAV_BLOCKS: NavBlock[] = [
     items: [
       soon("operativa-inicio", "Inicio", "Inicio de la cuenta", ALL_NAV_ROLES),
       soon("nuevo-post", "Nuevo post", "Publicar desde el vault", ALL_NAV_ROLES, "vault"),
-      soon("notificaciones", "Notificaciones", "Avisos de la bandeja", ALL_NAV_ROLES, "mensajes"),
+      link("notificaciones", "Notificaciones", "Avisos de la bandeja", "/notificaciones", OWNER_ROLES),
       link("mensajes", "Mensajes", "Bandeja de cada sesión", "/mensajes", ALL_NAV_ROLES, "mensajes"),
       link("boveda", "Bóveda", "Archivos de la cuenta", "/vault", ALL_NAV_ROLES, "vault"),
       soon("archivo", "Archivo", "Mensajes revisados", ALL_NAV_ROLES, "mensajes"),
