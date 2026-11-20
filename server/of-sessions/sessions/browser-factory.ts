@@ -33,14 +33,14 @@ export interface PersistentLaunchOptions {
   live?: LiveLaunchMode;
 }
 
-/** Chromium completo, sin el shell. Cloudflare sigue detectando este modo. */
-export const LIVE_HEADLESS_ARGS = ["--headless=new", "--disable-blink-features=AutomationControlled"] as const;
+/** Quita navigator.webdriver. Va en todos los modos de la vista, también la ventana. */
+export const LIVE_BASE_ARGS = ["--disable-blink-features=AutomationControlled"] as const;
 
-/**
- * Sin posición negativa: macOS la ignora y la ventana sale en el escritorio.
- * Se minimiza después por CDP. Sin UA forzado: el binario manda el suyo.
- */
-export const LIVE_OFFSCREEN_ARGS = ["--disable-blink-features=AutomationControlled"] as const;
+/** Chromium completo, sin el shell. */
+export const LIVE_HEADLESS_ARGS = ["--headless=new", ...LIVE_BASE_ARGS] as const;
+
+/** La ventana visible. Misma huella de lanzamiento que el modo sin cookie. */
+export const LIVE_WINDOW_ARGS = LIVE_BASE_ARGS;
 
 export function persistentContextLaunchOptions(options: PersistentLaunchOptions): {
   headless: boolean;
@@ -54,13 +54,12 @@ export function persistentContextLaunchOptions(options: PersistentLaunchOptions)
 } {
   const live = options.live;
   const isLive = live === "headless" || live === "offscreen" || live === "window";
-  const args = live === "headless" ? LIVE_HEADLESS_ARGS : live === "offscreen" ? LIVE_OFFSCREEN_ARGS : undefined;
+  const args = live === "headless" ? LIVE_HEADLESS_ARGS : isLive ? [...LIVE_WINDOW_ARGS] : undefined;
   return {
     headless: isLive ? false : options.headless,
-    ...(args ? { ignoreDefaultArgs: ["--enable-automation"], args: [...args] } : {}),
-    ...(isLive
-      ? { viewport: null }
-      : { userAgent: BROWSER_FINGERPRINT.userAgent, viewport: BROWSER_FINGERPRINT.viewport }),
+    ...(isLive ? { ignoreDefaultArgs: ["--enable-automation"], args: args ? [...args] : [] } : {}),
+    userAgent: BROWSER_FINGERPRINT.userAgent,
+    viewport: BROWSER_FINGERPRINT.viewport,
     locale: BROWSER_FINGERPRINT.locale,
     timezoneId: BROWSER_FINGERPRINT.timezoneId,
     ...(options.proxy ? { proxy: options.proxy } : {}),

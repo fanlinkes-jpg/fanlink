@@ -97,6 +97,8 @@ export class SessionManager {
   private readonly loginTasks = new Map<string, Promise<void>>();
   private readonly openContexts = new Set<BrowserContext>();
   private readonly closeReasons = new WeakMap<BrowserContext, string>();
+  /** La vista nativa no reescribe la sesión cifrada si OnlyFans pide login. */
+  private readonly liveContexts = new WeakSet<BrowserContext>();
   private readonly profiles: ProfileOwner;
   private background: ManagedBrowser | null = null;
   private readTail: Promise<void> = Promise.resolve();
@@ -1430,7 +1432,8 @@ export class SessionManager {
         proxy,
       });
       this.openContexts.add(context);
-      console.info(`[fanlink:navegador] vista=live binario=${context.browser()?.version() ?? "desconocida"} ua-forzado=no`);
+      this.liveContexts.add(context);
+      console.info(`[fanlink:navegador] vista=live binario=${context.browser()?.version() ?? "desconocida"} ua-forzado=si`);
       context.once("close", () => {
         const reason = this.closeReasons.get(context) ?? "ajeno";
         console.info(`[fanlink:navegador] vista=live perfil=${accountId} cerrado motivo=${reason}`);
@@ -1578,6 +1581,10 @@ export class SessionManager {
   private async rememberProfile(accountId: string, context: BrowserContext): Promise<void> {
     const sessionKey = this.options.config.sessionKey;
     if (!sessionKey) return;
+    if (this.liveContexts.has(context) && await this.contextShowsLogin(context)) {
+      console.info(`[fanlink:navegador] vista=live sesion=no-guardo`);
+      return;
+    }
     let state: StorageStateFile;
     try {
       state = parseStorageState(await context.storageState());
@@ -1590,6 +1597,20 @@ export class SessionManager {
     const storagePath = this.storagePath(accountId);
     await preparePrivateDir(path.dirname(storagePath));
     await writeEncryptedSession(storagePath, state, sessionKey);
+  }
+
+  private async contextShowsLogin(context: BrowserContext): Promise<boolean> {
+    const selector = this.options.site.loggedOutSelector;
+    for (const page of context.pages()) {
+      try {
+        if (this.options.site.isLoginUrl(page.url())) return true;
+        if (!selector) continue;
+        if ((await page.locator(`${selector}:visible`).count()) > 0) return true;
+      } catch {
+        continue;
+      }
+    }
+    return false;
   }
 
   private async forgetContext(context: BrowserContext, reason = "soltar"): Promise<void> {

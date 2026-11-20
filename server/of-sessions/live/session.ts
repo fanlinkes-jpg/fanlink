@@ -6,7 +6,8 @@ import { markLivePage } from "./pages.ts";
 import { deskCommand, liveControlAllowed, liveHistoryGuardSource, liveLog, liveQuality, liveRequestAllowed, liveSocketGuardSource, liveThreadClick, liveTypingEnabled, mapPointer, type DeskInput } from "./desk.ts";
 import { liveSectionPageUrl, type LiveSection } from "./sections.ts";
 import { BROWSER_FINGERPRINT } from "../sessions/browser-factory.ts";
-import { isLiveChallengeText, LIVE_CHALLENGE_NOTICE } from "./challenge.ts";
+import { isLiveChallengeText, isLiveLoginText, LIVE_CHALLENGE_NOTICE, LIVE_LOGIN_NOTICE } from "./challenge.ts";
+import { loginUserAgentOverride } from "./fingerprint.ts";
 import { isTargetClosedMessage, LIVE_CLOSED_NOTICE } from "./closed.ts";
 import { clearancePresent, liveChallengeUrl, liveRequestTrace, liveViewDebug } from "./debug.ts";
 
@@ -30,6 +31,7 @@ export async function startLiveCast(input: {
   onOwnMessage: (message: { messageId: string; body: string; priceCents: number | null; sentAt: string }) => void;
   onNotice?: (reason: string) => void;
   onClosed?: (reason: string) => void;
+  onLogin?: () => void;
 }): Promise<LiveCast> {
   const fps = liveFpsFromEnv();
   const quality = liveQuality(process.env.FANLINK_LIVE_QUALITY);
@@ -54,6 +56,7 @@ export async function startLiveCast(input: {
   let stopped = false;
   let reportedClosed = false;
   let challengeOpen = false;
+  let loginOnPage = false;
   const reportClosed = () => {
     if (stopped || reportedClosed) return;
     reportedClosed = true;
@@ -145,8 +148,10 @@ export async function startLiveCast(input: {
     const frame = response.request().frame();
     if (response.request().resourceType() === "document" && frame === page.mainFrame()) {
       documentChecked = response.text().then((text) => {
+        const sample = text.slice(0, 2000);
         const header = response.headers()["cf-mitigated"] === "challenge";
-        noteChallenge(header || isLiveChallengeText(text.slice(0, 1500)));
+        if (isLiveLoginText(sample)) loginOnPage = true;
+        noteChallenge(header || isLiveChallengeText(sample));
       }).catch(() => undefined);
       return;
     }
@@ -161,8 +166,24 @@ export async function startLiveCast(input: {
     }).catch(() => undefined);
   };
   page.on("response", onResponse);
+  const hints = await input.context.newCDPSession(page);
+  await hints.send("Emulation.setUserAgentOverride", loginUserAgentOverride() as never).catch(() => undefined);
   await page.goto(chatUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
   await documentChecked;
+  const passwordVisible = await page.locator('input[type="password"]:visible').count().then((count) => count > 0).catch(() => false);
+  if (!challengeOpen && (loginOnPage || passwordVisible)) {
+    console.info(liveLog("error", { accountId: input.accountId, detail: "login-visible" }));
+    input.onNotice?.(LIVE_LOGIN_NOTICE);
+    input.onLogin?.();
+    return {
+      async send() {},
+      acceptFile() {},
+      async stop() {
+        stopped = true;
+        await hints.detach().catch(() => undefined);
+      },
+    };
+  }
   if (!challengeOpen) await armGuards();
   cdp = await input.context.newCDPSession(page);
   if (debug) {
@@ -252,6 +273,7 @@ export async function startLiveCast(input: {
       stopped = true;
       console.info(liveLog("fin", { accountId: input.accountId }));
       await cdp?.send("Page.stopScreencast").catch(() => undefined);
+      await hints.detach().catch(() => undefined);
       // La siguiente sala reutiliza esta página: no se apilan guardias ni escuchas de la anterior.
       page.off("framenavigated", onNavigated);
       page.off("response", onResponse);

@@ -18,6 +18,7 @@ import {
   takeLiveEventSlot,
   type LiveRole,
 } from "./desk.ts";
+import { LIVE_LOGIN_NOTICE } from "./challenge.ts";
 import { isTargetClosedMessage, LIVE_CLOSED_NOTICE, shouldReviveLive } from "./closed.ts";
 import { startLiveCast, type LiveCast } from "./session.ts";
 import { noteLiveHold, registerLiveStopper, releaseLiveHold } from "./hold.ts";
@@ -40,6 +41,7 @@ type Room = {
   revives: number;
   opening: boolean;
   closing: boolean;
+  loginSeen: boolean;
   controlTimer: ReturnType<typeof setTimeout> | null;
   idle: ReturnType<typeof setTimeout> | null;
   notice: string;
@@ -220,6 +222,7 @@ async function openFreshRoom(ticket: LiveTicket, key: string): Promise<Room> {
     revives: 0,
     opening: false,
     closing: false,
+    loginSeen: false,
     controlTimer: null,
     idle: null,
     notice: "",
@@ -279,6 +282,9 @@ async function openBorrowed(room: Room, ticket: LiveTicket): Promise<void> {
       onClosed: (reason) => {
         void reviveOrStop(room, ticket, reason);
       },
+      onLogin: () => {
+        room.loginSeen = true;
+      },
       onOwnMessage: (message) => {
         const holder = room.holder;
         const since = room.heldSince;
@@ -318,6 +324,14 @@ async function openBorrowed(room: Room, ticket: LiveTicket): Promise<void> {
       room.cast = null;
       room.release = null;
       throw new Error("La sala se cerró.");
+    }
+    if (room.loginSeen) {
+      room.revives = 1;
+      await room.cast?.stop().catch(() => undefined);
+      await room.release?.().catch(() => undefined);
+      room.cast = null;
+      room.release = null;
+      throw new Error(LIVE_LOGIN_NOTICE);
     }
   } catch (error) {
     await room.cast?.stop().catch(() => undefined);
