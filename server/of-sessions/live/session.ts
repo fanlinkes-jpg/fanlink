@@ -7,6 +7,7 @@ import { deskCommand, liveControlAllowed, liveHistoryGuardSource, liveLog, liveQ
 import { liveSectionPageUrl, type LiveSection } from "./sections.ts";
 import { BROWSER_FINGERPRINT } from "../sessions/browser-factory.ts";
 import { isLiveChallengeText, LIVE_CHALLENGE_NOTICE } from "./challenge.ts";
+import { isTargetClosedMessage, LIVE_CLOSED_NOTICE } from "./closed.ts";
 import { clearancePresent, liveChallengeUrl, liveRequestTrace, liveViewDebug } from "./debug.ts";
 
 export type LiveFrame = { jpeg: Buffer; width: number; height: number };
@@ -28,6 +29,7 @@ export async function startLiveCast(input: {
   onFile: () => void;
   onOwnMessage: (message: { messageId: string; body: string; priceCents: number | null; sentAt: string }) => void;
   onNotice?: (reason: string) => void;
+  onClosed?: (reason: string) => void;
 }): Promise<LiveCast> {
   const fps = liveFpsFromEnv();
   const quality = liveQuality(process.env.FANLINK_LIVE_QUALITY);
@@ -50,7 +52,23 @@ export async function startLiveCast(input: {
   let viewport: { width: number; height: number } = { width: fingerprint.width, height: fingerprint.height };
   let cdp: CDPSession | null = null;
   let stopped = false;
+  let reportedClosed = false;
   let challengeOpen = false;
+  const reportClosed = () => {
+    if (stopped || reportedClosed) return;
+    reportedClosed = true;
+    console.info(liveLog("error", { accountId: input.accountId, detail: "target-cerrado" }));
+    input.onClosed?.(LIVE_CLOSED_NOTICE);
+  };
+  const noteSendError = (error: unknown) => {
+    const message = error instanceof Error ? error.message : "input";
+    if (isTargetClosedMessage(message)) {
+      reportClosed();
+      return;
+    }
+    console.info(liveLog("error", { accountId: input.accountId, detail: message }));
+  };
+  page.on("close", () => reportClosed());
   let fileWait: ((file: { name: string; mimeType: string; buffer: Buffer } | null) => void) | null = null;
   const debug = liveViewDebug();
   console.info(liveLog("inicio", { accountId: input.accountId, fps }));
@@ -204,7 +222,7 @@ export async function startLiveCast(input: {
 
   return {
     async send(command) {
-      if (stopped || !cdp) return;
+      if (stopped || reportedClosed || !cdp) return;
       if (challengeOpen) {
         const allowed = deskCommand(command, viewport, true);
         if (!allowed) return;
@@ -214,7 +232,7 @@ export async function startLiveCast(input: {
           return;
         }
         await cdp.send(allowed.method, allowed.params as never).catch((error: unknown) => {
-          console.info(liveLog("error", { accountId: input.accountId, detail: error instanceof Error ? error.message : "input" }));
+          noteSendError(error);
         });
         return;
       }
@@ -238,7 +256,7 @@ export async function startLiveCast(input: {
         return;
       }
       await cdp.send(next.method, next.params as never).catch((error: unknown) => {
-        console.info(liveLog("error", { accountId: input.accountId, detail: error instanceof Error ? error.message : "input" }));
+        noteSendError(error);
       });
     },
     acceptFile(file) {

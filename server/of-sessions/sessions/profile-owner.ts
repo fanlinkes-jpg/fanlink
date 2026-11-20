@@ -29,7 +29,7 @@ export type ProfileHooks = {
   openExclusive: (accountId: string) => Promise<BrowserContext>;
   openVisible: (accountId: string) => Promise<BrowserContext>;
   persist: (accountId: string, context: BrowserContext) => Promise<void>;
-  closeContext: (context: BrowserContext) => Promise<void>;
+  closeContext: (context: BrowserContext, reason: string) => Promise<void>;
   isStopped: () => boolean;
 };
 
@@ -66,7 +66,7 @@ export class ProfileOwner {
       }
       const context = await this.hooks.openShared(accountId);
       if (this.hooks.isStopped()) {
-        await this.hooks.closeContext(context);
+        await this.hooks.closeContext(context, "arranque-cancelado");
         throw new Error(messages.loginCancelled);
       }
       const created: Slot = {
@@ -126,7 +126,7 @@ export class ProfileOwner {
           await this.dropSlot(accountId);
           const context = await this.hooks.openVisible(accountId);
           if (this.hooks.isStopped()) {
-            await this.hooks.closeContext(context);
+            await this.hooks.closeContext(context, "arranque-cancelado");
             throw new Error(messages.loginCancelled);
           }
           const created: Slot = {
@@ -164,7 +164,7 @@ export class ProfileOwner {
           await this.dropSlot(accountId);
           const context = await this.hooks.openExclusive(accountId);
           if (this.hooks.isStopped()) {
-            await this.hooks.closeContext(context);
+            await this.hooks.closeContext(context, "arranque-cancelado");
             throw new Error(messages.loginCancelled);
           }
           const created: Slot = {
@@ -232,7 +232,7 @@ export class ProfileOwner {
       exclusive = again.exclusive;
       this.slots.delete(accountId);
       this.notifyIdle(accountId);
-      await this.hooks.closeContext(again.context);
+      await this.hooks.closeContext(again.context, again.visible ? "vista-suelta" : "lectura-suelta");
     });
     if (exclusive) this.finishLoginGate(accountId);
   }
@@ -250,7 +250,7 @@ export class ProfileOwner {
     this.slots.delete(accountId);
     this.notifyIdle(accountId);
     await this.saveProfile(accountId, current.context);
-    await this.hooks.closeContext(current.context);
+    await this.hooks.closeContext(current.context, current.visible ? "vista-cede" : "lectura-cede");
   }
 
   private async saveProfile(accountId: string, context: BrowserContext): Promise<void> {

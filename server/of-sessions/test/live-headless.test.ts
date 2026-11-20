@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { BrowserContext } from "playwright";
+import { mkdtemp, readlink, rm, symlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { isLiveChallengeText, LIVE_CHALLENGE_NOTICE } from "../live/challenge.ts";
+import { isTargetClosedMessage, shouldReviveLive } from "../live/closed.ts";
+import { clearStaleProfileLock, readProfileLock, waitForProfileLock } from "../sessions/profile-lock.ts";
 import { clearancePresent, liveRequestTrace, liveViewDebug } from "../live/debug.ts";
 import { liveLaunchMode } from "../live/headless.ts";
 import { LIVE_HEADLESS_ARGS, LIVE_OFFSCREEN_ARGS, persistentContextLaunchOptions } from "../sessions/browser-factory.ts";
@@ -59,6 +64,25 @@ test("el diagnostico no escribe query, hash ni el valor de cf_clearance", () => 
   assert.equal(traced?.includes("sign="), false);
   assert.equal(clearancePresent(["sess", "cf_clearance"]), true);
   assert.equal(clearancePresent(["sess"]), false);
+});
+
+test("un Chromium vivo bloquea el perfil y uno muerto se puede soltar", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "fanlink-lock-"));
+  try {
+    await symlink("mac.local-4242", path.join(dir, "SingletonLock"));
+    assert.equal((await readProfileLock(dir))?.pid, 4242);
+    assert.equal(await waitForProfileLock(dir, () => true, 0), "ajeno");
+    assert.equal(await readlink(path.join(dir, "SingletonLock")), "mac.local-4242");
+    assert.equal(await waitForProfileLock(dir, () => false, 0), "libre");
+    await assert.rejects(() => readlink(path.join(dir, "SingletonLock")));
+    await clearStaleProfileLock(dir);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+  assert.equal(isTargetClosedMessage("cdpSession.send: Target page, context or browser has been closed"), true);
+  assert.equal(isTargetClosedMessage("timeout"), false);
+  assert.equal(shouldReviveLive(0), true);
+  assert.equal(shouldReviveLive(1), false);
 });
 
 test("detecta el texto del reto antibots de OnlyFans", () => {

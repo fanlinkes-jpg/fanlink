@@ -40,6 +40,7 @@ import {
 } from "./browser-factory.ts";
 import { assertLoginDisplay } from "./display.ts";
 import { liveLaunchMode } from "../live/headless.ts";
+import { waitForProfileLock } from "./profile-lock.ts";
 import { openWorkPage } from "./work-page.ts";
 import { closeIfIdle } from "../live/pages.ts";
 import { readAccountProxy } from "../proxy.ts";
@@ -95,6 +96,7 @@ const CONFIRM_BACKOFF_MS = 30_000;
 export class SessionManager {
   private readonly loginTasks = new Map<string, Promise<void>>();
   private readonly openContexts = new Set<BrowserContext>();
+  private readonly closeReasons = new WeakMap<BrowserContext, string>();
   private readonly profiles: ProfileOwner;
   private background: ManagedBrowser | null = null;
   private readTail: Promise<void> = Promise.resolve();
@@ -115,7 +117,7 @@ export class SessionManager {
       openExclusive: (accountId) => this.launchLoginContext(accountId),
       openVisible: (accountId) => this.newLiveContext(accountId),
       persist: (accountId, context) => this.rememberProfile(accountId, context),
-      closeContext: (context) => this.forgetContext(context),
+      closeContext: (context, reason) => this.forgetContext(context, reason),
       isStopped: () => this.closed,
     });
   }
@@ -317,8 +319,8 @@ export class SessionManager {
   }
 
   /**
-   * Misma cuenta, perfil y proxy que las lecturas, pero en el modo visible
-   * de Conectar. No cambia el Chromium headless de las lecturas en segundo plano.
+   * Vista nativa. Espera a que las lecturas suelten el perfil, lo cierra y
+   * abre ese mismo directorio. Mientras la vista vive, las lecturas no lo piden.
    */
   async borrowLiveProfile(accountId: string): Promise<{ context: BrowserContext; release: () => Promise<void> }> {
     await this.assertUsable(accountId);
@@ -1411,19 +1413,29 @@ export class SessionManager {
     } catch {
       profileExists = false;
     }
+    console.info(`[fanlink:navegador] vista=live pide perfil=${accountId} modo=${mode} directorio=${profileExists ? "si" : "no"}`);
     if (profileExists) {
+      const lock = await waitForProfileLock(profile);
+      if (lock === "ajeno") {
+        console.info(`[fanlink:navegador] vista=live perfil=${accountId} lock=ajeno`);
+        throw new Error(messages.profileInUse);
+      }
       const proxy = await this.accountProxy(accountId);
-      console.info(`[fanlink:navegador] vista=live perfil=${accountId} modo=${mode} proxy=${proxy ? "si" : "no"}`);
+      console.info(`[fanlink:navegador] vista=live lanza perfil=${accountId} modo=${mode} proxy=${proxy ? "si" : "no"}`);
       const context = await this.options.browsers.launchPersistentContext(profile, {
         headless: false,
         live: mode,
         proxy,
       });
       this.openContexts.add(context);
+      context.once("close", () => {
+        const reason = this.closeReasons.get(context) ?? "ajeno";
+        console.info(`[fanlink:navegador] vista=live perfil=${accountId} cerrado motivo=${reason}`);
+      });
       try {
         await this.seedPersistentProfile(context, accountId);
       } catch (error) {
-        await this.forgetContext(context);
+        await this.forgetContext(context, "siembra");
         throw error;
       }
       return context;
@@ -1568,7 +1580,9 @@ export class SessionManager {
     await writeEncryptedSession(storagePath, state, sessionKey);
   }
 
-  private async forgetContext(context: BrowserContext): Promise<void> {
+  private async forgetContext(context: BrowserContext, reason = "soltar"): Promise<void> {
+    this.closeReasons.set(context, reason);
+    console.info(`[fanlink:navegador] cierro motivo=${reason}`);
     this.openContexts.delete(context);
     for (const page of context.pages()) {
       await page.close().catch(() => undefined);

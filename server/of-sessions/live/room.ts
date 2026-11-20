@@ -18,6 +18,7 @@ import {
   takeLiveEventSlot,
   type LiveRole,
 } from "./desk.ts";
+import { isTargetClosedMessage, LIVE_CLOSED_NOTICE, shouldReviveLive } from "./closed.ts";
 import { startLiveCast, type LiveCast } from "./session.ts";
 import { noteLiveHold, registerLiveStopper, releaseLiveHold } from "./hold.ts";
 import { takeLiveTicket, type LiveTicket } from "./tickets.ts";
@@ -36,6 +37,9 @@ type Room = {
   holderUsedAt: number;
   cast: LiveCast | null;
   release: (() => Promise<void>) | null;
+  revives: number;
+  opening: boolean;
+  closing: boolean;
   controlTimer: ReturnType<typeof setTimeout> | null;
   idle: ReturnType<typeof setTimeout> | null;
   notice: string;
@@ -213,6 +217,9 @@ async function openFreshRoom(ticket: LiveTicket, key: string): Promise<Room> {
     holderUsedAt: Date.now(),
     cast: null,
     release: null,
+    revives: 0,
+    opening: false,
+    closing: false,
     controlTimer: null,
     idle: null,
     notice: "",
@@ -220,14 +227,32 @@ async function openFreshRoom(ticket: LiveTicket, key: string): Promise<Room> {
   rooms.set(key, room);
   noteLiveHold(ticket.accountId);
   try {
-    const borrowed = liveOpener
-      ? await liveOpener.borrow(ticket.accountId)
-      : await borrowAccount(ticket.accountId);
-    if (rooms.get(key) !== room) {
-      await borrowed.release().catch(() => undefined);
-      throw new Error("La sala se cerró.");
+    await openBorrowed(room, ticket);
+  } catch (error) {
+    console.info(liveLog("error", { accountId: ticket.accountId, detail: error instanceof Error ? error.message.split("\n")[0] : "no se pudo abrir" }));
+    if (rooms.get(key) === room) await stopRoom(room);
+    else {
+      await room.cast?.stop().catch(() => undefined);
+      await room.release?.().catch(() => undefined);
+      room.cast = null;
+      room.release = null;
     }
-    room.release = borrowed.release;
+    throw error;
+  }
+  return room;
+}
+
+async function openBorrowed(room: Room, ticket: LiveTicket): Promise<void> {
+  const borrowed = liveOpener
+    ? await liveOpener.borrow(ticket.accountId)
+    : await borrowAccount(ticket.accountId);
+  if (rooms.get(room.key) !== room) {
+    await borrowed.release().catch(() => undefined);
+    throw new Error("La sala se cerró.");
+  }
+  room.release = borrowed.release;
+  room.opening = true;
+  try {
     const openCast = liveOpener?.open ?? startLiveCast;
     room.cast = await openCast({
       context: borrowed.context,
@@ -250,6 +275,9 @@ async function openFreshRoom(ticket: LiveTicket, key: string): Promise<Room> {
         for (const viewer of room.viewers) {
           sendJson(viewer.socket, { type: "notice", reason });
         }
+      },
+      onClosed: (reason) => {
+        void reviveOrStop(room, ticket, reason);
       },
       onOwnMessage: (message) => {
         const holder = room.holder;
@@ -284,7 +312,7 @@ async function openFreshRoom(ticket: LiveTicket, key: string): Promise<Room> {
         })).catch(() => undefined);
       },
     });
-    if (rooms.get(key) !== room) {
+    if (rooms.get(room.key) !== room) {
       await room.cast?.stop().catch(() => undefined);
       await room.release?.().catch(() => undefined);
       room.cast = null;
@@ -292,17 +320,43 @@ async function openFreshRoom(ticket: LiveTicket, key: string): Promise<Room> {
       throw new Error("La sala se cerró.");
     }
   } catch (error) {
-    console.info(liveLog("error", { accountId: ticket.accountId, detail: error instanceof Error ? error.message.split("\n")[0] : "no se pudo abrir" }));
-    if (rooms.get(key) === room) await stopRoom(room);
-    else {
-      await room.cast?.stop().catch(() => undefined);
-      await room.release?.().catch(() => undefined);
-      room.cast = null;
-      room.release = null;
+    await room.cast?.stop().catch(() => undefined);
+    await room.release?.().catch(() => undefined);
+    room.cast = null;
+    room.release = null;
+    const message = error instanceof Error ? error.message : "";
+    if (rooms.get(room.key) === room && shouldReviveLive(room.revives) && isTargetClosedMessage(message)) {
+      room.revives += 1;
+      console.info(liveLog("error", { accountId: ticket.accountId, detail: "reabre" }));
+      await openBorrowed(room, ticket);
+      return;
     }
     throw error;
+  } finally {
+    room.opening = false;
   }
-  return room;
+}
+
+async function reviveOrStop(room: Room, ticket: LiveTicket, reason: string): Promise<void> {
+  if (room.closing || room.opening || rooms.get(room.key) !== room) return;
+  if (shouldReviveLive(room.revives)) {
+    room.revives += 1;
+    console.info(liveLog("error", { accountId: room.accountId, detail: "reabre" }));
+    await room.cast?.stop().catch(() => undefined);
+    await room.release?.().catch(() => undefined);
+    room.cast = null;
+    room.release = null;
+    try {
+      await openBorrowed(room, ticket);
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message.split("\n")[0] : "";
+      reason = message.includes("Chromium") ? message : LIVE_CLOSED_NOTICE;
+    }
+  }
+  room.closing = true;
+  console.info(liveLog("error", { accountId: room.accountId, detail: reason }));
+  if (rooms.get(room.key) === room) await stopRoom(room, reason);
 }
 
 async function onClientMessage(room: Room, viewer: Viewer, raw: string): Promise<void> {
