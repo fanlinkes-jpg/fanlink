@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { liveRequestAllowed } from "../live/desk.ts";
+import { liveDeskBrowse, liveFrameAllowed, liveOpenPageAllowed, liveRequestAllowed } from "../live/desk.ts";
 import {
   liveSectionAllowedForRole,
   liveSectionPageUrl,
@@ -38,6 +38,23 @@ test("notifications deja pasar su página y sigue bloqueando banca y estados", (
   assert.equal(liveRequestAllowed("https://onlyfans.com/api2/v2/users/notifications", "POST", false, "notifications"), false);
   assert.equal(liveRequestAllowed("https://onlyfans.com/cdn-cgi/../my/banking", "POST", false, "notifications"), false);
   assert.equal(liveRequestAllowed("https://onlyfans.com/cdn-cgi/challenge-platform/h/g/flow/ov1", "PUT", false, "notifications"), false);
+});
+
+test("operativa recorre OnlyFans y bloquea banca, estados, pagos y ajustes", () => {
+  assert.equal(liveOpenPageAllowed("https://onlyfans.com/my/chats"), true);
+  assert.equal(liveOpenPageAllowed("https://onlyfans.com/my/vault"), true);
+  assert.equal(liveOpenPageAllowed("https://onlyfans.com/my/notifications"), true);
+  assert.equal(liveOpenPageAllowed("https://onlyfans.com/my/banking"), false);
+  assert.equal(liveOpenPageAllowed("https://onlyfans.com/my/statements"), false);
+  assert.equal(liveOpenPageAllowed("https://onlyfans.com/my/payouts"), false);
+  assert.equal(liveOpenPageAllowed("https://onlyfans.com/my/settings"), false);
+  assert.equal(liveFrameAllowed("https://onlyfans.com/my/chats", "notifications"), true);
+  assert.equal(liveFrameAllowed("https://onlyfans.com/my/settings/profile", "notifications"), false);
+  assert.equal(liveDeskBrowse("notifications", "control", "mouse"), true);
+  assert.equal(liveDeskBrowse("notifications", "control", "key"), true);
+  assert.equal(liveDeskBrowse("notifications", "view", "mouse"), false);
+  assert.equal(liveDeskBrowse("chat", "control", "key"), false);
+  assert.equal(liveDeskBrowse("notifications", "control", "file"), false);
 });
 
 test("solo la dueña abre la sección de notificaciones", () => {

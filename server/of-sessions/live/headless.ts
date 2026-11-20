@@ -3,13 +3,23 @@ import type { DisplayEnv } from "../config.ts";
 /** Cómo arranca la vista. En un Mac, fuera de pantalla: --headless=new no pasa el reto. */
 export type LiveLaunchMode = "offscreen" | "headless" | "window";
 
+export type LiveVisibility = "window" | "minimized" | "headless";
+
 /**
- * Sin cf_clearance la ventana es visible: macOS ignora una posición negativa
- * y minimizar corta el screencast. Con la cookie ya guardada, headless=new.
+ * La segunda vez no usa headless=new: ese modo volvió a disparar el reto.
+ * Con cf_clearance o tras la primera vista, la ventana real se minimiza
+ * (el screencast sigue). La primera apertura de la cuenta es visible.
  */
-export function liveLaunchForClearance(asked: LiveLaunchMode, hasClearance: boolean): LiveLaunchMode {
-  if (asked !== "offscreen") return asked;
-  return hasClearance ? "headless" : "window";
+export function liveVisibility(input: {
+  asked: LiveLaunchMode;
+  clearance: boolean;
+  seen: boolean;
+}): { visibility: LiveVisibility; reason: string } {
+  if (input.asked === "headless") return { visibility: "headless", reason: "forzada" };
+  if (input.asked === "window") return { visibility: "window", reason: "forzada" };
+  if (input.clearance) return { visibility: "minimized", reason: "cf_clearance" };
+  if (input.seen) return { visibility: "minimized", reason: "ya-vista" };
+  return { visibility: "window", reason: "primera" };
 }
 
 /**

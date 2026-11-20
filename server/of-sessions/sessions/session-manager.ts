@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { chmod, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
 import type { DisplayEnv, FanlinkConfig } from "../config.ts";
@@ -39,7 +39,9 @@ import {
   type ManagedBrowser,
 } from "./browser-factory.ts";
 import { assertLoginDisplay } from "./display.ts";
-import { liveLaunchForClearance, liveLaunchMode } from "../live/headless.ts";
+import { profileHasClearanceName } from "../live/clearance-file.ts";
+import { liveLaunchMode, liveVisibility } from "../live/headless.ts";
+import { minimizeLiveWindow } from "../live/window.ts";
 import { waitForProfileLock } from "./profile-lock.ts";
 import { openWorkPage } from "./work-page.ts";
 import { closeIfIdle } from "../live/pages.ts";
@@ -1406,18 +1408,24 @@ export class SessionManager {
    * En un Mac la ventana queda fuera de la pantalla. No usa headlessWork.
    */
   private async newLiveContext(accountId: string): Promise<BrowserContext> {
-    const asked = liveLaunchMode(process.env, this.options.displayEnv);
-    const hasClearance = await this.hasClearanceCookie(accountId);
-    const mode = liveLaunchForClearance(asked, hasClearance);
-    if (mode !== "headless") assertLoginDisplay(false, this.options.displayEnv);
     const profile = this.profileDir(accountId);
+    const asked = liveLaunchMode(process.env, this.options.displayEnv);
+    const fromSession = await this.hasClearanceCookie(accountId);
+    const fromProfile = await profileHasClearanceName(profile).catch(() => false);
+    const seen = await this.liveAlreadySeen(accountId);
+    const choice = liveVisibility({ asked, clearance: fromSession || fromProfile, seen });
+    const mode = choice.visibility === "headless" ? "headless" : "window";
+    const clearanceFrom = fromSession ? "sesion" : fromProfile ? "perfil" : "no";
+    if (mode !== "headless") assertLoginDisplay(false, this.options.displayEnv);
     let profileExists = false;
     try {
       profileExists = (await stat(profile)).isDirectory();
     } catch {
       profileExists = false;
     }
-    console.info(`[fanlink:navegador] vista=live pide perfil=${accountId} modo=${mode} cf_clearance=${hasClearance ? "si" : "no"} directorio=${profileExists ? "si" : "no"}`);
+    const headlessNote = choice.visibility === "headless" ? "si" : "no";
+    const because = choice.visibility === "minimized" ? " porque=headless-new-dispara-el-reto" : "";
+    console.info(`[fanlink:navegador] vista=live pide perfil=${accountId} modo=${choice.visibility} motivo=${choice.reason} cf_clearance=${clearanceFrom} ya-vista=${seen ? "si" : "no"} directorio=${profileExists ? "si" : "no"} headless=${headlessNote}${because}`);
     if (profileExists) {
       const lock = await waitForProfileLock(profile);
       if (lock === "ajeno") {
@@ -1434,6 +1442,12 @@ export class SessionManager {
       this.openContexts.add(context);
       this.liveContexts.add(context);
       console.info(`[fanlink:navegador] vista=live binario=${context.browser()?.version() ?? "desconocida"} ua-forzado=si`);
+      if (choice.visibility === "minimized") {
+        const hidden = await this.minimizeLive(context);
+        console.info(`[fanlink:navegador] vista=live ventana=${hidden ? "no" : "si"} motivo=${choice.reason}`);
+      } else {
+        console.info(`[fanlink:navegador] vista=live ventana=si motivo=${choice.reason}`);
+      }
       context.once("close", () => {
         const reason = this.closeReasons.get(context) ?? "ajeno";
         console.info(`[fanlink:navegador] vista=live perfil=${accountId} cerrado motivo=${reason}`);
@@ -1463,6 +1477,35 @@ export class SessionManager {
    * (reescrito al soltar el perfil). Si el perfil ya tiene esa cookie, no se
    * pisa con una copia más vieja.
    */
+  private liveSeenPath(accountId: string): string {
+    return path.join(this.options.config.dataDir, "live-ready", accountId);
+  }
+
+  private async liveAlreadySeen(accountId: string): Promise<boolean> {
+    try {
+      return (await stat(this.liveSeenPath(accountId))).isFile();
+    } catch {
+      return false;
+    }
+  }
+
+  private async markLiveSeen(accountId: string): Promise<void> {
+    const file = this.liveSeenPath(accountId);
+    await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+    await writeFile(file, "", { flag: "a", mode: 0o600 });
+    console.info(`[fanlink:navegador] vista=live lista=si`);
+  }
+
+  private async minimizeLive(context: BrowserContext): Promise<boolean> {
+    const page = context.pages()[0] ?? await context.newPage();
+    const cdp = await context.newCDPSession(page);
+    try {
+      return await minimizeLiveWindow((method, params) => cdp.send(method as "Browser.getWindowForTarget", params as never));
+    } finally {
+      await cdp.detach().catch(() => undefined);
+    }
+  }
+
   private async hasClearanceCookie(accountId: string): Promise<boolean> {
     try {
       const state = await this.readStorageState(accountId);
@@ -1585,6 +1628,7 @@ export class SessionManager {
       console.info(`[fanlink:navegador] vista=live sesion=no-guardo`);
       return;
     }
+    if (this.liveContexts.has(context)) await this.markLiveSeen(accountId).catch(() => undefined);
     let state: StorageStateFile;
     try {
       state = parseStorageState(await context.storageState());

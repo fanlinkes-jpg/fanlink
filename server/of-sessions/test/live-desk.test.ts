@@ -179,8 +179,10 @@ test("ceder el control no echa a quien mira y cada hilo va aparte", () => {
   assert.notEqual(liveRoomKey("acc", "7"), liveRoomKey("acc", "8"));
   assert.equal(liveViewerAccepted(3), true);
   assert.equal(liveViewerAccepted(4), false);
-  assert.equal(liveFps("100"), 4);
+  assert.equal(liveFps("100"), 16);
   assert.equal(liveFps("8"), 8);
+  assert.equal(liveFps("24"), 24);
+  assert.equal(liveFps(undefined), 16);
 });
 
 test("el socket exige el origen de la app y no lleva el ticket en la URL", () => {

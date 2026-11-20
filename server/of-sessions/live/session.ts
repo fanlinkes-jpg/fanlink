@@ -3,7 +3,8 @@ import { chatPageUrl } from "../sync/chats.ts";
 import { parseChatMessages } from "../sync/chats.ts";
 import { openWorkPage } from "../sessions/work-page.ts";
 import { markLivePage } from "./pages.ts";
-import { deskCommand, liveControlAllowed, liveHistoryGuardSource, liveLog, liveQuality, liveRequestAllowed, liveSocketGuardSource, liveThreadClick, liveTypingEnabled, mapPointer, type DeskInput } from "./desk.ts";
+import { deskCommand, LIVE_BLOCKED_NOTICE, liveCastFps, liveCastQuality, liveControlAllowed, liveFrameAllowed, liveFps, liveHistoryGuardSource, liveLog, liveOpenPageAllowed, liveQuality, liveSocketGuardSource, liveThreadClick, liveTypingEnabled, mapPointer, type DeskInput } from "./desk.ts";
+import { lastLivePage, rememberLivePage, safeLivePage } from "./last-page.ts";
 import { liveSectionPageUrl, type LiveSection } from "./sections.ts";
 import { BROWSER_FINGERPRINT } from "../sessions/browser-factory.ts";
 import { isLiveChallengeText, isLiveLoginText, LIVE_CHALLENGE_NOTICE, LIVE_LOGIN_NOTICE } from "./challenge.ts";
@@ -33,7 +34,7 @@ export async function startLiveCast(input: {
   onClosed?: (reason: string) => void;
   onLogin?: () => void;
 }): Promise<LiveCast> {
-  const fps = liveFpsFromEnv();
+  const fps = liveFps(process.env.FANLINK_LIVE_FPS);
   const quality = liveQuality(process.env.FANLINK_LIVE_QUALITY);
   const section: LiveSection = input.section ?? "chat";
   const needle = section === "notifications" ? "/my/notifications" : "/my/chats";
@@ -47,9 +48,10 @@ export async function startLiveCast(input: {
   const page = open ?? await openWorkPage(input.context);
   markLivePage(page);
   const typing = liveTypingEnabled();
-  const chatUrl = section === "chat"
+  const homeUrl = section === "chat"
     ? chatPageUrl("https://onlyfans.com/my/chats", input.threadKey, "onlyfans")
-    : liveSectionPageUrl(section);
+    : (lastLivePage(input.accountId) ?? liveSectionPageUrl(section));
+  let safeUrl = homeUrl;
   const fingerprint = BROWSER_FINGERPRINT.viewport;
   let viewport: { width: number; height: number } = { width: fingerprint.width, height: fingerprint.height };
   let cdp: CDPSession | null = null;
@@ -79,7 +81,7 @@ export async function startLiveCast(input: {
   const armGuards = async () => {
     if (guardsArmed || stopped) return;
     guardsArmed = true;
-    const history = liveHistoryGuardSource(chatUrl, section);
+    const history = liveHistoryGuardSource(safeUrl, section);
     const sockets = liveSocketGuardSource(typing);
     await page.addInitScript({ content: history });
     await page.addInitScript({ content: sockets });
@@ -98,9 +100,19 @@ export async function startLiveCast(input: {
     if (frame !== page.mainFrame() || goingHome) return;
     const url = frame.url();
     if (!url || url === "about:blank" || url.startsWith("chrome-error:")) return;
-    if (liveRequestAllowed(url, "GET", typing, section)) return;
+    if (liveFrameAllowed(url, section)) {
+      if (section === "notifications" && liveOpenPageAllowed(url)) {
+        const safe = safeLivePage(url);
+        if (safe) {
+          safeUrl = safe;
+          rememberLivePage(input.accountId, safe);
+        }
+      }
+      return;
+    }
+    input.onNotice?.(LIVE_BLOCKED_NOTICE);
     goingHome = true;
-    void page.goto(chatUrl, { waitUntil: "domcontentloaded" }).catch(() => undefined).finally(() => {
+    void page.goto(safeUrl, { waitUntil: "domcontentloaded" }).catch(() => undefined).finally(() => {
       goingHome = false;
     });
   };
@@ -168,7 +180,7 @@ export async function startLiveCast(input: {
   page.on("response", onResponse);
   const hints = await input.context.newCDPSession(page);
   await hints.send("Emulation.setUserAgentOverride", loginUserAgentOverride() as never).catch(() => undefined);
-  await page.goto(chatUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
+  await page.goto(safeUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
   await documentChecked;
   const passwordVisible = await page.locator('input[type="password"]:visible').count().then((count) => count > 0).catch(() => false);
   if (!challengeOpen && (loginOnPage || passwordVisible)) {
@@ -209,26 +221,46 @@ export async function startLiveCast(input: {
   }
   let lastFrame = 0;
   let sawFrame = false;
+  let hotUntil = 0;
+  let castHot = false;
+  const paintFrame = (jpeg: Buffer, width: number, height: number) => {
+    input.onFrame({ jpeg, width, height });
+  };
+  const restartCast = async (hot: boolean) => {
+    if (!cdp || stopped) return;
+    castHot = hot;
+    await cdp.send("Page.stopScreencast").catch(() => undefined);
+    await cdp.send("Page.startScreencast", {
+      format: "jpeg",
+      quality: liveCastQuality(quality, hot),
+      everyNthFrame: 1,
+    }).catch(() => undefined);
+  };
   cdp.on("Page.screencastFrame", (event: { data: string; sessionId: number; metadata?: { deviceWidth?: number; deviceHeight?: number } }) => {
     void cdp?.send("Page.screencastFrameAck", { sessionId: event.sessionId }).catch(() => undefined);
     const now = Date.now();
-    if (now - lastFrame < Math.round(1000 / fps)) return;
+    const hot = now < hotUntil;
+    if (hot !== castHot) void restartCast(hot);
+    const gap = Math.round(1000 / liveCastFps(fps, hot));
+    if (now - lastFrame < gap) return;
     lastFrame = now;
     if (event.metadata?.deviceWidth && event.metadata.deviceHeight) {
       viewport = { width: event.metadata.deviceWidth, height: event.metadata.deviceHeight };
     }
-    input.onFrame({ jpeg: Buffer.from(event.data, "base64"), width: viewport.width, height: viewport.height });
+    paintFrame(Buffer.from(event.data, "base64"), viewport.width, viewport.height);
     if (!sawFrame) {
       sawFrame = true;
       console.info(liveLog("inicio", { accountId: input.accountId, detail: "imagen" }));
     }
   });
-  await cdp.send("Page.startScreencast", { format: "jpeg", quality, everyNthFrame: 1 });
+  await cdp.send("Page.startScreencast", { format: "jpeg", quality: liveCastQuality(quality, false), everyNthFrame: 1 });
 
   return {
     async send(command) {
       if (stopped || reportedClosed || !cdp) return;
-      if (challengeOpen) {
+      hotUntil = Date.now() + 2_000;
+      const browsing = section === "notifications";
+      if (challengeOpen || browsing) {
         const allowed = deskCommand(command, viewport, true);
         if (!allowed) return;
         if (allowed.method === "resize") {
@@ -281,12 +313,6 @@ export async function startLiveCast(input: {
       cdp = null;
     },
   };
-}
-
-function liveFpsFromEnv(): number {
-  const value = Number(process.env.FANLINK_LIVE_FPS);
-  if (!Number.isInteger(value) || value < 1 || value > 8) return 4;
-  return value;
 }
 
 function pathOf(raw: string): string {

@@ -77,29 +77,11 @@ function item(
 
 export const NAV_BLOCKS: NavBlock[] = [
   item("link", "dashboard", "Dashboard general", "Inicio con resumen", "/", ALL_NAV_ROLES),
-  {
-    kind: "group",
-    id: "operativa",
-    label: "Operativa",
-    items: [
-      soon("operativa-inicio", "Inicio", "Inicio de la cuenta", ALL_NAV_ROLES),
-      soon("nuevo-post", "Nuevo post", "Publicar desde el vault", ALL_NAV_ROLES, "vault"),
-      link("notificaciones", "Notificaciones", "Avisos de la bandeja", "/notificaciones", OWNER_ROLES),
-      link("mensajes", "Mensajes", "Bandeja de cada sesión", "/mensajes", ALL_NAV_ROLES, "mensajes"),
-      link("boveda", "Bóveda", "Archivos de la cuenta", "/vault", ALL_NAV_ROLES, "vault"),
-      soon("archivo", "Archivo", "Mensajes revisados", ALL_NAV_ROLES, "mensajes"),
-      soon("colecciones", "Colecciones", "Carpetas del vault", ALL_NAV_ROLES, "vault"),
-      soon("estados-cuenta", "Estados de cuenta", "Cierre e ingresos", AGENCY_ROLES, "analitica"),
-      link("estadisticas", "Estadísticas", "Rendimiento", "/analitica", ALL_NAV_ROLES, "analitica"),
-      soon("banco", "Banco", "Cobros y saldo", AGENCY_ROLES, "analitica"),
-      soon("mi-perfil", "Mi perfil", "Datos de la cuenta", ALL_NAV_ROLES),
-      soon("ajustes-of", "Ajustes de OF", "Ajustes de OnlyFans", ALL_NAV_ROLES, "ajustes"),
-      soon("release-forms", "Release forms", "Autorizaciones", AGENCY_ROLES, "equipo"),
-    ],
-  },
+  item("link", "operativa", "Operativa", "Página real de OnlyFans", "/notificaciones", OWNER_ROLES),
   {
     ...item("link", "chat", "Chat", "Conversaciones en curso", "/mensajes", ALL_NAV_ROLES, "mensajes"),
   },
+  item("link", "estadisticas", "Estadísticas", "Rendimiento", "/analitica", ALL_NAV_ROLES, "analitica"),
   {
     kind: "group",
     id: "informes",

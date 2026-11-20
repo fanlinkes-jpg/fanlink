@@ -1,15 +1,17 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { BrowserContext } from "playwright";
-import { mkdtemp, readlink, rm, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readlink, rm, symlink } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { isLiveChallengeText, isLiveLoginText, LIVE_CHALLENGE_NOTICE } from "../live/challenge.ts";
 import { LOGIN_CLIENT_HINTS, loginUserAgentOverride } from "../live/fingerprint.ts";
 import { isTargetClosedMessage, shouldReviveLive } from "../live/closed.ts";
 import { clearStaleProfileLock, readProfileLock, waitForProfileLock } from "../sessions/profile-lock.ts";
+import { profileHasClearanceName } from "../live/clearance-file.ts";
 import { clearancePresent, liveRequestTrace, liveViewDebug } from "../live/debug.ts";
-import { liveLaunchForClearance, liveLaunchMode } from "../live/headless.ts";
+import { liveLaunchMode, liveVisibility } from "../live/headless.ts";
 import { LIVE_BASE_ARGS, LIVE_HEADLESS_ARGS, persistentContextLaunchOptions } from "../sessions/browser-factory.ts";
 import { minimizeLiveWindow } from "../live/window.ts";
 import { messages } from "../messages.ts";
@@ -31,10 +33,14 @@ test("en un Mac la vista queda fuera de pantalla y headless solo si se pide", ()
   assert.equal(liveLaunchMode({ FANLINK_LIVE_VIEW_HEADLESS: "1" }, mac), "headless");
   assert.equal(liveLaunchMode({ FANLINK_LIVE_VIEW_HEADLESS: "false" }, mac), "window");
   assert.equal(liveLaunchMode({ FANLINK_LIVE_VIEW_HEADLESS: "0" }, linuxHeadless), "window");
-  assert.equal(liveLaunchForClearance("offscreen", false), "window");
-  assert.equal(liveLaunchForClearance("offscreen", true), "headless");
-  assert.equal(liveLaunchForClearance("window", true), "window");
-  assert.equal(liveLaunchForClearance("headless", false), "headless");
+  assert.equal(liveVisibility({ asked: "offscreen", clearance: false, seen: false }).visibility, "window");
+  assert.equal(liveVisibility({ asked: "offscreen", clearance: false, seen: false }).reason, "primera");
+  assert.equal(liveVisibility({ asked: "offscreen", clearance: true, seen: false }).visibility, "minimized");
+  assert.equal(liveVisibility({ asked: "offscreen", clearance: true, seen: false }).reason, "cf_clearance");
+  assert.equal(liveVisibility({ asked: "offscreen", clearance: false, seen: true }).visibility, "minimized");
+  assert.equal(liveVisibility({ asked: "offscreen", clearance: false, seen: true }).reason, "ya-vista");
+  assert.equal(liveVisibility({ asked: "window", clearance: true, seen: true }).visibility, "window");
+  assert.equal(liveVisibility({ asked: "headless", clearance: false, seen: false }).visibility, "headless");
 });
 
 test("la vista usa la huella de Conectar y apaga webdriver en la ventana", () => {
@@ -105,6 +111,24 @@ test("un Chromium vivo bloquea el perfil y uno muerto se puede soltar", async ()
   assert.equal(isTargetClosedMessage("timeout"), false);
   assert.equal(shouldReviveLive(0), true);
   assert.equal(shouldReviveLive(1), false);
+});
+
+test("el perfil guarda el nombre cf_clearance y no hace falta su valor", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "fanlink-cookie-"));
+  try {
+    const folder = path.join(dir, "Default", "Network");
+    await mkdir(folder, { recursive: true });
+    const db = new DatabaseSync(path.join(folder, "Cookies"));
+    db.exec("CREATE TABLE cookies (name TEXT, value TEXT)");
+    db.prepare("INSERT INTO cookies (name, value) VALUES (?, ?)").run("cf_clearance", "no-se-lee");
+    db.close();
+    assert.equal(await profileHasClearanceName(dir), true);
+    const other = await mkdtemp(path.join(tmpdir(), "fanlink-cookie-"));
+    assert.equal(await profileHasClearanceName(other), false);
+    await rm(other, { recursive: true, force: true });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("la huella de la vista coincide con Chrome/131 y no con el binario", () => {

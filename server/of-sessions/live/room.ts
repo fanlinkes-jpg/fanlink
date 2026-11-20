@@ -7,6 +7,7 @@ import {
   draftAfterPaste,
   liveChallengeControl,
   liveControlAllowed,
+  liveDeskBrowse,
   liveFps,
   liveLog,
   liveRoomKey,
@@ -266,7 +267,10 @@ async function openBorrowed(room: Room, ticket: LiveTicket): Promise<void> {
       section: ticket.section,
       onFrame: (frame) => {
         for (const viewer of room.viewers) {
-          if (viewer.socket.readyState === viewer.socket.OPEN) viewer.socket.send(frame.jpeg);
+          const socket = viewer.socket;
+          if (socket.readyState !== socket.OPEN) continue;
+          if (socket.bufferedAmount > 180_000) continue;
+          socket.send(frame.jpeg);
         }
       },
       onFile: () => {
@@ -376,8 +380,17 @@ async function reviveOrStop(room: Room, ticket: LiveTicket, reason: string): Pro
 async function onClientMessage(room: Room, viewer: Viewer, raw: string): Promise<void> {
   const event = parseLiveEvent(raw);
   if (!event || event.type === "auth") return;
-  if (!takeLiveEventSlot(viewer.stamps, Date.now())) return;
+  if (event.type === "mouse" && event.action === "move" && !takeLiveEventSlot(viewer.stamps, Date.now())) return;
   const typing = liveTypingEnabled();
+  if (
+    room.cast &&
+    (event.type === "mouse" || event.type === "wheel" || event.type === "key" || event.type === "text" || event.type === "resize") &&
+    liveDeskBrowse(room.ticket.section, viewer.role, event.type)
+  ) {
+    noteControl(room);
+    await room.cast.send(event);
+    return;
+  }
   if (
     (event.type === "mouse" || event.type === "wheel" || event.type === "key" || event.type === "text") &&
     liveChallengeControl(room.notice.trim().length > 0, viewer.role, event.type)
