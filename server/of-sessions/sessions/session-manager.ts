@@ -39,7 +39,7 @@ import {
   type ManagedBrowser,
 } from "./browser-factory.ts";
 import { assertLoginDisplay } from "./display.ts";
-import { liveLaunchMode } from "../live/headless.ts";
+import { liveLaunchForClearance, liveLaunchMode } from "../live/headless.ts";
 import { waitForProfileLock } from "./profile-lock.ts";
 import { openWorkPage } from "./work-page.ts";
 import { closeIfIdle } from "../live/pages.ts";
@@ -1404,7 +1404,9 @@ export class SessionManager {
    * En un Mac la ventana queda fuera de la pantalla. No usa headlessWork.
    */
   private async newLiveContext(accountId: string): Promise<BrowserContext> {
-    const mode = liveLaunchMode(process.env, this.options.displayEnv);
+    const asked = liveLaunchMode(process.env, this.options.displayEnv);
+    const hasClearance = await this.hasClearanceCookie(accountId);
+    const mode = liveLaunchForClearance(asked, hasClearance);
     if (mode !== "headless") assertLoginDisplay(false, this.options.displayEnv);
     const profile = this.profileDir(accountId);
     let profileExists = false;
@@ -1413,7 +1415,7 @@ export class SessionManager {
     } catch {
       profileExists = false;
     }
-    console.info(`[fanlink:navegador] vista=live pide perfil=${accountId} modo=${mode} directorio=${profileExists ? "si" : "no"}`);
+    console.info(`[fanlink:navegador] vista=live pide perfil=${accountId} modo=${mode} cf_clearance=${hasClearance ? "si" : "no"} directorio=${profileExists ? "si" : "no"}`);
     if (profileExists) {
       const lock = await waitForProfileLock(profile);
       if (lock === "ajeno") {
@@ -1428,12 +1430,13 @@ export class SessionManager {
         proxy,
       });
       this.openContexts.add(context);
+      console.info(`[fanlink:navegador] vista=live binario=${context.browser()?.version() ?? "desconocida"} ua-forzado=no`);
       context.once("close", () => {
         const reason = this.closeReasons.get(context) ?? "ajeno";
         console.info(`[fanlink:navegador] vista=live perfil=${accountId} cerrado motivo=${reason}`);
       });
       try {
-        await this.seedPersistentProfile(context, accountId);
+        await this.seedPersistentProfile(context, accountId, false);
       } catch (error) {
         await this.forgetContext(context, "siembra");
         throw error;
@@ -1457,7 +1460,16 @@ export class SessionManager {
    * (reescrito al soltar el perfil). Si el perfil ya tiene esa cookie, no se
    * pisa con una copia más vieja.
    */
-  private async seedPersistentProfile(context: BrowserContext, accountId: string): Promise<void> {
+  private async hasClearanceCookie(accountId: string): Promise<boolean> {
+    try {
+      const state = await this.readStorageState(accountId);
+      return state.cookies.some((cookie) => cookie.name === "cf_clearance");
+    } catch {
+      return false;
+    }
+  }
+
+  private async seedPersistentProfile(context: BrowserContext, accountId: string, scripts = true): Promise<void> {
     const encrypted = await readFile(this.storagePath(accountId));
     const state = parseStorageState(
       JSON.parse(decryptBytes(encrypted, this.requireSessionKey()).toString("utf8")) as unknown,
@@ -1469,7 +1481,7 @@ export class SessionManager {
       return savedCookieIsFresher(cookie, current);
     });
     if (missing.length > 0) await context.addCookies(missing);
-    if (state.origins.length === 0) return;
+    if (!scripts || state.origins.length === 0) return;
     await context.addInitScript((origins) => {
       const match = origins.find((item) => item.origin === location.origin);
       if (!match) return;

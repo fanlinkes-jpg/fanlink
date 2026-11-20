@@ -1,4 +1,4 @@
-import type { BrowserContext, CDPSession, FileChooser, Frame, Page, Response, Route } from "playwright";
+import type { BrowserContext, CDPSession, FileChooser, Frame, Page, Response } from "playwright";
 import { chatPageUrl } from "../sync/chats.ts";
 import { parseChatMessages } from "../sync/chats.ts";
 import { openWorkPage } from "../sessions/work-page.ts";
@@ -84,21 +84,8 @@ export async function startLiveCast(input: {
       for (const source of sources) Function(source)();
     }, [history, sockets]).catch(() => undefined);
   };
-  const guardRoute = (route: Route) => {
-    const url = route.request().url();
-    const method = route.request().method();
-    if (liveRequestAllowed(url, method, typing, section)) return route.continue();
-    if (debug) {
-      const trace = liveRequestTrace(method, url);
-      if (trace) console.info(`[fanlink:live] abort ${trace}`);
-    }
-    return route.abort();
-  };
-  await page.route("**/*", guardRoute);
   page.on("popup", (popup) => {
-    void popup.route("**/*", (inner) => inner.abort()).finally(() => {
-      void popup.close().catch(() => undefined);
-    });
+    void popup.close().catch(() => undefined);
   });
   page.on("download", (download) => {
     void download.cancel().catch(() => undefined);
@@ -174,10 +161,6 @@ export async function startLiveCast(input: {
     }).catch(() => undefined);
   };
   page.on("response", onResponse);
-  const currentViewport = page.viewportSize();
-  if (!currentViewport || currentViewport.width !== viewport.width || currentViewport.height !== viewport.height) {
-    await page.setViewportSize(viewport);
-  }
   await page.goto(chatUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
   await documentChecked;
   if (!challengeOpen) await armGuards();
@@ -197,7 +180,8 @@ export async function startLiveCast(input: {
       };
     }).catch(() => null);
     if (probe) {
-      console.info(`[fanlink:live] sonda webdriver=${probe.webdriver ? "si" : "no"} lang=${probe.lang} tz=${probe.tz} screen=${probe.screen} outer=${probe.outer} pos=${probe.pos} brands=${probe.brands} ua=${probe.ua}`);
+      const binary = input.context.browser()?.version() ?? "desconocida";
+      console.info(`[fanlink:live] sonda webdriver=${probe.webdriver ? "si" : "no"} lang=${probe.lang} tz=${probe.tz} screen=${probe.screen} outer=${probe.outer} pos=${probe.pos} brands=${probe.brands} binario=${binary} ua=${probe.ua}`);
     }
     const names = (await input.context.cookies("https://onlyfans.com").catch(() => [])).map((cookie) => cookie.name);
     console.info(`[fanlink:live] cf_clearance=${clearancePresent(names) ? "si" : "no"}`);
@@ -271,7 +255,6 @@ export async function startLiveCast(input: {
       // La siguiente sala reutiliza esta página: no se apilan guardias ni escuchas de la anterior.
       page.off("framenavigated", onNavigated);
       page.off("response", onResponse);
-      await page.unroute("**/*", guardRoute).catch(() => undefined);
       await cdp?.detach().catch(() => undefined);
       cdp = null;
     },

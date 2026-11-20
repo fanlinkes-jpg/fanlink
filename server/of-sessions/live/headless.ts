@@ -4,10 +4,18 @@ import type { DisplayEnv } from "../config.ts";
 export type LiveLaunchMode = "offscreen" | "headless" | "window";
 
 /**
- * Por defecto, el mismo Chromium que Conectar, con la ventana en
- * `-32000,-32000` (1440×900, sin foco). FANLINK_LIVE_VIEW_HEADLESS=true
- * fuerza `--headless=new`. `false` abre la ventana en el escritorio.
- * Sin pantalla (Linux sin DISPLAY) no hay otra salida que headless.
+ * Sin cf_clearance la ventana es visible: macOS ignora una posición negativa
+ * y minimizar corta el screencast. Con la cookie ya guardada, headless=new.
+ */
+export function liveLaunchForClearance(asked: LiveLaunchMode, hasClearance: boolean): LiveLaunchMode {
+  if (asked !== "offscreen") return asked;
+  return hasClearance ? "headless" : "window";
+}
+
+/**
+ * Por defecto `offscreen`, que con cookie pasa a headless y sin ella a
+ * ventana visible. FANLINK_LIVE_VIEW_HEADLESS=true fuerza `--headless=new`.
+ * `false` abre la ventana. Sin pantalla solo cabe headless.
  */
 export function liveLaunchMode(
   env: NodeJS.ProcessEnv = process.env,

@@ -36,31 +36,31 @@ export interface PersistentLaunchOptions {
 /** Chromium completo, sin el shell. Cloudflare sigue detectando este modo. */
 export const LIVE_HEADLESS_ARGS = ["--headless=new", "--disable-blink-features=AutomationControlled"] as const;
 
-/** Ventana real, fuera del escritorio. Mismo tamaño que la huella de Conectar. */
-export const LIVE_OFFSCREEN_ARGS = [
-  "--window-position=-32000,-32000",
-  "--window-size=1440,900",
-  "--disable-blink-features=AutomationControlled",
-] as const;
+/**
+ * Sin posición negativa: macOS la ignora y la ventana sale en el escritorio.
+ * Se minimiza después por CDP. Sin UA forzado: el binario manda el suyo.
+ */
+export const LIVE_OFFSCREEN_ARGS = ["--disable-blink-features=AutomationControlled"] as const;
 
 export function persistentContextLaunchOptions(options: PersistentLaunchOptions): {
   headless: boolean;
   ignoreDefaultArgs?: string[];
   args?: string[];
-  userAgent: string;
-  viewport: { width: number; height: number };
+  userAgent?: string;
+  viewport: { width: number; height: number } | null;
   locale: string;
   timezoneId: string;
   proxy?: BrowserProxy;
 } {
   const live = options.live;
-  const hidden = live === "headless" || live === "offscreen" || live === "window";
+  const isLive = live === "headless" || live === "offscreen" || live === "window";
   const args = live === "headless" ? LIVE_HEADLESS_ARGS : live === "offscreen" ? LIVE_OFFSCREEN_ARGS : undefined;
   return {
-    headless: hidden ? false : options.headless,
+    headless: isLive ? false : options.headless,
     ...(args ? { ignoreDefaultArgs: ["--enable-automation"], args: [...args] } : {}),
-    userAgent: BROWSER_FINGERPRINT.userAgent,
-    viewport: BROWSER_FINGERPRINT.viewport,
+    ...(isLive
+      ? { viewport: null }
+      : { userAgent: BROWSER_FINGERPRINT.userAgent, viewport: BROWSER_FINGERPRINT.viewport }),
     locale: BROWSER_FINGERPRINT.locale,
     timezoneId: BROWSER_FINGERPRINT.timezoneId,
     ...(options.proxy ? { proxy: options.proxy } : {}),

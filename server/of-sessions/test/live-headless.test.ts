@@ -8,8 +8,9 @@ import { isLiveChallengeText, LIVE_CHALLENGE_NOTICE } from "../live/challenge.ts
 import { isTargetClosedMessage, shouldReviveLive } from "../live/closed.ts";
 import { clearStaleProfileLock, readProfileLock, waitForProfileLock } from "../sessions/profile-lock.ts";
 import { clearancePresent, liveRequestTrace, liveViewDebug } from "../live/debug.ts";
-import { liveLaunchMode } from "../live/headless.ts";
+import { liveLaunchForClearance, liveLaunchMode } from "../live/headless.ts";
 import { LIVE_HEADLESS_ARGS, LIVE_OFFSCREEN_ARGS, persistentContextLaunchOptions } from "../sessions/browser-factory.ts";
+import { minimizeLiveWindow } from "../live/window.ts";
 import { messages } from "../messages.ts";
 import { ProfileOwner } from "../sessions/profile-owner.ts";
 import { SessionPendingError } from "../types.ts";
@@ -29,26 +30,45 @@ test("en un Mac la vista queda fuera de pantalla y headless solo si se pide", ()
   assert.equal(liveLaunchMode({ FANLINK_LIVE_VIEW_HEADLESS: "1" }, mac), "headless");
   assert.equal(liveLaunchMode({ FANLINK_LIVE_VIEW_HEADLESS: "false" }, mac), "window");
   assert.equal(liveLaunchMode({ FANLINK_LIVE_VIEW_HEADLESS: "0" }, linuxHeadless), "window");
+  assert.equal(liveLaunchForClearance("offscreen", false), "window");
+  assert.equal(liveLaunchForClearance("offscreen", true), "headless");
+  assert.equal(liveLaunchForClearance("window", true), "window");
+  assert.equal(liveLaunchForClearance("headless", false), "headless");
 });
 
-test("la vista nativa usa el Chromium de Conectar fuera de pantalla, no el shell", () => {
+test("la vista nativa no fuerza el UA ni el viewport y no usa una posición negativa", () => {
   const offscreen = persistentContextLaunchOptions({ headless: false, live: "offscreen" });
   assert.equal(offscreen.headless, false);
   assert.deepEqual(offscreen.args, [...LIVE_OFFSCREEN_ARGS]);
-  assert.equal((offscreen.args ?? []).join(" ").includes("headless"), false);
-  assert.equal(offscreen.ignoreDefaultArgs?.includes("--enable-automation"), true);
-  assert.equal(offscreen.userAgent.includes("Chrome/131"), true);
+  assert.equal((offscreen.args ?? []).join(" ").includes("window-position"), false);
+  assert.equal(offscreen.userAgent, undefined);
+  assert.equal(offscreen.viewport, null);
   assert.equal(offscreen.locale, "es-ES");
   assert.equal(offscreen.timezoneId, "Europe/Madrid");
   const headless = persistentContextLaunchOptions({ headless: false, live: "headless" });
   assert.deepEqual(headless.args, [...LIVE_HEADLESS_ARGS]);
-  assert.equal(headless.headless, false);
+  assert.equal(headless.userAgent, undefined);
+  assert.equal(headless.viewport, null);
   const work = persistentContextLaunchOptions({ headless: true });
   assert.equal(work.headless, true);
-  assert.equal(work.args, undefined);
+  assert.equal(work.userAgent?.includes("Chrome/131"), true);
+  assert.deepEqual(work.viewport, { width: 1440, height: 900 });
   const windowed = persistentContextLaunchOptions({ headless: false, live: "window" });
-  assert.equal(windowed.headless, false);
-  assert.equal(windowed.args, undefined);
+  assert.equal(windowed.userAgent, undefined);
+  assert.equal(windowed.viewport, null);
+});
+
+test("minimizar manda setWindowBounds y no toca la red", async () => {
+  const calls: string[] = [];
+  const ok = await minimizeLiveWindow(async (method, params) => {
+    calls.push(method);
+    if (method === "Browser.getWindowForTarget") return { windowId: 7 };
+    assert.deepEqual(params, { windowId: 7, bounds: { windowState: "minimized" } });
+    return {};
+  });
+  assert.equal(ok, true);
+  assert.deepEqual(calls, ["Browser.getWindowForTarget", "Browser.setWindowBounds"]);
+  assert.equal(await minimizeLiveWindow(async () => { throw new Error("cerrado"); }), false);
 });
 
 test("el diagnostico no escribe query, hash ni el valor de cf_clearance", () => {
