@@ -3,8 +3,10 @@ import { createServer, type Server } from "node:http";
 import { test } from "node:test";
 import { WebSocket } from "ws";
 import { attachLiveView } from "../live/attach.ts";
+import { LIVE_CLOSED_NOTICE } from "../live/closed.ts";
 import { liveHoldsAccount, stopLiveForAccount } from "../live/hold.ts";
 import { stopLiveRooms, useLiveOpener } from "../live/room.ts";
+import { startLiveCast } from "../live/session.ts";
 import { issueLiveTicket } from "../live/tickets.ts";
 
 // El bucle que se veía al cargar OnlyFans: una sala que no llegó a abrir (o que
@@ -101,6 +103,34 @@ test("sin visores la sala se cierra tras la espera; volver a tiempo no abre otra
   } finally {
     if (before == null) delete process.env.FANLINK_LIVE_GRACE_MS;
     else process.env.FANLINK_LIVE_GRACE_MS = before;
+    await stopLiveRooms();
+    useLiveOpener(null);
+    await close(server);
+  }
+});
+
+test("si cierran la ventana, se relanza y el visor no recibe el aviso de cierre", async () => {
+  let opens = 0;
+  const bell: { ring: (() => void) | null } = { ring: null };
+  useLiveOpener({
+    async borrow() {
+      return { context: {} as never, release: async () => undefined };
+    },
+    async open(input: Parameters<typeof startLiveCast>[0]) {
+      opens += 1;
+      if (opens === 1) bell.ring = () => input.onClosed?.(LIVE_CLOSED_NOTICE);
+      return { async send() {}, acceptFile() {}, async stop() {} };
+    },
+  });
+  const { server, port, origin } = await listen();
+  try {
+    const first = await join(port, origin, "ana", "acc-relanzo");
+    assert.equal(first.kind, "status");
+    bell.ring?.();
+    await wait(250);
+    assert.equal(opens, 2);
+    assert.equal(first.socket?.readyState, WebSocket.OPEN);
+  } finally {
     await stopLiveRooms();
     useLiveOpener(null);
     await close(server);

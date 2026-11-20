@@ -31,6 +31,8 @@ export interface PersistentLaunchOptions {
    * la muestra. Playwright 1.64 con `headless: true` arranca otro binario.
    */
   live?: LiveLaunchMode;
+  /** `--start-minimized`. La sala vuelve a minimizar tras cargar, por si macOS la restaura. */
+  minimized?: boolean;
 }
 
 /** Quita navigator.webdriver. Va en todos los modos de la vista, también la ventana. */
@@ -39,8 +41,8 @@ export const LIVE_BASE_ARGS = ["--disable-blink-features=AutomationControlled"] 
 /** Chromium completo, sin el shell. */
 export const LIVE_HEADLESS_ARGS = ["--headless=new", ...LIVE_BASE_ARGS] as const;
 
-/** La ventana visible. Misma huella de lanzamiento que el modo sin cookie. */
-export const LIVE_WINDOW_ARGS = LIVE_BASE_ARGS;
+/** La ventana real. Misma huella que Conectar, más el arranque minimizado. */
+export const LIVE_WINDOW_ARGS = ["--start-minimized", ...LIVE_BASE_ARGS] as const;
 
 export function persistentContextLaunchOptions(options: PersistentLaunchOptions): {
   headless: boolean;
@@ -54,7 +56,8 @@ export function persistentContextLaunchOptions(options: PersistentLaunchOptions)
 } {
   const live = options.live;
   const isLive = live === "headless" || live === "offscreen" || live === "window";
-  const args = live === "headless" ? LIVE_HEADLESS_ARGS : isLive ? [...LIVE_WINDOW_ARGS] : undefined;
+  const windowArgs = options.minimized === false ? [...LIVE_BASE_ARGS] : [...LIVE_WINDOW_ARGS];
+  const args = live === "headless" ? LIVE_HEADLESS_ARGS : isLive ? windowArgs : undefined;
   return {
     headless: isLive ? false : options.headless,
     ...(isLive ? { ignoreDefaultArgs: ["--enable-automation"], args: args ? [...args] : [] } : {}),

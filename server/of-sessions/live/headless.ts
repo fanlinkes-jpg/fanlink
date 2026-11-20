@@ -6,20 +6,14 @@ export type LiveLaunchMode = "offscreen" | "headless" | "window";
 export type LiveVisibility = "window" | "minimized" | "headless";
 
 /**
- * La segunda vez no usa headless=new: ese modo volvió a disparar el reto.
- * Con cf_clearance o tras la primera vista, la ventana real se minimiza
- * (el screencast sigue). La primera apertura de la cuenta es visible.
+ * La ventana real arranca minimizada, también la primera vez, y no se
+ * vuelve a mostrar. El reto, si aparece, se ve en el canvas del CRM.
+ * headless=new no se usa: vuelve a disparar el reto.
  */
-export function liveVisibility(input: {
-  asked: LiveLaunchMode;
-  clearance: boolean;
-  seen: boolean;
-}): { visibility: LiveVisibility; reason: string } {
-  if (input.asked === "headless") return { visibility: "headless", reason: "forzada" };
-  if (input.asked === "window") return { visibility: "window", reason: "forzada" };
-  if (input.clearance) return { visibility: "minimized", reason: "cf_clearance" };
-  if (input.seen) return { visibility: "minimized", reason: "ya-vista" };
-  return { visibility: "window", reason: "primera" };
+export function liveVisibility(asked: LiveLaunchMode): { visibility: LiveVisibility; reason: string } {
+  if (asked === "headless") return { visibility: "headless", reason: "forzada" };
+  if (asked === "window") return { visibility: "window", reason: "forzada" };
+  return { visibility: "minimized", reason: "arranque" };
 }
 
 /**

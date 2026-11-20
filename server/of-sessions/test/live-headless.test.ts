@@ -12,7 +12,8 @@ import { clearStaleProfileLock, readProfileLock, waitForProfileLock } from "../s
 import { profileHasClearanceName } from "../live/clearance-file.ts";
 import { clearancePresent, liveRequestTrace, liveViewDebug } from "../live/debug.ts";
 import { liveLaunchMode, liveVisibility } from "../live/headless.ts";
-import { LIVE_BASE_ARGS, LIVE_HEADLESS_ARGS, persistentContextLaunchOptions } from "../sessions/browser-factory.ts";
+import { hideLiveProcess, liveContextOpen } from "../live/window.ts";
+import { LIVE_BASE_ARGS, LIVE_HEADLESS_ARGS, LIVE_WINDOW_ARGS, persistentContextLaunchOptions } from "../sessions/browser-factory.ts";
 import { minimizeLiveWindow } from "../live/window.ts";
 import { messages } from "../messages.ts";
 import { ProfileOwner } from "../sessions/profile-owner.ts";
@@ -33,20 +34,18 @@ test("en un Mac la vista queda fuera de pantalla y headless solo si se pide", ()
   assert.equal(liveLaunchMode({ FANLINK_LIVE_VIEW_HEADLESS: "1" }, mac), "headless");
   assert.equal(liveLaunchMode({ FANLINK_LIVE_VIEW_HEADLESS: "false" }, mac), "window");
   assert.equal(liveLaunchMode({ FANLINK_LIVE_VIEW_HEADLESS: "0" }, linuxHeadless), "window");
-  assert.equal(liveVisibility({ asked: "offscreen", clearance: false, seen: false }).visibility, "window");
-  assert.equal(liveVisibility({ asked: "offscreen", clearance: false, seen: false }).reason, "primera");
-  assert.equal(liveVisibility({ asked: "offscreen", clearance: true, seen: false }).visibility, "minimized");
-  assert.equal(liveVisibility({ asked: "offscreen", clearance: true, seen: false }).reason, "cf_clearance");
-  assert.equal(liveVisibility({ asked: "offscreen", clearance: false, seen: true }).visibility, "minimized");
-  assert.equal(liveVisibility({ asked: "offscreen", clearance: false, seen: true }).reason, "ya-vista");
-  assert.equal(liveVisibility({ asked: "window", clearance: true, seen: true }).visibility, "window");
-  assert.equal(liveVisibility({ asked: "headless", clearance: false, seen: false }).visibility, "headless");
+  assert.equal(liveVisibility("offscreen").visibility, "minimized");
+  assert.equal(liveVisibility("offscreen").reason, "arranque");
+  assert.equal(liveVisibility("window").visibility, "window");
+  assert.equal(liveVisibility("window").reason, "forzada");
+  assert.equal(liveVisibility("headless").visibility, "headless");
 });
 
 test("la vista usa la huella de Conectar y apaga webdriver en la ventana", () => {
   const offscreen = persistentContextLaunchOptions({ headless: false, live: "offscreen" });
   assert.equal(offscreen.headless, false);
-  assert.deepEqual(offscreen.args, [...LIVE_BASE_ARGS]);
+  assert.deepEqual(offscreen.args, [...LIVE_WINDOW_ARGS]);
+  assert.equal((offscreen.args ?? []).join(" ").includes("--start-minimized"), true);
   assert.equal((offscreen.args ?? []).join(" ").includes("window-position"), false);
   assert.equal(offscreen.userAgent?.includes("Chrome/131.0.0.0"), true);
   assert.deepEqual(offscreen.viewport, { width: 1440, height: 900 });
@@ -60,10 +59,16 @@ test("la vista usa la huella de Conectar y apaga webdriver en la ventana", () =>
   assert.equal(work.headless, true);
   assert.equal(work.userAgent?.includes("Chrome/131"), true);
   assert.equal(work.ignoreDefaultArgs, undefined);
-  const windowed = persistentContextLaunchOptions({ headless: false, live: "window" });
+  const windowed = persistentContextLaunchOptions({ headless: false, live: "window", minimized: false });
   assert.equal(windowed.userAgent?.includes("Chrome/131.0.0.0"), true);
   assert.deepEqual(windowed.args, [...LIVE_BASE_ARGS]);
+  assert.equal((windowed.args ?? []).join(" ").includes("--start-minimized"), false);
   assert.equal(windowed.ignoreDefaultArgs?.includes("--enable-automation"), true);
+});
+
+test("fuera de macOS no se llama a osascript", async () => {
+  assert.equal(await hideLiveProcess("linux"), false);
+  assert.equal(await hideLiveProcess("win32"), false);
 });
 
 test("minimizar manda setWindowBounds y no toca la red", async () => {
@@ -192,6 +197,75 @@ test("la vista nativa no reutiliza un Chromium headless ya abierto", async () =>
   await again.release();
   await live.release();
 });
+
+test("la vista guarda el navegador y la siguiente entrada no lanza otro", async () => {
+  const previous = process.env.FANLINK_LIVE_KEEP_MS;
+  process.env.FANLINK_LIVE_KEEP_MS = "80";
+  let opened = 0;
+  let shared = 0;
+  let closed = 0;
+  const context = openableContext();
+  const owner = new ProfileOwner({
+    async openShared() {
+      shared += 1;
+      return openableContext();
+    },
+    async openExclusive() {
+      return openableContext();
+    },
+    async openVisible() {
+      opened += 1;
+      return context;
+    },
+    async persist() {},
+    async closeContext() {
+      closed += 1;
+    },
+    isStopped() {
+      return false;
+    },
+  });
+  try {
+    assert.equal(liveContextOpen(context), true);
+    const first = await owner.leaseVisible("acc-guarda");
+    await first.release();
+    assert.equal(closed, 0, "soltar la vista no cierra el navegador");
+    const second = await owner.leaseVisible("acc-guarda");
+    assert.equal(opened, 1, "la segunda entrada lanzó otro Chromium");
+    assert.equal(second.context, context);
+    await second.release();
+    const read = await owner.lease("acc-guarda");
+    assert.equal(closed, 1, "una lectura no recuperó el perfil guardado");
+    assert.equal(shared, 1);
+    await read.release();
+    context.kill();
+    assert.equal(liveContextOpen(context), false);
+    const third = await owner.leaseVisible("acc-guarda");
+    assert.equal(opened, 2, "un navegador cerrado no se relanzó");
+    await third.release();
+    assert.ok(closed >= 2);
+  } finally {
+    if (previous == null) delete process.env.FANLINK_LIVE_KEEP_MS;
+    else process.env.FANLINK_LIVE_KEEP_MS = previous;
+    await owner.closeAll();
+  }
+});
+
+function openableContext(): BrowserContext & { kill: () => void } {
+  let dead = false;
+  return {
+    kill() {
+      dead = true;
+    },
+    pages() {
+      if (dead) throw new Error("closed");
+      return [];
+    },
+    browser() {
+      return { isConnected: () => !dead };
+    },
+  } as unknown as BrowserContext & { kill: () => void };
+}
 
 function fakeContext(): BrowserContext {
   return {} as BrowserContext;

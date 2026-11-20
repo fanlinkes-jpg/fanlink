@@ -1,4 +1,5 @@
 import type { BrowserContext } from "playwright";
+import { liveContextOpen } from "../live/window.ts";
 import { messages } from "../messages.ts";
 import { SessionPendingError } from "../types.ts";
 
@@ -17,6 +18,8 @@ type Slot = {
   yielding: boolean;
   /** Chromium de la vista nativa: no se reutiliza el contexto headless de las lecturas. */
   visible: boolean;
+  /** Cierre aplazado cuando ya no hay visores. */
+  park?: ReturnType<typeof setTimeout>;
 };
 
 export type ProfileLease = {
@@ -58,11 +61,14 @@ export class ProfileOwner {
         throw new SessionPendingError(messages.loginInProgress);
       }
       if (current?.visible) {
-        throw new SessionPendingError(messages.liveViewInProgress);
+        if (current.users > 0) throw new SessionPendingError(messages.liveViewInProgress);
+        console.info(`[fanlink:navegador] vista=live suelto perfil=${accountId} motivo=lectura`);
+        await this.dropSlot(accountId);
       }
-      if (current) {
-        current.users += 1;
-        return current;
+      const held = this.slots.get(accountId);
+      if (held) {
+        held.users += 1;
+        return held;
       }
       const context = await this.hooks.openShared(accountId);
       if (this.hooks.isStopped()) {
@@ -103,9 +109,17 @@ export class ProfileOwner {
             throw new SessionPendingError(messages.loginInProgress);
           }
           if (current?.visible) {
-            current.users += 1;
-            current.yielding = false;
-            return current;
+            if (!liveContextOpen(current.context)) {
+              if (current.users > 0) throw new SessionPendingError(messages.liveViewInProgress);
+              console.info(`[fanlink:navegador] vista=live relanzo perfil=${accountId} motivo=cerrado`);
+              await this.dropSlot(accountId);
+            } else {
+              this.clearPark(current);
+              current.users += 1;
+              current.yielding = false;
+              console.info(`[fanlink:navegador] vista=live reutilizo perfil=${accountId}`);
+              return current;
+            }
           }
           if (current) current.yielding = true;
           return null;
@@ -118,9 +132,17 @@ export class ProfileOwner {
             throw new SessionPendingError(messages.loginInProgress);
           }
           if (current?.visible) {
-            current.users += 1;
-            current.yielding = false;
-            return current;
+            if (!liveContextOpen(current.context)) {
+              if (current.users > 0) return null;
+              console.info(`[fanlink:navegador] vista=live relanzo perfil=${accountId} motivo=cerrado`);
+              await this.dropSlot(accountId);
+            } else {
+              this.clearPark(current);
+              current.users += 1;
+              current.yielding = false;
+              console.info(`[fanlink:navegador] vista=live reutilizo perfil=${accountId}`);
+              return current;
+            }
           }
           if (current && current.users > 0) return null;
           await this.dropSlot(accountId);
@@ -229,7 +251,13 @@ export class ProfileOwner {
         this.notifyIdle(accountId);
         return;
       }
+      if (again.visible && liveContextOpen(again.context) && liveKeepMs() > 0) {
+        this.armPark(accountId, token);
+        console.info(`[fanlink:navegador] vista=live guardo perfil=${accountId} espera=${keepLabel(liveKeepMs())}`);
+        return;
+      }
       exclusive = again.exclusive;
+      this.clearPark(again);
       this.slots.delete(accountId);
       this.notifyIdle(accountId);
       await this.hooks.closeContext(again.context, again.visible ? "vista-suelta" : "lectura-suelta");
@@ -247,6 +275,7 @@ export class ProfileOwner {
     if (current.users > 0) {
       throw new SessionPendingError(messages.loginInProgress);
     }
+    this.clearPark(current);
     this.slots.delete(accountId);
     this.notifyIdle(accountId);
     await this.saveProfile(accountId, current.context);
@@ -321,6 +350,27 @@ export class ProfileOwner {
     release?.();
   }
 
+  private clearPark(slot: Slot): void {
+    if (!slot.park) return;
+    clearTimeout(slot.park);
+    slot.park = undefined;
+  }
+
+  private armPark(accountId: string, token: symbol): void {
+    const current = this.slots.get(accountId);
+    if (!current) return;
+    this.clearPark(current);
+    current.park = setTimeout(() => {
+      void this.withLock(accountId, async () => {
+        const slot = this.slots.get(accountId);
+        if (!slot || slot.token !== token || slot.users > 0) return;
+        console.info(`[fanlink:navegador] vista=live suelto perfil=${accountId} motivo=espera`);
+        await this.dropSlot(accountId);
+      }).catch(() => undefined);
+    }, liveKeepMs());
+    current.park.unref?.();
+  }
+
   private async withLock<T>(accountId: string, run: () => Promise<T>): Promise<T> {
     const previous = this.chains.get(accountId) ?? Promise.resolve();
     let unlock: () => void = () => undefined;
@@ -338,6 +388,18 @@ export class ProfileOwner {
       unlock();
     }
   }
+}
+
+/** Cuánto sigue vivo el navegador de la vista después de salir. Por defecto 10 min. */
+export function liveKeepMs(): number {
+  const value = Number(process.env.FANLINK_LIVE_KEEP_MS);
+  if (Number.isInteger(value) && value >= 0 && value <= 30 * 60_000) return value;
+  return 10 * 60_000;
+}
+
+function keepLabel(ms: number): string {
+  if (ms >= 60_000 && ms % 60_000 === 0) return `${ms / 60_000}min`;
+  return `${ms}ms`;
 }
 
 /** Cuánto espera Reconectar a que las lecturas suelten el perfil. Por defecto 25 s. */

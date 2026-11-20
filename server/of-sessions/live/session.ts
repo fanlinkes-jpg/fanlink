@@ -1,8 +1,8 @@
 import type { BrowserContext, CDPSession, FileChooser, Frame, Page, Response } from "playwright";
 import { chatPageUrl } from "../sync/chats.ts";
 import { parseChatMessages } from "../sync/chats.ts";
-import { openWorkPage } from "../sessions/work-page.ts";
 import { markLivePage } from "./pages.ts";
+import { hideLiveProcess, setLiveWindowState } from "./window.ts";
 import { deskCommand, LIVE_BLOCKED_NOTICE, liveCastFps, liveCastQuality, liveControlAllowed, liveFrameAllowed, liveFps, liveHistoryGuardSource, liveLog, liveOpenPageAllowed, liveQuality, liveSocketGuardSource, liveThreadClick, liveTypingEnabled, mapPointer, type DeskInput } from "./desk.ts";
 import { lastLivePage, rememberLivePage, safeLivePage } from "./last-page.ts";
 import { liveSectionPageUrl, type LiveSection } from "./sections.ts";
@@ -38,14 +38,15 @@ export async function startLiveCast(input: {
   const quality = liveQuality(process.env.FANLINK_LIVE_QUALITY);
   const section: LiveSection = input.section ?? "chat";
   const needle = section === "notifications" ? "/my/notifications" : "/my/chats";
-  const open = input.context.pages().find((page) => {
+  const page = reusableLivePage(input.context, needle) ?? await input.context.newPage();
+  for (const extra of input.context.pages()) {
+    if (extra === page) continue;
     try {
-      return page.url().includes(needle);
+      if (extra.url() === "about:blank") await extra.close().catch(() => undefined);
     } catch {
-      return false;
+      // La pestaña ya no está.
     }
-  });
-  const page = open ?? await openWorkPage(input.context);
+  }
   markLivePage(page);
   const typing = liveTypingEnabled();
   const homeUrl = section === "chat"
@@ -57,6 +58,7 @@ export async function startLiveCast(input: {
   let cdp: CDPSession | null = null;
   let stopped = false;
   let reportedClosed = false;
+  let keepHidden: (motivo: string) => Promise<void> = async () => {};
   let challengeOpen = false;
   let loginOnPage = false;
   const reportClosed = () => {
@@ -100,6 +102,7 @@ export async function startLiveCast(input: {
     if (frame !== page.mainFrame() || goingHome) return;
     const url = frame.url();
     if (!url || url === "about:blank" || url.startsWith("chrome-error:")) return;
+    void keepHidden("navegacion");
     if (liveFrameAllowed(url, section)) {
       if (section === "notifications" && liveOpenPageAllowed(url)) {
         const safe = safeLivePage(url);
@@ -139,6 +142,7 @@ export async function startLiveCast(input: {
     if (stopped || challengeOpen === on) return;
     challengeOpen = on;
     input.onNotice?.(on ? LIVE_CHALLENGE_NOTICE : "");
+    void keepHidden(on ? "reto" : "reto-listo");
     if (!on) {
       void armGuards();
       if (debug) {
@@ -180,7 +184,20 @@ export async function startLiveCast(input: {
   page.on("response", onResponse);
   const hints = await input.context.newCDPSession(page);
   await hints.send("Emulation.setUserAgentOverride", loginUserAgentOverride() as never).catch(() => undefined);
-  await page.goto(safeUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
+  let hiddenLogged = false;
+  const sendWindow = (method: string, params?: Record<string, unknown>) => hints.send(method as "Browser.getWindowForTarget", params as never);
+  keepHidden = async (motivo: string) => {
+    if (stopped) return;
+    const ok = await setLiveWindowState(sendWindow, "minimized");
+    if (ok && hiddenLogged) return;
+    const dock = await hideLiveProcess();
+    if (ok) hiddenLogged = true;
+    console.info(`[fanlink:navegador] vista=live minimizo perfil=${input.accountId} motivo=${motivo} ok=${ok ? "si" : "no"} dock=${dock ? "oculto" : "no"}`);
+  };
+  await keepHidden("antes");
+  const here = page.url();
+  const already = here.includes("onlyfans.com") && liveFrameAllowed(here, section);
+  if (!already) await page.goto(safeUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
   await documentChecked;
   const passwordVisible = await page.locator('input[type="password"]:visible').count().then((count) => count > 0).catch(() => false);
   if (!challengeOpen && (loginOnPage || passwordVisible)) {
@@ -197,6 +214,7 @@ export async function startLiveCast(input: {
     };
   }
   if (!challengeOpen) await armGuards();
+  await keepHidden("carga");
   cdp = await input.context.newCDPSession(page);
   if (debug) {
     const probe = await page.evaluate(() => {
@@ -313,6 +331,35 @@ export async function startLiveCast(input: {
       cdp = null;
     },
   };
+}
+
+/** La página que ya está abierta. No crea otra ventana. */
+function reusableLivePage(context: BrowserContext, needle: string): Page | null {
+  const pages = context.pages();
+  const match = pages.find((page) => {
+    try {
+      return page.url().includes(needle);
+    } catch {
+      return false;
+    }
+  });
+  if (match) return match;
+  const site = pages.find((page) => {
+    try {
+      return page.url().includes("onlyfans.com");
+    } catch {
+      return false;
+    }
+  });
+  if (site) return site;
+  const blank = pages.find((page) => {
+    try {
+      return page.url() === "about:blank";
+    } catch {
+      return false;
+    }
+  });
+  return blank ?? pages[0] ?? null;
 }
 
 function pathOf(raw: string): string {

@@ -41,7 +41,7 @@ import {
 import { assertLoginDisplay } from "./display.ts";
 import { profileHasClearanceName } from "../live/clearance-file.ts";
 import { liveLaunchMode, liveVisibility } from "../live/headless.ts";
-import { minimizeLiveWindow } from "../live/window.ts";
+import { hideLiveProcess, minimizeLiveWindow } from "../live/window.ts";
 import { waitForProfileLock } from "./profile-lock.ts";
 import { openWorkPage } from "./work-page.ts";
 import { closeIfIdle } from "../live/pages.ts";
@@ -1413,7 +1413,7 @@ export class SessionManager {
     const fromSession = await this.hasClearanceCookie(accountId);
     const fromProfile = await profileHasClearanceName(profile).catch(() => false);
     const seen = await this.liveAlreadySeen(accountId);
-    const choice = liveVisibility({ asked, clearance: fromSession || fromProfile, seen });
+    const choice = liveVisibility(asked);
     const mode = choice.visibility === "headless" ? "headless" : "window";
     const clearanceFrom = fromSession ? "sesion" : fromProfile ? "perfil" : "no";
     if (mode !== "headless") assertLoginDisplay(false, this.options.displayEnv);
@@ -1433,10 +1433,11 @@ export class SessionManager {
         throw new Error(messages.profileInUse);
       }
       const proxy = await this.accountProxy(accountId);
-      console.info(`[fanlink:navegador] vista=live lanza perfil=${accountId} modo=${mode} proxy=${proxy ? "si" : "no"}`);
+      console.info(`[fanlink:navegador] vista=live lanza perfil=${accountId} modo=${choice.visibility} proxy=${proxy ? "si" : "no"}`);
       const context = await this.options.browsers.launchPersistentContext(profile, {
         headless: false,
         live: mode,
+        minimized: choice.visibility === "minimized",
         proxy,
       });
       this.openContexts.add(context);
@@ -1444,7 +1445,8 @@ export class SessionManager {
       console.info(`[fanlink:navegador] vista=live binario=${context.browser()?.version() ?? "desconocida"} ua-forzado=si`);
       if (choice.visibility === "minimized") {
         const hidden = await this.minimizeLive(context);
-        console.info(`[fanlink:navegador] vista=live ventana=${hidden ? "no" : "si"} motivo=${choice.reason}`);
+        const dock = hidden ? await hideLiveProcess(this.options.displayEnv.platform) : false;
+        console.info(`[fanlink:navegador] vista=live minimizo perfil=${accountId} motivo=${choice.reason} ok=${hidden ? "si" : "no"} dock=${dock ? "oculto" : "no"}`);
       } else {
         console.info(`[fanlink:navegador] vista=live ventana=si motivo=${choice.reason}`);
       }
