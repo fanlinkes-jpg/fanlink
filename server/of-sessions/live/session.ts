@@ -49,13 +49,12 @@ export async function startLiveCast(input: {
   let viewport: { width: number; height: number } = { width: fingerprint.width, height: fingerprint.height };
   let cdp: CDPSession | null = null;
   let stopped = false;
+  let challengeOpen = false;
   let fileWait: ((file: { name: string; mimeType: string; buffer: Buffer } | null) => void) | null = null;
   console.info(liveLog("inicio", { accountId: input.accountId, fps }));
   await page.addInitScript({ content: liveHistoryGuardSource(chatUrl, section) });
   await page.addInitScript({ content: liveSocketGuardSource(typing) });
   cdp = await input.context.newCDPSession(page);
-  await cdp.send("Network.enable").catch(() => undefined);
-  await cdp.send("Network.setBypassServiceWorker", { bypass: true }).catch(() => undefined);
   const guardRoute = (route: Route) => {
     if (liveRequestAllowed(route.request().url(), route.request().method(), typing, section)) return route.continue();
     return route.abort();
@@ -116,18 +115,26 @@ export async function startLiveCast(input: {
   if (!currentViewport || currentViewport.width !== viewport.width || currentViewport.height !== viewport.height) {
     await page.setViewportSize(viewport);
   }
-  const reportChallenge = () => {
-    void Promise.all([
+  const readChallenge = async () => {
+    const [title, body] = await Promise.all([
       page.title().catch(() => ""),
       page.locator("body").innerText({ timeout: 2_000 }).catch(() => ""),
-    ]).then(([title, body]) => {
-      if (stopped) return;
-      input.onNotice?.(isLiveChallengeText(`${title}\n${body}`) ? LIVE_CHALLENGE_NOTICE : "");
-    });
+    ]);
+    if (stopped) return;
+    challengeOpen = isLiveChallengeText(`${title}\n${body}`);
+    input.onNotice?.(challengeOpen ? LIVE_CHALLENGE_NOTICE : "");
   };
+  const onChallengeFrame = (frame: Frame) => {
+    if (frame !== page.mainFrame()) return;
+    void readChallenge();
+  };
+  page.on("framenavigated", onChallengeFrame);
   await page.goto(chatUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
-  reportChallenge();
-  const challengeTimer = setTimeout(reportChallenge, 16_000);
+  await readChallenge();
+  const challengeTimer = setInterval(() => {
+    void readChallenge();
+  }, 4_000);
+  challengeTimer.unref?.();
   let lastFrame = 0;
   let sawFrame = false;
   cdp.on("Page.screencastFrame", (event: { data: string; sessionId: number; metadata?: { deviceWidth?: number; deviceHeight?: number } }) => {
@@ -149,6 +156,19 @@ export async function startLiveCast(input: {
   return {
     async send(command) {
       if (stopped || !cdp) return;
+      if (challengeOpen) {
+        const allowed = deskCommand(command, viewport, true);
+        if (!allowed) return;
+        if (allowed.method === "resize") {
+          viewport = allowed.params;
+          await page.setViewportSize(viewport).catch(() => undefined);
+          return;
+        }
+        await cdp.send(allowed.method, allowed.params as never).catch((error: unknown) => {
+          console.info(liveLog("error", { accountId: input.accountId, detail: error instanceof Error ? error.message : "input" }));
+        });
+        return;
+      }
       if (!typing && command.type === "mouse" && command.action !== "move") {
         const point = mapPointer(command.x, command.y, { width: command.canvasWidth, height: command.canvasHeight }, viewport);
         const href = await page.evaluate(({ x, y }) => {
@@ -179,11 +199,12 @@ export async function startLiveCast(input: {
     async stop() {
       if (stopped) return;
       stopped = true;
-      clearTimeout(challengeTimer);
+      clearInterval(challengeTimer);
       console.info(liveLog("fin", { accountId: input.accountId }));
       await cdp?.send("Page.stopScreencast").catch(() => undefined);
       // La siguiente sala reutiliza esta página: no se apilan guardias ni escuchas de la anterior.
       page.off("framenavigated", onNavigated);
+      page.off("framenavigated", onChallengeFrame);
       page.off("response", onResponse);
       await page.unroute("**/*", guardRoute).catch(() => undefined);
       await cdp?.detach().catch(() => undefined);

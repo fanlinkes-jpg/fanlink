@@ -1398,9 +1398,10 @@ export class SessionManager {
   }
 
   /**
-   * Vista nativa: el mismo perfil persistente y proxy que Conectar, con
-   * headless según liveViewHeadless (visible en un Mac). Siembra la sesión
-   * cifrada; no usa headlessWork.
+   * Vista nativa: el mismo perfil persistente, proxy y huella que Conectar.
+   * Sin ventana (Chromium completo con --headless=new, no el shell de las
+   * lecturas). FANLINK_LIVE_VIEW_HEADLESS=false abre la ventana de depuración.
+   * No usa headlessWork.
    */
   private async newLiveContext(accountId: string): Promise<BrowserContext> {
     const headless = liveViewHeadless(process.env, this.options.displayEnv);
@@ -1417,6 +1418,7 @@ export class SessionManager {
       console.info(`[fanlink:navegador] vista=live perfil=${accountId} headless=${String(headless)} proxy=${proxy ? "si" : "no"}`);
       const context = await this.options.browsers.launchPersistentContext(profile, {
         headless,
+        live: headless,
         proxy,
       });
       this.openContexts.add(context);

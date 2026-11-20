@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type MouseEvent, type WheelEvent } from "react";
 import { ComingSoonPage } from "@/features/coming-soon-page";
+import { containedCanvasPoint } from "@/lib/live-pointer";
 import { openLiveView } from "@/lib/of-sessions";
 
 type LiveStatus = { type: "status"; role: "control" | "view"; send: boolean };
@@ -109,15 +110,16 @@ export function LiveOfViewer({ creatorId, section }: { creatorId: string; sectio
 
   const point = (event: MouseEvent<HTMLCanvasElement> | WheelEvent<HTMLCanvasElement>) => {
     const canvas = event.currentTarget;
-    return {
-      x: event.nativeEvent.offsetX,
-      y: event.nativeEvent.offsetY,
-      canvasWidth: canvas.clientWidth,
-      canvasHeight: canvas.clientHeight,
-    };
+    return containedCanvasPoint(
+      event.nativeEvent.offsetX,
+      event.nativeEvent.offsetY,
+      { width: canvas.clientWidth, height: canvas.clientHeight },
+      { width: canvas.width, height: canvas.height },
+    );
   };
 
-  const canType = statusRef.current?.role === "control" && statusRef.current.send;
+  const solving = notice.length > 0;
+  const canType = solving || (statusRef.current?.role === "control" && statusRef.current.send);
 
   if (!ready && message && message !== "Abriendo la página de OnlyFans…") {
     return <ComingSoonPage title="Notificaciones" hint={message} />;

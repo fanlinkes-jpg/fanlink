@@ -24,6 +24,39 @@ export interface ManagedBrowser {
 export interface PersistentLaunchOptions {
   headless: boolean;
   proxy?: BrowserProxy | null;
+  /**
+   * Vista nativa, sin ventana. Playwright 1.64 con `headless: true` arranca
+   * `chromium-headless-shell`, un binario distinto al de Conectar que
+   * Cloudflare rechaza. Con `live` se lanza el mismo Chromium y `--headless=new`.
+   */
+  live?: boolean;
+}
+
+/** Mismo Chromium que Conectar, sin ventana y sin el shell headless. */
+export const LIVE_CHROMIUM_ARGS = ["--headless=new", "--disable-blink-features=AutomationControlled"] as const;
+
+export function persistentContextLaunchOptions(options: PersistentLaunchOptions): {
+  headless: boolean;
+  ignoreDefaultArgs?: string[];
+  args?: string[];
+  userAgent: string;
+  viewport: { width: number; height: number };
+  locale: string;
+  timezoneId: string;
+  proxy?: BrowserProxy;
+} {
+  const live = options.live === true;
+  return {
+    headless: live ? false : options.headless,
+    ...(live
+      ? { ignoreDefaultArgs: ["--enable-automation"], args: [...LIVE_CHROMIUM_ARGS] }
+      : {}),
+    userAgent: BROWSER_FINGERPRINT.userAgent,
+    viewport: BROWSER_FINGERPRINT.viewport,
+    locale: BROWSER_FINGERPRINT.locale,
+    timezoneId: BROWSER_FINGERPRINT.timezoneId,
+    ...(options.proxy ? { proxy: options.proxy } : {}),
+  };
 }
 
 export interface BrowserFactory {
@@ -37,14 +70,7 @@ export interface BrowserFactory {
 export function createPlaywrightFactory(): BrowserFactory {
   return {
     async launchPersistentContext(userDataDir, options) {
-      return chromium.launchPersistentContext(userDataDir, {
-        headless: options.headless,
-        userAgent: BROWSER_FINGERPRINT.userAgent,
-        viewport: BROWSER_FINGERPRINT.viewport,
-        locale: BROWSER_FINGERPRINT.locale,
-        timezoneId: BROWSER_FINGERPRINT.timezoneId,
-        ...(options.proxy ? { proxy: options.proxy } : {}),
-      });
+      return chromium.launchPersistentContext(userDataDir, persistentContextLaunchOptions(options));
     },
     async launch() {
       const browser = await chromium.launch({ headless: true });

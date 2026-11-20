@@ -1,5 +1,5 @@
 export const LIVE_CHALLENGE_NOTICE =
-  "OnlyFans ha detenido la página en una comprobación antibots («Just a moment»). Esta vista usa el mismo Chromium visible que Conectar. Si el aviso no desaparece en unos segundos, cierra la vista, pulsa Reconectar en esa cuenta y ábrela otra vez.";
+  "OnlyFans muestra la comprobación antibots («Just a moment»). Haz clic en el recuadro dentro de esta vista y, si pide texto, teclea aquí: no se abre ninguna ventana. Cuando pase, la cookie queda en el perfil de la cuenta y la próxima apertura la reutiliza.";
 
 /** Detecta el intersticial antibots de OnlyFans / Cloudflare sin inspeccionar cookies. */
 export function isLiveChallengeText(text: string): boolean {

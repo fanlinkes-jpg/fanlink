@@ -5,6 +5,7 @@ import {
   claimControl,
   draftAfterKey,
   draftAfterPaste,
+  liveChallengeControl,
   liveControlAllowed,
   liveFps,
   liveLog,
@@ -309,6 +310,15 @@ async function onClientMessage(room: Room, viewer: Viewer, raw: string): Promise
   if (!event || event.type === "auth") return;
   if (!takeLiveEventSlot(viewer.stamps, Date.now())) return;
   const typing = liveTypingEnabled();
+  if (
+    (event.type === "mouse" || event.type === "wheel" || event.type === "key" || event.type === "text") &&
+    liveChallengeControl(room.notice.trim().length > 0, viewer.role, event.type)
+  ) {
+    if (!room.cast) return;
+    noteControl(room);
+    await room.cast.send(event);
+    return;
+  }
   if ((event.type === "mouse" || event.type === "wheel") && viewer.role === "control" && room.cast) {
     if (event.type === "wheel" || (event.type === "mouse" && event.action === "move")) {
       if (!liveControlAllowed(typing, viewer.role, event.type, "scroll")) return;

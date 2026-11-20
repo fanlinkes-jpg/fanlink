@@ -15,7 +15,7 @@ type Slot = {
   exclusive: boolean;
   /** Hay un login esperando a que las lecturas suelten el perfil. No se cierra todavía. */
   yielding: boolean;
-  /** Chromium visible del live view: no se reutiliza un contexto headless de lecturas. */
+  /** Chromium de la vista nativa: no se reutiliza el contexto headless de las lecturas. */
   visible: boolean;
 };
 
@@ -90,8 +90,8 @@ export class ProfileOwner {
    */
   /**
    * Vista nativa. Espera a que las lecturas suelten el perfil headless,
-   * lo cierra y abre el mismo directorio en modo visible. Si la vista
-   * ya tiene ese Chromium, lo reutiliza. No comparte la ventana de Conectar.
+   * lo cierra y abre el mismo directorio para el screencast, sin ventana.
+   * Si la vista ya tiene ese Chromium, lo reutiliza. No comparte el de Conectar.
    */
   async leaseVisible(accountId: string): Promise<ProfileLease> {
     try {

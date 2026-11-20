@@ -41,6 +41,21 @@ const LIVE_MEDIA_HOST = /^(cdn\d*|static\d*|public|media|thumbs|assets|files|upl
 const LIVE_API_HOST = /^(api\d*|ws\d*|socket)\.onlyfans\.com$/;
 const LIVE_WRITES = new Set(["POST", "PUT", "DELETE", "PATCH"]);
 
+/**
+ * El reto de Cloudflare termina con un GET del script y un POST del resultado,
+ * en `challenges.cloudflare.com` o en `/cdn-cgi/` del propio OnlyFans.
+ * No abre banca, estados ni la API de la cuenta.
+ */
+export function isLiveChallengeExchange(host: string, path: string, method: string): boolean {
+  const verb = method.toUpperCase();
+  if (verb !== "GET" && verb !== "HEAD" && verb !== "POST" && verb !== "OPTIONS") return false;
+  const segments = path.split("/").filter(Boolean);
+  if (segments.some((part) => (LIVE_DENIED_SEGMENTS as readonly string[]).includes(part))) return false;
+  if (host === "challenges.cloudflare.com" || host.endsWith(".challenges.cloudflare.com")) return true;
+  if (!path.includes("/cdn-cgi/")) return false;
+  return host === "onlyfans.com" || host === "www.onlyfans.com" || host === "cloudflare.com" || host.endsWith(".cloudflare.com");
+}
+
 /** Solo el chat y sus mensajes. En solo lectura no salen POST, PUT ni DELETE de mensajes, likes o PPV. */
 export function liveRequestAllowed(raw: string, method = "GET", typing = false, section: LiveSection = "chat"): boolean {
   if (raw.startsWith("data:") || raw.startsWith("blob:") || raw.startsWith("about:")) return true;
@@ -52,8 +67,6 @@ export function liveRequestAllowed(raw: string, method = "GET", typing = false, 
   }
   if (url.protocol !== "https:" && url.protocol !== "http:" && url.protocol !== "wss:" && url.protocol !== "ws:") return false;
   const host = url.hostname.toLowerCase();
-  if (liveChallengeHost(host)) return method.toUpperCase() === "GET" || method.toUpperCase() === "HEAD";
-  if (host !== "onlyfans.com" && !host.endsWith(".onlyfans.com")) return false;
   let path = url.pathname.toLowerCase();
   try {
     path = decodeURIComponent(path);
@@ -61,6 +74,9 @@ export function liveRequestAllowed(raw: string, method = "GET", typing = false, 
     return false;
   }
   if (path.includes("..") || path.includes("\\")) return false;
+  if (isLiveChallengeExchange(host, path, method)) return true;
+  if (liveChallengeHost(host)) return method.toUpperCase() === "GET" || method.toUpperCase() === "HEAD";
+  if (host !== "onlyfans.com" && !host.endsWith(".onlyfans.com")) return false;
   if (isChatReadWrite(method, path)) return false;
   if (liveBootPath(path)) return method.toUpperCase() === "GET" || method.toUpperCase() === "HEAD";
   if (!liveHostPathAllowed(host, path)) return false;
@@ -196,6 +212,8 @@ export function liveHistoryGuardSource(chatUrl = "", section: LiveSection = "cha
   });
   return `(() => {
     const allow = ${allow};
+    const here = location.hostname.toLowerCase();
+    if (here === "challenges.cloudflare.com" || here.endsWith(".challenges.cloudflare.com")) return true;
     const ok = (raw) => {
       try {
         const url = new URL(String(raw), location.origin);
@@ -212,6 +230,7 @@ export function liveHistoryGuardSource(chatUrl = "", section: LiveSection = "cha
           return false;
         }
         if (parts.some((part) => allow.denied.includes(part))) return false;
+        if (path.includes("/cdn-cgi/")) return true;
         if (allow.pageOnly) {
           return allow.prefixes.some((prefix) => path === prefix || path.startsWith(prefix + "/"));
         }
@@ -519,6 +538,12 @@ export function takeLiveEventSlot(stamps: number[], now: number, limit = LIVE_EV
   if (stamps.length >= limit) return false;
   stamps.push(now);
   return true;
+}
+
+/** El reto se resuelve en el visor. No habilita el envío ni los archivos. */
+export function liveChallengeControl(solving: boolean, role: LiveRole, kind: LiveClientEvent["type"]): boolean {
+  if (!solving || role !== "control") return false;
+  return kind === "mouse" || kind === "wheel" || kind === "key" || kind === "text";
 }
 
 /** Sin el flag de envío solo quedan el scroll y el clic que abre otro hilo. */

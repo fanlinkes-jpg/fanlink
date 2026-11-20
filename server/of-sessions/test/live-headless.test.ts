@@ -3,25 +3,40 @@ import { test } from "node:test";
 import type { BrowserContext } from "playwright";
 import { isLiveChallengeText, LIVE_CHALLENGE_NOTICE } from "../live/challenge.ts";
 import { liveViewHeadless } from "../live/headless.ts";
+import { LIVE_CHROMIUM_ARGS, persistentContextLaunchOptions } from "../sessions/browser-factory.ts";
 import { messages } from "../messages.ts";
 import { ProfileOwner } from "../sessions/profile-owner.ts";
 import { SessionPendingError } from "../types.ts";
 
-test("el live view es visible en un Mac y en Linux con pantalla, salvo que se fuerce headless", () => {
+test("el live view no abre ventana, salvo que se fuerce", () => {
   const mac = { platform: "darwin" as const };
   const win = { platform: "win32" as const };
   const linuxScreen = { platform: "linux" as const, display: ":0" };
   const linuxWayland = { platform: "linux" as const, wayland: "wayland-0" };
   const linuxHeadless = { platform: "linux" as const };
-  assert.equal(liveViewHeadless({}, mac), false);
-  assert.equal(liveViewHeadless({}, win), false);
-  assert.equal(liveViewHeadless({}, linuxScreen), false);
-  assert.equal(liveViewHeadless({}, linuxWayland), false);
+  assert.equal(liveViewHeadless({}, mac), true);
+  assert.equal(liveViewHeadless({}, win), true);
+  assert.equal(liveViewHeadless({}, linuxScreen), true);
+  assert.equal(liveViewHeadless({}, linuxWayland), true);
   assert.equal(liveViewHeadless({}, linuxHeadless), true);
   assert.equal(liveViewHeadless({ FANLINK_LIVE_VIEW_HEADLESS: "true" }, mac), true);
   assert.equal(liveViewHeadless({ FANLINK_LIVE_VIEW_HEADLESS: "false" }, linuxHeadless), false);
   assert.equal(liveViewHeadless({ FANLINK_LIVE_VIEW_HEADLESS: "0" }, linuxHeadless), false);
   assert.equal(liveViewHeadless({ FANLINK_LIVE_VIEW_HEADLESS: "1" }, mac), true);
+});
+
+test("la vista nativa usa el Chromium completo en headless nuevo, no el shell", () => {
+  const live = persistentContextLaunchOptions({ headless: true, live: true });
+  assert.equal(live.headless, false);
+  assert.deepEqual(live.args, [...LIVE_CHROMIUM_ARGS]);
+  assert.equal(live.ignoreDefaultArgs?.includes("--enable-automation"), true);
+  assert.equal(live.userAgent.includes("Chrome/131"), true);
+  const work = persistentContextLaunchOptions({ headless: true });
+  assert.equal(work.headless, true);
+  assert.equal(work.args, undefined);
+  const windowed = persistentContextLaunchOptions({ headless: false });
+  assert.equal(windowed.headless, false);
+  assert.equal(windowed.args, undefined);
 });
 
 test("detecta el texto del reto antibots de OnlyFans", () => {
@@ -30,6 +45,7 @@ test("detecta el texto del reto antibots de OnlyFans", () => {
   assert.equal(isLiveChallengeText("Checking if the site connection is secure"), true);
   assert.equal(isLiveChallengeText("Notifications\nAll activity"), false);
   assert.ok(LIVE_CHALLENGE_NOTICE.includes("comprobación antibots"));
+  assert.ok(LIVE_CHALLENGE_NOTICE.includes("no se abre ninguna ventana"));
 });
 
 test("la vista nativa no reutiliza un Chromium headless ya abierto", async () => {

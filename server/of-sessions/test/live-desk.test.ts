@@ -9,6 +9,7 @@ import {
   deskCommand,
   draftAfterKey,
   draftAfterPaste,
+  liveChallengeControl,
   liveControlAllowed,
   liveFps,
   liveLog,
@@ -42,7 +43,8 @@ test("la pestaña no sale de OnlyFans ni de su CDN", () => {
   assert.equal(liveRequestAllowed("https://cdn2.onlyfans.com/v.mp4"), true);
   assert.equal(liveRequestAllowed("https://static2.onlyfans.com/theme/onlyfans/spa/app.js"), true);
   assert.equal(liveRequestAllowed("https://challenges.cloudflare.com/cdn-cgi/challenge-platform/scripts/jsd/main.js"), true);
-  assert.equal(liveRequestAllowed("https://challenges.cloudflare.com/cdn-cgi/challenge-platform/scripts/jsd/main.js", "POST"), false);
+  assert.equal(liveRequestAllowed("https://challenges.cloudflare.com/cdn-cgi/challenge-platform/scripts/jsd/main.js", "POST"), true);
+  assert.equal(liveRequestAllowed("https://www.cloudflare.com/login", "POST"), false);
   assert.equal(liveRequestAllowed("https://example.com/"), false);
   assert.equal(liveRequestAllowed("https://onlyfans.com.evil/x"), false);
   assert.equal(liveRequestAllowed("about:blank"), true);
@@ -69,6 +71,12 @@ test("sin FANLINK_ENABLE_SEND no hay teclado, Enter ni archivos", () => {
   assert.equal(deskCommand({ type: "key", key: "Enter", code: "Enter", down: true }, viewport, false), null);
   assert.equal(deskCommand({ type: "text", text: "hola" }, viewport, false), null);
   assert.equal(deskCommand({ type: "mouse", action: "move", x: 1, y: 1, canvasWidth: 10, canvasHeight: 10 }, viewport, false)?.method, "Input.dispatchMouseEvent");
+  assert.equal(liveChallengeControl(true, "control", "mouse"), true);
+  assert.equal(liveChallengeControl(true, "control", "key"), true);
+  assert.equal(liveChallengeControl(true, "control", "text"), true);
+  assert.equal(liveChallengeControl(true, "control", "file"), false);
+  assert.equal(liveChallengeControl(true, "view", "mouse"), false);
+  assert.equal(liveChallengeControl(false, "control", "key"), false);
   assert.equal(liveControlAllowed(false, "control", "key"), false);
   assert.equal(liveControlAllowed(false, "control", "text"), false);
   assert.equal(liveControlAllowed(false, "control", "file"), false);

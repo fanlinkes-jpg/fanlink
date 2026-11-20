@@ -33,6 +33,11 @@ test("notifications deja pasar su página y sigue bloqueando banca y estados", (
   assert.equal(liveRequestAllowed("https://onlyfans.com/my/settings", "GET", false, "notifications"), false);
   assert.equal(liveRequestAllowed("https://onlyfans.com/my/payouts", "GET", false, "notifications"), false);
   assert.equal(liveRequestAllowed("https://onlyfans.com/my/chats", "GET", false, "notifications"), false);
+  assert.equal(liveRequestAllowed("https://onlyfans.com/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1", "GET", false, "notifications"), true);
+  assert.equal(liveRequestAllowed("https://onlyfans.com/cdn-cgi/challenge-platform/h/g/flow/ov1", "POST", false, "notifications"), true);
+  assert.equal(liveRequestAllowed("https://onlyfans.com/api2/v2/users/notifications", "POST", false, "notifications"), false);
+  assert.equal(liveRequestAllowed("https://onlyfans.com/cdn-cgi/../my/banking", "POST", false, "notifications"), false);
+  assert.equal(liveRequestAllowed("https://onlyfans.com/cdn-cgi/challenge-platform/h/g/flow/ov1", "PUT", false, "notifications"), false);
 });
 
 test("solo la dueña abre la sección de notificaciones", () => {
