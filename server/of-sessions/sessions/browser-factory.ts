@@ -1,4 +1,5 @@
 import { chromium, type BrowserContext } from "playwright";
+import type { LiveLaunchMode } from "../live/headless.ts";
 import { messages } from "../messages.ts";
 
 /**
@@ -25,15 +26,22 @@ export interface PersistentLaunchOptions {
   headless: boolean;
   proxy?: BrowserProxy | null;
   /**
-   * Vista nativa, sin ventana. Playwright 1.64 con `headless: true` arranca
-   * `chromium-headless-shell`, un binario distinto al de Conectar que
-   * Cloudflare rechaza. Con `live` se lanza el mismo Chromium y `--headless=new`.
+   * Vista nativa. `offscreen` es el Chromium de Conectar con la ventana fuera
+   * de la pantalla. `headless` usa `--headless=new` (no el shell). `window`
+   * la muestra. Playwright 1.64 con `headless: true` arranca otro binario.
    */
-  live?: boolean;
+  live?: LiveLaunchMode;
 }
 
-/** Mismo Chromium que Conectar, sin ventana y sin el shell headless. */
-export const LIVE_CHROMIUM_ARGS = ["--headless=new", "--disable-blink-features=AutomationControlled"] as const;
+/** Chromium completo, sin el shell. Cloudflare sigue detectando este modo. */
+export const LIVE_HEADLESS_ARGS = ["--headless=new", "--disable-blink-features=AutomationControlled"] as const;
+
+/** Ventana real, fuera del escritorio. Mismo tamaño que la huella de Conectar. */
+export const LIVE_OFFSCREEN_ARGS = [
+  "--window-position=-32000,-32000",
+  "--window-size=1440,900",
+  "--disable-blink-features=AutomationControlled",
+] as const;
 
 export function persistentContextLaunchOptions(options: PersistentLaunchOptions): {
   headless: boolean;
@@ -45,12 +53,12 @@ export function persistentContextLaunchOptions(options: PersistentLaunchOptions)
   timezoneId: string;
   proxy?: BrowserProxy;
 } {
-  const live = options.live === true;
+  const live = options.live;
+  const hidden = live === "headless" || live === "offscreen" || live === "window";
+  const args = live === "headless" ? LIVE_HEADLESS_ARGS : live === "offscreen" ? LIVE_OFFSCREEN_ARGS : undefined;
   return {
-    headless: live ? false : options.headless,
-    ...(live
-      ? { ignoreDefaultArgs: ["--enable-automation"], args: [...LIVE_CHROMIUM_ARGS] }
-      : {}),
+    headless: hidden ? false : options.headless,
+    ...(args ? { ignoreDefaultArgs: ["--enable-automation"], args: [...args] } : {}),
     userAgent: BROWSER_FINGERPRINT.userAgent,
     viewport: BROWSER_FINGERPRINT.viewport,
     locale: BROWSER_FINGERPRINT.locale,

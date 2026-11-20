@@ -2,41 +2,63 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { BrowserContext } from "playwright";
 import { isLiveChallengeText, LIVE_CHALLENGE_NOTICE } from "../live/challenge.ts";
-import { liveViewHeadless } from "../live/headless.ts";
-import { LIVE_CHROMIUM_ARGS, persistentContextLaunchOptions } from "../sessions/browser-factory.ts";
+import { clearancePresent, liveRequestTrace, liveViewDebug } from "../live/debug.ts";
+import { liveLaunchMode } from "../live/headless.ts";
+import { LIVE_HEADLESS_ARGS, LIVE_OFFSCREEN_ARGS, persistentContextLaunchOptions } from "../sessions/browser-factory.ts";
 import { messages } from "../messages.ts";
 import { ProfileOwner } from "../sessions/profile-owner.ts";
 import { SessionPendingError } from "../types.ts";
 
-test("el live view no abre ventana, salvo que se fuerce", () => {
+test("en un Mac la vista queda fuera de pantalla y headless solo si se pide", () => {
   const mac = { platform: "darwin" as const };
   const win = { platform: "win32" as const };
   const linuxScreen = { platform: "linux" as const, display: ":0" };
   const linuxWayland = { platform: "linux" as const, wayland: "wayland-0" };
   const linuxHeadless = { platform: "linux" as const };
-  assert.equal(liveViewHeadless({}, mac), true);
-  assert.equal(liveViewHeadless({}, win), true);
-  assert.equal(liveViewHeadless({}, linuxScreen), true);
-  assert.equal(liveViewHeadless({}, linuxWayland), true);
-  assert.equal(liveViewHeadless({}, linuxHeadless), true);
-  assert.equal(liveViewHeadless({ FANLINK_LIVE_VIEW_HEADLESS: "true" }, mac), true);
-  assert.equal(liveViewHeadless({ FANLINK_LIVE_VIEW_HEADLESS: "false" }, linuxHeadless), false);
-  assert.equal(liveViewHeadless({ FANLINK_LIVE_VIEW_HEADLESS: "0" }, linuxHeadless), false);
-  assert.equal(liveViewHeadless({ FANLINK_LIVE_VIEW_HEADLESS: "1" }, mac), true);
+  assert.equal(liveLaunchMode({}, mac), "offscreen");
+  assert.equal(liveLaunchMode({}, win), "offscreen");
+  assert.equal(liveLaunchMode({}, linuxScreen), "offscreen");
+  assert.equal(liveLaunchMode({}, linuxWayland), "offscreen");
+  assert.equal(liveLaunchMode({}, linuxHeadless), "headless");
+  assert.equal(liveLaunchMode({ FANLINK_LIVE_VIEW_HEADLESS: "true" }, mac), "headless");
+  assert.equal(liveLaunchMode({ FANLINK_LIVE_VIEW_HEADLESS: "1" }, mac), "headless");
+  assert.equal(liveLaunchMode({ FANLINK_LIVE_VIEW_HEADLESS: "false" }, mac), "window");
+  assert.equal(liveLaunchMode({ FANLINK_LIVE_VIEW_HEADLESS: "0" }, linuxHeadless), "window");
 });
 
-test("la vista nativa usa el Chromium completo en headless nuevo, no el shell", () => {
-  const live = persistentContextLaunchOptions({ headless: true, live: true });
-  assert.equal(live.headless, false);
-  assert.deepEqual(live.args, [...LIVE_CHROMIUM_ARGS]);
-  assert.equal(live.ignoreDefaultArgs?.includes("--enable-automation"), true);
-  assert.equal(live.userAgent.includes("Chrome/131"), true);
+test("la vista nativa usa el Chromium de Conectar fuera de pantalla, no el shell", () => {
+  const offscreen = persistentContextLaunchOptions({ headless: false, live: "offscreen" });
+  assert.equal(offscreen.headless, false);
+  assert.deepEqual(offscreen.args, [...LIVE_OFFSCREEN_ARGS]);
+  assert.equal((offscreen.args ?? []).join(" ").includes("headless"), false);
+  assert.equal(offscreen.ignoreDefaultArgs?.includes("--enable-automation"), true);
+  assert.equal(offscreen.userAgent.includes("Chrome/131"), true);
+  assert.equal(offscreen.locale, "es-ES");
+  assert.equal(offscreen.timezoneId, "Europe/Madrid");
+  const headless = persistentContextLaunchOptions({ headless: false, live: "headless" });
+  assert.deepEqual(headless.args, [...LIVE_HEADLESS_ARGS]);
+  assert.equal(headless.headless, false);
   const work = persistentContextLaunchOptions({ headless: true });
   assert.equal(work.headless, true);
   assert.equal(work.args, undefined);
-  const windowed = persistentContextLaunchOptions({ headless: false });
+  const windowed = persistentContextLaunchOptions({ headless: false, live: "window" });
   assert.equal(windowed.headless, false);
   assert.equal(windowed.args, undefined);
+});
+
+test("el diagnostico no escribe query, hash ni el valor de cf_clearance", () => {
+  assert.equal(liveViewDebug({}), false);
+  assert.equal(liveViewDebug({ FANLINK_LIVE_VIEW_DEBUG: "true" }), true);
+  assert.equal(liveViewDebug({ FANLINK_LIVE_VIEW_DEBUG: "1" }), true);
+  const traced = liveRequestTrace(
+    "POST",
+    "https://onlyfans.com/cdn-cgi/challenge-platform/h/g/flow/ov1/abcdefghijklmnopqrstuvwxyz012345?__cf_chl_tk=secreto&sign=abc#sess",
+  );
+  assert.equal(traced, "POST onlyfans.com/cdn-cgi/challenge-platform/h/g/flow/ov1/:id");
+  assert.equal(traced?.includes("secreto"), false);
+  assert.equal(traced?.includes("sign="), false);
+  assert.equal(clearancePresent(["sess", "cf_clearance"]), true);
+  assert.equal(clearancePresent(["sess"]), false);
 });
 
 test("detecta el texto del reto antibots de OnlyFans", () => {

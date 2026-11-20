@@ -1,16 +1,22 @@
 import type { DisplayEnv } from "../config.ts";
 
+/** Cómo arranca la vista. En un Mac, fuera de pantalla: --headless=new no pasa el reto. */
+export type LiveLaunchMode = "offscreen" | "headless" | "window";
+
 /**
- * La vista nativa no abre ventana: la página se ve solo en el CRM.
- * FANLINK_LIVE_VIEW_HEADLESS=false fuerza la ventana de depuración.
- * El argumento de pantalla se conserva para los llamadores; no decide.
+ * Por defecto, el mismo Chromium que Conectar, con la ventana en
+ * `-32000,-32000` (1440×900, sin foco). FANLINK_LIVE_VIEW_HEADLESS=true
+ * fuerza `--headless=new`. `false` abre la ventana en el escritorio.
+ * Sin pantalla (Linux sin DISPLAY) no hay otra salida que headless.
  */
-export function liveViewHeadless(
+export function liveLaunchMode(
   env: NodeJS.ProcessEnv = process.env,
   display: DisplayEnv,
-): boolean {
-  void display;
+): LiveLaunchMode {
   const raw = env.FANLINK_LIVE_VIEW_HEADLESS?.trim().toLowerCase();
-  if (raw === "false" || raw === "0") return false;
-  return true;
+  if (raw === "true" || raw === "1") return "headless";
+  if (raw === "false" || raw === "0") return "window";
+  if (display.platform === "win32" || display.platform === "darwin") return "offscreen";
+  if (display.display || display.wayland) return "offscreen";
+  return "headless";
 }

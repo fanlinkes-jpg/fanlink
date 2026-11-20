@@ -7,6 +7,7 @@ import { deskCommand, liveControlAllowed, liveHistoryGuardSource, liveLog, liveQ
 import { liveSectionPageUrl, type LiveSection } from "./sections.ts";
 import { BROWSER_FINGERPRINT } from "../sessions/browser-factory.ts";
 import { isLiveChallengeText, LIVE_CHALLENGE_NOTICE } from "./challenge.ts";
+import { clearancePresent, liveChallengeUrl, liveRequestTrace, liveViewDebug } from "./debug.ts";
 
 export type LiveFrame = { jpeg: Buffer; width: number; height: number };
 
@@ -51,12 +52,28 @@ export async function startLiveCast(input: {
   let stopped = false;
   let challengeOpen = false;
   let fileWait: ((file: { name: string; mimeType: string; buffer: Buffer } | null) => void) | null = null;
+  const debug = liveViewDebug();
   console.info(liveLog("inicio", { accountId: input.accountId, fps }));
-  await page.addInitScript({ content: liveHistoryGuardSource(chatUrl, section) });
-  await page.addInitScript({ content: liveSocketGuardSource(typing) });
-  cdp = await input.context.newCDPSession(page);
+  let guardsArmed = false;
+  const armGuards = async () => {
+    if (guardsArmed || stopped) return;
+    guardsArmed = true;
+    const history = liveHistoryGuardSource(chatUrl, section);
+    const sockets = liveSocketGuardSource(typing);
+    await page.addInitScript({ content: history });
+    await page.addInitScript({ content: sockets });
+    await page.evaluate((sources) => {
+      for (const source of sources) Function(source)();
+    }, [history, sockets]).catch(() => undefined);
+  };
   const guardRoute = (route: Route) => {
-    if (liveRequestAllowed(route.request().url(), route.request().method(), typing, section)) return route.continue();
+    const url = route.request().url();
+    const method = route.request().method();
+    if (liveRequestAllowed(url, method, typing, section)) return route.continue();
+    if (debug) {
+      const trace = liveRequestTrace(method, url);
+      if (trace) console.info(`[fanlink:live] abort ${trace}`);
+    }
     return route.abort();
   };
   await page.route("**/*", guardRoute);
@@ -98,9 +115,37 @@ export async function startLiveCast(input: {
       return chooser.setFiles([]);
     }).catch(() => undefined);
   });
+  const noteChallenge = (on: boolean) => {
+    if (stopped || challengeOpen === on) return;
+    challengeOpen = on;
+    input.onNotice?.(on ? LIVE_CHALLENGE_NOTICE : "");
+    if (!on) {
+      void armGuards();
+      if (debug) {
+        void input.context.cookies("https://onlyfans.com").then((cookies) => {
+          const names = cookies.map((cookie) => cookie.name);
+          console.info(`[fanlink:live] cf_clearance=${clearancePresent(names) ? "si" : "no"} tras-reto`);
+        }).catch(() => undefined);
+      }
+    }
+  };
+  let documentChecked: Promise<void> = Promise.resolve();
   const onResponse = (response: Response) => {
+    const url = response.url();
+    if (debug && liveChallengeUrl(url)) {
+      const trace = liveRequestTrace(response.request().method(), url);
+      if (trace) console.info(`[fanlink:live] reto status=${response.status()} ${trace}`);
+    }
+    const path = pathOf(url);
+    const frame = response.request().frame();
+    if (response.request().resourceType() === "document" && frame === page.mainFrame()) {
+      documentChecked = response.text().then((text) => {
+        const header = response.headers()["cf-mitigated"] === "challenge";
+        noteChallenge(header || isLiveChallengeText(text.slice(0, 1500)));
+      }).catch(() => undefined);
+      return;
+    }
     if (response.status() < 200 || response.status() >= 300) return;
-    const path = pathOf(response.url());
     if (!path.includes("message") && !path.includes("chat")) return;
     void response.text().then((text) => {
       const messages = parseChatMessages(JSON.parse(text) as unknown, input.threadKey, input.fanKey, input.accountUserId);
@@ -115,26 +160,30 @@ export async function startLiveCast(input: {
   if (!currentViewport || currentViewport.width !== viewport.width || currentViewport.height !== viewport.height) {
     await page.setViewportSize(viewport);
   }
-  const readChallenge = async () => {
-    const [title, body] = await Promise.all([
-      page.title().catch(() => ""),
-      page.locator("body").innerText({ timeout: 2_000 }).catch(() => ""),
-    ]);
-    if (stopped) return;
-    challengeOpen = isLiveChallengeText(`${title}\n${body}`);
-    input.onNotice?.(challengeOpen ? LIVE_CHALLENGE_NOTICE : "");
-  };
-  const onChallengeFrame = (frame: Frame) => {
-    if (frame !== page.mainFrame()) return;
-    void readChallenge();
-  };
-  page.on("framenavigated", onChallengeFrame);
   await page.goto(chatUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
-  await readChallenge();
-  const challengeTimer = setInterval(() => {
-    void readChallenge();
-  }, 4_000);
-  challengeTimer.unref?.();
+  await documentChecked;
+  if (!challengeOpen) await armGuards();
+  cdp = await input.context.newCDPSession(page);
+  if (debug) {
+    const probe = await page.evaluate(() => {
+      const nav = navigator as Navigator & { userAgentData?: { brands?: Array<{ brand: string }> } };
+      return {
+        webdriver: navigator.webdriver === true,
+        ua: navigator.userAgent,
+        brands: nav.userAgentData?.brands?.map((item) => item.brand).join(",") ?? "",
+        lang: navigator.language,
+        tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        screen: `${screen.width}x${screen.height}`,
+        outer: `${window.outerWidth}x${window.outerHeight}`,
+        pos: `${window.screenX},${window.screenY}`,
+      };
+    }).catch(() => null);
+    if (probe) {
+      console.info(`[fanlink:live] sonda webdriver=${probe.webdriver ? "si" : "no"} lang=${probe.lang} tz=${probe.tz} screen=${probe.screen} outer=${probe.outer} pos=${probe.pos} brands=${probe.brands} ua=${probe.ua}`);
+    }
+    const names = (await input.context.cookies("https://onlyfans.com").catch(() => [])).map((cookie) => cookie.name);
+    console.info(`[fanlink:live] cf_clearance=${clearancePresent(names) ? "si" : "no"}`);
+  }
   let lastFrame = 0;
   let sawFrame = false;
   cdp.on("Page.screencastFrame", (event: { data: string; sessionId: number; metadata?: { deviceWidth?: number; deviceHeight?: number } }) => {
@@ -199,12 +248,10 @@ export async function startLiveCast(input: {
     async stop() {
       if (stopped) return;
       stopped = true;
-      clearInterval(challengeTimer);
       console.info(liveLog("fin", { accountId: input.accountId }));
       await cdp?.send("Page.stopScreencast").catch(() => undefined);
       // La siguiente sala reutiliza esta página: no se apilan guardias ni escuchas de la anterior.
       page.off("framenavigated", onNavigated);
-      page.off("framenavigated", onChallengeFrame);
       page.off("response", onResponse);
       await page.unroute("**/*", guardRoute).catch(() => undefined);
       await cdp?.detach().catch(() => undefined);

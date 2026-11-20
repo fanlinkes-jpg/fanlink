@@ -39,7 +39,7 @@ import {
   type ManagedBrowser,
 } from "./browser-factory.ts";
 import { assertLoginDisplay } from "./display.ts";
-import { liveViewHeadless } from "../live/headless.ts";
+import { liveLaunchMode } from "../live/headless.ts";
 import { openWorkPage } from "./work-page.ts";
 import { closeIfIdle } from "../live/pages.ts";
 import { readAccountProxy } from "../proxy.ts";
@@ -1398,14 +1398,12 @@ export class SessionManager {
   }
 
   /**
-   * Vista nativa: el mismo perfil persistente, proxy y huella que Conectar.
-   * Sin ventana (Chromium completo con --headless=new, no el shell de las
-   * lecturas). FANLINK_LIVE_VIEW_HEADLESS=false abre la ventana de depuración.
-   * No usa headlessWork.
+   * Vista nativa: el mismo perfil, proxy, UA, locale y timezone que Conectar.
+   * En un Mac la ventana queda fuera de la pantalla. No usa headlessWork.
    */
   private async newLiveContext(accountId: string): Promise<BrowserContext> {
-    const headless = liveViewHeadless(process.env, this.options.displayEnv);
-    if (!headless) assertLoginDisplay(false, this.options.displayEnv);
+    const mode = liveLaunchMode(process.env, this.options.displayEnv);
+    if (mode !== "headless") assertLoginDisplay(false, this.options.displayEnv);
     const profile = this.profileDir(accountId);
     let profileExists = false;
     try {
@@ -1415,10 +1413,10 @@ export class SessionManager {
     }
     if (profileExists) {
       const proxy = await this.accountProxy(accountId);
-      console.info(`[fanlink:navegador] vista=live perfil=${accountId} headless=${String(headless)} proxy=${proxy ? "si" : "no"}`);
+      console.info(`[fanlink:navegador] vista=live perfil=${accountId} modo=${mode} proxy=${proxy ? "si" : "no"}`);
       const context = await this.options.browsers.launchPersistentContext(profile, {
-        headless,
-        live: headless,
+        headless: false,
+        live: mode,
         proxy,
       });
       this.openContexts.add(context);
