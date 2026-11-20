@@ -12,8 +12,9 @@ import { clearStaleProfileLock, readProfileLock, waitForProfileLock } from "../s
 import { profileHasClearanceName } from "../live/clearance-file.ts";
 import { clearancePresent, liveRequestTrace, liveViewDebug } from "../live/debug.ts";
 import { liveLaunchMode, liveVisibility } from "../live/headless.ts";
-import { hideLiveProcess, liveContextOpen } from "../live/window.ts";
-import { LIVE_BASE_ARGS, LIVE_HEADLESS_ARGS, LIVE_WINDOW_ARGS, persistentContextLaunchOptions } from "../sessions/browser-factory.ts";
+import { hideLiveProcess, liveContextOpen, liveHideScript, tuckLiveWindow } from "../live/window.ts";
+import { LIVE_BASE_ARGS, LIVE_HEADLESS_ARGS, LIVE_IGNORED_DEFAULT_ARGS, LIVE_WINDOW_ARGS, persistentContextLaunchOptions } from "../sessions/browser-factory.ts";
+import { chooseLiveChrome } from "../live/chrome.ts";
 import { minimizeLiveWindow } from "../live/window.ts";
 import { messages } from "../messages.ts";
 import { ProfileOwner } from "../sessions/profile-owner.ts";
@@ -50,6 +51,10 @@ test("la vista usa la huella de Conectar y apaga webdriver en la ventana", () =>
   assert.equal(offscreen.userAgent?.includes("Chrome/131.0.0.0"), true);
   assert.deepEqual(offscreen.viewport, { width: 1440, height: 900 });
   assert.equal(offscreen.ignoreDefaultArgs?.includes("--enable-automation"), true);
+  assert.equal(offscreen.ignoreDefaultArgs?.includes("--disable-component-update"), true);
+  assert.equal((offscreen.args ?? []).join(" ").includes("disable-component-update"), false);
+  assert.deepEqual(offscreen.ignoreDefaultArgs, [...LIVE_IGNORED_DEFAULT_ARGS]);
+  assert.equal(offscreen.channel, undefined);
   assert.equal(offscreen.locale, "es-ES");
   assert.equal(offscreen.timezoneId, "Europe/Madrid");
   const headless = persistentContextLaunchOptions({ headless: false, live: "headless" });
@@ -64,6 +69,48 @@ test("la vista usa la huella de Conectar y apaga webdriver en la ventana", () =>
   assert.deepEqual(windowed.args, [...LIVE_BASE_ARGS]);
   assert.equal((windowed.args ?? []).join(" ").includes("--start-minimized"), false);
   assert.equal(windowed.ignoreDefaultArgs?.includes("--enable-automation"), true);
+});
+
+test("la vista prefiere Chrome estable y no toca una ruta que no existe", () => {
+  const none = chooseLiveChrome({}, () => false);
+  assert.equal(none.source, "testing");
+  assert.equal(none.missingPath, false);
+  const stable = chooseLiveChrome({}, (path) => path.endsWith("Google Chrome"));
+  assert.equal(stable.source, "estable");
+  assert.equal(stable.channel, "chrome");
+  const routed = chooseLiveChrome({ FANLINK_LIVE_VIEW_CHROME_PATH: "/tmp/chrome" }, (path) => path === "/tmp/chrome");
+  assert.equal(routed.source, "ruta");
+  assert.equal(routed.executablePath, "/tmp/chrome");
+  const missing = chooseLiveChrome({ FANLINK_LIVE_VIEW_CHROME_PATH: "/no/chrome" }, () => false);
+  assert.equal(missing.source, "testing");
+  assert.equal(missing.missingPath, true);
+  const launched = persistentContextLaunchOptions({ headless: false, live: "window", channel: "chrome", executablePath: "/tmp/chrome" });
+  assert.equal(launched.executablePath, "/tmp/chrome");
+  assert.equal(launched.channel, undefined);
+  assert.equal(launched.userAgent?.includes("Chrome/131.0.0.0"), true);
+});
+
+test("el ocultado recorre todos los Chromium y no solo el primero", () => {
+  const script = liveHideScript();
+  assert.match(script, /every process whose name is "Google Chrome for Testing"/);
+  assert.match(script, /set visible of proc to false/);
+  assert.equal(script.includes('process "Google Chrome for Testing"'), false);
+});
+
+test("si la ventana vuelve a maximizarse, se minimiza otra vez", async () => {
+  const shown = await tuckLiveWindow(async (method, params) => {
+    if (method === "Browser.getWindowForTarget") return { windowId: 3 };
+    if (method === "Browser.getWindowBounds") return { bounds: { windowState: "maximized" } };
+    assert.deepEqual(params, { windowId: 3, bounds: { windowState: "minimized" } });
+    return {};
+  });
+  assert.equal(shown, "shown");
+  const hidden = await tuckLiveWindow(async (method) => {
+    if (method === "Browser.getWindowForTarget") return { windowId: 3 };
+    if (method === "Browser.getWindowBounds") return { bounds: { windowState: "minimized" } };
+    return {};
+  });
+  assert.equal(hidden, "hidden");
 });
 
 test("fuera de macOS no se llama a osascript", async () => {

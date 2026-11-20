@@ -227,10 +227,10 @@ export function LiveOfViewer({ creatorId, section }: { creatorId: string; sectio
 
 function explainLiveReason(reason: string | null | undefined): string {
   if (!reason || reason === "Vista en directo desactivada") {
-    return "La vista nativa de Notificaciones está apagada. Activa FANLINK_LIVE_VIEW_ENABLED y añade la cuenta a FANLINK_SEND_ALLOW_ACCOUNTS para ver la página real de OnlyFans.";
+    return "La vista nativa está apagada. Activa FANLINK_LIVE_VIEW_ENABLED para ver la página real de OnlyFans.";
   }
-  if (reason === "Esta cuenta no tiene la vista en directo.") {
-    return "Esta creadora no está en la lista de cuentas con vista nativa (FANLINK_SEND_ALLOW_ACCOUNTS).";
+  if (reason === "Esta cuenta no tiene sesión guardada.") {
+    return "Esta creadora no tiene sesión guardada. Conéctala antes de abrir la vista.";
   }
   return reason;
 }

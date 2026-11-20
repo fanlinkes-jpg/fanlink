@@ -2,7 +2,8 @@ import type { BrowserContext, CDPSession, FileChooser, Frame, Page, Response } f
 import { chatPageUrl } from "../sync/chats.ts";
 import { parseChatMessages } from "../sync/chats.ts";
 import { markLivePage } from "./pages.ts";
-import { hideLiveProcess, setLiveWindowState } from "./window.ts";
+import { liveChromeOrigin, widevineProbe } from "./chrome.ts";
+import { hideLiveProcess, liveProcessHideEnabled, tuckLiveWindow } from "./window.ts";
 import { deskCommand, LIVE_BLOCKED_NOTICE, liveCastFps, liveCastQuality, liveControlAllowed, liveFrameAllowed, liveFps, liveHistoryGuardSource, liveLog, liveOpenPageAllowed, liveQuality, liveSocketGuardSource, liveThreadClick, liveTypingEnabled, mapPointer, type DeskInput } from "./desk.ts";
 import { lastLivePage, rememberLivePage, safeLivePage } from "./last-page.ts";
 import { liveSectionPageUrl, type LiveSection } from "./sections.ts";
@@ -185,20 +186,66 @@ export async function startLiveCast(input: {
   const hints = await input.context.newCDPSession(page);
   await hints.send("Emulation.setUserAgentOverride", loginUserAgentOverride() as never).catch(() => undefined);
   let hiddenLogged = false;
+  let windowWatch: ReturnType<typeof setInterval> | null = null;
+  let tuckChain: Promise<void> = Promise.resolve();
   const sendWindow = (method: string, params?: Record<string, unknown>) => hints.send(method as "Browser.getWindowForTarget", params as never);
-  keepHidden = async (motivo: string) => {
-    if (stopped) return;
-    const ok = await setLiveWindowState(sendWindow, "minimized");
-    if (ok && hiddenLogged) return;
-    const dock = await hideLiveProcess();
-    if (ok) hiddenLogged = true;
-    console.info(`[fanlink:navegador] vista=live minimizo perfil=${input.accountId} motivo=${motivo} ok=${ok ? "si" : "no"} dock=${dock ? "oculto" : "no"}`);
+  const tuckAll = async (): Promise<"hidden" | "shown" | "fail"> => {
+    let pages;
+    try {
+      pages = input.context.pages();
+    } catch {
+      return "fail";
+    }
+    let any = false;
+    let shown = false;
+    for (const item of pages) {
+      if (item === page) {
+        const state = await tuckLiveWindow(sendWindow);
+        if (state === "fail") continue;
+        any = true;
+        if (state === "shown") shown = true;
+        continue;
+      }
+      const cdp = await input.context.newCDPSession(item);
+      try {
+        const state = await tuckLiveWindow((method, params) => cdp.send(method as "Browser.getWindowForTarget", params as never));
+        if (state === "fail") continue;
+        any = true;
+        if (state === "shown") shown = true;
+      } finally {
+        await cdp.detach().catch(() => undefined);
+      }
+    }
+    if (!any) return "fail";
+    return shown ? "shown" : "hidden";
   };
+  keepHidden = (motivo: string) => {
+    const run = tuckChain.then(() => applyHidden(motivo));
+    tuckChain = run.catch(() => undefined);
+    return run;
+  };
+  const applyHidden = async (motivo: string) => {
+    if (stopped) return;
+    const state = await tuckAll();
+    const shown = state === "shown";
+    if (!shown && hiddenLogged && motivo === "vigia") return;
+    const dock = liveProcessHideEnabled() ? await hideLiveProcess() : false;
+    if (state !== "fail") hiddenLogged = true;
+    const oculto = liveProcessHideEnabled() ? (dock ? "osascript" : "no") : "cdp";
+    console.info(`[fanlink:navegador] vista=live ${shown ? "reoculto" : "minimizo"} perfil=${input.accountId} motivo=${motivo} ok=${state === "fail" ? "no" : "si"} oculto=${oculto}`);
+  };
+  windowWatch = setInterval(() => {
+    void keepHidden("vigia");
+  }, 1_000);
+  windowWatch.unref?.();
   await keepHidden("antes");
   const here = page.url();
   const already = here.includes("onlyfans.com") && liveFrameAllowed(here, section);
   if (!already) await page.goto(safeUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
   await documentChecked;
+  const drm = await page.evaluate(widevineProbe).catch(() => false);
+  const binary = input.context.browser()?.version() ?? "desconocida";
+  console.info(`[fanlink:navegador] vista=live binario=${binary} origen=${liveChromeOrigin()} drm=${drm ? "si" : "no"}`);
   const passwordVisible = await page.locator('input[type="password"]:visible').count().then((count) => count > 0).catch(() => false);
   if (!challengeOpen && (loginOnPage || passwordVisible)) {
     console.info(liveLog("error", { accountId: input.accountId, detail: "login-visible" }));
@@ -209,6 +256,7 @@ export async function startLiveCast(input: {
       acceptFile() {},
       async stop() {
         stopped = true;
+        if (windowWatch) clearInterval(windowWatch);
         await hints.detach().catch(() => undefined);
       },
     };
@@ -327,6 +375,7 @@ export async function startLiveCast(input: {
       // La siguiente sala reutiliza esta página: no se apilan guardias ni escuchas de la anterior.
       page.off("framenavigated", onNavigated);
       page.off("response", onResponse);
+      if (windowWatch) clearInterval(windowWatch);
       await cdp?.detach().catch(() => undefined);
       cdp = null;
     },

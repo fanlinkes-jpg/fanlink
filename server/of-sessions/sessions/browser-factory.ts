@@ -33,10 +33,19 @@ export interface PersistentLaunchOptions {
   live?: LiveLaunchMode;
   /** `--start-minimized`. La sala vuelve a minimizar tras cargar, por si macOS la restaura. */
   minimized?: boolean;
+  /** Google Chrome estable, para Widevine. No se combina con executablePath. */
+  channel?: "chrome";
+  executablePath?: string;
 }
 
 /** Quita navigator.webdriver. Va en todos los modos de la vista, también la ventana. */
 export const LIVE_BASE_ARGS = ["--disable-blink-features=AutomationControlled"] as const;
+
+/**
+ * Playwright mete `--disable-component-update`, que deja Widevine sin componente.
+ * Se ignora solo en la vista. El resto de la huella no cambia.
+ */
+export const LIVE_IGNORED_DEFAULT_ARGS = ["--enable-automation", "--disable-component-update"] as const;
 
 /** Chromium completo, sin el shell. */
 export const LIVE_HEADLESS_ARGS = ["--headless=new", ...LIVE_BASE_ARGS] as const;
@@ -53,6 +62,8 @@ export function persistentContextLaunchOptions(options: PersistentLaunchOptions)
   locale: string;
   timezoneId: string;
   proxy?: BrowserProxy;
+  channel?: "chrome";
+  executablePath?: string;
 } {
   const live = options.live;
   const isLive = live === "headless" || live === "offscreen" || live === "window";
@@ -60,12 +71,14 @@ export function persistentContextLaunchOptions(options: PersistentLaunchOptions)
   const args = live === "headless" ? LIVE_HEADLESS_ARGS : isLive ? windowArgs : undefined;
   return {
     headless: isLive ? false : options.headless,
-    ...(isLive ? { ignoreDefaultArgs: ["--enable-automation"], args: args ? [...args] : [] } : {}),
+    ...(isLive ? { ignoreDefaultArgs: [...LIVE_IGNORED_DEFAULT_ARGS], args: args ? [...args] : [] } : {}),
     userAgent: BROWSER_FINGERPRINT.userAgent,
     viewport: BROWSER_FINGERPRINT.viewport,
     locale: BROWSER_FINGERPRINT.locale,
     timezoneId: BROWSER_FINGERPRINT.timezoneId,
     ...(options.proxy ? { proxy: options.proxy } : {}),
+    ...(options.executablePath ? { executablePath: options.executablePath } : {}),
+    ...(options.channel && !options.executablePath ? { channel: options.channel } : {}),
   };
 }
 

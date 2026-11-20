@@ -1,4 +1,3 @@
-import { accountOnAllowlist, allowTokens, type SendAccount } from "../send/gate.ts";
 import { liveSectionPrefixes, liveSectionPathAllowed, type LiveSection } from "./sections.ts";
 
 export type LiveRole = "control" | "view";
@@ -31,16 +30,13 @@ export function liveQuality(raw: string | undefined): number {
   return value;
 }
 
-/** Teclear en la pestaña es enviar. Mismo candado que el envío: flag y allowlist. */
-export function liveViewGate(
-  flag: string | undefined,
-  allowlist: string | undefined,
-  account: SendAccount,
-): { allowed: boolean; reason: string } {
+/**
+ * La vista nativa no abre envíos. Solo el flag y una sesión guardada.
+ * La dueña se comprueba aparte. No usa FANLINK_SEND_ALLOW_ACCOUNTS.
+ */
+export function liveViewGate(flag: string | undefined, hasSession: boolean): { allowed: boolean; reason: string } {
   if (flag !== "true") return { allowed: false, reason: "Vista en directo desactivada" };
-  if (allowTokens(allowlist).length === 0 || !accountOnAllowlist(allowlist, account)) {
-    return { allowed: false, reason: "Esta cuenta no tiene la vista en directo." };
-  }
+  if (!hasSession) return { allowed: false, reason: "Esta cuenta no tiene sesión guardada." };
   return { allowed: true, reason: "" };
 }
 

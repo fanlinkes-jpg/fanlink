@@ -41,7 +41,8 @@ import {
 import { assertLoginDisplay } from "./display.ts";
 import { profileHasClearanceName } from "../live/clearance-file.ts";
 import { liveLaunchMode, liveVisibility } from "../live/headless.ts";
-import { hideLiveProcess, minimizeLiveWindow } from "../live/window.ts";
+import { chooseLiveChrome, liveChromeOrigin, rememberLiveChrome, type LiveChromeChoice } from "../live/chrome.ts";
+import { hideLiveProcess, setLiveProcessHide, tuckLiveWindow } from "../live/window.ts";
 import { waitForProfileLock } from "./profile-lock.ts";
 import { openWorkPage } from "./work-page.ts";
 import { closeIfIdle } from "../live/pages.ts";
@@ -1433,20 +1434,21 @@ export class SessionManager {
         throw new Error(messages.profileInUse);
       }
       const proxy = await this.accountProxy(accountId);
-      console.info(`[fanlink:navegador] vista=live lanza perfil=${accountId} modo=${choice.visibility} proxy=${proxy ? "si" : "no"}`);
-      const context = await this.options.browsers.launchPersistentContext(profile, {
-        headless: false,
-        live: mode,
-        minimized: choice.visibility === "minimized",
-        proxy,
-      });
+      const chrome = chooseLiveChrome(process.env);
+      rememberLiveChrome(chrome);
+      setLiveProcessHide(chrome.source === "testing");
+      const missing = chrome.missingPath ? " motivo=ruta-ausente" : "";
+      console.info(`[fanlink:navegador] vista=live lanza perfil=${accountId} modo=${choice.visibility} origen=${chrome.source} proxy=${proxy ? "si" : "no"}${missing}`);
+      const context = await this.launchLiveBrowser(profile, mode, choice.visibility === "minimized", proxy, chrome);
       this.openContexts.add(context);
       this.liveContexts.add(context);
-      console.info(`[fanlink:navegador] vista=live binario=${context.browser()?.version() ?? "desconocida"} ua-forzado=si`);
+      const origen = liveChromeOrigin();
+      console.info(`[fanlink:navegador] vista=live binario=${context.browser()?.version() ?? "desconocida"} origen=${origen} ua-forzado=si oculto=${origen === "testing" ? "cdp+testing" : "cdp"}`);
       if (choice.visibility === "minimized") {
         const hidden = await this.minimizeLive(context);
-        const dock = hidden ? await hideLiveProcess(this.options.displayEnv.platform) : false;
-        console.info(`[fanlink:navegador] vista=live minimizo perfil=${accountId} motivo=${choice.reason} ok=${hidden ? "si" : "no"} dock=${dock ? "oculto" : "no"}`);
+        const dock = origen === "testing" && hidden ? await hideLiveProcess(this.options.displayEnv.platform) : false;
+        const oculto = origen === "testing" ? (dock ? "osascript" : "no") : "cdp";
+        console.info(`[fanlink:navegador] vista=live minimizo perfil=${accountId} motivo=${choice.reason} ok=${hidden ? "si" : "no"} oculto=${oculto}`);
       } else {
         console.info(`[fanlink:navegador] vista=live ventana=si motivo=${choice.reason}`);
       }
@@ -1498,14 +1500,50 @@ export class SessionManager {
     console.info(`[fanlink:navegador] vista=live lista=si`);
   }
 
-  private async minimizeLive(context: BrowserContext): Promise<boolean> {
-    const page = context.pages()[0] ?? await context.newPage();
-    const cdp = await context.newCDPSession(page);
+  private async launchLiveBrowser(
+    profile: string,
+    mode: "headless" | "window",
+    minimized: boolean,
+    proxy: Awaited<ReturnType<SessionManager["accountProxy"]>>,
+    chrome: LiveChromeChoice,
+  ): Promise<BrowserContext> {
+    const options = {
+      headless: false as const,
+      live: mode,
+      minimized,
+      proxy,
+      ...(chrome.executablePath ? { executablePath: chrome.executablePath } : {}),
+      ...(chrome.channel ? { channel: chrome.channel } : {}),
+    };
     try {
-      return await minimizeLiveWindow((method, params) => cdp.send(method as "Browser.getWindowForTarget", params as never));
-    } finally {
-      await cdp.detach().catch(() => undefined);
+      return await this.options.browsers.launchPersistentContext(profile, options);
+    } catch (error) {
+      if (chrome.source === "testing") throw error;
+      console.info(`[fanlink:navegador] vista=live origen=testing motivo=no-arranca`);
+      rememberLiveChrome({ source: "testing", missingPath: false });
+      setLiveProcessHide(true);
+      return this.options.browsers.launchPersistentContext(profile, {
+        headless: false,
+        live: mode,
+        minimized,
+        proxy,
+      });
     }
+  }
+
+  private async minimizeLive(context: BrowserContext): Promise<boolean> {
+    const pages = context.pages().length > 0 ? context.pages() : [await context.newPage()];
+    let ok = false;
+    for (const page of pages) {
+      const cdp = await context.newCDPSession(page);
+      try {
+        const state = await tuckLiveWindow((method, params) => cdp.send(method as "Browser.getWindowForTarget", params as never));
+        if (state !== "fail") ok = true;
+      } finally {
+        await cdp.detach().catch(() => undefined);
+      }
+    }
+    return ok;
   }
 
   private async hasClearanceCookie(accountId: string): Promise<boolean> {

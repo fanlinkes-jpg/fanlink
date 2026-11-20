@@ -31,11 +31,11 @@ import {
 
 const account = { creatorId: "9ikis52", accountId: "acc", handle: "bigpoppa1111", userId: "42", label: "Prueba" };
 
-test("la vista en directo sigue apagada sin el flag o fuera de la allowlist", () => {
-  assert.equal(liveViewGate(undefined, "9ikis52", account).allowed, false);
-  assert.equal(liveViewGate("true", "", account).allowed, false);
-  assert.equal(liveViewGate("true", "otra", account).allowed, false);
-  assert.equal(liveViewGate("true", "@bigpoppa1111", account).allowed, true);
+test("la vista en directo solo pide el flag y una sesión guardada", () => {
+  assert.equal(liveViewGate(undefined, true).allowed, false);
+  assert.equal(liveViewGate("true", false).allowed, false);
+  assert.equal(liveViewGate("true", false).reason, "Esta cuenta no tiene sesión guardada.");
+  assert.equal(liveViewGate("true", true).allowed, true);
 });
 
 test("la pestaña no sale de OnlyFans ni de su CDN", () => {
