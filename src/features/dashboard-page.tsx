@@ -12,7 +12,6 @@ import {
   isCardId,
   moveWidget,
   normalizeDashboardConfig,
-  parseScreen,
   PERIODS,
   screenBlurb,
   screenLabel,
@@ -33,10 +32,21 @@ import {
   SIN_DATOS,
 } from "@/lib/dashboard-config";
 import type { MetricPeriod } from "@/lib/creator-metrics";
+import { AnalyticsPage, AuditPage } from "@/features/control-pages";
 import { formatCents } from "@/lib/format";
 import { listCreatorSessions, listDashboard } from "@/lib/of-sessions";
 import { useOfReads } from "@/lib/use-of-reads";
 import { rememberOpenThread } from "@/lib/open-thread";
+import {
+  canOpenMessagePanel,
+  canOpenReports,
+  dashboardZone,
+  navRoleFromAccess,
+  reportHash,
+  REPORT_VIEWS,
+  type DashboardZone,
+  type ReportView,
+} from "@/lib/nav-config";
 
 export function DashboardPage() {
   const creators = useCrm((s) => s.creators);
@@ -48,13 +58,13 @@ export function DashboardPage() {
   const reads = useOfReads();
   const navigate = useNavigate();
   const [period, setPeriod] = useState<MetricPeriod>("month");
-  const [screen, setScreen] = useState<ScreenId>("resumen");
+  const [zone, setZone] = useState<DashboardZone>({ kind: "metricas", screen: "resumen" });
   const [alerts, setAlerts] = useState<SummaryAlert[] | null>(null);
   const [sessions, setSessions] = useState<Array<{ creatorId: string; label: string }>>([]);
 
   useEffect(() => {
-    setScreen(parseScreen(window.location.hash));
-    const onHash = () => setScreen(parseScreen(window.location.hash));
+    setZone(dashboardZone(window.location.hash));
+    const onHash = () => setZone(dashboardZone(window.location.hash));
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
@@ -84,7 +94,11 @@ export function DashboardPage() {
   const config = normalizeDashboardConfig(dashboardConfig);
   const audience = audienceOf(teamAccess.role);
   const allowed = screensFor(teamAccess);
-  const current = allowed.includes(screen) ? screen : "resumen";
+  const navRole = navRoleFromAccess(teamAccess);
+  const reportsOk = canOpenReports(navRole, teamAccess);
+  const panelOk = canOpenMessagePanel(navRole, teamAccess);
+  const showingReports = zone.kind === "informes";
+  const current = zone.kind === "metricas" && allowed.includes(zone.screen) ? zone.screen : "resumen";
   const visible = visibleCreators(teamAccess, creators);
   const selected = selectionValue(visible.map((creator) => creator.id), creatorId);
   const scoped = scopedCreators(teamAccess, creators, creatorId);
@@ -113,7 +127,12 @@ export function DashboardPage() {
 
   function open(next: ScreenId) {
     window.location.hash = next;
-    setScreen(next);
+    setZone({ kind: "metricas", screen: next });
+  }
+
+  function openReport(next: ReportView) {
+    window.location.hash = reportHash(next);
+    setZone({ kind: "informes", vista: next });
   }
 
   return (
@@ -125,12 +144,22 @@ export function DashboardPage() {
             key={id}
             type="button"
             onClick={() => open(id)}
-            aria-current={current === id ? "page" : undefined}
-            className={`rounded-md px-3 py-2 text-left text-sm ${current === id ? "bg-primary text-primary-fg" : "text-muted hover:bg-raised"}`}
+            aria-current={!showingReports && current === id ? "page" : undefined}
+            className={`rounded-md px-3 py-2 text-left text-sm ${!showingReports && current === id ? "bg-primary text-primary-fg" : "text-muted hover:bg-raised"}`}
           >
             {screenLabel(id)}
           </button>
         ))}
+        {reportsOk ? (
+          <button
+            type="button"
+            onClick={() => openReport(zone.kind === "informes" ? zone.vista : "creadoras")}
+            aria-current={showingReports ? "page" : undefined}
+            className={`rounded-md px-3 py-2 text-left text-sm ${showingReports ? "bg-primary text-primary-fg" : "text-muted hover:bg-raised"}`}
+          >
+            Informes
+          </button>
+        ) : null}
       </nav>
       <div className="min-w-0 flex-1">
         <header className="flex flex-wrap items-center gap-2 border-b border-line bg-surface px-4 py-3">
@@ -159,10 +188,17 @@ export function DashboardPage() {
         </header>
         <div className="space-y-4 p-4 md:p-6">
           {teamAccess.role !== "owner" && visible.length === 0 ? (
-            <p className="text-sm text-muted">No tienes cuentas asignadas. La dueña las asigna en Equipo.</p>
+            <p className="text-sm text-muted">No tienes cuentas asignadas. La dueña las asigna en Administrar.</p>
           ) : null}
           {reads.error ? <p className="text-sm text-[#8a5a12]">{reads.error}</p> : null}
-          {current === "resumen" ? (
+          {showingReports ? (
+            <ReportsPanel
+              vista={zone.vista}
+              allowed={reportsOk}
+              panelOk={panelOk}
+              onView={openReport}
+            />
+          ) : current === "resumen" ? (
             <Resumen audience={audience} config={config} figures={figures} />
           ) : current === "ajustes" ? (
             <ConfigEditor config={config} onChange={setDashboardConfig} />
@@ -173,6 +209,76 @@ export function DashboardPage() {
       </div>
     </div>
   );
+}
+
+function ReportsPanel({
+  vista,
+  allowed,
+  panelOk,
+  onView,
+}: {
+  vista: ReportView;
+  allowed: boolean;
+  panelOk: boolean;
+  onView: (vista: ReportView) => void;
+}) {
+  const tabs = REPORT_VIEWS.filter((item) => item !== "mensajes" || panelOk);
+  if (!allowed) {
+    return <p className="text-sm text-muted">No tienes acceso a los informes.</p>;
+  }
+  return (
+    <div className="space-y-4">
+      <div>
+        <h1 className="font-display text-2xl font-semibold tracking-tight">Informes</h1>
+        <p className="text-sm text-muted">Analítica de creadoras, equipo y fans. Los totales de la agencia los ve la dueña.</p>
+      </div>
+      <div className="flex flex-wrap gap-1 rounded-md border border-line p-1">
+        {tabs.map((item) => (
+          <button
+            key={item}
+            type="button"
+            onClick={() => onView(item)}
+            className={`rounded-md px-3 py-1 text-sm ${vista === item ? "bg-raised text-fg" : "text-muted"}`}
+          >
+            {reportTabLabel(item)}
+          </button>
+        ))}
+      </div>
+      <ReportBody vista={vista} panelOk={panelOk} />
+    </div>
+  );
+}
+
+function ReportBody({ vista, panelOk }: { vista: ReportView; panelOk: boolean }) {
+  switch (vista) {
+    case "creadoras":
+    case "equipo":
+    case "fans":
+      return <AnalyticsPage key={vista} initialView={vista} embedded />;
+    case "mensajes":
+      return panelOk ? <AuditPage /> : <p className="text-sm text-muted">El panel de mensajes es de la dueña y del admin.</p>;
+    default: {
+      const exhaustive: never = vista;
+      return exhaustive;
+    }
+  }
+}
+
+function reportTabLabel(vista: ReportView): string {
+  switch (vista) {
+    case "creadoras":
+      return "Creadoras";
+    case "equipo":
+      return "Equipo";
+    case "fans":
+      return "Fans";
+    case "mensajes":
+      return "Panel de mensajes";
+    default: {
+      const exhaustive: never = vista;
+      return exhaustive;
+    }
+  }
 }
 
 function Resumen({
@@ -317,13 +423,13 @@ function Upcoming({
 function ExistingLink({ screen }: { screen: ScreenId }) {
   switch (screen) {
     case "creadoras":
-      return <Link to="/creadoras" className="text-sm font-medium text-primary">Abrir creadoras</Link>;
+      return <Link to="/administrar" search={{ tab: "creadoras" }} className="text-sm font-medium text-primary">Abrir creadoras</Link>;
     case "fans":
-      return <Link to="/analitica" className="text-sm font-medium text-primary">Abrir analítica</Link>;
+      return <a href="/#informes-fans" className="text-sm font-medium text-primary">Ver informes de fans</a>;
     case "chatters":
-      return <Link to="/equipo" className="text-sm font-medium text-primary">Abrir equipo</Link>;
+      return <Link to="/administrar" search={{ tab: "chatters" }} className="text-sm font-medium text-primary">Abrir chatters</Link>;
     case "campanas":
-      return <Link to="/campanas" className="text-sm font-medium text-primary">Abrir campañas</Link>;
+      return <Link to="/funciones" search={{ tab: "masivos" }} className="text-sm font-medium text-primary">Abrir campañas</Link>;
     case "resumen":
     case "ajustes":
       return null;

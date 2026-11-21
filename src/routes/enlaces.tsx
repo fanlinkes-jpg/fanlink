@@ -1,11 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { AppShell } from "@/components/app-shell";
-import { LinksPage } from "@/features/growth-pages";
+import { legacyRedirectThrow } from "@/lib/route-redirect";
 
 export const Route = createFileRoute("/enlaces")({
-  component: () => (
-    <AppShell>
-      <LinksPage />
-    </AppShell>
-  ),
+  beforeLoad: () => {
+    legacyRedirectThrow("/enlaces");
+  },
 });

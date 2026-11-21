@@ -1361,7 +1361,7 @@ export function RealChatsPage() {
               {showScripts ? (
                 <div role="region" aria-label="Panel Guiones" className="absolute inset-x-2 bottom-full z-20 mb-1 max-h-52 overflow-y-auto rounded-xl border border-[#e6e8ee] bg-white p-2 text-sm shadow-lg">
                   <input aria-label="Buscar guiones" value={libraryQuery} placeholder="Buscar guiones" onChange={(event) => setLibraryQuery(event.target.value)} className="mb-2 h-8 w-full rounded border border-[#e6e8ee] px-2 text-sm" />
-                  <a href="/guiones" className="mb-2 block text-xs text-[#2456c7]">Biblioteca de guiones</a>
+                  <a href="/funciones?tab=guiones" className="mb-2 block text-xs text-[#2456c7]">Biblioteca de guiones</a>
                   {scriptHits.length === 0 ? <p className="text-xs text-[#6d7585]">Sin datos</p> : scriptHits.map((hit) => (
                     <button key={hit.id} type="button" className="block w-full rounded px-2 py-1 text-left hover:bg-[#f4f7ff]" onClick={() => {
                       replaceDraft(hit.text);

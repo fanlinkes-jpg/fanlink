@@ -139,7 +139,8 @@ function ConnectPage() {
         )}
 
         <Link
-          to="/creadoras"
+          to="/administrar"
+          search={{ tab: "creadoras" }}
           className="mt-4 inline-block text-sm text-[#3b6cff]"
         >
           Volver a creadoras

@@ -1,27 +1,37 @@
 import { useState } from "react";
+import { useNavigate } from "@tanstack/react-router";
 import { CreatorsPage, TeamPage } from "@/features/control-pages";
+import { adminTab, type AdminTab } from "@/lib/nav-config";
 
-export type AdminTab = "creadores" | "equipos";
+export type { AdminTab };
+
+const TABS = [
+  ["creadoras", "Creadoras"],
+  ["chatters", "Chatters"],
+] as const;
 
 export function AdminPage({ initialTab }: { initialTab?: AdminTab }) {
-  const [tab, setTab] = useState<AdminTab>(initialTab ?? "creadores");
+  const navigate = useNavigate();
+  const [tab, setTab] = useState<AdminTab>(initialTab ?? "creadoras");
+
+  function pick(next: AdminTab) {
+    setTab(next);
+    void navigate({ to: "/administrar", search: { tab: next }, replace: true });
+  }
 
   return (
     <div>
       <div className="flex flex-wrap items-end justify-between gap-3 px-4 pt-4 md:px-6 md:pt-6">
         <div>
           <h1 className="font-display text-2xl font-semibold">Administrar</h1>
-          <p className="text-sm text-muted">Creadores y equipos en una sola pantalla.</p>
+          <p className="text-sm text-muted">Creadoras y chatters del equipo.</p>
         </div>
         <div className="flex gap-1 rounded-md border border-line p-1">
-          {([
-            ["creadores", "Creadores"],
-            ["equipos", "Equipos"],
-          ] as const).map(([id, label]) => (
+          {TABS.map(([id, label]) => (
             <button
               key={id}
               type="button"
-              onClick={() => setTab(id)}
+              onClick={() => pick(id)}
               className={`rounded-md px-3 py-1 text-sm ${tab === id ? "bg-raised text-fg" : "text-muted"}`}
             >
               {label}
@@ -29,7 +39,25 @@ export function AdminPage({ initialTab }: { initialTab?: AdminTab }) {
           ))}
         </div>
       </div>
-      {tab === "creadores" ? <CreatorsPage /> : <TeamPage />}
+      <AdminBody tab={tab} />
     </div>
   );
+}
+
+function AdminBody({ tab }: { tab: AdminTab }) {
+  switch (tab) {
+    case "creadoras":
+      return <CreatorsPage />;
+    case "chatters":
+      return <TeamPage />;
+    default: {
+      const exhaustive: never = tab;
+      return exhaustive;
+    }
+  }
+}
+
+export function readAdminTab(value: unknown): AdminTab | undefined {
+  if (value === "creadoras" || value === "creadores" || value === "chatters" || value === "equipos") return adminTab(value);
+  return undefined;
 }

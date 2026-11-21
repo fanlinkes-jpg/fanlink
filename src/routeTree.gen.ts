@@ -17,9 +17,11 @@ import { Route as AuditoriaRouteImport } from './routes/auditoria'
 import { Route as AutomatizacionesRouteImport } from './routes/automatizaciones'
 import { Route as CampanasRouteImport } from './routes/campanas'
 import { Route as ConectarRouteImport } from './routes/conectar'
+import { Route as ConfiguracionRouteImport } from './routes/configuracion'
 import { Route as CreadorasRouteImport } from './routes/creadoras'
 import { Route as EnlacesRouteImport } from './routes/enlaces'
 import { Route as EquipoRouteImport } from './routes/equipo'
+import { Route as FuncionesRouteImport } from './routes/funciones'
 import { Route as GuionesRouteImport } from './routes/guiones'
 import { Route as ListasRouteImport } from './routes/listas'
 import { Route as LoginRouteImport } from './routes/login'
@@ -75,6 +77,11 @@ const ConectarRoute = ConectarRouteImport.update({
   path: '/conectar',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ConfiguracionRoute = ConfiguracionRouteImport.update({
+  id: '/configuracion',
+  path: '/configuracion',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const CreadorasRoute = CreadorasRouteImport.update({
   id: '/creadoras',
   path: '/creadoras',
@@ -88,6 +95,11 @@ const EnlacesRoute = EnlacesRouteImport.update({
 const EquipoRoute = EquipoRouteImport.update({
   id: '/equipo',
   path: '/equipo',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const FuncionesRoute = FuncionesRouteImport.update({
+  id: '/funciones',
+  path: '/funciones',
   getParentRoute: () => rootRouteImport,
 } as any)
 const GuionesRoute = GuionesRouteImport.update({
@@ -170,9 +182,11 @@ export interface FileRoutesByFullPath {
   '/automatizaciones': typeof AutomatizacionesRoute
   '/campanas': typeof CampanasRoute
   '/conectar': typeof ConectarRoute
+  '/configuracion': typeof ConfiguracionRoute
   '/creadoras': typeof CreadorasRoute
   '/enlaces': typeof EnlacesRoute
   '/equipo': typeof EquipoRoute
+  '/funciones': typeof FuncionesRoute
   '/guiones': typeof GuionesRoute
   '/listas': typeof ListasRoute
   '/login': typeof LoginRoute
@@ -197,9 +211,11 @@ export interface FileRoutesByTo {
   '/automatizaciones': typeof AutomatizacionesRoute
   '/campanas': typeof CampanasRoute
   '/conectar': typeof ConectarRoute
+  '/configuracion': typeof ConfiguracionRoute
   '/creadoras': typeof CreadorasRoute
   '/enlaces': typeof EnlacesRoute
   '/equipo': typeof EquipoRoute
+  '/funciones': typeof FuncionesRoute
   '/guiones': typeof GuionesRoute
   '/listas': typeof ListasRoute
   '/login': typeof LoginRoute
@@ -225,9 +241,11 @@ export interface FileRoutesById {
   '/automatizaciones': typeof AutomatizacionesRoute
   '/campanas': typeof CampanasRoute
   '/conectar': typeof ConectarRoute
+  '/configuracion': typeof ConfiguracionRoute
   '/creadoras': typeof CreadorasRoute
   '/enlaces': typeof EnlacesRoute
   '/equipo': typeof EquipoRoute
+  '/funciones': typeof FuncionesRoute
   '/guiones': typeof GuionesRoute
   '/listas': typeof ListasRoute
   '/login': typeof LoginRoute
@@ -254,9 +272,11 @@ export interface FileRouteTypes {
     | '/automatizaciones'
     | '/campanas'
     | '/conectar'
+    | '/configuracion'
     | '/creadoras'
     | '/enlaces'
     | '/equipo'
+    | '/funciones'
     | '/guiones'
     | '/listas'
     | '/login'
@@ -281,9 +301,11 @@ export interface FileRouteTypes {
     | '/automatizaciones'
     | '/campanas'
     | '/conectar'
+    | '/configuracion'
     | '/creadoras'
     | '/enlaces'
     | '/equipo'
+    | '/funciones'
     | '/guiones'
     | '/listas'
     | '/login'
@@ -308,9 +330,11 @@ export interface FileRouteTypes {
     | '/automatizaciones'
     | '/campanas'
     | '/conectar'
+    | '/configuracion'
     | '/creadoras'
     | '/enlaces'
     | '/equipo'
+    | '/funciones'
     | '/guiones'
     | '/listas'
     | '/login'
@@ -336,9 +360,11 @@ export interface RootRouteChildren {
   AutomatizacionesRoute: typeof AutomatizacionesRoute
   CampanasRoute: typeof CampanasRoute
   ConectarRoute: typeof ConectarRoute
+  ConfiguracionRoute: typeof ConfiguracionRoute
   CreadorasRoute: typeof CreadorasRoute
   EnlacesRoute: typeof EnlacesRoute
   EquipoRoute: typeof EquipoRoute
+  FuncionesRoute: typeof FuncionesRoute
   GuionesRoute: typeof GuionesRoute
   ListasRoute: typeof ListasRoute
   LoginRoute: typeof LoginRoute
@@ -413,6 +439,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ConectarRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/configuracion': {
+      id: '/configuracion'
+      path: '/configuracion'
+      fullPath: '/configuracion'
+      preLoaderRoute: typeof ConfiguracionRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/creadoras': {
       id: '/creadoras'
       path: '/creadoras'
@@ -432,6 +465,13 @@ declare module '@tanstack/react-router' {
       path: '/equipo'
       fullPath: '/equipo'
       preLoaderRoute: typeof EquipoRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/funciones': {
+      id: '/funciones'
+      path: '/funciones'
+      fullPath: '/funciones'
+      preLoaderRoute: typeof FuncionesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/guiones': {
@@ -544,9 +584,11 @@ const rootRouteChildren: RootRouteChildren = {
   AutomatizacionesRoute: AutomatizacionesRoute,
   CampanasRoute: CampanasRoute,
   ConectarRoute: ConectarRoute,
+  ConfiguracionRoute: ConfiguracionRoute,
   CreadorasRoute: CreadorasRoute,
   EnlacesRoute: EnlacesRoute,
   EquipoRoute: EquipoRoute,
+  FuncionesRoute: FuncionesRoute,
   GuionesRoute: GuionesRoute,
   ListasRoute: ListasRoute,
   LoginRoute: LoginRoute,
