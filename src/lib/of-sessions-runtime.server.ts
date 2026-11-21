@@ -44,6 +44,7 @@ import { readChatVaultView as readVaultPage, type VaultPageResult, type VaultRea
 import { fetchSignedOnlineFans } from "../../server/of-sessions/sync/online-fans.ts";
 import { sessionForApi } from "../../server/of-sessions/sync/of-chat-api.ts";
 import { withAccountApi } from "../../server/of-sessions/sync/api-list-pace.ts";
+import { shouldKickCreatorRead } from "./first-sync.ts";
 import { bindSignedViews, listOnlineFansView, markChatOpenedView, readVisibleFanSpendView } from "../../server/of-sessions/sync/signed-views.ts";
 
 export { listOnlineFansView, markChatOpenedView, readVisibleFanSpendView };
@@ -132,35 +133,53 @@ async function kickFirstSync(sessions: SessionManager, accountId: string): Promi
   if (process.env.FANLINK_SYNC_ENABLED === "false") return;
   const account = (await sessions.listAccounts()).find((item) => item.id === accountId);
   const creatorId = account?.creatorId ?? "-";
-  console.info(`[fanlink:sync] creator=${creatorId} estado=primera-lectura`);
-  if (!account?.creatorId) return;
-  try {
-    const read = await sessions.readCreatorChats(accountId);
-    if (read.loginRequired) await sessions.markLoginRequired(accountId);
-    if (!read.alreadyRunning) {
-      const sql = await getSql();
-      const events = await saveChatRead(sql, account.creatorId, read);
-      await deliverFanAlerts(sql, events);
+  if (!account?.creatorId) {
+    console.info(`[fanlink:sync] creator=${creatorId} estado=sin-cuenta`);
+    return;
+  }
+  const creator = account.creatorId;
+  const now = Date.now();
+  const paused = accountPause(accountId, now) != null;
+  const sql = await getSql();
+  const prior = await listCreatorReads(sql, [creator]);
+  const intervalMin = await readSyncIntervalMin(sql, intervalMinFromEnv(process.env.FANLINK_SYNC_INTERVAL_MIN));
+  if (!shouldKickCreatorRead({
+    paused,
+    lastAttemptAt: prior[0]?.lastAttemptAt ?? null,
+    now,
+    intervalMs: intervalMin * 60_000,
+  })) {
+    console.info(`[fanlink:sync] creator=${creator} estado=${paused ? "pausa" : "reciente"}`);
+    return;
+  }
+  console.info(`[fanlink:sync] creator=${creator} estado=primera-lectura`);
+  await withAccountApi(accountId, async () => {
+    try {
+      const read = await sessions.readCreatorChats(accountId);
+      if (read.loginRequired) await sessions.markLoginRequired(accountId);
+      if (!read.alreadyRunning) {
+        const events = await saveChatRead(await getSql(), creator, read);
+        await deliverFanAlerts(await getSql(), events);
+      }
+      const blocked = blockKind(0, read.reason ?? "");
+      if (blocked) noteAccountBlock(accountId, blocked);
+      console.info(`[fanlink:sync] creator=${creator} estado=${read.reason ? "error" : "ok"}`);
+    } catch (error) {
+      const text = error instanceof Error ? error.message.replace(/https?:\/\/\S+/gi, "").slice(0, 80) : "error";
+      console.info(`[fanlink:sync] creator=${creator} estado=error motivo=${text}`);
     }
-    const blocked = blockKind(0, read.reason ?? "");
-    if (blocked) noteAccountBlock(accountId, blocked);
-    console.info(`[fanlink:sync] creator=${account.creatorId} estado=${read.reason ? "error" : "ok"}`);
-  } catch (error) {
-    const text = error instanceof Error ? error.message.replace(/https?:\/\/\S+/gi, "").slice(0, 80) : "error";
-    console.info(`[fanlink:sync] creator=${account.creatorId} estado=error motivo=${text}`);
-  }
-  try {
-    const prior = await listCreatorReads(await getSql(), [account.creatorId]);
-    const read = await sessions.readCreatorData(accountId, true, txCursorOf(prior[0]));
-    logCreatorRead(account.creatorId, read);
-    if (read.alreadyRunning) return;
-    if (read.loginRequired) await sessions.markLoginRequired(accountId);
-    await saveCreatorRead(await getSql(), account.creatorId, read);
-    await syncAssignments(await getSql(), account.creatorId);
-  } catch (error) {
-    const text = error instanceof Error ? error.message.replace(/https?:\/\/\S+/gi, "").slice(0, 80) : "error";
-    console.info(`[fanlink:sync] creator=${account.creatorId} estado=error motivo=${text}`);
-  }
+    try {
+      const read = await sessions.readCreatorData(accountId, true, txCursorOf(prior[0]));
+      logCreatorRead(creator, read);
+      if (read.alreadyRunning) return;
+      if (read.loginRequired) await sessions.markLoginRequired(accountId);
+      await saveCreatorRead(await getSql(), creator, read);
+      await syncAssignments(await getSql(), creator);
+    } catch (error) {
+      const text = error instanceof Error ? error.message.replace(/https?:\/\/\S+/gi, "").slice(0, 80) : "error";
+      console.info(`[fanlink:sync] creator=${creator} estado=error motivo=${text}`);
+    }
+  });
 }
 
 function bootSyncLoop(sessions: SessionManager): void {
