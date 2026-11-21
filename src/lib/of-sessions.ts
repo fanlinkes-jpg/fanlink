@@ -210,6 +210,9 @@ export type CreatorChatList = {
     creatorId: string;
     sessionRejected: boolean;
     connection: "not_checked" | "live" | "rejected" | "inconclusive" | "login_required";
+    hasStorageState: boolean;
+    loginInProgress: boolean;
+    status: "active" | "expired" | "pending_login";
   }>;
   sessionNotices: string[];
 };

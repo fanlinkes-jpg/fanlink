@@ -110,12 +110,17 @@ async function createManager(): Promise<SessionManager> {
   const sql = await getSql();
   const file = new AccountStore(path.join(config.dataDir, "accounts.json"));
   const db = new DbAccountStore(sql);
+  let sessions: SessionManager | null = null;
   const runtime = await createSessionRuntime({
     config,
     site: onlyFansSite,
     store: createMirroringStore(file, db),
     browserFactory: createPlaywrightFactory(),
+    onSessionStored: (accountId) => {
+      if (sessions) void kickFirstSync(sessions, accountId);
+    },
   });
+  sessions = runtime.sessions;
   await runtime.sessions.recoverInterruptedLogins();
   bootSyncLoop(runtime.sessions);
   bootChatLoop(runtime.sessions);
@@ -123,6 +128,41 @@ async function createManager(): Promise<SessionManager> {
   bootHistoryLoop(runtime.sessions);
   bootNotificationLoop(runtime.sessions);
   return runtime.sessions;
+}
+
+async function kickFirstSync(sessions: SessionManager, accountId: string): Promise<void> {
+  if (process.env.FANLINK_SYNC_ENABLED === "false") return;
+  const account = (await sessions.listAccounts()).find((item) => item.id === accountId);
+  const creatorId = account?.creatorId ?? "-";
+  console.info(`[fanlink:sync] creator=${creatorId} estado=primera-lectura`);
+  if (!account?.creatorId) return;
+  try {
+    const read = await sessions.readCreatorChats(accountId);
+    if (read.loginRequired) await sessions.markLoginRequired(accountId);
+    if (!read.alreadyRunning) {
+      const sql = await getSql();
+      const events = await saveChatRead(sql, account.creatorId, read);
+      await deliverFanAlerts(sql, events);
+    }
+    const blocked = blockKind(0, read.reason ?? "");
+    if (blocked) noteAccountBlock(accountId, blocked);
+    console.info(`[fanlink:sync] creator=${account.creatorId} estado=${read.reason ? "error" : "ok"}`);
+  } catch (error) {
+    const text = error instanceof Error ? error.message.replace(/https?:\/\/\S+/gi, "").slice(0, 80) : "error";
+    console.info(`[fanlink:sync] creator=${account.creatorId} estado=error motivo=${text}`);
+  }
+  try {
+    const prior = await listCreatorReads(await getSql(), [account.creatorId]);
+    const read = await sessions.readCreatorData(accountId, true, txCursorOf(prior[0]));
+    logCreatorRead(account.creatorId, read);
+    if (read.alreadyRunning) return;
+    if (read.loginRequired) await sessions.markLoginRequired(accountId);
+    await saveCreatorRead(await getSql(), account.creatorId, read);
+    await syncAssignments(await getSql(), account.creatorId);
+  } catch (error) {
+    const text = error instanceof Error ? error.message.replace(/https?:\/\/\S+/gi, "").slice(0, 80) : "error";
+    console.info(`[fanlink:sync] creator=${account.creatorId} estado=error motivo=${text}`);
+  }
 }
 
 function bootSyncLoop(sessions: SessionManager): void {
@@ -691,6 +731,9 @@ export async function listCreatorChatViews(userId: string): Promise<CreatorChatL
       creatorId: account.creatorId,
       sessionRejected: account.sessionRejected,
       connection: account.connection,
+      hasStorageState: account.hasStorageState,
+      loginInProgress: account.loginInProgress,
+      status: account.status,
     }] : []),
     sessionNotices: accountSessionNotices(
       accounts.flatMap((account) => account.creatorId ? [account] : []),

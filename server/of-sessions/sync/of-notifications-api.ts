@@ -200,7 +200,7 @@ export async function fetchSignedNotifications(state: StorageStateFile, deps: Si
       avatarUrl,
     };
   }
-  const withTagCounts = nextCounts ? withTags(nextCounts, mePage.ok ? tags : nextCounts.tags) : null;
+  const withTagCounts = nextCounts ? withTags(nextCounts, tags != null ? tags : nextCounts.tags) : null;
   const empty = items.length === 0 && withTagCounts?.all === 0;
   return {
     items,
