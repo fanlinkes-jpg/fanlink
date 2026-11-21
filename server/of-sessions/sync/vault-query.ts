@@ -35,7 +35,11 @@ export type VaultCard = {
   offerLabel: string | null;
   buyLabel: string | null;
   dateLabel: string | null;
-  posted: boolean;
+  posted: boolean | null;
+  sent: boolean | null;
+  priceCents: number | null;
+  listId: string | null;
+  listIds: string[];
   packageLabel: "Tráiler gratis + vídeo de pago" | "Sin datos";
   packageWithId: string | null;
   sentToFan: boolean | null;
@@ -210,7 +214,11 @@ export function presentCard(
     offerLabel: vaultOfferLabel(item.priceCents),
     buyLabel: vaultBuyLabel(item.sentCount, salesCount),
     dateLabel: vaultDateLabel(item.uploadedAt),
-    posted: item.tags.includes("Feed"),
+    posted: item.tags.includes("Feed") ? true : item.tags.includes("Feed:no") ? false : null,
+    sent: item.tags.includes("Sent") ? true : item.tags.includes("Sent:no") ? false : null,
+    priceCents: item.priceCents,
+    listId: item.listId,
+    listIds: item.listIds ?? [],
     packageLabel: pack?.label ?? "Sin datos",
     packageWithId: pack?.withId ?? null,
     sentToFan: sentIds.has(item.id) ? true : uses.length === 0 && sentIds.size === 0 ? null : false,
@@ -298,24 +306,27 @@ async function selectVaultItems(
     if (query.bought === "si") where.push(fanExists(true));
     if (query.bought === "no") where.push(`not ${fanExists(true)}`);
   }
+  const withListIds = await hasListIdColumn(sql);
   const text = `select item_key, title, kind, seconds, preview, folder, tags, list_key, list_name, description, uploaded_at, price_cents, sales_count, sent_count
+            ${withListIds ? ", list_ids" : ""}
     from of_vault_item where ${where.join(" and ")}`;
   const rows = await sql.query<{
     item_key: string; title: string | null; kind: string | null; seconds: number | null; preview: string | null;
     folder: string | null; tags: unknown; list_key: string | null; list_name: string | null;
     description: string | null; uploaded_at: Date | string | null; price_cents: number | null;
-    sales_count: number | null; sent_count: number | null;
+    sales_count: number | null; sent_count: number | null; list_ids?: unknown;
   }>(text, params);
   return rows.map((row) => ({
     id: row.item_key,
     title: row.title ?? "Sin datos",
     kind: vaultKindOf(row.kind),
     seconds: row.seconds,
-    preview: null,
-    folder: row.folder,
+    preview: row.preview,
+    folder: row.folder ?? row.list_name,
     tags: tagsOf(row.tags),
     listId: row.list_key,
     listName: row.list_name,
+    listIds: idList(row.list_ids),
     description: row.description,
     uploadedAt: row.uploaded_at == null ? null : row.uploaded_at instanceof Date ? row.uploaded_at.toISOString() : String(row.uploaded_at),
     priceCents: row.price_cents,
@@ -369,6 +380,18 @@ async function hasListIdColumn(sql: ReadSql): Promise<boolean> {
     [],
   );
   return Number(rows[0]?.n ?? 0) > 0;
+}
+
+function idList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+  if (typeof value === "string") {
+    try {
+      return idList(JSON.parse(value) as unknown);
+    } catch {
+      return [];
+    }
+  }
+  return [];
 }
 
 function tagsOf(value: unknown): string[] {

@@ -149,6 +149,7 @@ export async function readSessionMediaResult(
     const headers: Record<string, string> = {
       accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
       referer: "https://onlyfans.com/",
+      origin: "https://onlyfans.com",
       "user-agent": BROWSER_FINGERPRINT.userAgent,
     };
     if (cookie) headers.cookie = cookie;

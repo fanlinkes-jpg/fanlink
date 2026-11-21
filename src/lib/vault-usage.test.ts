@@ -1,0 +1,42 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { vaultUsageText } from "./vault-usage.ts";
+
+test("el historial dice Sin datos en lo que OnlyFans no manda y no usa las compras", () => {
+  assert.equal(
+    vaultUsageText({
+      posted: true,
+      sent: true,
+      sentCount: 3,
+      priceCents: 500,
+      dateLabel: "2 ene 26",
+      seconds: 12,
+      kind: "video",
+    }),
+    "Feed Posted · Envíos Sent 3 · Precio $5.00 · Fecha 2 ene 26 · Duración 0:12",
+  );
+  assert.equal(
+    vaultUsageText({
+      posted: null,
+      sent: null,
+      sentCount: null,
+      priceCents: null,
+      dateLabel: null,
+      seconds: null,
+      kind: "video",
+    }),
+    "Feed Sin datos · Envíos Sin datos · Precio Sin datos · Fecha Sin datos · Duración Sin datos",
+  );
+  assert.equal(
+    vaultUsageText({
+      posted: false,
+      sent: false,
+      sentCount: null,
+      priceCents: 0,
+      dateLabel: "2 ene 26",
+      seconds: null,
+      kind: "foto",
+    }),
+    "Feed No publicado · Envíos No enviado · Precio Free · Fecha 2 ene 26",
+  );
+});

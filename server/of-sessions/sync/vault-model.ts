@@ -19,6 +19,8 @@ export type VaultFile = {
   sentCount: number | null;
   /** URL del archivo, no de la miniatura. No sale en el JSON del chatter. */
   fullUrl?: string | null;
+  /** `files.thumb`, si viene aparte del preview. No sale en el JSON del chatter. */
+  thumbUrl?: string | null;
   /** Id del vídeo de pago, si el tráiler lo dice. Sin esto no se empareja. */
   paidWithId?: string | null;
   /** Todas las listas del medio. `listId` es la principal. */
@@ -85,6 +87,8 @@ export function suggestVaultPrice(input: {
 export function parseVaultBundle(payload: unknown): { items: VaultFile[]; lists: VaultList[] } {
   const lists = vaultLists(payload);
   collectFolders(payload, lists);
+  const all = vaultAllList(payload);
+  if (all && !lists.some((list) => list.id === all.id)) lists.push(all);
   const raw = vaultList(payload);
   const items = raw.filter((entry) => !isFolderRow(entry)).flatMap((item) => parseVaultItem(item, lists));
   return { items, lists };
@@ -105,11 +109,23 @@ export function vaultPayloadKind(payload: unknown): "lists" | "media" | "other" 
   return "media";
 }
 
-/** Nombres de claves, nunca valores. Sirve para ver qué manda OF cuando el conteo sale vacío. */
+/** Nombres de claves, nunca valores. Incluye un nivel (`counters.messagesCount`). */
 export function vaultKeyNames(value: unknown): string {
   if (!value || typeof value !== "object" || Array.isArray(value)) return "ninguna";
-  const keys = Object.keys(value).filter((key) => /^[a-z][a-z0-9_]{0,40}$/i.test(key)).slice(0, 16);
-  return keys.length ? keys.join(",") : "ninguna";
+  const row = value as Record<string, unknown>;
+  const own = Object.keys(row).filter(keyName);
+  const keys = [...own];
+  for (const key of own) {
+    const child = row[key];
+    if (!child || typeof child !== "object" || Array.isArray(child)) continue;
+    for (const inner of Object.keys(child).filter(keyName).slice(0, 8)) keys.push(`${key}.${inner}`);
+  }
+  const shown = [...new Set(keys)].slice(0, 24);
+  return shown.length ? shown.join(",") : "ninguna";
+}
+
+function keyName(key: string): boolean {
+  return /^[a-z][a-z0-9_]{0,40}$/i.test(key);
 }
 
 /** Conteos de "Todos los medios". OF los manda en `all`, aparte del array `list`. */
@@ -299,19 +315,19 @@ function parseVaultItem(item: unknown, lists: readonly VaultList[]): VaultFile[]
         : type.includes("photo") || type.includes("image") || type.includes("foto")
           ? "foto"
           : null;
-  const secondsValue = row.duration ?? row.durationSeconds;
-  const seconds = typeof secondsValue === "number" && Number.isFinite(secondsValue) && secondsValue >= 0
-    ? Math.round(secondsValue)
-    : null;
+  const seconds = countOrNull(row.duration ?? row.durationSeconds);
   const membership = listMembership(row, lists);
+  const posted = boolFlag(row, ["hasPosts", "isPosted", "posted"]);
+  const sent = boolFlag(row, ["hasMessages", "isSent"]);
   return [{
     id,
     title,
     kind,
     seconds,
     preview: previewOf(row),
+    thumbUrl: thumbOf(row),
     folder: membership.listName,
-    tags: tagsOf(row),
+    tags: tagsOf(row, posted, sent),
     listId: membership.listId,
     listName: membership.listName,
     listIds: membership.listIds,
@@ -319,16 +335,36 @@ function parseVaultItem(item: unknown, lists: readonly VaultList[]): VaultFile[]
     uploadedAt: textOf(row.uploadedAt ?? row.createdAt),
     priceCents: priceToCents(row),
     salesCount: countOrNull(row.salesCount ?? row.purchases),
-    sentCount: countOrNull(row.sentCount ?? row.sent),
+    sentCount: sentCountOf(row),
     fullUrl: fullOf(row),
     paidWithId: textOf(row.paidMediaId ?? row.pairedMediaId ?? row.fullMediaId),
   }];
 }
 
-function tagsOf(row: Record<string, unknown>): string[] {
+function boolFlag(row: Record<string, unknown>, keys: readonly string[]): boolean | null {
+  for (const key of keys) {
+    if (!(key in row) || typeof row[key] !== "boolean") continue;
+    return row[key] === true;
+  }
+  return null;
+}
+
+/** Número de envíos. `buyersCount` y `tipsSumm` son compras, no envíos. */
+function sentCountOf(row: Record<string, unknown>): number | null {
+  const counters = nested(row.counters);
+  for (const key of ["messagesCount", "sentCount", "sendsCount", "messageCount"]) {
+    if (counters && key in counters) return countOrNull(counters[key]);
+    if (key in row) return countOrNull(row[key]);
+  }
+  return null;
+}
+
+function tagsOf(row: Record<string, unknown>, posted: boolean | null, sent: boolean | null): string[] {
   const tags: string[] = [];
-  if (row.hasPosts === true || row.isPosted === true || row.posted === true) tags.push("Feed");
-  if (row.isSent === true || row.sent === true) tags.push("Sent");
+  if (posted === true) tags.push("Feed");
+  if (posted === false) tags.push("Feed:no");
+  if (sent === true) tags.push("Sent");
+  if (sent === false) tags.push("Sent:no");
   if (row.trailer === true || row.isPreview === true || (textOf(row.type) ?? "").toLowerCase().includes("trailer")) tags.push("Tráiler");
   const states = Array.isArray(row.listStates) ? row.listStates : [];
   for (const entry of states) {
@@ -336,7 +372,7 @@ function tagsOf(row: Record<string, unknown>): string[] {
     const list = entry as Record<string, unknown>;
     const name = textOf(list.name);
     const type = (textOf(list.type) ?? "").toLowerCase();
-    if (type === "posts" || name === "Posts") tags.push("Feed");
+    if (posted !== false && (type === "posts" || name === "Posts")) tags.push("Feed");
     else if (name) tags.push(name);
   }
   return [...new Set(tags)];
@@ -346,13 +382,17 @@ function previewOf(row: Record<string, unknown>): string | null {
   const files = nested(row.files);
   return firstFileUrl(files?.squarePreview)
     ?? firstFileUrl(files?.preview)
-    ?? firstFileUrl(files?.thumb)
     ?? firstFileUrl(row.squarePreview)
     ?? firstFileUrl(row.preview)
-    ?? firstFileUrl(row.thumb)
+    ?? thumbOf(row)
     ?? firstFileUrl(files?.full)
     ?? firstFileUrl(row.src)
     ?? firstFileUrl(row.previewUrl);
+}
+
+function thumbOf(row: Record<string, unknown>): string | null {
+  const files = nested(row.files);
+  return firstFileUrl(files?.thumb) ?? firstFileUrl(row.thumb);
 }
 
 const SYSTEM_LISTS = new Set(["posts", "stories", "messages", "streams", "media"]);
@@ -416,13 +456,45 @@ function vaultLists(payload: unknown): VaultList[] {
 }
 
 function listCounts(list: Record<string, unknown>): Pick<VaultList, "photos" | "videos" | "gifs" | "audios" | "hasMedia"> {
+  const bags = countBags(list);
   return {
-    photos: countOrNull(list.photosCount ?? list.photoCount),
-    videos: countOrNull(list.videosCount ?? list.videoCount),
-    gifs: countOrNull(list.gifsCount ?? list.gifCount),
-    audios: countOrNull(list.audiosCount ?? list.audioCount),
-    hasMedia: list.hasMedia === true ? true : list.hasMedia === false ? false : null,
+    photos: pickCount(bags, ["photosCount", "photoCount", "photos_count", "photo_count"]),
+    videos: pickCount(bags, ["videosCount", "videoCount", "videos_count", "video_count"]),
+    gifs: pickCount(bags, ["gifsCount", "gifCount", "gifs_count", "gif_count"]),
+    audios: pickCount(bags, ["audiosCount", "audioCount", "audios_count", "audio_count"]),
+    hasMedia: pickBool(bags, ["hasMedia", "has_media"]),
   };
+}
+
+function countBags(list: Record<string, unknown>): Record<string, unknown>[] {
+  const bags = [list];
+  for (const key of ["counts", "counters"]) {
+    const child = nested(list[key]);
+    if (child) bags.push(child);
+  }
+  const medias = list.medias;
+  if (medias && typeof medias === "object" && !Array.isArray(medias)) bags.push(medias as Record<string, unknown>);
+  return bags;
+}
+
+function pickCount(bags: readonly Record<string, unknown>[], keys: readonly string[]): number | null {
+  for (const bag of bags) {
+    for (const key of keys) {
+      if (!(key in bag)) continue;
+      return countOrNull(bag[key]);
+    }
+  }
+  return null;
+}
+
+function pickBool(bags: readonly Record<string, unknown>[], keys: readonly string[]): boolean | null {
+  for (const bag of bags) {
+    for (const key of keys) {
+      if (bag[key] === true) return true;
+      if (bag[key] === false) return false;
+    }
+  }
+  return null;
 }
 
 
@@ -490,8 +562,13 @@ function firstFileUrl(value: unknown, depth = 0): string | null {
 }
 
 function countOrNull(value: unknown): number | null {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
-  return Math.round(value);
+  const numeric = typeof value === "number"
+    ? value
+    : typeof value === "string" && value.trim()
+      ? Number(value.trim())
+      : Number.NaN;
+  if (!Number.isFinite(numeric) || numeric < 0) return null;
+  return Math.round(numeric);
 }
 
 function textOf(value: unknown): string | null {

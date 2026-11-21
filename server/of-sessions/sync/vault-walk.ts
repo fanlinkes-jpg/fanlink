@@ -96,7 +96,7 @@ async function runWalk(input: WalkInput, listId: string, offset: number): Promis
       }
       logList(folder);
       if (folder.hasMedia === false) continue;
-      const child = await walkOne(input, folder.id, 0, false, budget, true);
+      const child = await walkOne(input, folder.id, 0, false, budget, true, folder.name);
       if (child.sessionRejected || child.signatureRejected || child.retryAfterMs > 0 || child.hasMore) {
         main.hasMore = true;
         break;
@@ -118,6 +118,7 @@ async function walkOne(
   includeLists: boolean,
   budget: { left: number },
   store: boolean,
+  listName: string | null = null,
 ): Promise<PageWalk> {
   let offset = start;
   let pages = 0;
@@ -158,7 +159,7 @@ async function walkOne(
     }
     payloads.push(...read.payloads);
     for (const payload of read.payloads) logPayload(payload);
-    const saved = await persistVaultRead(input.sql, input.creatorId, read.payloads, { listId, offset });
+    const saved = await persistVaultRead(input.sql, input.creatorId, read.payloads, { listId, offset, listName });
     if (thumbItems.length === 0) thumbItems = saved;
     let freshCount = 0;
     for (const item of saved) {

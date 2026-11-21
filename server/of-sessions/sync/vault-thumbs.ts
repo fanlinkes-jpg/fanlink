@@ -68,6 +68,7 @@ export function sessionThumbHeaders(state: StorageStateFile, nowMs: number): Rec
   return {
     accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
     referer: "https://onlyfans.com/",
+    origin: "https://onlyfans.com",
     "user-agent": BROWSER_FINGERPRINT.userAgent,
     cookie: auth.cookie,
   };
@@ -119,6 +120,7 @@ export async function loadFreshPreview(input: {
   const first = await readImage(input, url);
   if (first !== "rejected") return first;
   if (!reloaded) {
+    console.info("[fanlink:vault] miniatura refresco=vault-media");
     const next = await reloadUsable(input.reload, url, now);
     if (next) {
       url = next;
@@ -215,6 +217,7 @@ export async function preloadVaultThumbs(input: {
 
   let refreshed: readonly ThumbItem[] = [];
   try {
+    console.info("[fanlink:vault] miniatura refresco=vault-media");
     refreshed = await input.refreshPage();
   } catch {
     refreshed = [];

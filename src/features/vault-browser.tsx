@@ -3,6 +3,7 @@ import { queryVaultMirror } from "@/lib/of-sessions";
 import { VAULT_THUMB_MISSING, vaultMediaSrc } from "@/lib/chat-media";
 import { VAULT_CARD_FRAME, VAULT_CARD_IMAGE } from "@/lib/vault-card-frame";
 import { vaultFolderLabel } from "@/lib/vault-folder-label";
+import { vaultUsageText } from "@/lib/vault-usage";
 import { VAULT_FILTER_DEBOUNCE_MS } from "@/lib/vault-debounce";
 
 type VaultCard = {
@@ -11,16 +12,20 @@ type VaultCard = {
   kind: "foto" | "video" | "audio" | "gif" | null;
   seconds: number | null;
   folder: string | null;
+  listId?: string | null;
+  listIds?: string[];
   tags: string[];
   salesCount: number | null;
   sentCount?: number | null;
+  sent?: boolean | null;
+  priceCents?: number | null;
+  posted?: boolean | null;
   ventasLabel: string;
   bestSellerLabel: string | null;
   suggestedLabel: string;
   offerLabel?: string | null;
   buyLabel?: string | null;
   dateLabel?: string | null;
-  posted?: boolean;
   packageLabel: string;
   packageWithId: string | null;
   sentToFan: boolean | null;
@@ -101,6 +106,7 @@ export function VaultBrowser({
   const [picked, setPicked] = useState<string[]>([]);
   const [ready, setReady] = useState(false);
   const [preview, setPreview] = useState<VaultCard | null>(null);
+  const [hoverId, setHoverId] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -145,6 +151,7 @@ export function VaultBrowser({
         if (!alive) return;
         const view = payload as VaultPayload;
         setItems(view.items ?? []);
+        setLibrary((current) => current.length > 0 ? current : (view.items ?? []));
         setLists(view.lists ?? []);
         setNotice(view.notice ?? (view.items && view.items.length > 0 ? null : "Sin datos"));
       }).catch(() => {
@@ -179,10 +186,11 @@ export function VaultBrowser({
                 creatorId={creatorId}
                 listId={thumbPage.listId}
                 offset={thumbPage.offset}
-                items={library}
+                counts={lists.find((folder) => folder.id === "all")}
+                items={library.length > 0 ? library : items}
                 onClick={() => { onOpenFolder?.(null); setQuery({ ...query, folderId: null, scope: "todas" }); }}
               />
-              {lists.map((folder) => (
+              {lists.filter((folder) => folder.id !== "all").map((folder) => (
                 <VaultFolder
                   key={folder.id}
                   name={folder.name}
@@ -191,7 +199,7 @@ export function VaultBrowser({
                   offset={thumbPage.offset}
                   counts={folder}
                   active={query.folderId === folder.id}
-                  items={library.filter((item) => item.folder === folder.name || item.folder === folder.id)}
+                  items={folderItems(library.length > 0 ? library : items, folder)}
                   onClick={() => { onOpenFolder?.(folder.id); setQuery({ ...query, folderId: folder.id, scope: "carpeta" }); }}
                 />
               ))}
@@ -235,41 +243,54 @@ export function VaultBrowser({
                 <button
                   key={item.id}
                   type="button"
+                  data-vault-card
                   aria-pressed={selected}
                   disabled={item.blocked || !onAttach}
-                  className={`block w-full min-w-0 overflow-hidden rounded-xl bg-white text-left shadow-sm disabled:opacity-50 ${selected ? "ring-2 ring-[#00aff0]" : ""}`}
+                  title={usageOf(item)}
+                  className={`bg-[#f2f3f5] text-left shadow-sm disabled:opacity-50 ${selected ? "ring-2 ring-[#00aff0]" : ""}`}
+                  style={VAULT_CARD_FRAME}
+                  onMouseEnter={() => { if (item.kind === "video") setHoverId(item.id); }}
+                  onMouseLeave={() => setHoverId((current) => current === item.id ? null : current)}
                   onClick={() => setPicked((current) => current.includes(item.id) ? current.filter((id) => id !== item.id) : [...current, item.id])}
                 >
-                  <span data-vault-card className="relative block overflow-hidden bg-[#f2f3f5]" style={VAULT_CARD_FRAME}>
+                  {hoverId === item.id && item.kind === "video" ? (
+                    <video
+                      muted
+                      playsInline
+                      autoPlay
+                      preload="none"
+                      aria-label={item.title}
+                      style={VAULT_CARD_IMAGE}
+                      src={vaultMediaSrc(creatorId, item.id, "full", thumbPage)}
+                    />
+                  ) : (
                     <VaultThumb creatorId={creatorId} itemId={item.id} title={item.title} listId={thumbPage.listId} offset={thumbPage.offset} />
-                    <span className={`absolute left-1.5 top-1.5 grid h-5 w-5 place-items-center rounded-full text-[11px] font-semibold ${selected ? "bg-[#00aff0] text-white" : "bg-white/80 text-transparent"}`}>{selected ? picked.indexOf(item.id) + 1 : ""}</span>
-                    {item.offerLabel ? (
-                      <span className="absolute right-1.5 top-1.5 rounded-full bg-[#ff5a7a] px-1.5 py-0.5 text-[10px] font-semibold text-white">{item.offerLabel}</span>
-                    ) : item.posted ? (
-                      <span className="absolute right-1.5 top-1.5 rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white">Publicado</span>
-                    ) : null}
-                    <span className="absolute inset-x-1.5 bottom-1.5 flex items-center gap-1">
-                      <span
-                        role="button"
-                        tabIndex={0}
-                        aria-label={`Ver ${item.title}`}
-                        className="shrink-0 rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white"
-                        onClick={(event) => { event.stopPropagation(); setPreview(item); }}
-                        onKeyDown={(event) => { if (event.key === "Enter") { event.stopPropagation(); setPreview(item); } }}
-                      >Ver</span>
-                      {item.dateLabel ? <span className="min-w-0 truncate rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white">{item.dateLabel}</span> : null}
-                      {item.kind === "video" && item.seconds != null ? (
-                        <span className="ml-auto shrink-0 rounded bg-black/70 px-1 py-0.5 text-[10px] text-white">{formatSeconds(item.seconds)}</span>
-                      ) : null}
-                    </span>
+                  )}
+                  <span className={`absolute left-1.5 top-1.5 z-10 grid h-5 w-5 place-items-center rounded-full text-[11px] font-semibold ${selected ? "bg-[#00aff0] text-white" : "bg-white/80 text-transparent"}`}>{selected ? picked.indexOf(item.id) + 1 : ""}</span>
+                  <span className="absolute right-1.5 top-1.5 z-10 flex max-w-[70%] flex-col items-end gap-1">
+                    {item.posted ? <span className="rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white">Posted</span> : null}
+                    {item.priceCents == null ? (
+                      <span className="rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white">Sin datos</span>
+                    ) : item.priceCents <= 0 ? (
+                      <span className="rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white">Free</span>
+                    ) : (
+                      <span className="rounded-full bg-[#ff5a7a] px-1.5 py-0.5 text-[10px] font-semibold text-white">{item.offerLabel}</span>
+                    )}
                   </span>
-                  {item.sentCount != null || item.buyLabel || item.salesCount != null ? (
-                    <span className="flex items-center gap-2 px-1.5 py-1 text-[10px] text-[#5c6570]">
-                      {item.sentCount != null ? <span>{item.sentCount} envíos</span> : null}
-                      {item.buyLabel ? <span>{item.buyLabel}</span> : null}
-                      {item.salesCount != null ? <span>{item.salesCount} ventas</span> : null}
-                    </span>
-                  ) : null}
+                  <span className="absolute inset-x-1.5 bottom-1.5 z-10 flex items-center gap-1">
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Ver ${item.title}`}
+                      className="shrink-0 rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white"
+                      onClick={(event) => { event.stopPropagation(); setPreview(item); }}
+                      onKeyDown={(event) => { if (event.key === "Enter") { event.stopPropagation(); setPreview(item); } }}
+                    >Ver</span>
+                    <span className="min-w-0 truncate rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white">{item.dateLabel ?? "Sin datos"}</span>
+                    {item.kind === "video" ? (
+                      <span className="ml-auto shrink-0 rounded bg-black/70 px-1 py-0.5 text-[10px] text-white">{item.seconds == null ? "Sin datos" : formatSeconds(item.seconds)}</span>
+                    ) : null}
+                  </span>
                 </button>
                 );
               })}
@@ -429,7 +450,23 @@ function VaultThumb({ creatorId, itemId, title, listId, offset }: { creatorId: s
   return <VaultStill creatorId={creatorId} mediaId={itemId} title={title} className="absolute inset-0" imageStyle={VAULT_CARD_IMAGE} listId={listId} offset={offset} />;
 }
 
-function VaultStill({ creatorId, mediaId, className, title = "", listId, offset, imageStyle }: { creatorId: string; mediaId: string; className: string; title?: string; listId: string; offset: number; imageStyle?: { objectFit: "cover"; objectPosition: "center"; width: "100%"; height: "100%" } }) {
+function folderItems(items: readonly VaultCard[], folder: { id: string; name: string }): VaultCard[] {
+  return items.filter((item) => item.listId === folder.id || item.listIds?.includes(folder.id) || item.folder === folder.name || item.folder === folder.id);
+}
+
+function usageOf(item: VaultCard): string {
+  return vaultUsageText({
+    posted: item.posted ?? null,
+    sent: item.sent ?? null,
+    sentCount: item.sentCount ?? null,
+    priceCents: item.priceCents ?? null,
+    dateLabel: item.dateLabel ?? null,
+    seconds: item.seconds,
+    kind: item.kind,
+  });
+}
+
+function VaultStill({ creatorId, mediaId, className, title = "", listId, offset, imageStyle }: { creatorId: string; mediaId: string; className: string; title?: string; listId: string; offset: number; imageStyle?: typeof VAULT_CARD_IMAGE }) {
   const [missing, setMissing] = useState(false);
   if (missing) {
     return <span className={`grid place-items-center bg-[#f2f3f5] px-2 text-center text-[11px] text-[#5c6570] ${className}`}>{VAULT_THUMB_MISSING}</span>;
@@ -475,14 +512,18 @@ function VaultFolder({
     videos: items.filter((item) => item.kind === "video").length,
     gifs: items.filter((item) => item.kind === "gif").length,
   });
-  const thumb = items.find((item) => item.kind !== "audio");
+  const covers = items.filter((item) => item.kind !== "audio").slice(0, 4);
   return (
     <button type="button" onClick={onClick} className={`flex w-full items-center gap-3 px-4 py-3 text-left ${active ? "bg-[#f4f7fb]" : "hover:bg-[#fafbfc]"}`}>
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-semibold">{name}</span>
         <span className="text-xs text-[#8a96a3]">{label}</span>
       </span>
-      {thumb ? <VaultStill creatorId={creatorId} mediaId={thumb.id} className="h-12 w-12 rounded object-cover object-center" listId={listId} offset={offset} /> : null}
+      <span className="flex shrink-0 gap-1">
+        {covers.map((item) => (
+          <VaultStill key={item.id} creatorId={creatorId} mediaId={item.id} className="h-12 w-12 rounded object-cover object-center" listId={listId} offset={offset} />
+        ))}
+      </span>
     </button>
   );
 }

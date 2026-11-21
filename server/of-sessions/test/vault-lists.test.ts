@@ -30,7 +30,7 @@ test("cada lista trae su conteo y sus medios, paginando hasMore", async () => {
   const db = new PGlite();
   const seen: string[] = [];
   try {
-    for (const file of ["0037_vault_mirror.sql", "0038_vault_fan_filter.sql", "0040_vault_full_tags.sql", "0042_vault_paid_with.sql", "0044_vault_thumb_page.sql", "0050_vault_list_counts.sql"]) {
+    for (const file of ["0037_vault_mirror.sql", "0038_vault_fan_filter.sql", "0040_vault_full_tags.sql", "0042_vault_paid_with.sql", "0044_vault_thumb_page.sql", "0050_vault_list_counts.sql", "0051_vault_list_media.sql"]) {
       await db.exec(await readFile(path.join(root, "migrations", file), "utf8"));
     }
     const fetchImpl = (async (input: RequestInfo | URL) => {
@@ -113,7 +113,7 @@ test("las carpetas en list no cortan los medios y la página siguiente trae las 
     { id: 30436425, type: "media", name: "Cargas", photosCount: 0, videosCount: 0, gifsCount: 0, audiosCount: 0, hasMedia: false },
   ];
   try {
-    for (const file of ["0037_vault_mirror.sql", "0038_vault_fan_filter.sql", "0040_vault_full_tags.sql", "0042_vault_paid_with.sql", "0044_vault_thumb_page.sql", "0050_vault_list_counts.sql"]) {
+    for (const file of ["0037_vault_mirror.sql", "0038_vault_fan_filter.sql", "0040_vault_full_tags.sql", "0042_vault_paid_with.sql", "0044_vault_thumb_page.sql", "0050_vault_list_counts.sql", "0051_vault_list_media.sql"]) {
       await db.exec(await readFile(path.join(root, "migrations", file), "utf8"));
     }
     const fetchImpl = (async (input: RequestInfo | URL) => {
@@ -183,7 +183,7 @@ test("sin hasMore sigue mientras la página de medios viene llena", async () => 
   const db = new PGlite();
   const seen: string[] = [];
   try {
-    for (const file of ["0037_vault_mirror.sql", "0038_vault_fan_filter.sql", "0040_vault_full_tags.sql", "0042_vault_paid_with.sql", "0044_vault_thumb_page.sql", "0050_vault_list_counts.sql"]) {
+    for (const file of ["0037_vault_mirror.sql", "0038_vault_fan_filter.sql", "0040_vault_full_tags.sql", "0042_vault_paid_with.sql", "0044_vault_thumb_page.sql", "0050_vault_list_counts.sql", "0051_vault_list_media.sql"]) {
       await db.exec(await readFile(path.join(root, "migrations", file), "utf8"));
     }
     const fetchImpl = (async (input: RequestInfo | URL) => {
