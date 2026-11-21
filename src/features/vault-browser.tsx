@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { queryVaultMirror } from "@/lib/of-sessions";
 import { VAULT_THUMB_MISSING, vaultMediaSrc } from "@/lib/chat-media";
 import { VAULT_CARD_FRAME, VAULT_CARD_IMAGE } from "@/lib/vault-card-frame";
@@ -115,11 +115,13 @@ export function VaultBrowser({
   const [ready, setReady] = useState(false);
   const [preview, setPreview] = useState<VaultCard | null>(null);
   const [hoverId, setHoverId] = useState<string | null>(null);
+  const wantedFolder = useRef<string | null>(null);
 
   useEffect(() => {
     let alive = true;
     setReady(false);
     const folderId = layout === "of" && thumbPage.listId !== "all" ? thumbPage.listId : null;
+    const ticket = folderId;
     void queryVaultMirror({
       data: {
         creatorId,
@@ -129,7 +131,7 @@ export function VaultBrowser({
         ...(layout === "of" ? { query: { ...EMPTY_QUERY, folderId, scope: folderId ? "carpeta" as const : "todas" as const } } : {}),
       },
     }).then((payload) => {
-      if (!alive) return;
+      if (!alive || wantedFolder.current !== ticket) return;
       const view = payload as VaultPayload;
       if (layout !== "of") setQuery({ ...EMPTY_QUERY, ...(view.query ?? {}) });
       applyView(view);
@@ -200,7 +202,7 @@ export function VaultBrowser({
                 counts={lists.find((folder) => folder.id === "all")}
                 covers={[]}
                 items={library.length > 0 ? library : items}
-                onClick={() => { onOpenFolder?.(null); setQuery({ ...query, folderId: null, scope: "todas" }); }}
+                onClick={() => { wantedFolder.current = null; onOpenFolder?.(null); setQuery({ ...query, folderId: null, scope: "todas" }); }}
               />
               {lists.filter((folder) => folder.id !== "all").map((folder) => (
                 <VaultFolder
@@ -213,7 +215,7 @@ export function VaultBrowser({
                   covers={folder.covers ?? []}
                   active={query.folderId === folder.id}
                   items={query.folderId === folder.id ? grid : []}
-                  onClick={() => { onOpenFolder?.(folder.id); setQuery({ ...query, folderId: folder.id, scope: "carpeta" }); }}
+                  onClick={() => { wantedFolder.current = folder.id; onOpenFolder?.(folder.id); setQuery({ ...query, folderId: folder.id, scope: "carpeta" }); }}
                 />
               ))}
               {lists.length === 0 ? <p className="px-4 py-3 text-xs text-[#8a96a3]">Sin datos</p> : null}

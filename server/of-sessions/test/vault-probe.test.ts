@@ -5,6 +5,7 @@ import { assertProbeFileSafe, probePageContinues, sanitizeVaultShape, vaultListL
 import { VAULT_LISTS_FIXTURE } from "./fixtures/vault-of-shape.ts";
 import { mediaAcceptHeader, vaultPlayerLog } from "../sync/media-bytes.ts";
 import { boundVaultOffset, VAULT_OFFSET_CAP } from "../sync/vault-walk.ts";
+import { vaultFolderMark } from "../sync/vault-model.ts";
 
 test("la página de medios usa list y limit 40, sin type ni field", () => {
   const all = vaultMediaPath("all", 0);
@@ -18,7 +19,12 @@ test("la página de medios usa list y limit 40, sin type ni field", () => {
   assert.match(vaultMediaPath("88001", 40), /list_id=88001/);
   assert.equal(vaultMediaPath("88001", 40).includes("list=88001"), false);
   const line = vaultPageLog({ route: all, status: 200, count: 40, hasMore: "si", offset: 0, listId: "all" });
-  assert.match(line, /ruta=\/api2\/v2\/vault\/media status=200 n=40 hasMore=si offset=0 list=all/);
+  assert.match(line, /ruta=\/api2\/v2\/vault\/media status=200 n=40 hasMore=si offset=0 list=todos/);
+  const mark = vaultFolderMark("28619188");
+  assert.equal(mark, vaultFolderMark("28619188"));
+  assert.notEqual(mark, vaultFolderMark("29012649"));
+  assert.equal(mark.includes("28619188"), false);
+  assert.equal(vaultFolderMark("all"), "todos");
   assert.equal(line.includes("sign"), false);
 });
 

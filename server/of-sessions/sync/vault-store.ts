@@ -209,6 +209,23 @@ async function rememberListMembers(sql: ReadSql, creatorId: string, listId: stri
   }
 }
 
+/** Al cerrar un recorrido completo, quita de la carpeta los medios que ya no han salido. */
+export async function finishListMembers(sql: ReadSql, creatorId: string, listId: string, itemIds: readonly string[]): Promise<void> {
+  if (!listId || listId === "all" || !(await hasColumn(sql, "of_vault_list_item", "item_key"))) return;
+  await rememberListMembers(sql, creatorId, listId, itemIds);
+  if (itemIds.length === 0) {
+    await sql.query(
+      "delete from of_vault_list_item where creator_id = $1 and list_key = $2",
+      [creatorId, listId],
+    );
+    return;
+  }
+  await sql.query(
+    "delete from of_vault_list_item where creator_id = $1 and list_key = $2 and not (item_key = any($3::text[]))",
+    [creatorId, listId, itemIds],
+  );
+}
+
 /** Si la lista no trajo medias[], las primeras del recorrido con list_id sirven de portada. */
 async function fillEmptyCovers(sql: ReadSql, creatorId: string, listId: string, covers: ReadonlyArray<{ id: string; kind: string | null }>): Promise<void> {
   if (covers.length === 0 || !(await hasColumn(sql, "of_vault_list", "cover_ids"))) return;

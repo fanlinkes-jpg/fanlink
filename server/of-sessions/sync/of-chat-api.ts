@@ -290,7 +290,7 @@ export function vaultPageLog(input: {
   listId: string;
 }): string {
   const route = input.route.split("?")[0] || "/api2/v2/vault/media";
-  const listId = input.listId.replace(/https?:\/\/\S+/gi, "").replace(/[\r\n]/g, " ").trim().slice(0, 40);
+  const listId = input.listId === "listas" ? "listas" : vaultFolderMark(input.listId);
   return `[fanlink:vault] pagina ruta=${route} status=${input.status ?? "sin"} n=${input.count} hasMore=${input.hasMore} offset=${input.offset} list=${listId}`;
 }
 

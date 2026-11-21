@@ -2,7 +2,7 @@ import type { StorageStateFile } from "../sessions/storage-state.ts";
 import { fetchSignedVault, VAULT_MEDIA_LIMIT } from "./of-chat-api.ts";
 import type { ReadSql } from "./store.ts";
 import { folderMediaCap, mergeVaultList, parseVaultBundle, vaultAllList, vaultFolderMark, vaultKeyNames, vaultPayloadKind, type VaultFile, type VaultList } from "./vault-model.ts";
-import { persistVaultRead, storedFolderCounts } from "./vault-store.ts";
+import { finishListMembers, persistVaultRead, storedFolderCounts } from "./vault-store.ts";
 
 /** Pausa entre páginas. Más lenta que el chat: la bóveda pesa. */
 export const VAULT_PAGE_GAP_MS = 800;
@@ -136,6 +136,7 @@ async function walkOne(
   let signatureRejected = false;
   let retryAfterMs = 0;
   const cap = listId === "all" ? null : folderMediaCap(await storedFolderCounts(input.sql, input.creatorId, listId));
+  let suspicious = false;
   while (pages < VAULT_WALK_CAP) {
     if (budget.left <= 0) {
       hasMore = true;
@@ -163,6 +164,7 @@ async function walkOne(
     const peeked = mediaBody(read.payloads);
     const peekedCount = mediaCount(peeked);
     if (listId !== "all" && cap != null && items.length + peekedCount > cap) {
+      suspicious = true;
       console.info(`[fanlink:vault] carpeta=${vaultFolderMark(listId)} sospechosa param=list_id n=${peekedCount} tope=${cap}`);
       hasMore = false;
       nextOffset = offset;
@@ -209,6 +211,9 @@ async function walkOne(
   }
   if (store && start === 0 && items.length > 0 && !hasMore && !sessionRejected && !signatureRejected && retryAfterMs === 0) {
     remember(input.creatorId, listId, input.now(), items, thumbItems);
+  }
+  if (listId !== "all" && start === 0 && !hasMore && !suspicious && !sessionRejected && !signatureRejected) {
+    await finishListMembers(input.sql, input.creatorId, listId, items.map((item) => item.id));
   }
   console.info(`[fanlink:vault] fin lista=${vaultFolderMark(listId)} paginas=${pages} medios=${items.length} hasMore=${hasMore ? "si" : "no"}`);
   console.info(`[fanlink:vault] carpeta=${vaultFolderMark(listId)} n=${items.length}`);

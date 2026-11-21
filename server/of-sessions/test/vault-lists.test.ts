@@ -164,7 +164,7 @@ test("las carpetas en list no cortan los medios y la página siguiente trae las 
     assert.equal(seen.some((href) => href.includes("/vault/lists") && href.includes("offset=5")), true);
     assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("offset=24") && href.includes("list=all")), true);
     assert.equal(seen.some((href) => href.includes("list_id=ducha")), true);
-    assert.equal(lines.some((line) => line.includes("pagina ruta=/api2/v2/vault/media") && line.includes("offset=0") && line.includes("n=24") && line.includes("hasMore=si") && line.includes("list=all")), true);
+    assert.equal(lines.some((line) => line.includes("pagina ruta=/api2/v2/vault/media") && line.includes("offset=0") && line.includes("n=24") && line.includes("hasMore=si") && line.includes("list=todos")), true);
     assert.equal(lines.some((line) => line.includes("respuesta ruta=lists") && line.includes("itemClaves=") && line.includes("photosCount")), true);
     assert.equal(lines.some((line) => line.includes("fotos=4") && line.includes("videos=2") && line.includes("photosCount") && !line.includes("nombre=")), true);
     assert.equal(lines.some((line) => line.includes("nombre=") || line.includes("id=ducha")), false);
@@ -279,6 +279,10 @@ test("list_id de una carpeta no guarda la bóveda entera", async () => {
       }
       return Response.json({ list: [], hasMore: false });
     }) as typeof fetch;
+    await asSql(db).query(
+      "insert into of_vault_list_item (creator_id, list_key, item_key) values ($1, $2, $3)",
+      ["3zk7kbr", "88001", "viejo"],
+    );
     const walked = await walkVault({
       creatorId: "3zk7kbr",
       state: storedState(),
@@ -301,6 +305,11 @@ test("list_id de una carpeta no guarda la bóveda entera", async () => {
       query: { ...emptyVaultQuery(), folderId: "88001", scope: "carpeta" },
     });
     assert.deepEqual(good.payload.items.map((item) => item.id).sort(), ["701", "702"]);
+    const members = await asSql(db).query<{ item_key: string }>(
+      "select item_key from of_vault_list_item where creator_id = $1 and list_key = $2",
+      ["3zk7kbr", "88001"],
+    );
+    assert.deepEqual(members.map((row) => row.item_key).sort(), ["701", "702"]);
     const bad = await queryVaultForActor(asSql(db), actor, {
       creatorId: "3zk7kbr",
       remember: false,

@@ -258,6 +258,12 @@ export function RealChatsPage() {
   const [vaultReading, setVaultReading] = useState(false);
   const vaultPage = useRef({ listId: "all", offset: 0, busy: false });
   const vaultGen = useRef(0);
+  const vaultPending = useRef<{ listId: string; offset: number } | null>(null);
+  function takeVaultPending() {
+    const pending = vaultPending.current;
+    vaultPending.current = null;
+    return pending;
+  }
   const [thumbPage, setThumbPage] = useState({ listId: "all", offset: 0 });
   const offerPriceId = useRef<string | null>(null);
 
@@ -777,7 +783,11 @@ export function RealChatsPage() {
   async function loadOfVault(listId = "all", offset = 0) {
     setPanel("vault");
     if (!selected) return;
-    if (!vaultLoadAllowed(vaultPage.current, { listId, offset })) return;
+    if (!vaultLoadAllowed(vaultPage.current, { listId, offset })) {
+      vaultPending.current = { listId, offset };
+      return;
+    }
+    vaultPending.current = null;
     const generation = vaultGen.current + 1;
     vaultGen.current = generation;
     if (offset === 0 && listId !== vaultPage.current.listId) setOfVault([]);
@@ -798,7 +808,11 @@ export function RealChatsPage() {
       if (offset === 0) setOfVault([]);
       setError(sessionErrorText(err));
     } finally {
-      if (generation === vaultGen.current) setVaultReading(false);
+      if (generation === vaultGen.current) {
+        setVaultReading(false);
+        const pending = takeVaultPending();
+        if (pending) void loadOfVault(pending.listId, pending.offset);
+      }
     }
   }
 

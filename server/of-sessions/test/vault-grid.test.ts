@@ -172,6 +172,89 @@ test("el panel real del chat monta VaultBrowser con tarjetas cuadradas", async (
   }
 });
 
+test("pulsar una carpeta durante la carga no vuelve a Todos", async () => {
+  const port = await freePort();
+  const server = startDev(port);
+  const browser = await chromium.launch();
+  let releaseAll: () => void = () => undefined;
+  const holdAll = new Promise<void>((resolve) => {
+    releaseAll = resolve;
+  });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    await page.route("**/*", async (route) => {
+      const request = route.request();
+      const url = request.url();
+      if (request.headers()["x-tsr-serverfn"] === "true" && serverExport(url).includes("listCreatorChats")) {
+        await route.fulfill({ status: 200, headers: { "content-type": "application/json" }, body: JSON.stringify({ result: chatList() }) });
+        return;
+      }
+      if (request.headers()["x-tsr-serverfn"] === "true" && serverExport(url).includes("readChatVault")) {
+        const posted = request.postData() ?? "";
+        const folder = posted.includes("ducha");
+        if (!folder) await holdAll;
+        await route.fulfill({
+          status: 200,
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            result: {
+              items: folder
+                ? [
+                  { id: "m1", title: "foto", kind: "foto" },
+                  { id: "m2", title: "clip", kind: "video" },
+                  { id: "m3", title: "otra", kind: "foto" },
+                ]
+                : Array.from({ length: 40 }, (_, index) => ({ id: `all-${index}`, title: "todos", kind: "foto" })),
+              reason: null,
+              hasMore: false,
+              nextOffset: 0,
+              cached: false,
+            },
+          }),
+        });
+        return;
+      }
+      if (request.headers()["x-tsr-serverfn"] === "true" && isVaultQuery(url)) {
+        await route.fulfill({
+          status: 200,
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ result: vaultView(folderOf(request.postData() ?? "")) }),
+        });
+        return;
+      }
+      await route.continue();
+    });
+    await waitForServer(`http://127.0.0.1:${port}/mensajes`);
+    await page.goto(`http://127.0.0.1:${port}/mensajes`, { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: "Enviar" }).waitFor();
+    await page.evaluate(async () => {
+      const load = new Function("specifier", "return import(specifier)") as (specifier: string) => Promise<{
+        useCrm: { setState: (patch: Record<string, unknown>) => void };
+      }>;
+      const mod = await load("/src/lib/crm.ts");
+      mod.useCrm.setState({
+        creators: [{ id: "3zk7kbr", name: "Jose", handle: "@jose", platform: "onlyfans", city: "Madrid", subscribers: 10, revenue30: null, growth: 0, split: 20, status: "activa", hue: 200, proxy: "" }],
+        creatorId: "3zk7kbr",
+      });
+    });
+    await page.getByText("Fan de prueba").first().waitFor();
+    await page.getByRole("button", { name: "Add from media vault", exact: true }).click();
+    const panel = page.getByRole("region", { name: "Panel Add from media vault" });
+    await panel.getByText("Cargando…").waitFor();
+    await panel.getByRole("button", { name: /LA DUCHA/ }).click();
+    await page.waitForFunction(() => document.querySelectorAll("[data-vault-card]").length === 3);
+    releaseAll();
+    await page.waitForTimeout(500);
+    assert.equal(await panel.locator("[data-vault-card]").count(), 3);
+    assert.equal(await panel.getByText("all-0").count(), 0);
+    await panel.getByText("foto").first().waitFor();
+  } finally {
+    releaseAll();
+    await browser.close().catch(() => undefined);
+    server.kill("SIGTERM");
+  }
+});
+
 function chatList() {
   const thread = {
     creatorId: "3zk7kbr",
