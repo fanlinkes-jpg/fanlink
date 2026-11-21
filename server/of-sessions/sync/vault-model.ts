@@ -514,6 +514,12 @@ export function videoHoldText(row: Record<string, unknown> | null): string {
   return "Vídeo no disponible";
 }
 
+/** 401 o 429 del detalle: el visor no insiste. */
+export function videoDetailHold(status: number | null, row: Record<string, unknown> | null): string {
+  if (status === 401 || status === 429) return "OnlyFans está limitando, prueba en un momento";
+  return videoHoldText(row);
+}
+
 function flagWord(value: unknown): string {
   if (value === true || value === 1) return "si";
   if (value === false || value === 0) return "no";

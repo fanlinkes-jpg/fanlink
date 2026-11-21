@@ -95,7 +95,7 @@ export async function handleVaultMedia(request: Request, deps: {
     }
   }
   const range = url.searchParams.get("part") === "head" ? headRange(request.headers.get("range")) : request.headers.get("range");
-  return streamMedia(preview, range, deps.fetchBytes);
+  return streamMedia(preview, range, deps.fetchBytes, deps.videoHold);
 }
 
 /** Con `part=head` cualquier Range se queda en el primer megabyte. El hover no baja el archivo entero. */
@@ -171,10 +171,12 @@ async function streamMedia(
   target: string | null,
   range: string | null,
   fetchBytes: (url: string, range?: string | null) => Promise<MediaBytes | null>,
+  videoHold?: () => string | null,
 ): Promise<Response> {
-  if (!target || !mediaHostAllowed(target)) return new Response("Sin datos", { status: 404 });
+  const hold = () => videoHold?.()?.trim() || null;
+  if (!target || !mediaHostAllowed(target)) return holdResponse(hold());
   const bytes = await fetchBytes(target, range);
-  if (!bytes) return new Response("Sin datos", { status: 404 });
+  if (!bytes) return holdResponse(hold());
   const body = mediaBody(bytes);
   if (!body) return new Response("Sin datos", { status: 404 });
   const length = bytes.contentLength ?? bytes.body?.byteLength ?? null;
@@ -187,6 +189,14 @@ async function streamMedia(
   if (length != null) headers.set("content-length", String(length));
   if (bytes.contentRange) headers.set("content-range", bytes.contentRange);
   return new Response(body, { status: bytes.status, headers });
+}
+
+function holdResponse(hold: string | null): Response {
+  if (!hold) return new Response("Sin datos", { status: 404 });
+  return new Response(hold, {
+    status: 409,
+    headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "private, no-store" },
+  });
 }
 
 function thumbResponse(cached: { body: Uint8Array; contentType: string }): Response {

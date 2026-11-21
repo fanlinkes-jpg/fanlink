@@ -558,24 +558,55 @@ function VaultPlayback({ src }: { src: string }) {
   const node = useRef<HTMLVideoElement>(null);
   const [state, setState] = useState<"carga" | "ok" | "error" | "timeout">("carga");
   const [note, setNote] = useState("");
+  const [local, setLocal] = useState<string | null>(null);
   useEffect(() => {
     const video = node.current;
+    let cancelled = false;
+    let objectUrl: string | null = null;
     setState("carga");
     setNote("");
-    if (!src || !video) return;
-    video.src = src;
-    video.load();
-    const handle = setTimeout(() => setState((current) => current === "carga" ? "timeout" : current), 20_000);
+    setLocal(null);
+    if (!src) return;
+    const controller = new AbortController();
+    const handle = setTimeout(() => {
+      controller.abort();
+      setState((current) => current === "carga" ? "timeout" : current);
+    }, 20_000);
+    void fetch(src, { signal: controller.signal }).then(async (response) => {
+      if (cancelled) return;
+      const type = response.headers.get("content-type") ?? "";
+      if (response.status === 409 || type.startsWith("text/plain")) {
+        const text = (await response.text()).replace(/\s+/g, " ").trim().slice(0, 160);
+        setNote(text);
+        setState("error");
+        return;
+      }
+      if (!response.ok || !type.startsWith("video/")) {
+        setState("error");
+        return;
+      }
+      const blob = await response.blob();
+      if (cancelled) return;
+      objectUrl = URL.createObjectURL(blob);
+      setLocal(objectUrl);
+    }).catch(() => {
+      if (!cancelled) setState((current) => current === "timeout" ? current : "error");
+    });
     return () => {
+      cancelled = true;
       clearTimeout(handle);
-      video.pause();
-      video.removeAttribute("src");
-      video.load();
+      controller.abort();
+      if (video) {
+        video.pause();
+        video.removeAttribute("src");
+        video.load();
+      }
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [src]);
-  if (!src) return <p className="text-sm text-white">Vídeo no disponible</p>;
+  if (!src || state === "error") return <p className="text-sm text-white">{note || "Vídeo no disponible"}</p>;
   if (state === "timeout") return <p className="text-sm text-white">No se ha podido cargar el vídeo</p>;
-  if (state === "error") return <p className="text-sm text-white">{note || "Vídeo no disponible"}</p>;
+  if (!local) return <p className="text-sm text-white">Cargando…</p>;
   return (
     <video
       ref={node}
@@ -585,18 +616,9 @@ function VaultPlayback({ src }: { src: string }) {
       playsInline
       preload="auto"
       className="h-full w-full bg-black object-contain"
-      src={src}
+      src={local}
       onCanPlay={() => setState("ok")}
-      onError={() => {
-        void fetch(src).then(async (response) => {
-          const type = response.headers.get("content-type") ?? "";
-          if (response.status === 409 || type.startsWith("text/plain")) {
-            const text = (await response.text()).replace(/\s+/g, " ").trim().slice(0, 160);
-            if (text) setNote(text);
-          }
-          setState("error");
-        }).catch(() => setState("error"));
-      }}
+      onError={() => setState("error")}
     />
   );
 }

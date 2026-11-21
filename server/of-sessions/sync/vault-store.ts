@@ -1,4 +1,5 @@
 import type { ReadSql } from "./store.ts";
+import { signedUrlExpired } from "./vault-thumbs.ts";
 import { emptyVaultQuery, vaultQueryFromUnknown, type VaultQuery } from "./vault-filter.ts";
 import { folderMediaCap, historyFromMedia, historyFromSends, isCandidateVideoUrl, mergeFanUses, mergeVaultList, parseVaultBundle, stampVaultList, vaultKindOf, type FanVaultUse, type VaultFile, type VaultList } from "./vault-model.ts";
 import type { SaleFolder } from "./vault-block.ts";
@@ -333,6 +334,37 @@ export async function storedVaultMediaUrls(sql: ReadSql, creatorId: string, medi
 function videoUrlOnly(url: string | null): string | null {
   if (!url || !isCandidateVideoUrl(url)) return null;
   return url;
+}
+
+/** Pausa antes de volver a pedir un detalle cuya URL ya falló o caducó. */
+export const VIDEO_DETAIL_PAUSE_MS = 800;
+
+/**
+ * Reutiliza full_url o clip_url solo si la firma sigue viva.
+ * Si caducó, o si se fuerza tras un 403/410, pide el detalle una sola vez.
+ */
+export async function reuseOrRefreshVideo(input: {
+  sql: ReadSql;
+  creatorId: string;
+  mediaId: string;
+  variant: "full" | "clip";
+  now: number;
+  force: boolean;
+  pause: (ms: number) => Promise<void>;
+  loadDetail: () => Promise<{ url: string | null; hold: string }>;
+}): Promise<{ url: string | null; hold: string | null }> {
+  const urls = await storedVaultMediaUrls(input.sql, input.creatorId, input.mediaId);
+  const picked = playbackUrl(urls, input.variant, urls.kind);
+  const live = picked && !signedUrlExpired(picked, input.now) ? picked : null;
+  if (live && !input.force) return { url: live, hold: null };
+  if (picked || input.force) await input.pause(VIDEO_DETAIL_PAUSE_MS);
+  const detail = await input.loadDetail();
+  if (detail.url) {
+    await saveVaultFull(input.sql, input.creatorId, input.mediaId, detail.url);
+    await saveVaultClip(input.sql, input.creatorId, input.mediaId, detail.url);
+    return { url: detail.url, hold: null };
+  }
+  return { url: null, hold: detail.hold };
 }
 
 /** URL que puede reproducir un vídeo. Una miniatura no cuenta. */

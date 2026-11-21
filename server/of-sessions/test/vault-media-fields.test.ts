@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import test from "node:test";
-import { choosePlayableVideo, parseVaultBundle, stampVaultList, vaultDetailRow, videoHoldText, videoShapeLine } from "../sync/vault-model.ts";
+import { PGlite } from "@electric-sql/pglite";
+import { choosePlayableVideo, parseVaultBundle, stampVaultList, vaultDetailRow, videoDetailHold, videoHoldText, videoShapeLine } from "../sync/vault-model.ts";
 import { fetchSignedMediaDetail, vaultMediaDetailPath } from "../sync/of-chat-api.ts";
 import { clearSignRulesCache } from "../sync/of-sign.ts";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
 import { handleVaultMedia, headRange, noteVaultPlayRequest } from "../http/vault-http.ts";
 import { loadFreshPreview } from "../sync/vault-thumbs.ts";
-import { playbackUrl } from "../sync/vault-store.ts";
+import { playbackUrl, reuseOrRefreshVideo, VIDEO_DETAIL_PAUSE_MS } from "../sync/vault-store.ts";
+import type { ReadSql } from "../sync/store.ts";
 import { clearVaultThumbs, fetchVaultMedia, getVaultThumb, hasFtyp, putVaultThumb, VIDEO_FETCH_TIMEOUT_MS, videoBytesAccepted, videoFollowUp } from "../sync/media-bytes.ts";
 import { folderColumnView } from "../../../src/lib/vault-folder-label.ts";
 
@@ -388,6 +392,85 @@ test("part=head recorta cualquier rango al primer megabyte y un 206 no entra en 
   assert.equal(partial?.status, 206);
   assert.equal(getVaultThumb("c-206", "v9"), null);
 });
+
+test("una URL caducada en SQL pide el detalle y responde video/mp4", async () => {
+  assert.equal(videoDetailHold(401, null), "OnlyFans está limitando, prueba en un momento");
+  assert.equal(videoDetailHold(429, null), "OnlyFans está limitando, prueba en un momento");
+  const db = new PGlite();
+  const root = path.resolve(import.meta.dirname, "../../..");
+  try {
+    for (const file of ["0037_vault_mirror.sql", "0040_vault_full_tags.sql", "0052_vault_clip.sql"]) {
+      await db.exec(await readFile(path.join(root, "migrations", file), "utf8"));
+    }
+    await db.exec(`insert into of_vault_item (creator_id, item_key, kind, full_url, clip_url) values ('c-1', 'v9', 'video', 'https://cdn2.onlyfans.com/files/old.mp4?Expires=1700000000', 'https://cdn2.onlyfans.com/files/old.mp4?Expires=1700000000')`);
+    let paused = 0;
+    let detailStatus = 0;
+    clearSignRulesCache();
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const href = String(input);
+      if (href.includes("dynamic-rules")) {
+        return Response.json({
+          static_param: "param",
+          format: "1:{}:{:x}:2",
+          checksum_indexes: [0, 1],
+          checksum_constants: [5, 5],
+          checksum_constant: 10,
+          app_token: "token",
+          remove_headers: ["user-id"],
+        });
+      }
+      return Response.json({
+        id: 9,
+        type: "video",
+        isReady: true,
+        hasError: false,
+        canView: true,
+        convertedToVideo: false,
+        files: { full: { url: "https://cdn2.onlyfans.com/files/fresh.mp4" } },
+      });
+    }) as typeof fetch;
+    const resolved = await reuseOrRefreshVideo({
+      sql: asSql(db),
+      creatorId: "c-1",
+      mediaId: "v9",
+      variant: "full",
+      now: Date.now(),
+      force: false,
+      pause: async (ms) => { paused = ms; },
+      loadDetail: async () => {
+        const detail = await fetchSignedMediaDetail(detailState(), { fetch: fetchImpl, now: () => 1_700_000_000_000 }, "v9");
+        detailStatus = detail.status ?? 0;
+        const row = vaultDetailRow(detail.body);
+        return { url: row ? choosePlayableVideo(row)?.url ?? null : null, hold: videoDetailHold(detail.status, row) };
+      },
+    });
+    assert.equal(paused, VIDEO_DETAIL_PAUSE_MS);
+    assert.equal(detailStatus, 200);
+    assert.equal(resolved.url, "https://cdn2.onlyfans.com/files/fresh.mp4");
+    const saved = await db.query<{ full_url: string; clip_url: string }>("select full_url, clip_url from of_vault_item where item_key = 'v9'");
+    assert.equal(saved.rows[0]?.full_url, resolved.url);
+    assert.equal(saved.rows[0]?.clip_url, resolved.url);
+    const played = await handleVaultMedia(new Request("http://127.0.0.1/api/vault-media?creatorId=c-1&mediaId=v9&variant=full"), {
+      session: async () => ({ userId: "dueña", role: "owner", perms: ["vault"] }),
+      findPreview: async () => resolved.url,
+      fetchBytes: async () => ({ status: 200, body: Uint8Array.from([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70]), contentType: "video/mp4", contentLength: 8 }),
+    });
+    assert.equal(played.status, 200);
+    assert.equal(played.headers.get("content-type"), "video/mp4");
+  } finally {
+    clearSignRulesCache();
+    await db.close();
+  }
+});
+
+function asSql(db: PGlite): ReadSql {
+  return {
+    async query<T>(text: string, params?: unknown[]): Promise<T[]> {
+      const result = await db.query<T>(text, params);
+      return result.rows;
+    },
+  };
+}
 
 function detailState(): StorageStateFile {
   return {
