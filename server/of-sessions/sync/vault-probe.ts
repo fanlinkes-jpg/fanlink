@@ -48,15 +48,15 @@ export function sanitizeVaultShape(value: unknown, depth = 0): unknown {
   }
   if (typeof value === "number") {
     if (!Number.isFinite(value)) return null;
-    if (Number.isInteger(value) && value >= 0 && value < 100_000) return value;
-    return "id";
+    if (Number.isInteger(value) && Math.abs(value) >= 100_000) return "id";
+    return value;
   }
   if (typeof value === "boolean" || value == null) return value;
   return "text";
 }
 
 export function assertProbeFileSafe(raw: string): void {
-  if (/sess=|x-bc|app-token|"sign"\s*:/i.test(raw)) throw new Error("El sondeo iba a guardar un secreto.");
+  if (/sess=|x-bc|app-token|"sign"\s*:|Policy=|Signature=/i.test(raw)) throw new Error("El sondeo iba a guardar un secreto.");
 }
 
 export async function executeVaultProbe(input: {
@@ -74,15 +74,15 @@ export async function executeVaultProbe(input: {
   if ("reason" in auth) throw new Error(auth.reason);
   const rules = await loadSignRules(input.fetch, input.now());
   const reads: Array<{ name: string; path: string; status: number | null; body: unknown }> = [];
-  const listsPath = vaultListsPath(0);
-  const lists = await probeGet(input.fetch, listsPath, signedHeaders(rules, listsPath, auth, input.now()));
-  reads.push({ name: "lists", path: listsPath.split("?")[0] ?? listsPath, status: lists.status, body: lists.body });
-  input.stdout(`[fanlink:vault] sonda ruta=/api2/v2/vault/lists status=${lists.status ?? "sin"}`);
+  const lists = await readListPages(input, rules, auth, reads);
   const mediaPath = vaultMediaPath("all", 0, "list");
   const media = await probeGet(input.fetch, mediaPath, signedHeaders(rules, mediaPath, auth, input.now()));
   reads.push({ name: "media-all", path: "/api2/v2/vault/media", status: media.status, body: media.body });
   input.stdout(`[fanlink:vault] sonda ruta=/api2/v2/vault/media list=all status=${media.status ?? "sin"}`);
-  const folderId = firstFolderId(lists.body);
+  const folderId = reads
+    .filter((read) => read.name === "lists" || read.name.startsWith("lists-"))
+    .map((read) => firstFolderId(read.body))
+    .find((id) => id) ?? null;
   if (folderId) {
     const byList = vaultMediaPath(folderId, 0, "list");
     const listed = await probeGet(input.fetch, byList, signedHeaders(rules, byList, auth, input.now()));
@@ -111,6 +111,49 @@ export async function executeVaultProbe(input: {
   }
   input.stdout(`[fanlink:vault] sonda archivo=${file}`);
   return file;
+}
+
+const PROBE_LIST_PAGES = 20;
+
+async function readListPages(
+  input: { fetch: typeof fetch; now: () => number; stdout: (line: string) => void },
+  rules: Awaited<ReturnType<typeof loadSignRules>>,
+  auth: { cookie: string; userId: string; xBc: string },
+  reads: Array<{ name: string; path: string; status: number | null; body: unknown }>,
+): Promise<unknown> {
+  let offset = 0;
+  let last: unknown = null;
+  for (let page = 0; page < PROBE_LIST_PAGES; page += 1) {
+    const listsPath = vaultListsPath(offset);
+    const lists = await probeGet(input.fetch, listsPath, signedHeaders(rules, listsPath, auth, input.now()));
+    reads.push({
+      name: page === 0 ? "lists" : `lists-${offset}`,
+      path: "/api2/v2/vault/lists",
+      status: lists.status,
+      body: lists.body,
+    });
+    input.stdout(`[fanlink:vault] sonda ruta=/api2/v2/vault/lists offset=${offset} status=${lists.status ?? "sin"}`);
+    last = lists.body;
+    if (!probeHasMore(lists.body)) return last;
+    const count = probeListCount(lists.body);
+    const next = offset + (count > 0 ? count : 50);
+    if (next <= offset) return last;
+    offset = next;
+  }
+  input.stdout(`[fanlink:vault] sonda ruta=/api2/v2/vault/lists corte=paginas tope=${PROBE_LIST_PAGES}`);
+  return last;
+}
+
+function probeHasMore(body: unknown): boolean {
+  if (!body || typeof body !== "object") return false;
+  const raw = body as Record<string, unknown>;
+  return raw.hasMore === true || raw.has_more === true;
+}
+
+function probeListCount(body: unknown): number {
+  if (!body || typeof body !== "object") return 0;
+  const list = (body as Record<string, unknown>).list;
+  return Array.isArray(list) ? list.length : 0;
 }
 
 function firstFolderId(body: unknown): string | null {

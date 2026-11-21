@@ -7,6 +7,7 @@ import path from "node:path";
 import test from "node:test";
 import { chromium, type Page } from "playwright";
 import { VAULT_CARD_FRAME, VAULT_CARD_IMAGE } from "../../../src/lib/vault-card-frame.ts";
+import { vaultGridColumns } from "../../../src/lib/vault-grid.ts";
 
 const root = path.resolve(import.meta.dirname, "../../..");
 
@@ -130,6 +131,10 @@ test("el panel real del chat monta VaultBrowser con tarjetas cuadradas", async (
     while (vaultReads < 1 && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 50));
     const cards = panel.locator("[data-vault-card]");
     assert.equal(await cards.count(), 40);
+    assert.equal(await firstRowCount(cards), vaultGridColumns(1440));
+    await page.setViewportSize({ width: 2000, height: 1000 });
+    assert.equal(await firstRowCount(cards), vaultGridColumns(2000));
+    await page.setViewportSize({ width: 1440, height: 900 });
     const last = cards.last();
     await last.scrollIntoViewIfNeeded();
     const lastBox = await last.boundingBox();
@@ -196,6 +201,14 @@ function folderOf(raw: string | null): string | null {
   } catch {
     return null;
   }
+}
+
+async function firstRowCount(cards: ReturnType<Page["locator"]>): Promise<number> {
+  return cards.evaluateAll((nodes) => {
+    const tops = nodes.map((node) => Math.round(node.getBoundingClientRect().top));
+    const first = tops[0] ?? 0;
+    return tops.filter((top) => Math.abs(top - first) < 8).length;
+  });
 }
 
 function isVaultQuery(url: string): boolean {

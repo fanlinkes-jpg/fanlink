@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { vaultMediaPath, vaultPageLog } from "../sync/of-chat-api.ts";
 import { assertProbeFileSafe, sanitizeVaultShape } from "../sync/vault-probe.ts";
-import { vaultPlayerLog } from "../sync/media-bytes.ts";
+import { mediaAcceptHeader, vaultPlayerLog } from "../sync/media-bytes.ts";
+import { boundVaultOffset, VAULT_OFFSET_CAP } from "../sync/vault-walk.ts";
 
 test("la página de medios usa list y limit 40, sin type ni field", () => {
   const all = vaultMediaPath("all", 0);
@@ -53,4 +54,15 @@ test("el sondeo guarda la forma y no un secreto", () => {
   assert.match(player, /reproductor status=206 range=bytes=0-1048575/);
   assert.match(player, /tipo=video\/mp4 bytes=1048576/);
   assert.equal(player.includes("http"), false);
+  assert.equal(mediaAcceptHeader("https://cdn2.onlyfans.com/files/a.mp4", "bytes=0-100"), "video/*,*/*");
+  assert.equal(mediaAcceptHeader("https://cdn2.onlyfans.com/files/a.jpg", null).startsWith("image/"), true);
+  assert.throws(() => assertProbeFileSafe('{"u":"https://cdn.example/a?Policy=abc"}'), /secreto/);
+  assert.throws(() => assertProbeFileSafe("Signature=abc"), /secreto/);
+  assert.equal(sanitizeVaultShape(99999), 99999);
+  assert.equal(sanitizeVaultShape(100000), "id");
+  assert.equal(sanitizeVaultShape(22), 22);
+  const lines: string[] = [];
+  assert.equal(boundVaultOffset(9000, 40, (line) => lines.push(line)), VAULT_OFFSET_CAP);
+  assert.match(lines[0] ?? "", /corte offset tope=2000 pedido=9000 desde=40/);
+  assert.equal(boundVaultOffset(80, 40, () => undefined), 80);
 });

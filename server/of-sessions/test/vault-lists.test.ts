@@ -220,6 +220,38 @@ test("sin hasMore sigue mientras la página de medios viene llena", async () => 
   }
 });
 
+test("un 400 de list reintenta la carpeta con list_id y all no lleva type ni field", async () => {
+  clearSignRulesCache();
+  const seen: string[] = [];
+  const fetchImpl = (async (input: RequestInfo | URL) => {
+    const href = String(input);
+    seen.push(href);
+    if (href.includes("dynamic-rules")) return Response.json(RULES);
+    const url = new URL(href);
+    if (!href.includes("/vault/media")) return Response.json({ list: [], hasMore: false });
+    if (url.searchParams.get("list") === "all") return Response.json({ list: [{ id: 1, type: "photo" }], hasMore: false });
+    if (url.searchParams.has("list_id")) return Response.json({ list: [{ id: 9, type: "photo" }], hasMore: false });
+    return new Response("no", { status: 400 });
+  }) as typeof fetch;
+  try {
+    const all = await fetchSignedVault(storedState(), { fetch: fetchImpl, now: () => 1_700_000_000_000 }, "all", 0, { includeLists: false });
+    assert.equal(all.status, 200);
+    const allUrl = seen.find((href) => href.includes("/vault/media") && href.includes("list=all"));
+    assert.ok(allUrl);
+    assert.equal(allUrl.includes("type="), false);
+    assert.equal(allUrl.includes("field="), false);
+    assert.equal(allUrl.includes("list_id="), false);
+    const folder = await fetchSignedVault(storedState(), { fetch: fetchImpl, now: () => 1_700_000_000_000 }, "ducha", 0, { includeLists: false });
+    assert.equal(folder.status, 200);
+    assert.equal(seen.some((href) => href.includes("list=ducha") && !href.includes("list_id=")), true);
+    assert.equal(seen.some((href) => href.includes("list_id=ducha")), true);
+    const saved = folder.payloads[0] as { list?: Array<{ id?: number }> };
+    assert.equal(saved.list?.[0]?.id, 9);
+  } finally {
+    clearSignRulesCache();
+  }
+});
+
 test("dos lecturas de la misma cuenta esperan el hueco y no salen a la vez", async () => {
   clearSignRulesCache();
   clearAccountChatPace();
@@ -257,7 +289,7 @@ test("dos lecturas de la misma cuenta esperan el hueco y no salen a la vez", asy
   }
 });
 
-test("una subcarpeta custom usa photos, videos y list_id, y no se filtra por el título", async () => {
+test("una carpeta custom guarda photos y videos y al abrirla solo salen sus medios", async () => {
   clearSignRulesCache();
   clearVaultWalkCache();
   const db = new PGlite();

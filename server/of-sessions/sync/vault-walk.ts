@@ -388,19 +388,32 @@ function hasMoreLabel(body: unknown): string {
   return explicitHasMore(body) ? "si" : "no";
 }
 
+export const VAULT_OFFSET_CAP = 2_000;
+
+/** El tope no se traga una bóveda grande en silencio. */
+export function boundVaultOffset(next: number, from: number, log: (line: string) => void = console.info): number {
+  if (!Number.isFinite(next)) return from;
+  const raw = Math.floor(next);
+  if (raw > VAULT_OFFSET_CAP) {
+    log(`[fanlink:vault] corte offset tope=${VAULT_OFFSET_CAP} pedido=${raw} desde=${from}`);
+    return VAULT_OFFSET_CAP;
+  }
+  return Math.max(0, raw);
+}
+
 function followingOffset(body: unknown, offset: number, count: number): number {
   if (body && typeof body === "object") {
     const raw = body as Record<string, unknown>;
     const cursor = raw.nextOffset ?? raw.next_offset;
-    if (typeof cursor === "number" && Number.isFinite(cursor) && cursor > offset) return Math.min(2_000, Math.floor(cursor));
+    if (typeof cursor === "number" && Number.isFinite(cursor) && cursor > offset) return boundVaultOffset(cursor, offset);
   }
-  if (count > 0) return Math.min(2_000, offset + count);
+  if (count > 0) return boundVaultOffset(offset + count, offset);
   return offset;
 }
 
 function normalize(offset: number): number {
   if (!Number.isFinite(offset) || offset <= 0) return 0;
-  return Math.min(2_000, Math.floor(offset));
+  return boundVaultOffset(offset, 0);
 }
 
 function num(value: number | null | undefined): string {

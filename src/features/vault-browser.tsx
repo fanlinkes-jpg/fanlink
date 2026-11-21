@@ -3,6 +3,7 @@ import { queryVaultMirror } from "@/lib/of-sessions";
 import { VAULT_THUMB_MISSING, vaultMediaSrc } from "@/lib/chat-media";
 import { VAULT_CARD_FRAME, VAULT_CARD_IMAGE } from "@/lib/vault-card-frame";
 import { vaultFolderLabel } from "@/lib/vault-folder-label";
+import { VAULT_GRID_CLASS } from "@/lib/vault-grid";
 import { vaultSentPill, vaultUsageText } from "@/lib/vault-usage";
 import { VAULT_FILTER_DEBOUNCE_MS } from "@/lib/vault-debounce";
 
@@ -231,7 +232,7 @@ export function VaultBrowser({
               ))}
             </div>
             <div
-              className="grid min-h-0 flex-1 content-start gap-3 overflow-y-auto px-4 pb-4 [grid-template-columns:repeat(auto-fill,minmax(168px,1fr))]"
+              className={VAULT_GRID_CLASS}
               onScroll={(event) => {
                 const el = event.currentTarget;
                 if (el.scrollTop + el.clientHeight >= el.scrollHeight - 160) onMore?.();
@@ -333,7 +334,7 @@ export function VaultBrowser({
             <button type="button" className="absolute inset-0" aria-label="Cerrar vista previa" onClick={() => setPreview(null)} />
             <div className="relative z-10 flex h-[80vh] w-[80vw] items-center justify-center">
               {preview.kind === "video" ? (
-                <video controls autoPlay playsInline className="h-full w-full bg-black object-contain" src={vaultMediaSrc(creatorId, preview.id, preview.hoverClip ? "clip" : "full", thumbPage)} />
+                <video controls autoPlay playsInline className="h-full w-full bg-black object-contain" src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} />
               ) : preview.kind === "audio" ? (
                 <audio controls className="w-full" src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} />
               ) : (

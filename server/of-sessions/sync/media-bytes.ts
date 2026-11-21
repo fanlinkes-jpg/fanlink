@@ -147,7 +147,7 @@ export async function readSessionMediaResult(
     const auth = sessionForApi(state, Date.now());
     const cookie = "cookie" in auth ? auth.cookie : "";
     const headers: Record<string, string> = {
-      accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+      accept: mediaAcceptHeader(target, header),
       referer: "https://onlyfans.com/",
       origin: "https://onlyfans.com",
       "user-agent": BROWSER_FINGERPRINT.userAgent,
@@ -222,6 +222,12 @@ async function loadMedia(target: string, headers: Record<string, string>, ranged
 
 const thumbNotes = new Set<string>();
 const thumbRecovered = new Set<string>();
+
+/** Una miniatura pide imagen. Un vídeo, o un Range de vídeo, pide vídeo. */
+export function mediaAcceptHeader(target: string, range: string | null): string {
+  if (range || isVideoTarget(target)) return "video/*,*/*";
+  return "image/avif,image/webp,image/apng,image/*,*/*;q=0.8";
+}
 
 function isVideoTarget(url: string): boolean {
   const path = url.split("?")[0]?.toLowerCase() ?? "";
