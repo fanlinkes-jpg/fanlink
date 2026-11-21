@@ -465,9 +465,64 @@ export function choosePlayableVideo(row: Record<string, unknown>): { name: strin
   }
   for (const field of fields) {
     const url = playableFrom(field.value);
-    if (url) return { name: field.name, url };
+    if (url && !isPlaylistUrl(url)) return { name: field.name, url };
   }
   return null;
+}
+
+/** El manifiesto HLS/DASH, si el detalle no trae mp4. No incluye la firma. */
+export function drmManifestUrl(row: Record<string, unknown>): string | null {
+  const manifest = nested(nested(nested(row.files)?.drm)?.manifest);
+  if (!manifest) return null;
+  for (const key of ["hls", "dash"] as const) {
+    const value = textOf(manifest[key]);
+    if (value && /^https:\/\//i.test(value)) return value;
+  }
+  return null;
+}
+
+/** La primera URL de medio de una lista HLS. Ignora otras listas. */
+export function playlistMediaUrl(body: string, base: string): string | null {
+  for (const raw of body.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    let url: URL;
+    try {
+      url = new URL(line, base);
+    } catch {
+      continue;
+    }
+    if (url.protocol !== "https:") continue;
+    const href = url.toString();
+    if (isPlaylistUrl(href) || !isCandidateVideoUrl(href)) continue;
+    return href;
+  }
+  return null;
+}
+
+/**
+ * Jose entra por el mp4 del listado. Si el detalle solo trae lista, se lee una vez
+ * y el mp4 sigue el mismo reproductor.
+ */
+export async function resolveDetailPlayback(
+  row: Record<string, unknown>,
+  readText: (url: string) => Promise<string | null>,
+  pause: () => Promise<void>,
+): Promise<{ url: string | null; via: "archivo" | "lista" | "sin-url" }> {
+  const direct = choosePlayableVideo(row);
+  if (direct) return { url: direct.url, via: "archivo" };
+  const manifest = drmManifestUrl(row);
+  if (!manifest) return { url: null, via: "sin-url" };
+  if (!isPlaylistUrl(manifest) && isCandidateVideoUrl(manifest)) return { url: manifest, via: "archivo" };
+  await pause();
+  const body = await readText(manifest);
+  const media = body ? playlistMediaUrl(body, manifest) : null;
+  return { url: media, via: media ? "lista" : "sin-url" };
+}
+
+function isPlaylistUrl(url: string): boolean {
+  const path = url.split("?")[0]?.toLowerCase() ?? "";
+  return path.endsWith(".m3u8") || path.endsWith(".mpd");
 }
 
 /** Forma de los campos de vídeo, sin URL ni ids. Sirve para comparar cuentas. */

@@ -7,10 +7,10 @@ import { handleVaultMedia, noteVaultPlayRequest } from "../../../server/of-sessi
 import { readSessionMediaResult, videoBytesAccepted, videoFollowUp } from "../../../server/of-sessions/sync/media-bytes.ts";
 import { accountCreatorIds } from "../../../server/of-sessions/http/vault-accounts.ts";
 import { fetchSignedMediaDetail, fetchSignedVault } from "../../../server/of-sessions/sync/of-chat-api.ts";
-import { choosePlayableVideo, parseVaultBundle, vaultDetailRow, vaultFolderMark, videoFlagLine, videoHoldPayload } from "../../../server/of-sessions/sync/vault-model.ts";
+import { parseVaultBundle, resolveDetailPlayback, vaultDetailRow, vaultFolderMark, videoFlagLine, videoHoldPayload } from "../../../server/of-sessions/sync/vault-model.ts";
 import { loadFreshPreview, normalizeVaultOffset, reloadVaultPreview, signedUrlExpired } from "../../../server/of-sessions/sync/vault-thumbs.ts";
 import { openProfileThumbs } from "../../../server/of-sessions/sync/vault-owner.ts";
-import { playbackUrl, reuseOrRefreshVideo, saveVaultPreview, storedVaultMediaUrls, storedVaultPage } from "../../../server/of-sessions/sync/vault-store.ts";
+import { playbackUrl, reuseOrRefreshVideo, saveVaultPreview, storedVaultMediaUrls, storedVaultPage, VIDEO_DETAIL_PAUSE_MS } from "../../../server/of-sessions/sync/vault-store.ts";
 
 export const Route = createFileRoute("/api/vault-media")({
   server: {
@@ -130,11 +130,23 @@ async function loadMediaDetail(creatorId: string, mediaId: string): Promise<{ ur
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   }, mediaId);
   const row = vaultDetailRow(read.body);
-  const chosen = row ? choosePlayableVideo(row) : null;
   const flags = row ? videoFlagLine(row) : "convertedToVideo=ausente canView=ausente hasError=ausente isReady=ausente";
-  console.info(`[fanlink:vault] video medio=${vaultFolderMark(mediaId)} detalle=${chosen ? "url" : "sin-url"} status=${read.status ?? "sin"} ${flags}`.slice(0, 280));
-  if (chosen?.url && !signedUrlExpired(chosen.url, Date.now())) return { url: chosen.url, hold: "" };
+  const playback = row
+    ? await resolveDetailPlayback(row, readPlaylist, () => new Promise((resolve) => setTimeout(resolve, VIDEO_DETAIL_PAUSE_MS)))
+    : { url: null, via: "sin-url" as const };
+  console.info(`[fanlink:vault] video medio=${vaultFolderMark(mediaId)} detalle=${playback.via} status=${read.status ?? "sin"} ${flags}`.slice(0, 320));
+  if (playback.url && !signedUrlExpired(playback.url, Date.now())) return { url: playback.url, hold: "" };
   return { url: null, hold: JSON.stringify(videoHoldPayload(read.status, row)) };
+}
+
+async function readPlaylist(url: string): Promise<string | null> {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return null;
+    return await response.text();
+  } catch {
+    return null;
+  }
 }
 
 async function thumbPage(

@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { PGlite } from "@electric-sql/pglite";
-import { choosePlayableVideo, parseVaultBundle, stampVaultList, vaultDetailRow, videoDetailHold, videoDrmLine, videoHoldPayload, videoHoldText, videoShapeLine } from "../sync/vault-model.ts";
+import { choosePlayableVideo, parseVaultBundle, resolveDetailPlayback, stampVaultList, vaultDetailRow, videoDetailHold, videoDrmLine, videoHoldPayload, videoHoldText, videoShapeLine } from "../sync/vault-model.ts";
 import { fetchSignedMediaDetail, vaultMediaDetailPath } from "../sync/of-chat-api.ts";
 import { clearSignRulesCache } from "../sync/of-sign.ts";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
@@ -511,6 +511,50 @@ test("un detalle con convertedToVideo=no y drm no trae mp4 y abre OnlyFans", asy
   assert.equal(body.includes("m3u8"), false);
   assert.equal(body.includes("sek"), false);
   assert.deepEqual(JSON.parse(body), payload);
+});
+
+test("convertedToVideo=no con lista usa el mismo reproductor que el mp4", async () => {
+  const jose = {
+    type: "video",
+    convertedToVideo: false,
+    canView: true,
+    hasError: false,
+    isReady: true,
+    files: { full: { url: "https://cdn2.onlyfans.com/files/jose.mp4?Policy=sek" } },
+  };
+  let reads = 0;
+  const direct = await resolveDetailPlayback(jose, async () => { reads += 1; return null; }, async () => undefined);
+  assert.equal(direct.via, "archivo");
+  assert.equal(direct.url, jose.files.full.url);
+  assert.equal(reads, 0);
+  const row = {
+    id: 24,
+    type: "video",
+    convertedToVideo: false,
+    canView: true,
+    hasError: false,
+    isReady: true,
+    files: {
+      full: { url: null, sources: [] },
+      drm: { manifest: { hls: "https://cdn2.onlyfans.com/hls/files/a.m3u8?Policy=sek" } },
+    },
+    videoSources: { "240": null, "720": null },
+  };
+  assert.equal(choosePlayableVideo(row), null);
+  assert.match(videoDrmLine(row), /drm=si manifest=hls/);
+  assert.equal(videoDrmLine(row).includes("sek"), false);
+  const resolved = await resolveDetailPlayback(row, async () => "#EXTM3U\nhttps://cdn2.onlyfans.com/files/full.mp4\n", async () => undefined);
+  assert.equal(resolved.via, "lista");
+  assert.equal(resolved.url, "https://cdn2.onlyfans.com/files/full.mp4");
+  const played = await handleVaultMedia(new Request("http://127.0.0.1/api/vault-media?creatorId=u1fpdnp&mediaId=24&variant=full", {
+    headers: { range: "bytes=0-" },
+  }), {
+    session: async () => ({ userId: "dueña", role: "owner", perms: ["vault"] }),
+    findPreview: async () => resolved.url,
+    fetchBytes: async () => ({ status: 206, body: Uint8Array.from([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70]), contentType: "video/mp4", contentRange: "bytes 0-7/8", contentLength: 8 }),
+  });
+  assert.equal(played.status, 206);
+  assert.equal(played.headers.get("content-type"), "video/mp4");
 });
 
 function asSql(db: PGlite): ReadSql {
