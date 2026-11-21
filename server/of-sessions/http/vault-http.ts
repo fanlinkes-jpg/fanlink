@@ -16,7 +16,9 @@ export function mediaLogLine(creatorId: string, messageKey: string): string | nu
   return `[fanlink:media] creator=${vaultFolderMark(creatorId)} message=${vaultFolderMark(messageKey)}`;
 }
 
-/** Cada «Ver» o clip deja una línea antes de leer la sesión. Sin URL ni id. */
+/** Cada «Ver» o el hover deja una línea antes de leer la sesión. Sin URL ni id.
+ * «Ver» registra `ver variant=full`. El hover registra `ver variant=clip`.
+ */
 export function noteVaultPlayRequest(request: Request): void {
   const url = new URL(request.url);
   const variant = url.searchParams.get("variant");
@@ -96,10 +98,9 @@ export async function handleVaultMedia(request: Request, deps: {
   return streamMedia(preview, range, deps.fetchBytes);
 }
 
-/** Un Range abierto (`bytes=0-`) se queda en el primer megabyte. Así el hover no baja el archivo entero. */
-function headRange(header: string | null): string {
-  if (!header || /^bytes=0-$/i.test(header.trim())) return "bytes=0-1048575";
-  return header;
+/** Con `part=head` cualquier Range se queda en el primer megabyte. El hover no baja el archivo entero. */
+export function headRange(_header: string | null): string {
+  return "bytes=0-1048575";
 }
 
 export async function handleVaultSend(request: Request, deps: {

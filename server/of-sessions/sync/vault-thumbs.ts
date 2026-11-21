@@ -304,7 +304,7 @@ function usablePreview(url: string | null, now: number): string | null {
 }
 
 function storeImage(creatorId: string, mediaId: string, media: MediaBytes | null): MediaBytes | null {
-  if (!media?.body || !imageBytes(media.body, media.contentType)) return null;
+  if (!media?.body || media.status !== 200 || !imageBytes(media.body, media.contentType)) return null;
   putVaultThumb(creatorId, mediaId, media.body, media.contentType);
   return media;
 }
@@ -358,7 +358,7 @@ async function fetchThumbOnce(
       return { status: 0, body: null, contentType: "" };
     }
   }
-  if (!response.ok) {
+  if (response.status !== 200) {
     const status = response.status;
     await response.body?.cancel().catch(() => undefined);
     return { status, body: null, contentType: "" };

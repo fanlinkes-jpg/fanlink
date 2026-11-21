@@ -4,10 +4,10 @@ import { choosePlayableVideo, parseVaultBundle, stampVaultList, vaultDetailRow, 
 import { fetchSignedMediaDetail, vaultMediaDetailPath } from "../sync/of-chat-api.ts";
 import { clearSignRulesCache } from "../sync/of-sign.ts";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
-import { handleVaultMedia } from "../http/vault-http.ts";
+import { handleVaultMedia, headRange, noteVaultPlayRequest } from "../http/vault-http.ts";
+import { loadFreshPreview } from "../sync/vault-thumbs.ts";
 import { playbackUrl } from "../sync/vault-store.ts";
 import { clearVaultThumbs, fetchVaultMedia, getVaultThumb, hasFtyp, putVaultThumb, VIDEO_FETCH_TIMEOUT_MS, videoBytesAccepted, videoFollowUp } from "../sync/media-bytes.ts";
-import { noteVaultPlayRequest } from "../http/vault-http.ts";
 import { folderColumnView } from "../../../src/lib/vault-folder-label.ts";
 
 test("los conteos aceptan string, snake_case y el objeto counts, y Todos se guarda", () => {
@@ -349,6 +349,44 @@ test("un vídeo sin url pide el detalle y acaba en video/mp4", async () => {
   assert.equal(held.status, 409);
   assert.equal(await held.text(), "Vídeo aún procesándose en OnlyFans");
   clearSignRulesCache();
+});
+
+test("part=head recorta cualquier rango al primer megabyte y un 206 no entra en la caché", async () => {
+  assert.equal(headRange(null), "bytes=0-1048575");
+  assert.equal(headRange("bytes=0-"), "bytes=0-1048575");
+  assert.equal(headRange("bytes=500-9000000"), "bytes=0-1048575");
+  assert.equal(headRange("bytes=100-"), "bytes=0-1048575");
+  let seen: string | null = null;
+  await handleVaultMedia(new Request("http://127.0.0.1/api/vault-media?creatorId=c-1&mediaId=v9&variant=clip&part=head", {
+    headers: { range: "bytes=500-9000000" },
+  }), {
+    session: async () => ({ userId: "dueña", role: "owner", perms: ["vault"] }),
+    findPreview: async () => "https://cdn2.onlyfans.com/files/full.mp4",
+    fetchBytes: async (_url, range) => {
+      seen = range ?? null;
+      return { status: 206, body: Uint8Array.from([1]), contentType: "video/mp4", contentRange: "bytes 0-1048575/9" };
+    },
+  });
+  assert.equal(seen, "bytes=0-1048575");
+  const lines: string[] = [];
+  const previous = console.info;
+  console.info = ((line?: unknown) => { lines.push(String(line ?? "")); }) as typeof console.info;
+  noteVaultPlayRequest(new Request("http://127.0.0.1/api/vault-media?creatorId=c-1&mediaId=v9&variant=clip&part=head"));
+  console.info = previous;
+  assert.equal(lines.some((line) => line.includes("ver variant=clip") && !line.includes("v9")), true);
+  clearVaultThumbs();
+  const partial = await loadFreshPreview({
+    creatorId: "c-206",
+    mediaId: "v9",
+    url: "https://cdn2.onlyfans.com/files/t.jpg",
+    read: async () => ({
+      status: 206,
+      media: { status: 206, body: Uint8Array.from([0xff, 0xd8, 0xff]), contentType: "image/jpeg", contentRange: "bytes 0-2/9" },
+    }),
+    reload: async () => null,
+  });
+  assert.equal(partial?.status, 206);
+  assert.equal(getVaultThumb("c-206", "v9"), null);
 });
 
 function detailState(): StorageStateFile {
