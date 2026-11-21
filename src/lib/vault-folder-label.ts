@@ -11,7 +11,7 @@ export type VaultFolderCounts = {
 
 export type FolderCover = { id: string; kind: string | null };
 
-/** El texto de la carpeta. Los conteos de la lista mandan, también si son 0. */
+/** El texto de la carpeta. Un conteo ausente no se pinta como 0. */
 export function vaultFolderLabel(counts: VaultFolderCounts, loaded: { photos: number; videos: number; gifs: number }): string {
   const known = folderCountsKnown(counts);
   if (!known && counts.count != null && counts.count > 0) return `${counts.count} medios`;
@@ -19,12 +19,14 @@ export function vaultFolderLabel(counts: VaultFolderCounts, loaded: { photos: nu
   const videos = shownCount(counts.videos, known ? 0 : loaded.videos);
   const gifs = shownCount(counts.gifs, known ? 0 : loaded.gifs);
   const audios = shownCount(counts.audios, 0);
-  const total = photos + videos + gifs + audios;
+  const total = (photos ?? 0) + (videos ?? 0) + (gifs ?? 0) + (audios ?? 0);
   if (total === 0 && counts.hasMedia === false) return "vacío";
-  if (total === 0 && !known) return "Sin datos";
-  const parts = [piece(photos, "foto", "fotos"), piece(videos, "vídeo", "vídeos")];
-  if (gifs > 0) parts.push(piece(gifs, "GIF", "GIF"));
-  if (audios > 0) parts.push(piece(audios, "audio", "audios"));
+  const parts: string[] = [];
+  if (photos != null) parts.push(piece(photos, "foto", "fotos"));
+  if (videos != null) parts.push(piece(videos, "vídeo", "vídeos"));
+  if (gifs != null && gifs > 0) parts.push(piece(gifs, "GIF", "GIF"));
+  if (audios != null && audios > 0) parts.push(piece(audios, "audio", "audios"));
+  if (parts.length === 0) return "Sin datos";
   return parts.join(" · ");
 }
 
@@ -57,7 +59,8 @@ function piece(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
 }
 
-function shownCount(reported: number | null, loaded: number): number {
-  if (reported == null) return loaded;
-  return reported;
+function shownCount(reported: number | null, loaded: number): number | null {
+  if (reported != null) return reported;
+  if (loaded > 0) return loaded;
+  return null;
 }

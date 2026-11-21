@@ -1,7 +1,7 @@
 import { creatorIdsForChats } from "../../../src/lib/access-policy.ts";
 import { emptyVaultQuery, folderAndChildren, searchVaultLists, vaultQueryFromUnknown, type VaultQuery } from "./vault-filter.ts";
 import { itemSaleBlocked } from "./vault-block.ts";
-import { suggestVaultPrice, trailerPackages, vaultKindOf, type VaultFile, type VaultKind } from "./vault-model.ts";
+import { suggestVaultPrice, trailerPackages, vaultFolderMark, vaultKindOf, type VaultFile, type VaultKind } from "./vault-model.ts";
 import type { ReadSql } from "./store.ts";
 import { fanVaultUses, loadVaultMirror, loadVaultQuery, piecePurchaseCents, saveVaultQuery } from "./vault-store.ts";
 
@@ -286,16 +286,15 @@ async function selectVaultItems(
   if (query.minBuyRate != null) {
     where.push(`sent_count is not null and sent_count > 0 and sales_count is not null and sales_count::float / sent_count >= ${add(query.minBuyRate)}`);
   }
-  const hasListIds = await hasListIdColumn(sql);
   if (query.scope === "carpeta" && query.folderId) {
     const ids = [...folderAndChildren(folders, query.folderId)];
     if (!ids.includes(query.folderId)) ids.push(query.folderId);
     if (ids.length > 0) {
       const slot = add(ids);
-      const members = hasListIds
-        ? ` or exists (select 1 from jsonb_array_elements_text(coalesce(list_ids, '[]'::jsonb)) elem where elem = any(${slot}::text[]))`
-        : "";
-      where.push(`(list_key = any(${slot}::text[])${members})`);
+      const members = await hasMemberTable(sql)
+        ? `exists (select 1 from of_vault_list_item member where member.creator_id = of_vault_item.creator_id and member.item_key = of_vault_item.item_key and member.list_key = any(${slot}::text[]))`
+        : `list_key = any(${slot}::text[])`;
+      where.push(`(${members})`);
     }
   }
   if (query.sent !== "cualquiera" || query.bought !== "cualquiera") {
@@ -324,6 +323,9 @@ async function selectVaultItems(
     description: string | null; uploaded_at: Date | string | null; price_cents: number | null;
     sales_count: number | null; sent_count: number | null; list_ids?: unknown; clip_url?: string | null;
   }>(text, params);
+  if (query.scope === "carpeta" && query.folderId) {
+    console.info(`[fanlink:vault] carpeta=${vaultFolderMark(query.folderId)} n=${rows.length}`);
+  }
   return rows.map((row) => ({
     id: row.item_key,
     title: row.title ?? "Sin datos",
@@ -380,6 +382,15 @@ function sqlFold(expr: string): string {
 
 function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, (char) => `\\${char}`);
+}
+
+async function hasMemberTable(sql: ReadSql): Promise<boolean> {
+  const rows = await sql.query<{ n: number | string }>(
+    `select count(*)::int as n from information_schema.tables
+     where table_schema = 'public' and table_name = 'of_vault_list_item'`,
+    [],
+  );
+  return Number(rows[0]?.n ?? 0) > 0;
 }
 
 async function hasListIdColumn(sql: ReadSql): Promise<boolean> {

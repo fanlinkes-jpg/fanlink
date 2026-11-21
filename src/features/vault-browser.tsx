@@ -89,6 +89,7 @@ export function VaultBrowser({
   onMore,
   onOpenFolder,
   thumbPage = { listId: "all", offset: 0 },
+  pageItems = [],
 }: {
   creatorId: string;
   fanKey: string | null;
@@ -99,6 +100,8 @@ export function VaultBrowser({
   onMore?: () => void;
   onOpenFolder?: (listId: string | null) => void;
   thumbPage?: { listId: string; offset: number };
+  /** Medios que acaba de devolver el recorrido de esa carpeta. */
+  pageItems?: ReadonlyArray<{ id: string; title: string; kind: VaultCard["kind"] }>;
 }) {
   const [listText, setListText] = useState("");
   const [query, setQuery] = useState(EMPTY_QUERY);
@@ -114,13 +117,14 @@ export function VaultBrowser({
   useEffect(() => {
     let alive = true;
     setReady(false);
+    const folderId = layout === "of" && thumbPage.listId !== "all" ? thumbPage.listId : null;
     void queryVaultMirror({
       data: {
         creatorId,
         fanKey,
         listText: "",
         remember: false,
-        ...(layout === "of" ? { query: { ...EMPTY_QUERY } } : {}),
+        ...(layout === "of" ? { query: { ...EMPTY_QUERY, folderId, scope: folderId ? "carpeta" as const : "todas" as const } } : {}),
       },
     }).then((payload) => {
       if (!alive) return;
@@ -144,7 +148,7 @@ export function VaultBrowser({
       setLists(view.lists ?? []);
       setNotice(view.notice ?? (view.items && view.items.length > 0 ? null : "Sin datos"));
     }
-  }, [creatorId, fanKey, reloadToken, layout]);
+  }, [creatorId, fanKey, reloadToken, layout, thumbPage.listId]);
 
   useEffect(() => {
     if (!ready) return;
@@ -171,6 +175,8 @@ export function VaultBrowser({
   }, [ready, creatorId, fanKey, query, listText, layout]);
 
   const kind = query.kinds[0] ?? "";
+  const openFolderId = query.scope === "carpeta" ? query.folderId : null;
+  const grid = folderGrid(items, pageItems, openFolderId, thumbPage.listId);
   const folderName = lists.find((folder) => folder.id === query.folderId)?.name ?? "Todos los medios";
   if (layout === "of") {
     return (
@@ -204,7 +210,7 @@ export function VaultBrowser({
                   counts={folder}
                   covers={folder.covers ?? []}
                   active={query.folderId === folder.id}
-                  items={folderItems(library.length > 0 ? library : items, folder)}
+                  items={query.folderId === folder.id ? grid : []}
                   onClick={() => { onOpenFolder?.(folder.id); setQuery({ ...query, folderId: folder.id, scope: "carpeta" }); }}
                 />
               ))}
@@ -241,8 +247,8 @@ export function VaultBrowser({
                 if (el.scrollTop + el.clientHeight >= el.scrollHeight - 160) onMore?.();
               }}
             >
-              {items.length === 0 ? <p className="col-span-4 text-sm text-[#8a96a3]">Sin datos</p> : null}
-              {items.map((item) => {
+              {grid.length === 0 ? <p className="col-span-4 text-sm text-[#8a96a3]">Sin datos</p> : null}
+              {grid.map((item) => {
                 const selected = picked.includes(item.id);
                 const sentLabel = vaultSentPill(item.sent ?? null, item.sentCount ?? null);
                 return (
@@ -315,7 +321,7 @@ export function VaultBrowser({
             className="rounded-full bg-[#00aff0] px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
             onClick={() => {
               for (const id of picked) {
-                const item = items.find((row) => row.id === id);
+                const item = grid.find((row) => row.id === id);
                 if (!item || item.blocked) continue;
                 onAttach?.({
                   id: item.id,
@@ -460,8 +466,39 @@ function VaultThumb({ creatorId, itemId, title, listId, offset }: { creatorId: s
   return <VaultStill creatorId={creatorId} mediaId={itemId} title={title} className="absolute inset-0" imageStyle={VAULT_CARD_IMAGE} listId={listId} offset={offset} />;
 }
 
-function folderItems(items: readonly VaultCard[], folder: { id: string; name: string }): VaultCard[] {
-  return items.filter((item) => item.listId === folder.id || item.listIds?.includes(folder.id));
+function folderGrid(
+  mirror: readonly VaultCard[],
+  pageItems: ReadonlyArray<{ id: string; title: string; kind: VaultCard["kind"] }>,
+  folderId: string | null,
+  pageListId: string,
+): VaultCard[] {
+  if (!folderId) return [...mirror];
+  if (pageListId === folderId && pageItems.length > 0) {
+    const byId = new Map(mirror.map((item) => [item.id, item]));
+    return pageItems.map((item) => byId.get(item.id) ?? stubCard(item));
+  }
+  return mirror.filter((item) => item.listId === folderId);
+}
+
+function stubCard(item: { id: string; title: string; kind: VaultCard["kind"] }): VaultCard {
+  return {
+    id: item.id,
+    title: item.title || "Sin datos",
+    kind: item.kind,
+    seconds: null,
+    folder: null,
+    tags: [],
+    salesCount: null,
+    ventasLabel: "Sin datos",
+    bestSellerLabel: null,
+    suggestedLabel: "Sin datos",
+    packageLabel: "Sin datos",
+    packageWithId: null,
+    sentToFan: null,
+    boughtByFan: null,
+    blocked: false,
+    history: [],
+  };
 }
 
 function usageOf(item: VaultCard): string {

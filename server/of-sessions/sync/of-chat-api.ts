@@ -266,7 +266,7 @@ export function vaultListsPath(offset: number): string {
   return `/api2/v2/vault/lists?view=main&offset=${offset}&limit=${VAULT_LIST_LIMIT}`;
 }
 
-export function vaultMediaPath(listId: string, offset: number): string {
+export function vaultMediaPath(listId: string, offset: number, param: "list" | "list_id" = "list_id"): string {
   const params = new URLSearchParams({
     limit: String(VAULT_MEDIA_LIMIT),
     offset: String(offset),
@@ -274,6 +274,7 @@ export function vaultMediaPath(listId: string, offset: number): string {
   });
   const id = listId.trim() || "all";
   if (id === "all") params.set("list", "all");
+  else if (param === "list") params.set("list", id);
   else params.set("list_id", id);
   return `/api2/v2/vault/media?${params.toString()}`;
 }
@@ -335,8 +336,13 @@ export async function fetchSignedVault(state: StorageStateFile, deps: {
     else return { ...empty, status: read.status, reason: read.reason };
   }
   if (wantMedia) {
-    const primary = vaultMediaPath(list, skip);
-    const read = await readVaultPath(deps, () => getJson(deps.fetch, primary, signedHeaders(rules, primary, auth, deps.now()), deps.now()));
+    let primary = vaultMediaPath(list, skip);
+    let read = await readVaultPath(deps, () => getJson(deps.fetch, primary, signedHeaders(rules, primary, auth, deps.now()), deps.now()));
+    if (list !== "all" && read.status === 400) {
+      console.info("[fanlink:vault] list_id status=400 reintento=list");
+      primary = vaultMediaPath(list, skip, "list");
+      read = await readVaultPath(deps, () => getJson(deps.fetch, primary, signedHeaders(rules, primary, auth, deps.now()), deps.now()));
+    }
     console.info(vaultPageLog({ route: primary, status: read.status, count: mediaCountOf(read.body), hasMore: hasMoreLabelOf(read.body), offset: skip, listId: list }));
     status = read.status;
     const stopped = stopVaultRead(payloads, read);

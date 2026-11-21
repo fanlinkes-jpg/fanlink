@@ -223,6 +223,29 @@ test("sin hasMore sigue mientras la página de medios viene llena", async () => 
   }
 });
 
+test("un 400 de list_id reintenta una vez con list", async () => {
+  clearSignRulesCache();
+  const seen: string[] = [];
+  const fetchImpl = (async (input: RequestInfo | URL) => {
+    const href = String(input);
+    seen.push(href);
+    if (href.includes("dynamic-rules")) return Response.json(RULES);
+    const url = new URL(href);
+    if (url.searchParams.get("list_id") === "333") return new Response("{}", { status: 400 });
+    if (url.searchParams.get("list") === "333") return Response.json(VAULT_MEDIA_FOLDER_FIXTURE);
+    return Response.json({ list: [], hasMore: false });
+  }) as typeof fetch;
+  try {
+    const folder = await fetchSignedVault(storedState(), { fetch: fetchImpl, now: () => 1_700_000_000_000 }, "333", 0, { includeLists: false });
+    assert.equal(seen.filter((href) => href.includes("list_id=333")).length, 1);
+    assert.equal(seen.filter((href) => href.includes("list=333") && !href.includes("list_id=333")).length, 1);
+    const saved = folder.payloads[0] as { list?: Array<{ id?: number }> };
+    assert.equal(saved.list?.[0]?.id, 9001);
+  } finally {
+    clearSignRulesCache();
+  }
+});
+
 test("list=all no lleva type ni field y una carpeta sale con list_id", async () => {
   clearSignRulesCache();
   const seen: string[] = [];

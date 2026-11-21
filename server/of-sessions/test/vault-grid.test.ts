@@ -66,10 +66,26 @@ test("el panel real del chat monta VaultBrowser con tarjetas cuadradas", async (
       }
       if (request.headers()["x-tsr-serverfn"] === "true" && serverExport(url).includes("readChatVault")) {
         vaultReads += 1;
+        const posted = request.postData() ?? "";
+        const folder = posted.includes("ducha");
         await route.fulfill({
           status: 200,
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ result: { items: [], reason: null, hasMore: true, nextOffset: 24, cached: false } }),
+          body: JSON.stringify({
+            result: {
+              items: folder
+                ? [
+                  { id: "m1", title: "foto", kind: "foto" },
+                  { id: "m2", title: "clip", kind: "video" },
+                  { id: "m3", title: "otra", kind: "foto" },
+                ]
+                : [],
+              reason: null,
+              hasMore: !folder,
+              nextOffset: folder ? 0 : 24,
+              cached: false,
+            },
+          }),
         });
         return;
       }
@@ -149,6 +165,7 @@ test("el panel real del chat monta VaultBrowser con tarjetas cuadradas", async (
     await panel.getByRole("button", { name: /LA DUCHA/ }).click();
     await page.waitForFunction(() => document.querySelectorAll("[data-vault-card]").length === 3);
     assert.equal(await panel.locator("[data-vault-card]").count(), 3);
+    assert.equal(await panel.getByText("ultimo").count(), 0);
   } finally {
     await browser.close().catch(() => undefined);
     server.kill("SIGTERM");

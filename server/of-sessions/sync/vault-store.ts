@@ -162,7 +162,38 @@ export async function persistVaultRead(
   if (saved.length === 0 && lists.size === 0) return [];
   await saveVaultMirror(sql, creatorId, saved, [...lists.values()]);
   if (saved.length > 0 && page) await rememberThumbPage(sql, creatorId, saved.map((item) => item.id), page);
+  if (requested && requested !== "all" && saved.length > 0) {
+    await rememberListMembers(sql, creatorId, requested, saved.map((item) => item.id));
+    const fromList = lists.get(requested)?.covers ?? [];
+    if (fromList.length === 0) {
+      await fillEmptyCovers(sql, creatorId, requested, saved.filter((item) => item.kind !== "audio").slice(0, 4).map((item) => ({ id: item.id, kind: item.kind })));
+    }
+  }
   return saved;
+}
+
+/** Los medios que devolvió `list_id` pertenecen a esa carpeta. No copia el catálogo de listStates. */
+async function rememberListMembers(sql: ReadSql, creatorId: string, listId: string, itemIds: readonly string[]): Promise<void> {
+  if (!(await hasColumn(sql, "of_vault_list_item", "item_key"))) return;
+  for (const itemId of itemIds) {
+    await sql.query(
+      `insert into of_vault_list_item (creator_id, list_key, item_key)
+       values ($1, $2, $3)
+       on conflict (creator_id, list_key, item_key) do nothing`,
+      [creatorId, listId, itemId],
+    );
+  }
+}
+
+/** Si la lista no trajo medias[], las primeras del recorrido con list_id sirven de portada. */
+async function fillEmptyCovers(sql: ReadSql, creatorId: string, listId: string, covers: ReadonlyArray<{ id: string; kind: string | null }>): Promise<void> {
+  if (covers.length === 0 || !(await hasColumn(sql, "of_vault_list", "cover_ids"))) return;
+  await sql.query(
+    `update of_vault_list set cover_ids = $3::jsonb
+     where creator_id = $1 and list_key = $2
+       and (cover_ids is null or cover_ids = '[]'::jsonb)`,
+    [creatorId, listId, JSON.stringify(covers)],
+  );
 }
 
 export async function saveVaultFull(sql: ReadSql, creatorId: string, mediaId: string, fullUrl: string): Promise<void> {

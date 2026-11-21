@@ -60,6 +60,9 @@ test("el sondeo guarda la forma y no un secreto", () => {
   const hidden = sanitizeVaultShape({ id: 12, listId: 34, photosCount: 4, minus: -2, ratio: 1.5 }) as Record<string, unknown>;
   assert.equal(hidden.id, "id");
   assert.equal(hidden.listId, "id");
+  const paid = sanitizeVaultShape({ paid: 12, valid: 3 }) as Record<string, unknown>;
+  assert.equal(paid.paid, 12);
+  assert.equal(paid.valid, 3);
   assert.equal(hidden.photosCount, 4);
   assert.equal(hidden.minus, "id");
   assert.equal(hidden.ratio, "id");

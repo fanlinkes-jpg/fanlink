@@ -375,9 +375,6 @@ function tagsOf(row: Record<string, unknown>, posted: boolean | null, sent: bool
   if (sent === true) tags.push("Sent");
   if (sent === false) tags.push("Sent:no");
   if (row.trailer === true || row.isPreview === true || (textOf(row.type) ?? "").toLowerCase().includes("trailer")) tags.push("Tráiler");
-  for (const list of memberLists(row)) {
-    if (list.name && list.type !== "posts" && list.name !== "Posts") tags.push(list.name);
-  }
   return [...new Set(tags)];
 }
 
@@ -426,33 +423,27 @@ function isVideoUrl(url: string): boolean {
   return path.endsWith(".mp4") || path.endsWith(".webm") || path.endsWith(".mov") || path.endsWith(".m4v");
 }
 
-const SYSTEM_LISTS = new Set(["posts", "stories", "messages", "streams", "media"]);
-
-function listMembership(row: Record<string, unknown>, lists: readonly VaultList[]): {
+/**
+ * `listStates` es el catálogo de listas (canAddMedia), no la pertenencia.
+ * La pertenencia la pone el recorrido con `list_id` vía `stampVaultList`.
+ */
+function listMembership(_row: Record<string, unknown>, _lists: readonly VaultList[]): {
   listId: string | null;
   listName: string | null;
   listIds: string[];
 } {
-  const parsed = memberLists(row);
-  const custom = parsed.find((list) => !SYSTEM_LISTS.has(list.type));
-  const chosen = custom ?? parsed[0];
-  const listId = chosen?.id ?? null;
-  const listName = chosen?.name ?? lists.find((list) => list.id === listId)?.name ?? null;
-  return { listId, listName, listIds: [...new Set(parsed.map((list) => list.id))] };
+  return { listId: null, listName: null, listIds: [] };
 }
 
-/** `hasMedia: false` es el catálogo de listas, no la pertenencia. Sin el campo, la entrada sí cuenta. */
-function memberLists(row: Record<string, unknown>): Array<{ id: string; name: string | null; type: string }> {
-  const states = Array.isArray(row.listStates) ? row.listStates : [];
-  return states.flatMap((entry) => {
-    if (!entry || typeof entry !== "object") return [];
-    const list = entry as Record<string, unknown>;
-    const id = textOf(list.id);
-    if (!id) return [];
-    const flag = list.hasMedia ?? list.has_media;
-    if (typeof flag === "boolean" && flag === false) return [];
-    return [{ id, name: textOf(list.name), type: (textOf(list.type) ?? "").toLowerCase() }];
-  });
+/** Marca corta de una carpeta. No es el id ni el nombre. */
+export function vaultFolderMark(id: string): string {
+  if (!id || id === "all") return "todos";
+  let hash = 2166136261;
+  for (let index = 0; index < id.length; index += 1) {
+    hash ^= id.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0").slice(0, 6);
 }
 
 function collectFolders(payload: unknown, lists: VaultList[]): void {

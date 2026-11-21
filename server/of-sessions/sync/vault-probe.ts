@@ -29,7 +29,7 @@ export function readProbeAccount(argv: readonly string[]): string {
 }
 
 function isIdKey(key: string): boolean {
-  return key === "id" || key.endsWith("Id") || key.toLowerCase().endsWith("id");
+  return key === "id" || key.endsWith("Id") || key.endsWith("_id");
 }
 
 /**

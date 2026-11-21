@@ -776,6 +776,7 @@ export function RealChatsPage() {
     setPanel("vault");
     if (!selected) return;
     if (offset < 0 || vaultPage.current.busy) return;
+    if (offset === 0 && listId !== vaultPage.current.listId) setOfVault([]);
     vaultPage.current = { listId, offset, busy: true };
     if (offset === 0) setVaultReading(true);
     try {
@@ -1805,7 +1806,7 @@ function ComposerPanelBody({
         <div role="region" aria-label="Panel Add from media vault" className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {reading ? <p className="px-4 py-2 text-sm text-[#8a96a3]">Leyendo la bóveda de OnlyFans…</p> : null}
           {creatorId && creatorId !== "all" ? (
-            <VaultBrowser layout="of" creatorId={creatorId} fanKey={fanKey} reloadToken={vaultReload} thumbPage={thumbPage} onAttach={onVault} onClose={onClose} onMore={onVaultMore} onOpenFolder={onOpenFolder} />
+            <VaultBrowser layout="of" creatorId={creatorId} fanKey={fanKey} reloadToken={vaultReload} thumbPage={thumbPage} pageItems={ofVault} onAttach={onVault} onClose={onClose} onMore={onVaultMore} onOpenFolder={onOpenFolder} />
           ) : <p className="p-4 text-sm text-[#8a96a3]">Sin datos</p>}
         </div>
       );

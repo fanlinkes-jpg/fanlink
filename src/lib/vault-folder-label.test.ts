@@ -22,6 +22,13 @@ test("un 0 de la carpeta no se sustituye por los medios de Todos", () => {
   );
 });
 
+test("un conteo que no viene no se pinta como cero", () => {
+  assert.equal(
+    vaultFolderLabel({ photos: 0, videos: null, gifs: null, audios: null, hasMedia: true }, { photos: 615, videos: 2, gifs: 2 }),
+    "0 fotos",
+  );
+});
+
 test("vacío solo cuando OnlyFans dice que la lista no tiene medios", () => {
   assert.equal(
     vaultFolderLabel({ photos: 0, videos: 0, gifs: 0, audios: 0, hasMedia: false }, none),

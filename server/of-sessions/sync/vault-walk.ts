@@ -1,7 +1,7 @@
 import type { StorageStateFile } from "../sessions/storage-state.ts";
 import { fetchSignedVault, VAULT_MEDIA_LIMIT } from "./of-chat-api.ts";
 import type { ReadSql } from "./store.ts";
-import { mergeVaultList, parseVaultBundle, vaultAllList, vaultKeyNames, vaultPayloadKind, type VaultFile, type VaultList } from "./vault-model.ts";
+import { mergeVaultList, parseVaultBundle, vaultAllList, vaultFolderMark, vaultKeyNames, vaultPayloadKind, type VaultFile, type VaultList } from "./vault-model.ts";
 import { persistVaultRead } from "./vault-store.ts";
 
 /** Pausa entre páginas. Más lenta que el chat: la bóveda pesa. */
@@ -201,6 +201,7 @@ async function walkOne(
     remember(input.creatorId, listId, input.now(), items, thumbItems);
   }
   console.info(`[fanlink:vault] fin lista=${safe(listId)} paginas=${pages} medios=${items.length} hasMore=${hasMore ? "si" : "no"}`);
+  console.info(`[fanlink:vault] carpeta=${vaultFolderMark(listId)} n=${items.length}`);
   return {
     items,
     thumbItems,
