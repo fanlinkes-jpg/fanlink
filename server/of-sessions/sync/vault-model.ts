@@ -412,7 +412,7 @@ function clipOf(row: Record<string, unknown>): string | null {
     }
   }
   const files = nested(row.files);
-  for (const key of ["preview", "squarePreview"]) {
+  for (const key of ["src", "source", "full", "preview", "squarePreview"]) {
     const url = firstFileUrl(files?.[key]) ?? firstFileUrl(row[key]);
     if (url && isVideoUrl(url)) return url;
   }
@@ -516,8 +516,8 @@ function vaultLists(payload: unknown): VaultList[] {
 function listCounts(list: Record<string, unknown>): Pick<VaultList, "photos" | "videos" | "gifs" | "audios" | "hasMedia" | "count"> {
   const bags = countBags(list);
   return {
-    photos: pickCount(bags, ["photosCount", "photoCount", "photos_count", "photo_count", "photos", "photo"]),
-    videos: pickCount(bags, ["videosCount", "videoCount", "videos_count", "video_count", "videos", "video"]),
+    photos: pickCount(bags, ["photosCount", "photoCount", "photos_count", "photo_count", "photos", "photo", "imagesCount", "imageCount", "image_count"]),
+    videos: pickCount(bags, ["videosCount", "videoCount", "videos_count", "video_count", "videos", "video", "video_count"]),
     gifs: pickCount(bags, ["gifsCount", "gifCount", "gifs_count", "gif_count", "gifs", "gif"]),
     audios: pickCount(bags, ["audiosCount", "audioCount", "audios_count", "audio_count", "audios", "audio"]),
     hasMedia: pickBool(bags, ["hasMedia", "has_media"]),

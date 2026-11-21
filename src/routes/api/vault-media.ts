@@ -4,7 +4,7 @@ import { getSql } from "@/lib/db";
 import { getOfSessionManager } from "@/lib/of-sessions-runtime.server";
 import { ensureStaff } from "@/lib/workspace-store";
 import { handleVaultMedia } from "../../../server/of-sessions/http/vault-http.ts";
-import { readSessionMediaBytes, readSessionMediaResult } from "../../../server/of-sessions/sync/media-bytes.ts";
+import { readSessionMediaResult } from "../../../server/of-sessions/sync/media-bytes.ts";
 import { accountCreatorIds } from "../../../server/of-sessions/http/vault-accounts.ts";
 import { fetchSignedVault } from "../../../server/of-sessions/sync/of-chat-api.ts";
 import { parseVaultBundle } from "../../../server/of-sessions/sync/vault-model.ts";
@@ -24,7 +24,8 @@ export const Route = createFileRoute("/api/vault-media")({
           const url = new URL(request.url);
           const creatorId = url.searchParams.get("creatorId") ?? "";
           const mediaId = url.searchParams.get("mediaId") ?? "";
-          const variant = url.searchParams.get("variant") === "full" ? "full" : "preview";
+          const rawVariant = url.searchParams.get("variant");
+          const variant = rawVariant === "full" || rawVariant === "clip" ? rawVariant : "preview";
           const page = await thumbPage(sql, creatorId, mediaId, url);
           return handleVaultMedia(request, {
             session: async () => ({ userId: access.userId, role: access.role, perms: access.perms, creatorIds }),
@@ -34,8 +35,16 @@ export const Route = createFileRoute("/api/vault-media")({
               if (wanted === "clip") return urls.clip;
               return urls.preview ?? urls.thumb ?? urls.full;
             },
-            fetchBytes: (target, range) => {
-              if (variant === "full" || range) return readSessionMediaBytes(creatorId, target, range);
+            fetchBytes: async (target, range) => {
+              if (variant === "full" || variant === "clip" || range) {
+                const first = await readSessionMediaResult(creatorId, target, range);
+                if (first.media) return first.media;
+                if (first.status !== 403 && first.status !== 410) return null;
+                const fresh = await reloadPreview(sql, creatorId, mediaId, page.listId, page.offset);
+                if (!fresh) return null;
+                const second = await readSessionMediaResult(creatorId, fresh, range);
+                return second.media;
+              }
               return loadFreshPreview({
                 creatorId,
                 mediaId,

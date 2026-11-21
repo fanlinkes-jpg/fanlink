@@ -11,14 +11,14 @@ test("una lista con contadores no sale vacía aunque aún no se hayan pintado su
   );
   assert.equal(
     vaultFolderLabel({ photos: null, videos: null, gifs: null, audios: null, hasMedia: null }, { photos: 2, videos: 1, gifs: 0 }),
-    "2 fotos · 1 vídeos",
+    "2 fotos · 1 vídeo",
   );
 });
 
 test("un photosCount 0 no tapa los medios ya cargados", () => {
   assert.equal(
     vaultFolderLabel({ photos: 0, videos: 0, gifs: 0, audios: 0, hasMedia: true }, { photos: 6, videos: 1, gifs: 0 }),
-    "6 fotos · 1 vídeos",
+    "6 fotos · 1 vídeo",
   );
 });
 

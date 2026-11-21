@@ -254,24 +254,42 @@ export type VaultFetchOptions = {
 
 /** La web pide las carpetas de 50 en 50 (`view=main`) y sigue con offset mientras `hasMore`. */
 export const VAULT_LIST_LIMIT = 50;
-/** La web pide los medios de 24 en 24: type=all, field=recent, sort=desc, list_id solo con carpeta. */
-export const VAULT_MEDIA_LIMIT = 24;
+/**
+ * La web pagina con `limit` 40, `offset`, `sort=desc` y `list`.
+ * `list=all` es toda la bóveda. Una carpeta usa `list=<id>`.
+ * `list_id`, `type=all` y `field=recent` no van: un 400 de esa query
+ * cortaba el paseo en la primera página.
+ */
+export const VAULT_MEDIA_LIMIT = 40;
 
 export function vaultListsPath(offset: number): string {
   return `/api2/v2/vault/lists?view=main&offset=${offset}&limit=${VAULT_LIST_LIMIT}`;
 }
 
-export function vaultMediaPath(listId: string, offset: number): string {
+export function vaultMediaPath(listId: string, offset: number, folderParam: "list" | "list_id" = "list"): string {
   const params = new URLSearchParams({
     limit: String(VAULT_MEDIA_LIMIT),
     offset: String(offset),
-    type: "all",
-    field: "recent",
     sort: "desc",
   });
-  if (listId !== "all") params.set("list_id", listId);
+  const id = listId.trim() || "all";
+  params.set(folderParam, id);
   return `/api2/v2/vault/media?${params.toString()}`;
-};
+}
+
+/** Ruta, estado y conteos. Sin query firmada ni cookies. */
+export function vaultPageLog(input: {
+  route: string;
+  status: number | null;
+  count: number;
+  hasMore: string;
+  offset: number;
+  listId: string;
+}): string {
+  const route = input.route.split("?")[0] || "/api2/v2/vault/media";
+  const listId = input.listId.replace(/https?:\/\/\S+/gi, "").replace(/[\r\n]/g, " ").trim().slice(0, 40);
+  return `[fanlink:vault] pagina ruta=${route} status=${input.status ?? "sin"} n=${input.count} hasMore=${input.hasMore} offset=${input.offset} list=${listId}`;
+}
 
 /**
  * Una página de `vault/lists` y/o `vault/media`. No relee miniaturas.
@@ -303,28 +321,69 @@ export async function fetchSignedVault(state: StorageStateFile, deps: {
     : 0;
   const wantLists = options?.includeLists ?? skip === 0;
   const wantMedia = options?.includeMedia !== false;
-  const paths = [
-    ...(wantLists ? [vaultListsPath(listSkip)] : []),
-    ...(wantMedia ? [vaultMediaPath(list, skip)] : []),
-  ];
   const payloads: unknown[] = [];
   let status: number | null = null;
-  for (const path of paths) {
+  if (wantLists) {
+    const path = vaultListsPath(listSkip);
     const read = await readVaultPath(deps, () => getJson(deps.fetch, path, signedHeaders(rules, path, auth, deps.now()), deps.now()));
     status = read.status;
-    if (read.sessionRejected) {
-      return { payloads, status: 401, reason: SESSION_EXPIRED_LABEL, sessionRejected: true, signatureRejected: false, retryAfterMs: 0 };
-    }
-    if (read.signatureRejected) {
-      return { payloads, status: 400, reason: "OnlyFans ha rechazado la firma", sessionRejected: false, signatureRejected: true, retryAfterMs: 0 };
-    }
-    if (read.retryAfterMs > 0) {
-      return { payloads, status: 429, reason: "OnlyFans respondió 429", sessionRejected: false, signatureRejected: false, retryAfterMs: read.retryAfterMs };
-    }
+    console.info(vaultPageLog({ route: path, status: read.status, count: listCountOf(read.body), hasMore: hasMoreLabelOf(read.body), offset: listSkip, listId: "listas" }));
+    const stopped = stopVaultRead(payloads, read);
+    if (stopped) return stopped;
     if (read.ok) payloads.push(read.body);
     else return { ...empty, status: read.status, reason: read.reason };
   }
+  if (wantMedia) {
+    const primary = vaultMediaPath(list, skip, "list");
+    let read = await readVaultPath(deps, () => getJson(deps.fetch, primary, signedHeaders(rules, primary, auth, deps.now()), deps.now()));
+    console.info(vaultPageLog({ route: primary, status: read.status, count: mediaCountOf(read.body), hasMore: hasMoreLabelOf(read.body), offset: skip, listId: list }));
+    if (read.status === 400 && list !== "all") {
+      const alt = vaultMediaPath(list, skip, "list_id");
+      const second = await readVaultPath(deps, () => getJson(deps.fetch, alt, signedHeaders(rules, alt, auth, deps.now()), deps.now()));
+      console.info(vaultPageLog({ route: alt, status: second.status, count: mediaCountOf(second.body), hasMore: hasMoreLabelOf(second.body), offset: skip, listId: list }));
+      if (second.ok) read = second;
+    }
+    status = read.status;
+    const stopped = stopVaultRead(payloads, read);
+    if (stopped) return stopped;
+    if (read.ok) payloads.push(read.body);
+    else return { ...empty, payloads, status: read.status, reason: read.reason };
+  }
   return { ...empty, payloads, status, reason: payloads.length === 0 ? "No se ha podido leer la bóveda." : null };
+}
+
+function stopVaultRead(payloads: unknown[], read: JsonPage): SignedVaultRead | null {
+  if (read.sessionRejected) {
+    return { payloads, status: 401, reason: SESSION_EXPIRED_LABEL, sessionRejected: true, signatureRejected: false, retryAfterMs: 0 };
+  }
+  if (read.signatureRejected) {
+    return { payloads, status: 400, reason: "OnlyFans ha rechazado la firma", sessionRejected: false, signatureRejected: true, retryAfterMs: 0 };
+  }
+  if (read.retryAfterMs > 0) {
+    return { payloads, status: 429, reason: "OnlyFans respondió 429", sessionRejected: false, signatureRejected: false, retryAfterMs: read.retryAfterMs };
+  }
+  return null;
+}
+
+function listCountOf(body: unknown): number {
+  if (!body || typeof body !== "object") return 0;
+  const raw = body as Record<string, unknown>;
+  if (Array.isArray(raw.list)) return raw.list.length;
+  if (Array.isArray(raw.lists)) return raw.lists.length;
+  return 0;
+}
+
+function mediaCountOf(body: unknown): number {
+  if (!body || typeof body !== "object") return 0;
+  const list = (body as Record<string, unknown>).list;
+  return Array.isArray(list) ? list.length : 0;
+}
+
+function hasMoreLabelOf(body: unknown): string {
+  if (!body || typeof body !== "object") return "ausente";
+  const raw = body as Record<string, unknown>;
+  if (!("hasMore" in raw) && !("has_more" in raw)) return "ausente";
+  return raw.hasMore === true || raw.has_more === true ? "si" : "no";
 }
 
 async function readVaultPath(deps: {

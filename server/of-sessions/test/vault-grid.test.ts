@@ -45,6 +45,7 @@ test("el panel real del chat monta VaultBrowser con tarjetas cuadradas", async (
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     let vaultReads = 0;
+    let lastVaultBody = "";
     const seenExports: string[] = [];
     await page.route("**/*", async (route) => {
       const request = route.request();
@@ -75,7 +76,7 @@ test("el panel real del chat monta VaultBrowser con tarjetas cuadradas", async (
         await route.fulfill({
           status: 200,
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ result: vaultView() }),
+          body: JSON.stringify({ result: vaultView(folderOf(lastVaultBody = request.postData() ?? "")) }),
         });
         return;
       }
@@ -140,6 +141,9 @@ test("el panel real del chat monta VaultBrowser con tarjetas cuadradas", async (
     assert.ok(vaultReads >= 2, `el scroll no pidió otra página (${vaultReads}) vistos ${seenExports.join(" | ")}`);
     const shotPath = await savePanelShot(page);
     assert.ok(shotPath.endsWith("boveda-panel-1440.png"));
+    await panel.getByRole("button", { name: /LA DUCHA/ }).click();
+    await page.waitForFunction(() => document.querySelectorAll("[data-vault-card]").length === 3);
+    assert.equal(await panel.locator("[data-vault-card]").count(), 3);
   } finally {
     await browser.close().catch(() => undefined);
     server.kill("SIGTERM");
@@ -182,6 +186,18 @@ function chatList() {
   };
 }
 
+function folderOf(raw: string | null): string | null {
+  if (!raw) return null;
+  if (raw.includes('"s":"ducha"') || raw.includes('"folderId":"ducha"')) return "ducha";
+  try {
+    const body = JSON.parse(raw) as { query?: { folderId?: string | null }; data?: { query?: { folderId?: string | null } } };
+    const id = body.data?.query?.folderId ?? body.query?.folderId ?? null;
+    return typeof id === "string" && id ? id : null;
+  } catch {
+    return null;
+  }
+}
+
 function isVaultQuery(url: string): boolean {
   return url.includes("cXVlcnlWYXVsdE1pcnJvc") || serverExport(url).includes("queryVaultMirror");
 }
@@ -214,7 +230,7 @@ async function savePanelShot(page: Page): Promise<string> {
   }
 }
 
-function vaultView() {
+function vaultView(folderId: string | null = null) {
   const card = {
     tags: [] as string[],
     salesCount: null,
@@ -229,7 +245,7 @@ function vaultView() {
     blocked: false,
     history: [],
   };
-  return {
+  const view = {
     notice: null,
     lists: [
       { id: "all", name: "Todos", parentId: null, photos: 22, videos: 18, gifs: 0, audios: 0, hasMedia: true },
@@ -258,10 +274,15 @@ function vaultView() {
       })),
     ],
     query: {
-      text: "", kinds: [], minSeconds: null, maxSeconds: null, uploadedFrom: null, uploadedTo: null, list: null, folderId: null,
-      scope: "todas", couples: [], offer: "todas", minPriceCents: null, maxPriceCents: null, sent: "cualquiera", bought: "cualquiera",
+      text: "", kinds: [], minSeconds: null, maxSeconds: null, uploadedFrom: null, uploadedTo: null, list: null, folderId,
+      scope: folderId ? "carpeta" : "todas", couples: [], offer: "todas", minPriceCents: null, maxPriceCents: null, sent: "cualquiera", bought: "cualquiera",
       bestSeller: false, minBuyRate: null, sort: "fecha", themes: [],
     },
+  };
+  if (!folderId) return view;
+  return {
+    ...view,
+    items: view.items.filter((item) => item.listId === folderId || item.listIds.some((id: string) => id === folderId)),
   };
 }
 

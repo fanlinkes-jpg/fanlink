@@ -9,12 +9,12 @@ export type VaultUsage = {
   kind: string | null;
 };
 
-/** Pastilla visible. null solo si OnlyFans dijo que no se envió. */
+/** Pastilla visible. null si OnlyFans no dijo que se envió y no hay conteo. */
 export function vaultSentPill(sent: boolean | null, sentCount: number | null): string | null {
   if (sent == null && sentCount == null) return null;
   if (sent === false) return null;
   if (sentCount != null) return `Enviado ${sentCount}`;
-  return "Enviado · Sin datos";
+  return "Enviado";
 }
 
 export function vaultUsageText(usage: VaultUsage): string {
@@ -22,7 +22,7 @@ export function vaultUsageText(usage: VaultUsage): string {
   const sent = usage.sent == null
     ? "Sin datos"
     : usage.sent
-      ? usage.sentCount == null ? "Enviado · Sin datos" : `Enviado ${usage.sentCount}`
+      ? usage.sentCount == null ? "Enviado" : `Enviado ${usage.sentCount}`
       : "No enviado";
   const price = usage.priceLabel ?? "Sin datos";
   const date = usage.dateLabel ?? "Sin datos";

@@ -19,9 +19,9 @@ export function vaultFolderLabel(counts: VaultFolderCounts, loaded: { photos: nu
   const audios = shownCount(counts.audios, 0);
   const total = photos + videos + gifs + audios;
   if (total > 0) {
-    const parts = [`${photos} fotos`, `${videos} vídeos`];
-    if (gifs > 0) parts.push(`${gifs} GIF`);
-    if (audios > 0) parts.push(`${audios} audios`);
+    const parts = [piece(photos, "foto", "fotos"), piece(videos, "vídeo", "vídeos")];
+    if (gifs > 0) parts.push(piece(gifs, "GIF", "GIF"));
+    if (audios > 0) parts.push(piece(audios, "audio", "audios"));
     return parts.join(" · ");
   }
   if (counts.hasMedia === false) return "vacío";
@@ -30,6 +30,10 @@ export function vaultFolderLabel(counts: VaultFolderCounts, loaded: { photos: nu
 }
 
 /** Un 0 de OnlyFans no esconde medios que el paseo ya guardó. */
+function piece(count: number, one: string, many: string): string {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
 function shownCount(reported: number | null, loaded: number): number {
   if (reported == null || (reported === 0 && loaded > 0)) return loaded;
   return reported;

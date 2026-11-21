@@ -195,12 +195,22 @@ async function loadMedia(target: string, headers: Record<string, string>, ranged
     await response.body?.cancel().catch(() => undefined);
     return { status: response.status };
   }
-  if (ranged) {
+  const upstreamType = (response.headers.get("content-type") ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
+  const video = ranged || upstreamType.startsWith("video/") || isVideoTarget(target);
+  if (video) {
     const media = mediaFromFetchResponse(response);
     if (!media) {
       await response.body?.cancel().catch(() => undefined);
       return { status: response.status };
     }
+    if (!media.contentType.startsWith("video/") && isVideoTarget(target)) media.contentType = "video/mp4";
+    console.info(vaultPlayerLog({
+      status: media.status,
+      range: headers.range ?? null,
+      contentRange: media.contentRange ?? null,
+      contentType: media.contentType,
+      bytes: media.contentLength ?? null,
+    }));
     return media;
   }
   const raw = new Uint8Array(await response.arrayBuffer());
@@ -212,6 +222,25 @@ async function loadMedia(target: string, headers: Record<string, string>, ranged
 
 const thumbNotes = new Set<string>();
 const thumbRecovered = new Set<string>();
+
+function isVideoTarget(url: string): boolean {
+  const path = url.split("?")[0]?.toLowerCase() ?? "";
+  return path.endsWith(".mp4") || path.endsWith(".webm") || path.endsWith(".mov") || path.endsWith(".m4v");
+}
+
+export function vaultPlayerLog(input: {
+  status: number;
+  range: string | null;
+  contentRange: string | null;
+  contentType: string;
+  bytes: number | null;
+}): string {
+  const clean = (value: string) => value.replace(/https?:\/\/\S+/gi, "").replace(/[\r\n]/g, " ").trim().slice(0, 80);
+  const range = input.range ? clean(input.range) : "no";
+  const back = input.contentRange ? clean(input.contentRange) : "no";
+  const type = clean(input.contentType || "sin").split(";")[0] || "sin";
+  return `[fanlink:vault] reproductor status=${input.status} range=${range} devuelto=${back} tipo=${type} bytes=${input.bytes ?? "sin"}`;
+}
 
 export function noteVaultThumb(status: number, intento?: string): void {
   const key = `${status}:${intento ?? ""}`;

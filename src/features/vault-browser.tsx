@@ -174,7 +174,7 @@ export function VaultBrowser({
     return (
       <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-white text-[#1c2333]">
         <div className="flex min-h-0 flex-1 overflow-hidden">
-          <aside className="flex w-72 shrink-0 flex-col border-r border-[#eceff3]">
+          <aside className="flex w-80 shrink-0 flex-col border-r border-[#eceff3]">
             <div className="flex items-center gap-2 border-b border-[#eceff3] px-4 py-3">
               <p className="text-sm font-semibold tracking-wide">BÓVEDA</p>
               <input aria-label="Buscar listas" value={listText} placeholder="Buscar" onChange={(event) => setListText(event.target.value)} className="ml-auto h-8 w-28 rounded-full border border-[#e6e8ee] px-3 text-xs" />
@@ -231,7 +231,7 @@ export function VaultBrowser({
               ))}
             </div>
             <div
-              className="grid min-h-0 flex-1 content-start gap-3 overflow-y-auto px-4 pb-4 [grid-template-columns:repeat(auto-fill,minmax(104px,1fr))]"
+              className="grid min-h-0 flex-1 content-start gap-3 overflow-y-auto px-4 pb-4 [grid-template-columns:repeat(auto-fill,minmax(168px,1fr))]"
               onScroll={(event) => {
                 const el = event.currentTarget;
                 if (el.scrollTop + el.clientHeight >= el.scrollHeight - 160) onMore?.();
@@ -270,18 +270,23 @@ export function VaultBrowser({
                       <VaultThumb creatorId={creatorId} itemId={item.id} title={item.title} listId={thumbPage.listId} offset={thumbPage.offset} />
                     )}
                     <span className={`absolute left-1.5 top-1.5 z-10 grid h-5 w-5 place-items-center rounded-full text-[11px] font-semibold ${selected ? "bg-[#00aff0] text-white" : "bg-white/80 text-transparent"}`}>{selected ? picked.indexOf(item.id) + 1 : ""}</span>
+                    <span className="absolute right-1.5 top-1.5 z-10 flex max-w-[70%] flex-col items-end gap-1">
+                      {item.posted ? <span className="rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white">Publicado</span> : null}
+                      {sentLabel ? <span className="rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white">{sentLabel}</span> : null}
+                      {!item.posted && !sentLabel && priceChip(item.priceLabel) ? (
+                        <span className={`rounded-full px-1.5 py-0.5 text-[10px] text-white ${priceChip(item.priceLabel) === "PPV" ? "bg-[#ff5a7a] font-semibold" : "bg-black/70"}`}>{priceChip(item.priceLabel)}</span>
+                      ) : null}
+                    </span>
                   </span>
-                  <span className="flex flex-wrap items-center gap-1 px-1 py-1">
-                    {item.posted ? <span className="rounded-full bg-[#1c2333] px-1.5 py-0.5 text-[10px] text-white">Publicado</span> : null}
-                    {item.priceLabel && item.priceLabel !== "Sin datos" ? (
-                      <span className={`rounded-full px-1.5 py-0.5 text-[10px] text-white ${item.priceLabel !== "Free" ? "bg-[#ff5a7a] font-semibold" : "bg-[#1c2333]"}`}>{item.priceLabel}</span>
-                    ) : null}
-                    {sentLabel ? <span className="rounded-full bg-[#1c2333] px-1.5 py-0.5 text-[10px] text-white">{sentLabel}</span> : null}
+                  <span className="line-clamp-2 flex flex-wrap items-center gap-1 px-1 py-1">
                     {item.dateLabel && item.dateLabel !== "Sin datos" ? (
                       <span className="rounded-full bg-[#1c2333] px-1.5 py-0.5 text-[10px] text-white">{item.dateLabel}</span>
                     ) : null}
                     {item.kind === "video" && item.seconds != null ? (
                       <span className="rounded bg-[#1c2333] px-1 py-0.5 text-[10px] text-white">{formatSeconds(item.seconds)}</span>
+                    ) : null}
+                    {item.priceLabel && item.priceLabel !== "Sin datos" && item.priceLabel !== "Free" ? (
+                      <span className="rounded-full bg-[#1c2333] px-1.5 py-0.5 text-[10px] text-white">{item.priceLabel}</span>
                     ) : null}
                     <span
                       role="button"
@@ -326,13 +331,13 @@ export function VaultBrowser({
         {preview ? (
           <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-6" role="dialog" aria-label="Vista previa">
             <button type="button" className="absolute inset-0" aria-label="Cerrar vista previa" onClick={() => setPreview(null)} />
-            <div className="relative z-10 max-h-[80vh] max-w-3xl">
+            <div className="relative z-10 flex h-[80vh] w-[80vw] items-center justify-center">
               {preview.kind === "video" ? (
-                <video controls autoPlay className="max-h-[80vh] max-w-full bg-black" src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} />
+                <video controls autoPlay playsInline className="h-full w-full bg-black object-contain" src={vaultMediaSrc(creatorId, preview.id, preview.hoverClip ? "clip" : "full", thumbPage)} />
               ) : preview.kind === "audio" ? (
-                <audio controls src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} />
+                <audio controls className="w-full" src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} />
               ) : (
-                <img alt={preview.title} className="max-h-[80vh] max-w-full object-contain" src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} />
+                <img alt={preview.title} className="h-full w-full object-contain" src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} />
               )}
             </div>
           </div>
@@ -515,18 +520,26 @@ function VaultFolder({
   });
   const covers = items.filter((item) => item.kind !== "audio").slice(0, 4);
   return (
-    <button type="button" onClick={onClick} className={`flex w-full items-center gap-3 px-4 py-3 text-left ${active ? "bg-[#f4f7fb]" : "hover:bg-[#fafbfc]"}`}>
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-semibold">{name}</span>
-        <span className="block truncate text-xs text-[#8a96a3]">{label}</span>
+    <button type="button" onClick={onClick} className={`flex w-full flex-col gap-2 px-4 py-3 text-left ${active ? "bg-[#f4f7fb]" : "hover:bg-[#fafbfc]"}`}>
+      <span className="min-w-0">
+        <span className="line-clamp-2 block text-sm font-semibold">{name}</span>
+        <span className="block text-xs text-[#8a96a3]">{label}</span>
       </span>
-      <span className="flex shrink-0 gap-1">
-        {covers.map((item) => (
-          <VaultStill key={item.id} creatorId={creatorId} mediaId={item.id} className="h-12 w-12 rounded object-cover object-center" listId={listId} offset={offset} />
-        ))}
-      </span>
+      {covers.length > 0 ? (
+        <span className="flex gap-1">
+          {covers.map((item) => (
+            <VaultStill key={item.id} creatorId={creatorId} mediaId={item.id} className="h-12 w-12 rounded object-cover object-center" listId={listId} offset={offset} />
+          ))}
+        </span>
+      ) : null}
     </button>
   );
+}
+
+function priceChip(label: string | null | undefined): "Gratis" | "PPV" | null {
+  if (!label || label === "Sin datos") return null;
+  if (label === "Free" || label === "Gratis") return "Gratis";
+  return "PPV";
 }
 
 function formatSeconds(seconds: number): string {

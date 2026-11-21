@@ -6,10 +6,10 @@ import { persistVaultRead } from "./vault-store.ts";
 
 /** Pausa entre páginas. Más lenta que el chat: la bóveda pesa. */
 export const VAULT_PAGE_GAP_MS = 800;
-/** Páginas de una sola lista. 40 × 40 cubre las 514 de una cuenta. */
+/** Páginas de una sola lista. 40 × 40 cubre una bóveda de más de mil medios. */
 export const VAULT_WALK_CAP = 40;
-/** Páginas en total, listas incluidas, para no encadenar cientos de peticiones. */
-export const VAULT_WALK_BUDGET = 80;
+/** Páginas en total. La lista «all» tiene que poder terminar antes de las carpetas. */
+export const VAULT_WALK_BUDGET = 200;
 export const VAULT_WALK_CACHE_MS = 10 * 60 * 1000;
 
 export type VaultWalk = {
@@ -172,10 +172,10 @@ async function walkOne(
     const body = mediaBody(read.payloads);
     const count = mediaCount(body);
     const flagged = explicitHasMore(body);
-    const pageFull = !hasMoreField(body) && count === VAULT_MEDIA_LIMIT;
+    const pageFull = count === VAULT_MEDIA_LIMIT;
     hasMore = flagged || pageFull;
     pages += 1;
-    console.info(`[fanlink:vault] pagina lista=${safe(listId)} offset=${offset} medios=${count} hasMore=${hasMoreLabel(body)}`);
+    console.info(`[fanlink:vault] pagina ruta=/api2/v2/vault/media status=${status ?? "sin"} n=${count} hasMore=${hasMoreLabel(body)} offset=${offset} list=${safe(listId)}`);
     if (pageFull) {
       console.info(`[fanlink:vault] sin hasMore lista=${safe(listId)} offset=${offset} medios=${count} sigue=pagina-llena`);
     }
