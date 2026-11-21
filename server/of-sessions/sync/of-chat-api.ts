@@ -281,6 +281,12 @@ export function vaultMediaPath(listId: string, offset: number): string {
   return `/api2/v2/vault/media?${params.toString()}`;
 }
 
+/** Un medio de la bóveda. La web lo pide al abrir un vídeo cuyo listado no trae URL. */
+export function vaultMediaDetailPath(mediaId: string): string {
+  const id = mediaId.trim();
+  return `/api2/v2/vault/media/${encodeURIComponent(id)}`;
+}
+
 /** Ruta, estado y conteos. Sin query firmada ni cookies. */
 export function vaultPageLog(input: {
   route: string;
@@ -354,6 +360,23 @@ export async function fetchSignedVault(state: StorageStateFile, deps: {
     else return { ...empty, payloads, status: read.status, reason: read.reason, queryParam };
   }
   return { ...empty, payloads, status, queryParam, reason: payloads.length === 0 ? "No se ha podido leer la bóveda." : null };
+}
+
+/** Detalle firmado de un medio. No registra la URL ni el id. */
+export async function fetchSignedMediaDetail(state: StorageStateFile, deps: {
+  fetch: typeof fetch;
+  now: () => number;
+  accountId?: string;
+  sleep?: (ms: number) => Promise<void>;
+}, mediaId: string): Promise<{ status: number | null; body: unknown; reason: string | null }> {
+  const auth = sessionForApi(state, deps.now());
+  if ("reason" in auth) return { status: null, body: null, reason: auth.reason };
+  const rules = await loadSignRules(deps.fetch, deps.now());
+  const path = vaultMediaDetailPath(mediaId);
+  const read = await readVaultPath(deps, () => getJson(deps.fetch, path, signedHeaders(rules, path, auth, deps.now()), deps.now()));
+  console.info(`[fanlink:vault] video medio=${vaultFolderMark(mediaId)} detalle status=${read.status || "sin"}`);
+  if (!read.ok) return { status: read.status, body: null, reason: read.reason };
+  return { status: read.status, body: read.body, reason: null };
 }
 
 function stopVaultRead(payloads: unknown[], read: JsonPage, queryParam: "list" | "list_id" | null = null): SignedVaultRead | null {

@@ -282,6 +282,14 @@ export async function saveVaultFull(sql: ReadSql, creatorId: string, mediaId: st
   );
 }
 
+export async function saveVaultClip(sql: ReadSql, creatorId: string, mediaId: string, clipUrl: string): Promise<void> {
+  if (!(await hasColumn(sql, "of_vault_item", "clip_url"))) return;
+  await sql.query(
+    "update of_vault_item set clip_url = $3 where creator_id = $1 and item_key = $2",
+    [creatorId, mediaId, clipUrl],
+  );
+}
+
 export async function saveVaultPreview(
   sql: ReadSql,
   creatorId: string,

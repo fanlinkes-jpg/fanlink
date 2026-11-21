@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseVaultBundle, stampVaultList, videoShapeLine } from "../sync/vault-model.ts";
+import { choosePlayableVideo, parseVaultBundle, stampVaultList, vaultDetailRow, videoHoldText, videoShapeLine } from "../sync/vault-model.ts";
+import { fetchSignedMediaDetail, vaultMediaDetailPath } from "../sync/of-chat-api.ts";
+import { clearSignRulesCache } from "../sync/of-sign.ts";
+import type { StorageStateFile } from "../sessions/storage-state.ts";
+import { handleVaultMedia } from "../http/vault-http.ts";
 import { playbackUrl } from "../sync/vault-store.ts";
 import { clearVaultThumbs, fetchVaultMedia, getVaultThumb, hasFtyp, putVaultThumb, VIDEO_FETCH_TIMEOUT_MS, videoBytesAccepted, videoFollowUp } from "../sync/media-bytes.ts";
 import { noteVaultPlayRequest } from "../http/vault-http.ts";
@@ -272,6 +276,90 @@ test("un 206 a mitad de archivo no exige ftyp y el principio sin ftyp no se sirv
     globalThis.fetch = previous;
   }
 });
+
+test("un vídeo sin url pide el detalle y acaba en video/mp4", async () => {
+  const bare = {
+    id: 43,
+    type: "video",
+    convertedToVideo: false,
+    canView: true,
+    hasError: false,
+    isReady: true,
+    files: { full: { url: null, src: null, source: null, sources: [] } },
+    videoSources: { "240": null, "720": null },
+  };
+  const line = videoShapeLine(bare);
+  assert.equal(line.includes("https"), false);
+  assert.match(line, /convertedToVideo=no/);
+  assert.match(line, /canView=si/);
+  assert.match(line, /hasError=no/);
+  assert.match(line, /isReady=si/);
+  assert.match(line, /files\.full=objeto url:ausente/);
+  assert.equal(choosePlayableVideo(bare), null);
+  assert.equal(videoHoldText({ ...bare, isReady: false }), "Vídeo aún procesándose en OnlyFans");
+  assert.equal(videoHoldText({ ...bare, hasError: true }), "OnlyFans no ha podido procesar el vídeo");
+  assert.equal(vaultMediaDetailPath("43"), "/api2/v2/vault/media/43");
+  clearSignRulesCache();
+  const seen: string[] = [];
+  const fetchImpl = (async (input: RequestInfo | URL) => {
+    const href = String(input);
+    seen.push(href.split("?")[0] ?? href);
+    if (href.includes("dynamic-rules")) {
+      return Response.json({
+        static_param: "param",
+        format: "1:{}:{:x}:2",
+        checksum_indexes: [0, 1],
+        checksum_constants: [5, 5],
+        checksum_constant: 10,
+        app_token: "token",
+        remove_headers: ["user-id"],
+      });
+    }
+    assert.equal(new URL(href).pathname, "/api2/v2/vault/media/43");
+    return Response.json({
+      id: 43,
+      type: "video",
+      convertedToVideo: false,
+      canView: true,
+      hasError: false,
+      isReady: true,
+      files: { full: { url: "https://cdn2.onlyfans.com/files/full.mp4?Policy=sek" } },
+      videoSources: { "240": null, "720": null },
+    });
+  }) as typeof fetch;
+  const detail = await fetchSignedMediaDetail(detailState(), { fetch: fetchImpl, now: () => 1_700_000_000_000 }, "43");
+  const row = vaultDetailRow(detail.body);
+  const chosen = row ? choosePlayableVideo(row) : null;
+  assert.equal(chosen?.name, "files.full");
+  assert.equal(chosen?.url, "https://cdn2.onlyfans.com/files/full.mp4?Policy=sek");
+  assert.equal(seen.some((href) => href.endsWith("/api2/v2/vault/media/43")), true);
+  const played = await handleVaultMedia(new Request("http://127.0.0.1/api/vault-media?creatorId=c-1&mediaId=43&variant=full"), {
+    session: async () => ({ userId: "dueña", role: "owner", perms: ["vault"] }),
+    findPreview: async () => chosen?.url ?? null,
+    fetchBytes: async () => ({ status: 200, body: Uint8Array.from([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70]), contentType: "video/mp4", contentLength: 8 }),
+  });
+  assert.equal(played.status, 200);
+  assert.equal(played.headers.get("content-type"), "video/mp4");
+  const held = await handleVaultMedia(new Request("http://127.0.0.1/api/vault-media?creatorId=c-1&mediaId=43&variant=full"), {
+    session: async () => ({ userId: "dueña", role: "owner", perms: ["vault"] }),
+    findPreview: async () => null,
+    videoHold: () => "Vídeo aún procesándose en OnlyFans",
+    fetchBytes: async () => null,
+  });
+  assert.equal(held.status, 409);
+  assert.equal(await held.text(), "Vídeo aún procesándose en OnlyFans");
+  clearSignRulesCache();
+});
+
+function detailState(): StorageStateFile {
+  return {
+    cookies: [
+      { name: "auth_id", value: "42", domain: ".onlyfans.com", path: "/", expires: -1, httpOnly: true, secure: true, sameSite: "Lax" },
+      { name: "sess", value: "ok", domain: ".onlyfans.com", path: "/", expires: -1, httpOnly: true, secure: true, sameSite: "Lax" },
+    ],
+    origins: [{ origin: "https://onlyfans.com", localStorage: [{ name: "bcTokenSha", value: "huella" }] }],
+  };
+}
 
 function accountShape(
   all: [number, number, number, number],

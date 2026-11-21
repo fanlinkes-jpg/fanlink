@@ -557,9 +557,11 @@ function HoverClip({ src, title }: { src: string; title: string }) {
 function VaultPlayback({ src }: { src: string }) {
   const node = useRef<HTMLVideoElement>(null);
   const [state, setState] = useState<"carga" | "ok" | "error" | "timeout">("carga");
+  const [note, setNote] = useState("");
   useEffect(() => {
     const video = node.current;
     setState("carga");
+    setNote("");
     if (!src || !video) return;
     video.src = src;
     video.load();
@@ -573,7 +575,7 @@ function VaultPlayback({ src }: { src: string }) {
   }, [src]);
   if (!src) return <p className="text-sm text-white">Vídeo no disponible</p>;
   if (state === "timeout") return <p className="text-sm text-white">No se ha podido cargar el vídeo</p>;
-  if (state === "error") return <p className="text-sm text-white">Vídeo no disponible</p>;
+  if (state === "error") return <p className="text-sm text-white">{note || "Vídeo no disponible"}</p>;
   return (
     <video
       ref={node}
@@ -585,7 +587,16 @@ function VaultPlayback({ src }: { src: string }) {
       className="h-full w-full bg-black object-contain"
       src={src}
       onCanPlay={() => setState("ok")}
-      onError={() => setState("error")}
+      onError={() => {
+        void fetch(src).then(async (response) => {
+          const type = response.headers.get("content-type") ?? "";
+          if (response.status === 409 || type.startsWith("text/plain")) {
+            const text = (await response.text()).replace(/\s+/g, " ").trim().slice(0, 160);
+            if (text) setNote(text);
+          }
+          setState("error");
+        }).catch(() => setState("error"));
+      }}
     />
   );
 }

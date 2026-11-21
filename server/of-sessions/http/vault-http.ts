@@ -63,6 +63,8 @@ export async function handleVaultMedia(request: Request, deps: {
   findPreview: (creatorId: string, mediaId: string, variant?: "full" | "preview" | "clip") => Promise<string | null>;
   fetchBytes: (url: string, range?: string | null) => Promise<MediaBytes | null>;
   log?: (line: string) => void;
+  /** Texto para el visor cuando un vídeo sigue sin URL después del detalle. */
+  videoHold?: () => string | null;
 }): Promise<Response> {
   const actor = await deps.session();
   if (!actor) return new Response("Unauthorized", { status: 401 });
@@ -81,6 +83,15 @@ export async function handleVaultMedia(request: Request, deps: {
     if (cached) return thumbResponse(cached);
   }
   const preview = await deps.findPreview(creatorId, mediaId, variant);
+  if (!preview && (variant === "full" || variant === "clip")) {
+    const hold = deps.videoHold?.()?.trim();
+    if (hold) {
+      return new Response(hold, {
+        status: 409,
+        headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "private, no-store" },
+      });
+    }
+  }
   const range = url.searchParams.get("part") === "head" ? headRange(request.headers.get("range")) : request.headers.get("range");
   return streamMedia(preview, range, deps.fetchBytes);
 }

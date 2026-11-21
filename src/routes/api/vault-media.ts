@@ -6,11 +6,11 @@ import { ensureStaff } from "@/lib/workspace-store";
 import { handleVaultMedia, noteVaultPlayRequest } from "../../../server/of-sessions/http/vault-http.ts";
 import { readSessionMediaResult, videoBytesAccepted, videoFollowUp } from "../../../server/of-sessions/sync/media-bytes.ts";
 import { accountCreatorIds } from "../../../server/of-sessions/http/vault-accounts.ts";
-import { fetchSignedVault } from "../../../server/of-sessions/sync/of-chat-api.ts";
-import { parseVaultBundle, vaultFolderMark } from "../../../server/of-sessions/sync/vault-model.ts";
+import { fetchSignedMediaDetail, fetchSignedVault } from "../../../server/of-sessions/sync/of-chat-api.ts";
+import { choosePlayableVideo, parseVaultBundle, vaultDetailRow, vaultFolderMark, videoFlagLine, videoHoldText } from "../../../server/of-sessions/sync/vault-model.ts";
 import { loadFreshPreview, normalizeVaultOffset, reloadVaultPreview } from "../../../server/of-sessions/sync/vault-thumbs.ts";
 import { openProfileThumbs } from "../../../server/of-sessions/sync/vault-owner.ts";
-import { playbackUrl, saveVaultPreview, storedVaultMediaUrls, storedVaultPage } from "../../../server/of-sessions/sync/vault-store.ts";
+import { playbackUrl, saveVaultClip, saveVaultFull, saveVaultPreview, storedVaultMediaUrls, storedVaultPage } from "../../../server/of-sessions/sync/vault-store.ts";
 
 export const Route = createFileRoute("/api/vault-media")({
   server: {
@@ -29,14 +29,29 @@ export const Route = createFileRoute("/api/vault-media")({
           const variant = rawVariant === "full" || rawVariant === "clip" ? rawVariant : "preview";
           const page = await thumbPage(sql, creatorId, mediaId, url);
           let expectVideo = false;
+          let hold: string | null = null;
           return handleVaultMedia(request, {
             session: async () => ({ userId: access.userId, role: access.role, perms: access.perms, creatorIds }),
+            videoHold: () => hold,
             findPreview: async (creator, id, wanted) => {
               const urls = await storedVaultMediaUrls(sql, creator, id);
               expectVideo = urls.kind === "video" && (wanted === "full" || wanted === "clip");
               const picked = playbackUrl(urls, wanted ?? "preview", urls.kind);
-              if (expectVideo && !picked) console.info(`[fanlink:vault] video medio=${vaultFolderMark(id)} motivo=sin-url`);
-              return picked;
+              if (picked || !expectVideo) return picked;
+              const remembered = rememberedHold(creator, id);
+              if (remembered) {
+                hold = remembered;
+                return null;
+              }
+              const detail = await loadMediaDetail(creator, id);
+              if (detail.url) {
+                await saveVaultFull(sql, creator, id, detail.url);
+                await saveVaultClip(sql, creator, id, detail.url);
+                return detail.url;
+              }
+              hold = detail.hold;
+              rememberHold(creator, id, detail.hold);
+              return null;
             },
             fetchBytes: async (target, range) => {
               if (expectVideo || range) {
@@ -73,6 +88,36 @@ export const Route = createFileRoute("/api/vault-media")({
     },
   },
 });
+
+const videoHolds = new Map<string, { at: number; text: string }>();
+
+function rememberedHold(creatorId: string, mediaId: string): string | null {
+  const hit = videoHolds.get(`${creatorId}\n${mediaId}`);
+  if (!hit || Date.now() - hit.at > 60_000) return null;
+  return hit.text;
+}
+
+function rememberHold(creatorId: string, mediaId: string, text: string): void {
+  videoHolds.set(`${creatorId}\n${mediaId}`, { at: Date.now(), text });
+}
+
+async function loadMediaDetail(creatorId: string, mediaId: string): Promise<{ url: string | null; hold: string }> {
+  const sessions = await getOfSessionManager();
+  const account = (await sessions.listAccounts()).find((item) => item.creatorId === creatorId && item.status === "active" && item.hasStorageState);
+  if (!account) return { url: null, hold: "Vídeo no disponible" };
+  const read = await fetchSignedMediaDetail(await sessions.readStorageState(account.id), {
+    fetch,
+    now: () => Date.now(),
+    accountId: account.id,
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  }, mediaId);
+  const row = vaultDetailRow(read.body);
+  const chosen = row ? choosePlayableVideo(row) : null;
+  const flags = row ? videoFlagLine(row) : "convertedToVideo=ausente canView=ausente hasError=ausente isReady=ausente";
+  console.info(`[fanlink:vault] video medio=${vaultFolderMark(mediaId)} detalle=${chosen ? "url" : "sin-url"} ${flags}`.slice(0, 280));
+  if (chosen?.url) return { url: chosen.url, hold: "" };
+  return { url: null, hold: videoHoldText(row) };
+}
 
 async function thumbPage(
   sql: Awaited<ReturnType<typeof getSql>>,

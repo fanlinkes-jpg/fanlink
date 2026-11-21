@@ -476,6 +476,7 @@ export function videoShapeLine(row: Record<string, unknown>): string {
   const source = nested(row.source) ?? nested(files?.source);
   const sources = nested(row.videoSources);
   const parts = [
+    videoFlagLine(row),
     `files.full=${valueKind(files?.full)}`,
     `files.full.sources=${valueKind(nested(files?.full)?.sources)}`,
     `files.source=${valueKind(files?.source)}`,
@@ -488,6 +489,35 @@ export function videoShapeLine(row: Record<string, unknown>): string {
     parts.push(keys.length ? `videoSources=${keys.map((key) => `${key}:${valueKind(sources[key])}`).join(",")}` : "videoSources=vacio");
   }
   return parts.join(" ");
+}
+
+/** El detalle de un medio puede venir suelto, en `data` o en `list`. */
+export function vaultDetailRow(body: unknown): Record<string, unknown> | null {
+  const row = nested(body);
+  if (!row) return null;
+  if (row.id != null && (row.type != null || row.files != null || row.videoSources != null)) return row;
+  const data = nested(row.data);
+  if (data?.id != null) return data;
+  const list = Array.isArray(row.list) ? row.list.find((item) => item && typeof item === "object") : null;
+  return nested(list);
+}
+
+export function videoFlagLine(row: Record<string, unknown>): string {
+  return `convertedToVideo=${flagWord(row.convertedToVideo)} canView=${flagWord(row.canView)} hasError=${flagWord(row.hasError)} isReady=${flagWord(row.isReady)}`;
+}
+
+export function videoHoldText(row: Record<string, unknown> | null): string {
+  if (row?.hasError === true) return "OnlyFans no ha podido procesar el vídeo";
+  if (row?.isReady === false) return "Vídeo aún procesándose en OnlyFans";
+  if (row?.canView === false) return "No se puede ver este vídeo";
+  if (nested(nested(row?.files)?.drm)) return "OnlyFans no da un mp4 de este vídeo";
+  return "Vídeo no disponible";
+}
+
+function flagWord(value: unknown): string {
+  if (value === true || value === 1) return "si";
+  if (value === false || value === 0) return "no";
+  return "ausente";
 }
 
 function valueKind(value: unknown): string {

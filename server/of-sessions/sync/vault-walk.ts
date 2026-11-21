@@ -236,8 +236,8 @@ async function walkOne(
     const pageFull = count === VAULT_MEDIA_LIMIT;
     hasMore = flagged || pageFull;
     pages += 1;
-    if (pageFull && !singlePage) {
-      console.info(`[fanlink:vault] sin hasMore lista=${vaultFolderMark(listId)} offset=${offset} medios=${count} sigue=pagina-llena`);
+    if (pageFull && !flagged && !singlePage) {
+      console.info(`[fanlink:vault] hasMore=${hasMoreLabel(body)} lista=${vaultFolderMark(listId)} offset=${offset} medios=${count} sigue=pagina-llena`);
     }
     if (!hasMore) {
       nextOffset = offset;
