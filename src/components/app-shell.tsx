@@ -3,33 +3,16 @@ import { listCreatorChats } from "@/lib/of-sessions";
 import { unreadTotalFor } from "../../server/of-sessions/sync/unread-chats.ts";
 import { useEffect, useState, type ReactNode } from "react";
 import {
-  Archive,
-  Banknote,
-  BarChart3,
-  Bell,
-  ClipboardList,
-  Contact,
-  CreditCard,
-  FilePlus,
-  FileText,
-  Folder,
   Home,
   Languages,
   LayoutDashboard,
   LayoutGrid,
-  Link2,
-  ListFilter,
   Menu,
-  MessageCircle,
   MessagesSquare,
-  ScrollText,
   Settings,
   Shield,
   Sparkles,
-  UserRound,
   Users,
-  Vault,
-  Workflow,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -43,7 +26,6 @@ import {
   navRoleFromAccess,
   pathMatchesNavLink,
   visibleNavBlocks,
-  type NavBlock,
   type NavLink,
 } from "@/lib/nav-config";
 import { SessionSync } from "@/components/session-sync";
@@ -56,41 +38,10 @@ const BLOCK_ICONS: Record<string, LucideIcon> = {
   dashboard: LayoutDashboard,
   operativa: LayoutGrid,
   chat: MessagesSquare,
-  informes: BarChart3,
   "funciones-inteligentes": Sparkles,
   administrar: Users,
   proxys: Shield,
-  "ajustes-app": Settings,
-};
-
-const ITEM_ICONS: Record<string, LucideIcon> = {
-  "operativa-inicio": Home,
-  "nuevo-post": FilePlus,
-  notificaciones: Bell,
-  mensajes: MessageCircle,
-  boveda: Vault,
-  archivo: Archive,
-  colecciones: Folder,
-  "estados-cuenta": ClipboardList,
-  estadisticas: BarChart3,
-  banco: Banknote,
-  "mi-perfil": UserRound,
-  "ajustes-of": Settings,
-  "release-forms": FileText,
-  "informes-creador": UserRound,
-  "informes-empleados": Contact,
-  "informes-fans": Users,
-  "panel-mensajes": MessagesSquare,
-  "mensajes-masivos": Sparkles,
-  "listas-inteligentes": ListFilter,
-  "auto-seguir": Workflow,
-  "vault-pro": Vault,
-  guiones: ScrollText,
-  "promocion-perfil": Sparkles,
-  "enlaces-prueba": Link2,
-  "enlaces-seguimiento": Link2,
-  cuenta: Settings,
-  facturacion: CreditCard,
+  configuracion: Settings,
 };
 
 function NavRouteLink({
@@ -121,35 +72,6 @@ function NavRouteLink({
   );
 }
 
-function MenuFlyout({ title, items, onPick }: { title: string; items: NavLink[]; onPick: () => void }) {
-  return (
-    <div className="max-h-[70vh] w-80 overflow-auto rounded-2xl border border-[#e6e8ee] bg-[#eef0f4] p-2 shadow-xl">
-      <p className="mb-2 rounded-xl bg-[#1d2433] px-3 py-2 text-[11px] font-semibold tracking-[0.14em] text-white uppercase">{title}</p>
-      <div className="space-y-1.5">
-        {items.map((item) => {
-          const ItemIcon = ITEM_ICONS[item.id] ?? LayoutGrid;
-          return (
-            <NavRouteLink
-              key={item.id}
-              item={item}
-              onClick={onPick}
-              className="flex items-center gap-3 rounded-xl border border-[#e6e8ee] bg-white px-3 py-2 hover:border-[#3b6cff]"
-            >
-              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[#eef2ff] text-[#3b6cff]">
-                <ItemIcon className="h-4 w-4" />
-              </span>
-              <span className="min-w-0">
-                <span className="block text-sm font-semibold leading-tight text-[#1c2333]">{item.label}</span>
-                <span className="block text-xs text-[#6d7585]">{item.comingSoon ? "Próximamente" : item.hint}</span>
-              </span>
-            </NavRouteLink>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 function Logo({ className }: { className?: string }) {
   return (
     <span className={cn("grid h-8 w-8 place-items-center rounded-md bg-primary text-primary-fg", className)}>
@@ -175,7 +97,6 @@ export function Splash() {
 }
 
 function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean }) {
-  const [menu, setMenu] = useState<string | null>(null);
   const [mobile, setMobile] = useState(false);
   const path = useRouterState({ select: (s) => s.location.pathname });
   const navigate = useNavigate();
@@ -213,8 +134,6 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
       ) : (
         <ShellFrame
           bleed={bleed}
-          menu={menu}
-          setMenu={setMenu}
           mobile={mobile}
           setMobile={setMobile}
           path={path}
@@ -274,8 +193,6 @@ function useUnreadChats(creatorId: string): number | null {
 function ShellFrame({
   children,
   bleed,
-  menu,
-  setMenu,
   mobile,
   setMobile,
   path,
@@ -297,8 +214,6 @@ function ShellFrame({
 }: {
   children: ReactNode;
   bleed?: boolean;
-  menu: string | null;
-  setMenu: (value: string | null) => void;
   mobile: boolean;
   setMobile: (value: boolean) => void;
   path: string;
@@ -313,7 +228,7 @@ function ShellFrame({
   setTranslate: (value: boolean) => void;
   workspaceNotice: string | null;
   teamAccess: { displayName: string; devMode: boolean };
-  blocks: NavBlock[];
+  blocks: NavLink[];
   currentOk: boolean;
   unreadChats: number | null;
   avatars: Record<string, string | null>;
@@ -324,47 +239,23 @@ function ShellFrame({
       <aside className="relative z-50 hidden w-14 shrink-0 flex-col items-center gap-1 border-r border-line bg-surface py-3 md:flex">
         <Logo className="mb-2" />
         {blocks.map((block) => {
-          if (block.kind === "link") {
-            const Icon = BLOCK_ICONS[block.id] ?? LayoutGrid;
-            const active = pathMatchesNavLink(path, block);
-            const isChat = block.id === "chat";
-            return (
-              <NavRouteLink
-                key={block.id}
-                item={block}
-                aria-label={isChat ? unreadLabel(unreadChats, block.label) : block.label}
-                title={isChat && unreadChats == null ? "Sin datos" : undefined}
-                className={cn(
-                  "relative grid h-10 w-10 place-items-center rounded-xl",
-                  active ? "bg-[#3b6cff] text-white" : "text-muted hover:bg-raised",
-                )}
-              >
-                <Icon className="h-5 w-5" />
-                {isChat && unreadChats != null && unreadChats > 0 ? <span className="absolute -top-1 -right-1 min-w-4 rounded-full bg-danger px-1 text-[10px] font-semibold text-white">{unreadChats}</span> : null}
-              </NavRouteLink>
-            );
-          }
           const Icon = BLOCK_ICONS[block.id] ?? LayoutGrid;
-          const open = menu === block.id;
-          const active = block.items.some((item) => pathMatchesNavLink(path, item));
+          const active = pathMatchesNavLink(path, block);
+          const isChat = block.id === "chat";
           return (
-            <div key={block.id} className="relative">
-              <button
-                aria-label={block.label}
-                onClick={() => setMenu(open ? null : block.id)}
-                className={cn(
-                  "grid h-10 w-10 place-items-center rounded-xl text-muted hover:bg-raised",
-                  (open || active) && "bg-primary/10 text-primary",
-                )}
-              >
-                <Icon className="h-5 w-5" />
-              </button>
-              {open && (
-                <div className="absolute top-0 left-12 z-50">
-                  <MenuFlyout title={block.label} items={block.items} onPick={() => setMenu(null)} />
-                </div>
+            <NavRouteLink
+              key={block.id}
+              item={block}
+              aria-label={isChat ? unreadLabel(unreadChats, block.label) : block.label}
+              title={isChat && unreadChats == null ? "Sin datos" : undefined}
+              className={cn(
+                "relative grid h-10 w-10 place-items-center rounded-xl",
+                active ? "bg-[#3b6cff] text-white" : "text-muted hover:bg-raised",
               )}
-            </div>
+            >
+              <Icon className="h-5 w-5" />
+              {isChat && unreadChats != null && unreadChats > 0 ? <span className="absolute -top-1 -right-1 min-w-4 rounded-full bg-danger px-1 text-[10px] font-semibold text-white">{unreadChats}</span> : null}
+            </NavRouteLink>
           );
         })}
       </aside>
@@ -377,15 +268,25 @@ function ShellFrame({
               <p className="font-display text-sm font-semibold">Fanlink</p>
               <button onClick={() => setMobile(false)} aria-label="Cerrar"><X className="h-4 w-4" /></button>
             </div>
-            {blocks.map((block) => (
-              <div key={block.id} className="mb-3">
-                {block.kind === "group" ? (
-                  <MenuFlyout title={block.label} items={block.items} onPick={() => setMobile(false)} />
-                ) : (
-                  <MenuFlyout title={block.label} items={[block]} onPick={() => setMobile(false)} />
-                )}
-              </div>
-            ))}
+            {blocks.map((block) => {
+              const Icon = BLOCK_ICONS[block.id] ?? LayoutGrid;
+              return (
+                <NavRouteLink
+                  key={block.id}
+                  item={block}
+                  onClick={() => setMobile(false)}
+                  className="mb-1 flex items-center gap-3 rounded-xl border border-[#e6e8ee] bg-white px-3 py-2"
+                >
+                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[#eef2ff] text-[#3b6cff]">
+                    <Icon className="h-4 w-4" />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-sm font-semibold leading-tight text-[#1c2333]">{block.label}</span>
+                    <span className="block text-xs text-[#6d7585]">{block.hint}</span>
+                  </span>
+                </NavRouteLink>
+              );
+            })}
           </div>
         </div>
       )}
@@ -460,13 +361,14 @@ function ShellFrame({
           </div>
         </main>
         <nav className="fixed inset-x-0 bottom-0 z-30 flex border-t border-line bg-surface md:hidden">
-          <Link to="/" className="flex flex-1 flex-col items-center py-2 text-xs text-muted"><Home className="h-4 w-4" />Inicio</Link>
+          <Link to="/" className="flex flex-1 flex-col items-center py-2 text-xs text-muted"><Home className="h-4 w-4" />Dashboard</Link>
           <Link to="/mensajes" className="flex flex-1 flex-col items-center py-2 text-xs text-muted"><MessagesSquare className="h-4 w-4" />Chat</Link>
-          <Link to="/campanas" className="flex flex-1 flex-col items-center py-2 text-xs text-muted"><Sparkles className="h-4 w-4" />Masivos</Link>
+          {blocks.some((block) => block.id === "funciones-inteligentes") ? (
+            <Link to="/funciones" search={{ tab: "masivos" }} className="flex flex-1 flex-col items-center py-2 text-xs text-muted"><Sparkles className="h-4 w-4" />Funciones</Link>
+          ) : null}
           <button className="flex flex-1 flex-col items-center py-2 text-xs text-muted" onClick={() => setMobile(true)}><Menu className="h-4 w-4" />Más</button>
         </nav>
       </div>
-      {menu && <button className="fixed inset-0 z-40 hidden md:block" aria-label="Cerrar menú" onClick={() => setMenu(null)} />}
       <Toaster theme="light" />
     </div>
   );

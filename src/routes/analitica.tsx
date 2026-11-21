@@ -1,6 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { AppShell } from "@/components/app-shell";
-import { AnalyticsPage } from "@/features/control-pages";
+import { legacyRedirectThrow } from "@/lib/route-redirect";
 
 type AnalyticsView = "creadoras" | "equipo" | "fans";
 
@@ -11,14 +10,7 @@ export const Route = createFileRoute("/analitica")({
     }
     return {};
   },
-  component: AnaliticaRoute,
+  beforeLoad: ({ search }) => {
+    legacyRedirectThrow("/analitica", search);
+  },
 });
-
-function AnaliticaRoute() {
-  const { vista } = Route.useSearch();
-  return (
-    <AppShell>
-      <AnalyticsPage key={vista ?? "creadoras"} initialView={vista} />
-    </AppShell>
-  );
-}

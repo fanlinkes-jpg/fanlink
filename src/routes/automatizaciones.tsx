@@ -1,11 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { AppShell } from "@/components/app-shell";
-import { AutomationsPage } from "@/features/growth-pages";
+import { legacyRedirectThrow } from "@/lib/route-redirect";
 
 export const Route = createFileRoute("/automatizaciones")({
-  component: () => (
-    <AppShell>
-      <AutomationsPage />
-    </AppShell>
-  ),
+  beforeLoad: () => {
+    legacyRedirectThrow("/automatizaciones");
+  },
 });

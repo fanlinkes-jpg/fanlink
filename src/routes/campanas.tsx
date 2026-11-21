@@ -1,11 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { AppShell } from "@/components/app-shell";
-import { CampaignsPage } from "@/features/growth-pages";
+import { legacyRedirectThrow } from "@/lib/route-redirect";
 
 export const Route = createFileRoute("/campanas")({
-  component: () => (
-    <AppShell>
-      <CampaignsPage />
-    </AppShell>
-  ),
+  beforeLoad: () => {
+    legacyRedirectThrow("/campanas");
+  },
 });

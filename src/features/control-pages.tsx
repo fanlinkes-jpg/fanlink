@@ -18,7 +18,7 @@ import { listCreatorChats, listTeamMetrics, setCreatorProxy, type TeamMetricView
 import { PLATFORMS } from "@/features/growth-pages";
 import { Badge, Button, Field, Panel, Select } from "@/components/ui";
 
-export function AnalyticsPage({ initialView }: { initialView?: "creadoras" | "equipo" | "fans" } = {}) {
+export function AnalyticsPage({ initialView, embedded = false }: { initialView?: "creadoras" | "equipo" | "fans"; embedded?: boolean } = {}) {
   const [view, setView] = useState<"creadoras" | "equipo" | "fans">(initialView ?? "creadoras");
   const [period, setPeriod] = useState<MetricPeriod>("month");
   const [teamRows, setTeamRows] = useState<TeamMetricView[]>([]);
@@ -54,19 +54,25 @@ export function AnalyticsPage({ initialView }: { initialView?: "creadoras" | "eq
   const chart = report?.series.map((point) => ({ day: point.label, amountCents: point.grossCents, currency: "USD" })) ?? [];
 
   return (
-    <div className="space-y-4 p-4 md:p-6">
+    <div className={embedded ? "space-y-4" : "space-y-4 p-4 md:p-6"}>
       <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="font-display text-2xl font-semibold">Analítica</h1>
+        {embedded ? (
           <p className="text-sm text-muted">Las cifras son las guardadas. Abrir esta pantalla no sincroniza. El servidor lo hace solo, cerca de un minuto después de arrancar y luego cada cierto tiempo.</p>
-        </div>
-        <div className="flex gap-1 rounded-md border border-line p-1">
-          {(["creadoras", "equipo", "fans"] as const).map((v) => (
-            <button key={v} onClick={() => setView(v)} className={`rounded-md px-3 py-1 text-sm capitalize ${view === v ? "bg-raised text-fg" : "text-muted"}`}>
-              {v}
-            </button>
-          ))}
-        </div>
+        ) : (
+          <div>
+            <h1 className="font-display text-2xl font-semibold">Analítica</h1>
+            <p className="text-sm text-muted">Las cifras son las guardadas. Abrir esta pantalla no sincroniza. El servidor lo hace solo, cerca de un minuto después de arrancar y luego cada cierto tiempo.</p>
+          </div>
+        )}
+        {embedded ? null : (
+          <div className="flex gap-1 rounded-md border border-line p-1">
+            {(["creadoras", "equipo", "fans"] as const).map((v) => (
+              <button key={v} onClick={() => setView(v)} className={`rounded-md px-3 py-1 text-sm capitalize ${view === v ? "bg-raised text-fg" : "text-muted"}`}>
+                {v}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       {owner ? (
         <SyncInterval
@@ -902,7 +908,7 @@ export function CreatorsPage() {
   );
 }
 
-export function SettingsPage() {
+export function SettingsPage({ embedded = false }: { embedded?: boolean } = {}) {
   const agency = useCrm((s) => s.agency);
   const setAgency = useCrm((s) => s.setAgency);
   const stopWords = useCrm((s) => s.stopWords);
@@ -916,15 +922,16 @@ export function SettingsPage() {
   const setAdaptPrices = useCrm((s) => s.setAdaptPrices);
   const notify = useCrm((s) => s.notifyShifts);
   const setNotify = useCrm((s) => s.setNotify);
-  const resetDemo = useCrm((s) => s.resetDemo);
   const [word, setWord] = useState("");
 
   return (
-    <div className="space-y-4 p-4 md:p-6">
-      <div>
-        <h1 className="font-display text-2xl font-semibold">Ajustes</h1>
-        <p className="text-sm text-muted">La operación de Fanlink se guarda en este navegador. No hay conexión real con las plataformas.</p>
-      </div>
+    <div className={embedded ? "space-y-4" : "space-y-4 p-4 md:p-6"}>
+      {embedded ? null : (
+        <div>
+          <h1 className="font-display text-2xl font-semibold">Ajustes</h1>
+          <p className="text-sm text-muted">La operación de Fanlink se guarda en este navegador. No hay conexión real con las plataformas.</p>
+        </div>
+      )}
       <Panel title="Agencia">
         <label className="block text-xs text-muted">Nombre
           <Field value={agency} onChange={(e) => setAgency(e.target.value)} className="mt-1" />
@@ -975,10 +982,6 @@ export function SettingsPage() {
             </li>
           ))}
         </ul>
-      </Panel>
-      <Panel title="Demostración">
-        <p className="mb-3 text-sm text-muted">Vuelve a los datos de ejemplo de Fanlink si has hecho pruebas. En la base compartida eso lo guarda la dueña.</p>
-        <Button variant="danger" onClick={() => { resetDemo(); toast.success("Datos restaurados"); }}>Restaurar demo</Button>
       </Panel>
     </div>
   );
