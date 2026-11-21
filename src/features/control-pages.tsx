@@ -54,7 +54,7 @@ export function AnalyticsPage({ initialView, embedded = false }: { initialView?:
   const chart = report?.series.map((point) => ({ day: point.label, amountCents: point.grossCents, currency: "USD" })) ?? [];
 
   return (
-    <div className="space-y-4 p-4 md:p-6">
+    <div className={embedded ? "space-y-4" : "space-y-4 p-4 md:p-6"}>
       <div className="flex flex-wrap items-end justify-between gap-3">
         {embedded ? (
           <p className="text-sm text-muted">Las cifras son las guardadas. Abrir esta pantalla no sincroniza. El servidor lo hace solo, cerca de un minuto después de arrancar y luego cada cierto tiempo.</p>
@@ -922,7 +922,6 @@ export function SettingsPage({ embedded = false }: { embedded?: boolean } = {}) 
   const setAdaptPrices = useCrm((s) => s.setAdaptPrices);
   const notify = useCrm((s) => s.notifyShifts);
   const setNotify = useCrm((s) => s.setNotify);
-  const resetDemo = useCrm((s) => s.resetDemo);
   const [word, setWord] = useState("");
 
   return (
@@ -983,10 +982,6 @@ export function SettingsPage({ embedded = false }: { embedded?: boolean } = {}) 
             </li>
           ))}
         </ul>
-      </Panel>
-      <Panel title="Demostración">
-        <p className="mb-3 text-sm text-muted">Vuelve a los datos de ejemplo de Fanlink si has hecho pruebas. En la base compartida eso lo guarda la dueña.</p>
-        <Button variant="danger" onClick={() => { resetDemo(); toast.success("Datos restaurados"); }}>Restaurar demo</Button>
       </Panel>
     </div>
   );

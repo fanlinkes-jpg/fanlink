@@ -37,7 +37,7 @@ Tiene que listar las migraciones aplicadas, incluida `0019_chat_author.sql` y `0
 
 ## 3. Proxy por cuenta
 
-En Creadoras, la dueña abre Más y guarda un proxy `http://`, `https://` o `socks5://`. El usuario y la contraseña se cifran con `FANLINK_SESSION_KEY` en `data/proxies/<cuenta>.bin`. Chromium de esa cuenta lo usa al conectar, comprobar y sincronizar. La contraseña no vuelve a la pantalla ni al log.
+En Proxys, o en Administrar → Creadoras (Más), la dueña guarda un proxy `http://`, `https://` o `socks5://`. El usuario y la contraseña se cifran con `FANLINK_SESSION_KEY` en `data/proxies/<cuenta>.bin`. Chromium de esa cuenta lo usa al conectar, comprobar y sincronizar. La contraseña no vuelve a la pantalla ni al log.
 
 ## 4. WhatsApp
 
@@ -60,11 +60,11 @@ export FANLINK_WHATSAPP_TOKEN=
 export FANLINK_WHATSAPP_PHONE_ID=
 ```
 
-`FANLINK_ALERT_QUIET_MIN` es el mínimo entre avisos del mismo fan. `FANLINK_ALERT_MODE` vale `all` (defecto: todos los chatters con avisos), `assigned` (solo quien tiene la cuenta) o `users` (la lista `FANLINK_ALERT_USERS`, ids separados por comas). El teléfono de cada miembro se guarda en Equipo.
+`FANLINK_ALERT_QUIET_MIN` es el mínimo entre avisos del mismo fan. `FANLINK_ALERT_MODE` vale `all` (defecto: todos los chatters con avisos), `assigned` (solo quien tiene la cuenta) o `users` (la lista `FANLINK_ALERT_USERS`, ids separados por comas). El teléfono de cada miembro se guarda en Administrar, pestaña Chatters.
 
 ## 5. Envío real de un chat
 
-Sigue apagado si no pones las dos variables. No cambia `FANLINK_SESSION_KEY`. Los masivos de Campañas no usan esta puerta: siguen sin salir a OnlyFans.
+Sigue apagado si no pones las dos variables. No cambia `FANLINK_SESSION_KEY`. Los masivos de Funciones inteligentes no usan esta puerta: siguen sin salir a OnlyFans.
 
 ```bash
 export FANLINK_ENABLE_SEND=true

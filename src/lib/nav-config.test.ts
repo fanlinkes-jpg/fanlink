@@ -9,7 +9,9 @@ import {
   dashboardZone,
   legacyRedirect,
   navRoleFromAccess,
+  reportBodyKind,
   reportHash,
+  reportTabsFor,
   visibleFunctionTabs,
   visibleNavBlocks,
 } from "./nav-config.ts";
@@ -47,7 +49,11 @@ test("la dueña ve las siete secciones y la operativa", () => {
   assert.equal(canOpenMessagePanel("owner", ownerAccess), true);
 });
 
-test("el admin ve configuración, administrar y proxys, y no la operativa", () => {
+test("el rol de menú manager ve Configuración, pero la sesión no lo fabrica", () => {
+  assert.equal(navRoleFromAccess({ role: "member" }), "chatter");
+  assert.equal(navRoleFromAccess(null), null);
+  assert.notEqual(navRoleFromAccess(chatterAccess), "manager");
+  assert.equal(canAccessPath("/configuracion", navRoleFromAccess(chatterAccess), chatterAccess), false);
   const seen = ids("manager", ownerAccess);
   assert.equal(seen.includes("dashboard"), true);
   assert.equal(seen.includes("administrar"), true);
@@ -111,6 +117,20 @@ test("la modelo no ve funciones, administrar, proxys ni configuración", () => {
   assert.equal(seen.includes("operativa"), false);
   assert.equal(seen.includes("dashboard"), true);
   assert.equal(seen.includes("chat"), true);
+});
+
+test("ReportsPanel: un chatter con #informes-mensajes no ve el panel", () => {
+  const role = navRoleFromAccess(chatterAccess);
+  const zone = dashboardZone("#informes-mensajes");
+  assert.equal(zone.kind, "informes");
+  if (zone.kind !== "informes") return;
+  assert.equal(zone.vista, "mensajes");
+  const panelOk = canOpenMessagePanel(role, chatterAccess);
+  assert.equal(panelOk, false);
+  assert.deepEqual(reportTabsFor(panelOk), ["creadoras", "equipo", "fans"]);
+  assert.equal(reportBodyKind(zone.vista, panelOk), "denied");
+  assert.equal(reportBodyKind("mensajes", canOpenMessagePanel("owner", ownerAccess)), "audit");
+  assert.equal(reportBodyKind("fans", true), "analytics");
 });
 
 test("la analítica y el resto de rutas viejas apuntan a su sitio nuevo", () => {

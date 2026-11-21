@@ -361,9 +361,11 @@ function ShellFrame({
           </div>
         </main>
         <nav className="fixed inset-x-0 bottom-0 z-30 flex border-t border-line bg-surface md:hidden">
-          <Link to="/" className="flex flex-1 flex-col items-center py-2 text-xs text-muted"><Home className="h-4 w-4" />Inicio</Link>
+          <Link to="/" className="flex flex-1 flex-col items-center py-2 text-xs text-muted"><Home className="h-4 w-4" />Dashboard</Link>
           <Link to="/mensajes" className="flex flex-1 flex-col items-center py-2 text-xs text-muted"><MessagesSquare className="h-4 w-4" />Chat</Link>
-          <Link to="/funciones" search={{ tab: "masivos" }} className="flex flex-1 flex-col items-center py-2 text-xs text-muted"><Sparkles className="h-4 w-4" />Funciones</Link>
+          {blocks.some((block) => block.id === "funciones-inteligentes") ? (
+            <Link to="/funciones" search={{ tab: "masivos" }} className="flex flex-1 flex-col items-center py-2 text-xs text-muted"><Sparkles className="h-4 w-4" />Funciones</Link>
+          ) : null}
           <button className="flex flex-1 flex-col items-center py-2 text-xs text-muted" onClick={() => setMobile(true)}><Menu className="h-4 w-4" />Más</button>
         </nav>
       </div>

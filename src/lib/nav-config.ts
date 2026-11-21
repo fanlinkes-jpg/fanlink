@@ -95,6 +95,10 @@ const LEGACY_GATED_PATHS: PathGate[] = [
   { prefix: "/proximamente/enlaces-prueba", roles: STAFF_ROLES, perm: "campanas" },
 ];
 
+/**
+ * La sesión solo guarda `owner` o `member`. El miembro entra como chatter.
+ * `manager` (admin) existe en la tabla del menú y vería Configuración, pero esta función no lo devuelve.
+ */
 export function navRoleFromAccess(access: Pick<TeamAccess, "role"> | null | undefined): NavRole | null {
   if (!access) return null;
   if (access.role === "owner") return "owner";
@@ -125,6 +129,28 @@ export function reportView(value: unknown): ReportView {
       return value;
     default:
       return "creadoras";
+  }
+}
+
+export function reportTabsFor(panelOk: boolean): ReportView[] {
+  return REPORT_VIEWS.filter((item) => item !== "mensajes" || panelOk);
+}
+
+export type ReportBodyKind = "analytics" | "audit" | "denied";
+
+/** Misma decisión que pinta ReportsPanel: el chatter no abre el panel de mensajes. */
+export function reportBodyKind(vista: ReportView, panelOk: boolean): ReportBodyKind {
+  switch (vista) {
+    case "creadoras":
+    case "equipo":
+    case "fans":
+      return "analytics";
+    case "mensajes":
+      return panelOk ? "audit" : "denied";
+    default: {
+      const exhaustive: never = vista;
+      return exhaustive;
+    }
   }
 }
 

@@ -42,8 +42,9 @@ import {
   canOpenReports,
   dashboardZone,
   navRoleFromAccess,
+  reportBodyKind,
   reportHash,
-  REPORT_VIEWS,
+  reportTabsFor,
   type DashboardZone,
   type ReportView,
 } from "@/lib/nav-config";
@@ -58,12 +59,11 @@ export function DashboardPage() {
   const reads = useOfReads();
   const navigate = useNavigate();
   const [period, setPeriod] = useState<MetricPeriod>("month");
-  const [zone, setZone] = useState<DashboardZone>({ kind: "metricas", screen: "resumen" });
+  const [zone, setZone] = useState<DashboardZone>(() => dashboardZone(window.location.hash));
   const [alerts, setAlerts] = useState<SummaryAlert[] | null>(null);
   const [sessions, setSessions] = useState<Array<{ creatorId: string; label: string }>>([]);
 
   useEffect(() => {
-    setZone(dashboardZone(window.location.hash));
     const onHash = () => setZone(dashboardZone(window.location.hash));
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
@@ -222,7 +222,7 @@ function ReportsPanel({
   panelOk: boolean;
   onView: (vista: ReportView) => void;
 }) {
-  const tabs = REPORT_VIEWS.filter((item) => item !== "mensajes" || panelOk);
+  const tabs = reportTabsFor(panelOk);
   if (!allowed) {
     return <p className="text-sm text-muted">No tienes acceso a los informes.</p>;
   }
@@ -250,15 +250,16 @@ function ReportsPanel({
 }
 
 function ReportBody({ vista, panelOk }: { vista: ReportView; panelOk: boolean }) {
-  switch (vista) {
-    case "creadoras":
-    case "equipo":
-    case "fans":
-      return <AnalyticsPage key={vista} initialView={vista} embedded />;
-    case "mensajes":
-      return panelOk ? <AuditPage /> : <p className="text-sm text-muted">El panel de mensajes es de la dueña y del admin.</p>;
+  const kind = reportBodyKind(vista, panelOk);
+  switch (kind) {
+    case "analytics":
+      return <AnalyticsPage key={vista} initialView={vista === "mensajes" ? "creadoras" : vista} embedded />;
+    case "audit":
+      return <AuditPage />;
+    case "denied":
+      return <p className="text-sm text-muted">El panel de mensajes lo ve la dueña.</p>;
     default: {
-      const exhaustive: never = vista;
+      const exhaustive: never = kind;
       return exhaustive;
     }
   }
