@@ -367,8 +367,8 @@ export function parseNotificationPayload(value: unknown, options: ParseNotificat
  * y, si también viene, `system`.
  */
 export function parseNotificationCounts(value: unknown): NotificationCounts | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const raw = value as Record<string, unknown>;
+  const raw = countSource(value);
+  if (!raw) return null;
   const media = countNumber(raw.deactivated_media);
   const system = countNumber(raw.system);
   const onlyfans = media == null && system == null ? null : (media ?? 0) + (system ?? 0);
@@ -377,7 +377,7 @@ export function parseNotificationCounts(value: unknown): NotificationCounts | nu
     subscriptions: countNumber(raw.subscribed),
     purchases: countNumber(raw.purchases),
     tips: countNumber(raw.tip),
-    tags: null,
+    tags: "tags" in raw ? countNumber(raw.tags) : null,
     comments: countNumber(raw.commented),
     mentions: countNumber(raw.mentioned),
     likes: countNumber(raw.favorited),
@@ -385,6 +385,18 @@ export function parseNotificationCounts(value: unknown): NotificationCounts | nu
     onlyfans,
   };
   return Object.values(counts).some((item) => item != null) ? counts : null;
+}
+
+function countSource(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  for (const key of ["counters", "counts"] as const) {
+    const nested = raw[key];
+    if (!nested || typeof nested !== "object" || Array.isArray(nested)) continue;
+    const inner = nested as Record<string, unknown>;
+    if (countNumber(inner.all) != null || "subscribed" in inner || "tip" in inner || "purchases" in inner) return inner;
+  }
+  return raw;
 }
 
 /** `newTagsCount` de GET /users/me. Si la clave no está, null. */
@@ -860,10 +872,12 @@ function amountFromPairs(record: Record<string, unknown>): number | null {
   return null;
 }
 
-function countNumber(value: unknown): number | null {
+function countNumber(value: unknown, depth = 0): number | null {
   if (typeof value === "number" && Number.isFinite(value) && value >= 0) return Math.floor(value);
   if (typeof value === "string" && /^\d+$/.test(value.trim())) return Number(value);
-  return null;
+  if (depth >= 1 || !value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  return countNumber(row.unread ?? row.count ?? row.total, depth + 1);
 }
 
 function fillGaps(previous: ParsedNotification, incoming: ParsedNotification): ParsedNotification {

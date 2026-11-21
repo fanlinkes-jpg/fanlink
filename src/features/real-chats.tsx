@@ -11,6 +11,7 @@ import { listCreatorNotifications, markCreatorNotificationsRead, type Notificati
 import { NOTIFICATION_TABS, TAB_LABEL, isOwnerOnlyKind, tabOf, type NotificationCounts, type NotificationKind, type NotificationTab } from "@/lib/notifications";
 import { NotificationFanCard } from "@/features/notification-card";
 import { useCrm, type VaultItem } from "@/lib/crm";
+import { chatSyncLabel, headerSyncLabel, type ChatSyncInput } from "@/lib/chat-sync-label";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
 import { clearOpenThread, peekOpenThread } from "@/lib/open-thread";
 import { useChatFanCards } from "@/lib/use-chat-fan-cards";
@@ -528,6 +529,7 @@ export function RealChatsPage() {
     .sort((left, right) => left.sentAt.localeCompare(right.sentAt));
   const meta = data?.meta.find((item) => item.creatorId === selected?.creatorId);
   const running = selected ? data?.runningCreatorIds.includes(selected.creatorId) : false;
+  const syncPhase = chatPhase(data, creatorId === "all" ? selected?.creatorId ?? null : creatorId, Boolean(running));
   const canForce = teamAccess?.role === "owner" && selected != null;
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -1102,7 +1104,7 @@ export function RealChatsPage() {
           });
         }}>
         {visible.length === 0 ? (
-          <p className="px-4 py-8 text-sm text-[#6d7585]">{viewBlocked ? SESSION_EXPIRED_LABEL : sessionNotices.length > 0 && threads.length === 0 ? sessionNotices.join(" · ") : threads.length === 0 ? emptyChatsLabel(data) : "Sin datos"}</p>
+          <p className="px-4 py-8 text-sm text-[#6d7585]">{viewBlocked ? SESSION_EXPIRED_LABEL : sessionNotices.length > 0 && threads.length === 0 ? sessionNotices.join(" · ") : threads.length === 0 ? syncPhaseLabel(syncPhase) : "Sin datos"}</p>
         ) : (
           <ul>
             {visible.map((thread) => {
@@ -1152,7 +1154,7 @@ export function RealChatsPage() {
         <header className="relative flex shrink-0 items-center justify-between gap-3 border-b border-[#e6e8ee] px-4 py-3">
               <div className="min-w-0">
                 <button type="button" className="truncate text-left font-medium" onClick={() => { setFanMenu((open) => !open); setRenaming(false); }} aria-expanded={fanMenu} aria-label="Opciones del fan">
-                  {selected ? fanTitle(selected) : "Sin sincronizar"}
+                  {selected ? fanTitle(selected) : syncPhaseLabel(syncPhase)}
                 </button>
                 {selected && creatorId === "all" ? <p className="truncate text-xs text-[#6d7585]">{creators.find((creator) => creator.id === selected.creatorId)?.name ?? "Cuenta"}</p> : null}
                 {fanMenu && selected ? (
@@ -1237,7 +1239,7 @@ export function RealChatsPage() {
             </header>
             {menu && selected ? (
               <div className="shrink-0 border-b border-[#e6e8ee] px-4 py-2 text-xs text-[#6d7585]">
-                {running ? "En curso" : meta?.status === "error" ? `Error · ${shortReason(meta.reason)}` : meta?.status === "ok" ? "OK" : "Sin sincronizar"}
+                {headerSyncLabel(syncPhase)}
                 {meta?.syncedAt ? ` · ${syncAge(meta.syncedAt)}` : ""}
                 {canForce ? (
                   <button
@@ -1266,7 +1268,7 @@ export function RealChatsPage() {
                 olderLock.current = false;
               });
             }}>
-              {!selected || (messages.length === 0 && pendingForThread(pendingOut, selected).length === 0 && jobList.every((job) => job.creatorId !== selected.creatorId || job.threadKey !== selected.threadKey)) ? <li className="text-sm text-[#6d7585]">{selected ? "Sin datos" : "Sin sincronizar"}</li> : null}
+              {!selected || (messages.length === 0 && pendingForThread(pendingOut, selected).length === 0 && jobList.every((job) => job.creatorId !== selected.creatorId || job.threadKey !== selected.threadKey)) ? <li className="text-sm text-[#6d7585]">{selected ? "Sin datos" : syncPhaseLabel(syncPhase)}</li> : null}
               {messages.map((message) => (
                 <ThreadMessage key={message.messageKey} message={message} />
               ))}
@@ -1536,7 +1538,7 @@ export function RealChatsPage() {
             <div className="flex shrink-0 items-center justify-end border-b border-[#e6e8ee] bg-white px-2 py-1">
               <button type="button" aria-label="Cerrar" className="rounded px-2 py-1 text-sm" onClick={() => setInsightsOpen(false)}>X</button>
             </div>
-            <div className="min-h-0 flex-1 overflow-hidden">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
               {selected ? (
                 <InsightPane thread={selected} cards={fanCards.fans} crmFans={crmFans} messages={messages} profiles={data?.profiles ?? []} notes={data?.notes ?? []} onNotes={saveNote} onProfile={(profile) => { void saveFanProfile({ data: profile }).then(() => refresh()); }} onCopyDraft={(body, price) => { replaceDraft(body); setDraftPrice(price); setPriceLabel(`$${(price / 100).toFixed(2)}`); setInsightsOpen(false); }} onCreatorNote={(body) => { if (!selected.fanKey) return; void saveFanNote({ data: { creatorId: selected.creatorId, fanKey: selected.fanKey, body } }).then(() => refresh()); }} />
               ) : (
@@ -1958,21 +1960,28 @@ function pendingCaption(item: { scheduledAt: string | null; authorName: string |
   return "Pendiente · no enviado";
 }
 
-function emptyChatsLabel(data: CreatorChatList | null): string {
-  if (data?.meta.some((item) => item.status === "error")) {
-    const reason = data.meta.find((item) => item.status === "error")?.reason;
-    return reason ? `Error · ${shortReason(reason)}` : "Error";
+function chatPhase(data: CreatorChatList | null, creatorId: string | null, running: boolean): ChatSyncInput {
+  if (!data) return { hasSession: true, loginInProgress: false, status: null, reason: null, running: true };
+  const accounts = data.accounts.filter((row) => creatorId == null || row.creatorId === creatorId);
+  const metas = data.meta.filter((row) => creatorId == null || row.creatorId === creatorId);
+  const account = accounts[0];
+  const meta = metas.find((row) => row.status === "error") ?? metas.find((row) => row.status === "ok") ?? metas[0];
+  const hasSession = accounts.some((row) => row.hasStorageState && row.status === "active");
+  const loginInProgress = accounts.some((row) => row.loginInProgress);
+  if (accounts.length > 1 && metas.some((row) => row.status === "ok")) {
+    return { hasSession: true, loginInProgress: false, status: "ok", reason: null, running };
   }
-  if (data?.meta.some((item) => item.status === "ok")) return "Sin conversaciones";
-  return "Sin sincronizar";
+  return {
+    hasSession: creatorId == null ? accounts.length > 0 && hasSession : Boolean(account?.hasStorageState),
+    loginInProgress,
+    status: meta?.status ?? null,
+    reason: meta?.reason ?? null,
+    running,
+  };
 }
 
-function shortReason(reason: string | null | undefined): string {
-  if (!reason) return "error";
-  const cut = reason.split(". json:")[0] ?? reason;
-  const text = cut.replace(/https?:\/\/\S+/g, "").replace(/\s+/g, " ").trim();
-  if (/redirigido a login/i.test(text)) return "OnlyFans pide iniciar sesión: pulsa Reconectar";
-  return text;
+function syncPhaseLabel(phase: ChatSyncInput): string {
+  return chatSyncLabel(phase);
 }
 
 function syncAge(iso: string): string {

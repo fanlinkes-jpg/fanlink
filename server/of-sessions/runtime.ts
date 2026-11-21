@@ -19,6 +19,7 @@ export interface CreateRuntimeOptions {
   displayEnv?: DisplayEnv;
   now?: () => Date;
   afterLoginPageOpen?: (page: Page, accountId: string) => Promise<void> | void;
+  onSessionStored?: (accountId: string) => void;
   logger?: { info(message: string): void; warn(message: string): void };
   store?: AccountRepository;
   fetch?: typeof fetch;
@@ -45,6 +46,7 @@ export async function createSessionRuntime(options: CreateRuntimeOptions) {
     displayEnv: options.displayEnv ?? currentDisplayEnv(),
     now: options.now,
     afterLoginPageOpen: options.afterLoginPageOpen,
+    onSessionStored: options.onSessionStored,
     logger: options.logger,
     fetch: options.fetch,
     sleep: options.sleep,
