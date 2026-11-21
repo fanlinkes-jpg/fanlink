@@ -66,6 +66,33 @@ export function vaultWebTrace(method: string, raw: string): string | null {
   return `${verb} ${safePath}${query}`;
 }
 
+/** Petición de manifiesto o segmento en la CDN. Sin URL, sin firma y sin cookies. */
+export function vaultCdnTrace(method: string, raw: string, cookieHeader: string | null): string | null {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  const host = url.hostname.toLowerCase();
+  if (!host.endsWith(".onlyfans.com") && !host.endsWith(".cloudfront.net")) return null;
+  const path = url.pathname.toLowerCase();
+  const tipo = path.endsWith(".m3u8") ? "m3u8" : path.endsWith(".mpd") ? "mpd" : "segmento";
+  if (tipo === "segmento" && !/\.(m4s|cmfv|cmfa|ts|mp4|aac|m4a)$/.test(path)) return null;
+  const verb = method.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 8) || "GET";
+  const firma = cookieHeader && /cloudfront-policy|cloudfront-signature|cloudfront-key-pair-id/i.test(cookieHeader) ? "si" : "no";
+  return `${verb} cdn tipo=${tipo} firma=${firma} origen=${vaultPathMark(url.pathname)}`;
+}
+
+function vaultPathMark(path: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < path.length; index += 1) {
+    hash ^= path.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0").slice(0, 6);
+}
+
 function redactVaultParam(value: string): string {
   const trimmed = value.trim();
   if (/^-?\d+$/.test(trimmed)) return "<n>";

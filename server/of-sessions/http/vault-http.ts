@@ -63,7 +63,7 @@ export async function handleChatMedia(request: Request, deps: {
 export async function handleVaultMedia(request: Request, deps: {
   session: () => Promise<SessionActor>;
   findPreview: (creatorId: string, mediaId: string, variant?: "full" | "preview" | "clip") => Promise<string | null>;
-  fetchBytes: (url: string, range?: string | null) => Promise<MediaBytes | null>;
+  fetchBytes: (url: string, range?: string | null, signal?: AbortSignal) => Promise<MediaBytes | null>;
   log?: (line: string) => void;
   /** Texto para el visor cuando un vídeo sigue sin URL después del detalle. */
   videoHold?: () => string | null;
@@ -90,7 +90,7 @@ export async function handleVaultMedia(request: Request, deps: {
     if (held.status !== 404) return held;
   }
   const range = url.searchParams.get("part") === "head" ? headRange(request.headers.get("range")) : request.headers.get("range");
-  return streamMedia(preview, range, deps.fetchBytes, deps.videoHold);
+  return streamMedia(preview, range, deps.fetchBytes, deps.videoHold, request.signal);
 }
 
 /** Con `part=head` cualquier Range se queda en el primer megabyte. El hover no baja el archivo entero. */
@@ -165,19 +165,20 @@ function canReadMedia(actor: VaultActor): boolean {
 async function streamMedia(
   target: string | null,
   range: string | null,
-  fetchBytes: (url: string, range?: string | null) => Promise<MediaBytes | null>,
+  fetchBytes: (url: string, range?: string | null, signal?: AbortSignal) => Promise<MediaBytes | null>,
   videoHold?: () => string | null,
+  signal?: AbortSignal,
 ): Promise<Response> {
   const hold = () => videoHold?.()?.trim() || null;
   if (!target || !mediaHostAllowed(target)) return holdResponse(hold());
-  const bytes = await fetchBytes(target, range);
+  const bytes = await fetchBytes(target, range, signal);
   if (!bytes) return holdResponse(hold());
   const body = mediaBody(bytes);
   if (!body) return new Response("Sin datos", { status: 404 });
   const length = bytes.contentLength ?? bytes.body?.byteLength ?? null;
   const headers = new Headers({
     "content-type": bytes.contentType || "application/octet-stream",
-    "cache-control": !range && bytes.status === 200 ? "private, max-age=300" : "private, no-store",
+    "cache-control": !range && bytes.status === 200 && !bytes.contentType.includes("mpegurl") ? "private, max-age=300" : "private, no-store",
     "x-content-type-options": "nosniff",
     "accept-ranges": "bytes",
   });

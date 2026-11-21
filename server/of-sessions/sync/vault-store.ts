@@ -339,9 +339,12 @@ function videoUrlOnly(url: string | null): string | null {
 /** Pausa antes de volver a pedir un detalle cuya URL ya falló o caducó. */
 export const VIDEO_DETAIL_PAUSE_MS = 800;
 
+const videoRefresh = new Map<string, Promise<{ url: string | null; hold: string | null; hls: string | null }>>();
+
 /**
  * Reutiliza full_url o clip_url solo si la firma sigue viva.
  * Si caducó, o si se fuerza tras un 403/410, pide el detalle una sola vez.
+ * Dos «Ver» a la vez comparten esa petición.
  */
 export async function reuseOrRefreshVideo(input: {
   sql: ReadSql;
@@ -351,20 +354,31 @@ export async function reuseOrRefreshVideo(input: {
   now: number;
   force: boolean;
   pause: (ms: number) => Promise<void>;
-  loadDetail: () => Promise<{ url: string | null; hold: string }>;
-}): Promise<{ url: string | null; hold: string | null }> {
+  loadDetail: () => Promise<{ url: string | null; hold: string; hls?: string | null }>;
+}): Promise<{ url: string | null; hold: string | null; hls: string | null }> {
   const urls = await storedVaultMediaUrls(input.sql, input.creatorId, input.mediaId);
   const picked = playbackUrl(urls, input.variant, urls.kind);
   const live = picked && !signedUrlExpired(picked, input.now) ? picked : null;
-  if (live && !input.force) return { url: live, hold: null };
-  if (picked || input.force) await input.pause(VIDEO_DETAIL_PAUSE_MS);
-  const detail = await input.loadDetail();
-  if (detail.url) {
-    await saveVaultFull(input.sql, input.creatorId, input.mediaId, detail.url);
-    await saveVaultClip(input.sql, input.creatorId, input.mediaId, detail.url);
-    return { url: detail.url, hold: null };
+  if (live && !input.force) return { url: live, hold: null, hls: null };
+  const key = `${input.creatorId}\n${input.mediaId}`;
+  const pending = videoRefresh.get(key);
+  if (pending) return pending;
+  const promise = (async () => {
+    if (picked || input.force) await input.pause(VIDEO_DETAIL_PAUSE_MS);
+    const detail = await input.loadDetail();
+    if (detail.url) {
+      await saveVaultFull(input.sql, input.creatorId, input.mediaId, detail.url);
+      await saveVaultClip(input.sql, input.creatorId, input.mediaId, detail.url);
+      return { url: detail.url, hold: null, hls: null };
+    }
+    return { url: null, hold: detail.hold, hls: detail.hls ?? null };
+  })();
+  videoRefresh.set(key, promise);
+  try {
+    return await promise;
+  } finally {
+    if (videoRefresh.get(key) === promise) videoRefresh.delete(key);
   }
-  return { url: null, hold: detail.hold };
 }
 
 /** URL que puede reproducir un vídeo. Una miniatura no cuenta. */

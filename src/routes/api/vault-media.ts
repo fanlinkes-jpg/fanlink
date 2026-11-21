@@ -7,7 +7,8 @@ import { handleVaultMedia, noteVaultPlayRequest } from "../../../server/of-sessi
 import { readSessionMediaResult, videoBytesAccepted, videoFollowUp } from "../../../server/of-sessions/sync/media-bytes.ts";
 import { accountCreatorIds } from "../../../server/of-sessions/http/vault-accounts.ts";
 import { fetchSignedMediaDetail, fetchSignedVault } from "../../../server/of-sessions/sync/of-chat-api.ts";
-import { parseVaultBundle, resolveDetailPlayback, vaultDetailRow, vaultFolderMark, videoContainer, videoFlagLine, videoFormatHold, videoHoldPayload } from "../../../server/of-sessions/sync/vault-model.ts";
+import { choosePlayableVideo, drmManifestUrl, parseVaultBundle, resolveDetailPlayback, vaultDetailRow, vaultFolderMark, videoContainer, videoFlagLine, videoFormatHold, videoHoldPayload } from "../../../server/of-sessions/sync/vault-model.ts";
+import { hlsMediaResponse, openHlsManifest, readBoundedPlaylist } from "../../../server/of-sessions/sync/vault-hls.ts";
 import { loadFreshPreview, normalizeVaultOffset, reloadVaultPreview, signedUrlExpired } from "../../../server/of-sessions/sync/vault-thumbs.ts";
 import { openProfileThumbs } from "../../../server/of-sessions/sync/vault-owner.ts";
 import { playbackUrl, reuseOrRefreshVideo, saveVaultPreview, storedVaultMediaUrls, storedVaultPage, VIDEO_DETAIL_PAUSE_MS } from "../../../server/of-sessions/sync/vault-store.ts";
@@ -23,6 +24,9 @@ export const Route = createFileRoute("/api/vault-media")({
           const access = await ensureStaff(sql, userId, !authConfigured && userId === DEV_USER_ID);
           const creatorIds = await accountCreatorIds(sql);
           const url = new URL(request.url);
+          if (url.searchParams.get("variant") === "hls") {
+            return hlsMediaResponse(url.searchParams.get("k") ?? "", url.searchParams.get("u") ?? "", request.headers.get("range"), fetch, request.signal);
+          }
           const creatorId = url.searchParams.get("creatorId") ?? "";
           const mediaId = url.searchParams.get("mediaId") ?? "";
           const rawVariant = url.searchParams.get("variant");
@@ -30,6 +34,7 @@ export const Route = createFileRoute("/api/vault-media")({
           const page = await thumbPage(sql, creatorId, mediaId, url);
           let expectVideo = false;
           let hold: string | null = null;
+          let hlsManifest: string | null = null;
           let refreshed = false;
           const wantedVariant = variant === "clip" ? "clip" : "full";
           const refreshOnce = async (pause: boolean): Promise<string | null> => {
@@ -45,6 +50,10 @@ export const Route = createFileRoute("/api/vault-media")({
               pause: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
               loadDetail: () => loadMediaDetail(creatorId, mediaId),
             });
+            if (again.hls) {
+              hlsManifest = again.hls;
+              rememberHls(creatorId, mediaId, again.hls);
+            }
             if (!again.url && again.hold) {
               hold = again.hold;
               rememberHold(creatorId, mediaId, again.hold);
@@ -61,21 +70,31 @@ export const Route = createFileRoute("/api/vault-media")({
               const picked = playbackUrl(urls, play, urls.kind);
               if (!expectVideo) return picked;
               if (picked && !signedUrlExpired(picked, Date.now())) return picked;
+              const cachedHls = rememberedHls(creator, id);
+              if (cachedHls) {
+                hlsManifest = cachedHls;
+                return "https://cdn2.onlyfans.com/hls/media.m3u8";
+              }
               const remembered = !picked ? rememberedHold(creator, id) : null;
               if (remembered) {
                 hold = remembered;
                 return null;
               }
-              return refreshOnce(Boolean(picked));
+              const fresh = await refreshOnce(Boolean(picked));
+              if (hlsManifest) return "https://cdn2.onlyfans.com/hls/media.m3u8";
+              return fresh;
             },
-            fetchBytes: async (target, range) => {
+            fetchBytes: async (target, range, signal) => {
+              if (hlsManifest) {
+                return { status: 200, body: new TextEncoder().encode(hlsManifest), contentType: "application/vnd.apple.mpegurl" };
+              }
               if (expectVideo && videoContainer({ url: target }) === "avi") {
                 hold = aviHold();
                 rememberHold(creatorId, mediaId, hold);
                 return null;
               }
               if (expectVideo || range) {
-                const first = await readSessionMediaResult(creatorId, target, range, { expectVideo });
+                const first = await readSessionMediaResult(creatorId, target, range, { expectVideo, signal });
                 if (first.status === 415) {
                   hold = aviHold();
                   rememberHold(creatorId, mediaId, hold);
@@ -86,7 +105,7 @@ export const Route = createFileRoute("/api/vault-media")({
                 if (expectVideo && plan === "refresh") {
                   const fresh = await refreshOnce(true);
                   if (!fresh) return null;
-                  const second = await readSessionMediaResult(creatorId, fresh, range, { expectVideo });
+                  const second = await readSessionMediaResult(creatorId, fresh, range, { expectVideo, signal });
                   if (!second.media || !videoBytesAccepted(second.media.contentType)) return null;
                   return second.media;
                 }
@@ -118,6 +137,17 @@ export const Route = createFileRoute("/api/vault-media")({
 });
 
 const videoHolds = new Map<string, { at: number; text: string }>();
+const hlsManifests = new Map<string, { at: number; text: string }>();
+
+function rememberedHls(creatorId: string, mediaId: string): string | null {
+  const hit = hlsManifests.get(`${creatorId}\n${mediaId}`);
+  if (!hit || Date.now() - hit.at > 9 * 60_000) return null;
+  return hit.text;
+}
+
+function rememberHls(creatorId: string, mediaId: string, text: string): void {
+  hlsManifests.set(`${creatorId}\n${mediaId}`, { at: Date.now(), text });
+}
 
 function rememberedHold(creatorId: string, mediaId: string): string | null {
   const hit = videoHolds.get(`${creatorId}\n${mediaId}`);
@@ -129,10 +159,10 @@ function rememberHold(creatorId: string, mediaId: string, text: string): void {
   videoHolds.set(`${creatorId}\n${mediaId}`, { at: Date.now(), text });
 }
 
-async function loadMediaDetail(creatorId: string, mediaId: string): Promise<{ url: string | null; hold: string }> {
+async function loadMediaDetail(creatorId: string, mediaId: string): Promise<{ url: string | null; hold: string; hls: string | null }> {
   const sessions = await getOfSessionManager();
   const account = (await sessions.listAccounts()).find((item) => item.creatorId === creatorId && item.status === "active" && item.hasStorageState);
-  if (!account) return { url: null, hold: "Vídeo no disponible" };
+  if (!account) return { url: null, hold: "Vídeo no disponible", hls: null };
   const read = await fetchSignedMediaDetail(await sessions.readStorageState(account.id), {
     fetch,
     now: () => Date.now(),
@@ -141,15 +171,22 @@ async function loadMediaDetail(creatorId: string, mediaId: string): Promise<{ ur
   }, mediaId);
   const row = vaultDetailRow(read.body);
   const flags = row ? videoFlagLine(row) : "convertedToVideo=ausente canView=ausente hasError=ausente isReady=ausente";
+  const manifest = row && !choosePlayableVideo(row) ? drmManifestUrl(row) : null;
+  if (row && manifest && /\.m3u8(?:$|\?)/i.test(manifest)) {
+    const text = await openHlsManifest(row, fetch, () => new Promise((resolve) => setTimeout(resolve, VIDEO_DETAIL_PAUSE_MS)));
+    console.info(`[fanlink:vault] video medio=${vaultFolderMark(mediaId)} detalle=${text ? "hls" : "sin-url"} tipo=lista status=${read.status ?? "sin"} ${flags}`.slice(0, 360));
+    if (text) return { url: null, hold: "", hls: text };
+    return { url: null, hold: JSON.stringify(videoHoldPayload(read.status, row)), hls: null };
+  }
   const playback = row
     ? await resolveDetailPlayback(row, readPlaylist, () => new Promise((resolve) => setTimeout(resolve, VIDEO_DETAIL_PAUSE_MS)))
     : { url: null, via: "sin-url" as const };
   const tipo = videoContainer({ url: playback.url });
   console.info(`[fanlink:vault] video medio=${vaultFolderMark(mediaId)} detalle=${playback.via} tipo=${tipo} status=${read.status ?? "sin"} ${flags}`.slice(0, 360));
   const format = videoFormatHold(tipo);
-  if (format) return { url: null, hold: aviHold() };
-  if (playback.url && !signedUrlExpired(playback.url, Date.now())) return { url: playback.url, hold: "" };
-  return { url: null, hold: JSON.stringify(videoHoldPayload(read.status, row)) };
+  if (format) return { url: null, hold: aviHold(), hls: null };
+  if (playback.url && !signedUrlExpired(playback.url, Date.now())) return { url: playback.url, hold: "", hls: null };
+  return { url: null, hold: JSON.stringify(videoHoldPayload(read.status, row)), hls: null };
 }
 
 function aviHold(): string {
@@ -157,13 +194,7 @@ function aviHold(): string {
 }
 
 async function readPlaylist(url: string): Promise<string | null> {
-  try {
-    const response = await fetch(url);
-    if (!response.ok) return null;
-    return await response.text();
-  } catch {
-    return null;
-  }
+  return readBoundedPlaylist(url, fetch);
 }
 
 async function thumbPage(

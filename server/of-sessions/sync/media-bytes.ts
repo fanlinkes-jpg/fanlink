@@ -3,8 +3,28 @@ import { sessionForApi } from "./of-chat-api.ts";
 import { mediaHostAllowed, nextMediaUrl } from "./history.ts";
 import { BROWSER_FINGERPRINT } from "../sessions/browser-factory.ts";
 
-/** La descarga de un vídeo no espera más que esto. */
+/** La descarga de un vídeo no espera más que esto a que el CDN conteste. */
 export const VIDEO_FETCH_TIMEOUT_MS = 20_000;
+
+/**
+ * Primer trozo de «Ver». 2 MiB son unos 5–10 s de un vídeo normal
+ * y se quedan por debajo de 20 s en uno pesado. No es el archivo entero.
+ */
+export const VIDEO_OPEN_BYTES = 2 * 1024 * 1024;
+
+/** Al abrir, el rango lleva fin. Un salto (`bytes=N-`, N>0) se deja igual. */
+export function boundedVideoRange(range: string | null | undefined): string {
+  const header = mediaRangeHeader(range ?? null);
+  const cap = VIDEO_OPEN_BYTES - 1;
+  if (!header) return `bytes=0-${cap}`;
+  const match = /^bytes=(\d+)-(\d*)$/.exec(header);
+  if (!match) return `bytes=0-${cap}`;
+  const start = Number(match[1]);
+  if (start > 0) return header;
+  const end = match[2] === "" ? null : Number(match[2]);
+  if (end == null || end > cap) return `bytes=0-${cap}`;
+  return header;
+}
 
 /** Dos páginas de la bóveda (40 + 40) y un margen, para no perder la anterior al pasar de página. */
 export const VAULT_THUMB_CACHE_MAX = 160;
@@ -138,7 +158,7 @@ export async function readSessionMediaResult(
   creatorId: string,
   target: string,
   range?: string | null,
-  options?: { expectVideo?: boolean },
+  options?: { expectVideo?: boolean; signal?: AbortSignal },
 ): Promise<{ status: number; media: MediaBytes | null }> {
   if (!mediaHostAllowed(target)) return { status: 0, media: null };
   const header = mediaRangeHeader(range);
@@ -163,7 +183,7 @@ export async function readSessionMediaResult(
     const attempts = mediaHeaderAttempts(headers);
     for (let index = 0; index < attempts.length; index += 1) {
       const attempt = attempts[index] ?? headers;
-      const loaded = await loadMedia(target, attempt, options?.expectVideo === true);
+      const loaded = await loadMedia(target, attempt, options?.expectVideo === true, options?.signal);
       const media = asMedia(loaded);
       if (media) {
         if (index > 0 && !options?.expectVideo) noteVaultThumbRecovered(creatorId, media.status);
@@ -207,27 +227,35 @@ export function videoFollowUp(status: number, contentType: string | null, expect
   return "drop";
 }
 
-export async function fetchVaultMedia(target: string, headers: Record<string, string>, expectVideo = false): Promise<LoadResult> {
-  return loadMedia(target, headers, expectVideo);
+export async function fetchVaultMedia(target: string, headers: Record<string, string>, expectVideo = false, signal?: AbortSignal): Promise<LoadResult> {
+  return loadMedia(target, headers, expectVideo, signal);
 }
 
-async function loadMedia(target: string, headers: Record<string, string>, expectVideo = false): Promise<LoadResult> {
+async function loadMedia(target: string, headers: Record<string, string>, expectVideo = false, client?: AbortSignal): Promise<LoadResult> {
+  const outbound = { ...headers };
+  if (expectVideo) outbound.range = boundedVideoRange(headers.range);
+  const controller = new AbortController();
+  const headerTimeout = expectVideo ? AbortSignal.timeout(VIDEO_FETCH_TIMEOUT_MS) : null;
+  const stopTimeout = headerTimeout ? linkAbort(headerTimeout, controller) : () => undefined;
+  if (client) linkAbort(client, controller);
+  const signal = expectVideo || client ? controller.signal : undefined;
   let response: Response;
-  const signal = expectVideo ? AbortSignal.timeout(VIDEO_FETCH_TIMEOUT_MS) : undefined;
   try {
-    response = await fetch(target, { headers, redirect: "manual", signal });
+    response = await fetch(target, { headers: outbound, redirect: "manual", signal });
   } catch (error) {
-    if (expectVideo && isTimeoutError(error)) console.info("[fanlink:vault] reproductor error motivo=timeout");
+    stopTimeout();
+    if (expectVideo && headerTimeout?.aborted && !client?.aborted) console.info("[fanlink:vault] reproductor error motivo=timeout");
     return { status: 0 };
   }
+  stopTimeout();
   if (response.status >= 300 && response.status < 400) {
     const next = nextMediaUrl(target, response.headers.get("location"));
     await response.body?.cancel().catch(() => undefined);
     if (!next) return { status: response.status };
     try {
-      response = await fetch(next, { headers, redirect: "manual", signal });
+      response = await fetch(next, { headers: outbound, redirect: "manual", signal });
     } catch (error) {
-      if (expectVideo && isTimeoutError(error)) console.info("[fanlink:vault] reproductor error motivo=timeout");
+      if (expectVideo && headerTimeout?.aborted && !client?.aborted) console.info("[fanlink:vault] reproductor error motivo=timeout");
       return { status: 0 };
     }
   }
@@ -248,7 +276,7 @@ async function loadMedia(target: string, headers: Record<string, string>, expect
       await response.body?.cancel().catch(() => undefined);
       return { status: response.status };
     }
-    const atStart = rangeOpensAtZero(headers.range);
+    const atStart = rangeOpensAtZero(outbound.range);
     if (expectVideo && ambiguousVideoType(upstreamType) && atStart && media.stream) {
       const peeked = await peekFtyp(media.stream);
       media.stream = peeked.stream;
@@ -273,7 +301,7 @@ async function loadMedia(target: string, headers: Record<string, string>, expect
     }
     console.info(vaultPlayerLog({
       status: media.status,
-      range: headers.range ?? null,
+      range: outbound.range ?? null,
       contentRange: media.contentRange ?? null,
       contentType: media.contentType,
       bytes: media.contentLength ?? null,
@@ -303,8 +331,14 @@ function rangeOpensAtZero(range: string | undefined): boolean {
   return Number(match[1]) === 0;
 }
 
-function isTimeoutError(error: unknown): boolean {
-  return error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+function linkAbort(from: AbortSignal, to: AbortController): () => void {
+  const onAbort = () => to.abort(from.reason);
+  if (from.aborted) {
+    to.abort(from.reason);
+    return () => undefined;
+  }
+  from.addEventListener("abort", onAbort, { once: true });
+  return () => from.removeEventListener("abort", onAbort);
 }
 
 function ambiguousVideoType(type: string): boolean {

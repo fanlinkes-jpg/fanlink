@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import Hls from "hls.js";
 import { queryVaultMirror } from "@/lib/of-sessions";
 import { VAULT_THUMB_MISSING, vaultMediaSrc } from "@/lib/chat-media";
 import { VAULT_CARD_FRAME, VAULT_CARD_IMAGE } from "@/lib/vault-card-frame";
@@ -556,55 +557,84 @@ function HoverClip({ src, title }: { src: string; title: string }) {
 
 function VaultPlayback({ src }: { src: string }) {
   const node = useRef<HTMLVideoElement>(null);
-  const [state, setState] = useState<"carga" | "ok" | "error" | "timeout">("carga");
+  const [state, setState] = useState<"carga" | "ok" | "error">("carga");
   const [note, setNote] = useState("");
   const [openVault, setOpenVault] = useState(false);
-  const [local, setLocal] = useState<string | null>(null);
+  const [ready, setReady] = useState(false);
   useEffect(() => {
     const video = node.current;
     let cancelled = false;
-    let objectUrl: string | null = null;
+    let hls: Hls | null = null;
     setState("carga");
     setNote("");
     setOpenVault(false);
-    setLocal(null);
-    if (!src) return;
+    setReady(false);
+    if (!src || !video) return;
     const controller = new AbortController();
-    const handle = setTimeout(() => {
-      controller.abort();
-      setState((current) => current === "carga" ? "timeout" : current);
-    }, 20_000);
-    void fetch(src, { signal: controller.signal }).then(async (response) => {
-      if (cancelled) return;
-      const type = response.headers.get("content-type") ?? "";
+    const handle = setTimeout(() => controller.abort(), 8_000);
+    void fetch(src, {
+      signal: controller.signal,
+      headers: { Range: "bytes=0-1" },
+      cache: "no-store",
+    }).then(async (response) => {
+      const type = (response.headers.get("content-type") ?? "").toLowerCase();
       if (response.status === 409 || type.startsWith("text/plain") || type.includes("json")) {
         const hold = readPlaybackHold(await response.text());
+        if (cancelled) return;
         setNote(hold.texto);
         setOpenVault(hold.abrir);
         setState("error");
         return;
       }
-      if (!response.ok || !type.startsWith("video/")) {
+      await response.body?.cancel().catch(() => undefined);
+      if (cancelled) return;
+      clearTimeout(handle);
+      if (type.includes("mpegurl")) {
+        if (video.canPlayType("application/vnd.apple.mpegurl")) {
+          video.src = src;
+          setReady(true);
+          return;
+        }
+        if (!Hls.isSupported()) {
+          setNote("No se ha podido cargar el vídeo");
+          setState("error");
+          return;
+        }
+        hls = new Hls({ maxBufferLength: 10, maxMaxBufferLength: 20 });
+        hls.loadSource(src);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          if (!cancelled) setReady(true);
+        });
+        hls.on(Hls.Events.ERROR, (_event, data) => {
+          if (!data.fatal || cancelled) return;
+          setNote("No se ha podido cargar el vídeo");
+          setOpenVault(false);
+          setState("error");
+        });
+        return;
+      }
+      if (response.status !== 200 && response.status !== 206) {
+        setNote("No se ha podido cargar el vídeo");
         setState("error");
         return;
       }
-      const blob = await response.blob();
-      if (cancelled) return;
-      objectUrl = URL.createObjectURL(blob);
-      setLocal(objectUrl);
+      video.src = src;
+      setReady(true);
     }).catch(() => {
-      if (!cancelled) setState((current) => current === "timeout" ? current : "error");
+      if (!cancelled) {
+        setNote("No se ha podido cargar el vídeo");
+        setState("error");
+      }
     });
     return () => {
       cancelled = true;
       clearTimeout(handle);
       controller.abort();
-      if (video) {
-        video.pause();
-        video.removeAttribute("src");
-        video.load();
-      }
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      hls?.destroy();
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
     };
   }, [src]);
   if (!src || state === "error") {
@@ -615,25 +645,25 @@ function VaultPlayback({ src }: { src: string }) {
       </div>
     );
   }
-  if (state === "timeout") return <p className="text-sm text-white">No se ha podido cargar el vídeo</p>;
-  if (!local) return <p className="text-sm text-white">Cargando…</p>;
   return (
-    <video
-      ref={node}
-      data-playback={src}
-      controls
-      autoPlay
-      playsInline
-      preload="auto"
-      className="h-full w-full bg-black object-contain"
-      src={local}
-      onCanPlay={() => setState("ok")}
-      onError={() => {
-        setNote((current) => current || "El navegador no puede reproducir este formato.");
-        setOpenVault(true);
-        setState("error");
-      }}
-    />
+    <>
+      {ready ? null : <p className="text-sm text-white">Cargando…</p>}
+      <video
+        ref={node}
+        data-playback={src}
+        controls
+        autoPlay
+        playsInline
+        preload="metadata"
+        className={ready ? "h-full w-full bg-black object-contain" : "hidden"}
+        onCanPlay={() => setState("ok")}
+        onError={() => {
+          setNote("No se ha podido cargar el vídeo");
+          setOpenVault(false);
+          setState("error");
+        }}
+      />
+    </>
   );
 }
 

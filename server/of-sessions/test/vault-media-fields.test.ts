@@ -3,7 +3,8 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { PGlite } from "@electric-sql/pglite";
-import { browserVideoType, choosePlayableVideo, parseVaultBundle, resolveDetailPlayback, stampVaultList, vaultDetailRow, videoContainer, videoDetailHold, videoDrmLine, videoFlagLine, videoFormatHold, videoHoldPayload, videoHoldText, videoShapeLine } from "../sync/vault-model.ts";
+import { browserVideoType, choosePlayableVideo, drmManifestUrl, parseVaultBundle, resolveDetailPlayback, stampVaultList, vaultDetailRow, videoContainer, videoDetailHold, videoDrmLine, videoFlagLine, videoFormatHold, videoHoldPayload, videoHoldText, videoShapeLine } from "../sync/vault-model.ts";
+import { hlsMediaResponse, hlsSegmentType, playVaultHlsDetail, readBoundedPlaylist } from "../sync/vault-hls.ts";
 import { fetchSignedMediaDetail, vaultMediaDetailPath } from "../sync/of-chat-api.ts";
 import { clearSignRulesCache } from "../sync/of-sign.ts";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
@@ -11,7 +12,7 @@ import { handleVaultMedia, headRange, noteVaultPlayRequest } from "../http/vault
 import { loadFreshPreview } from "../sync/vault-thumbs.ts";
 import { playbackUrl, reuseOrRefreshVideo, VIDEO_DETAIL_PAUSE_MS } from "../sync/vault-store.ts";
 import type { ReadSql } from "../sync/store.ts";
-import { clearVaultThumbs, fetchVaultMedia, getVaultThumb, hasFtyp, putVaultThumb, VIDEO_FETCH_TIMEOUT_MS, videoBytesAccepted, videoFollowUp } from "../sync/media-bytes.ts";
+import { boundedVideoRange, clearVaultThumbs, fetchVaultMedia, getVaultThumb, hasFtyp, putVaultThumb, VIDEO_FETCH_TIMEOUT_MS, VIDEO_OPEN_BYTES, videoBytesAccepted, videoFollowUp } from "../sync/media-bytes.ts";
 import { folderColumnView } from "../../../src/lib/vault-folder-label.ts";
 
 test("los conteos aceptan string, snake_case y el objeto counts, y Todos se guarda", () => {
@@ -463,7 +464,115 @@ test("una URL caducada en SQL pide el detalle y responde video/mp4", async () =>
   }
 });
 
-test("un detalle con convertedToVideo=no y drm no trae mp4 y abre OnlyFans", async () => {
+test("dos Ver a la vez piden el detalle una sola vez", async () => {
+  let calls = 0;
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const sql: ReadSql = {
+    async query<T>(text: string): Promise<T[]> {
+      if (text.includes("information_schema")) return [{ n: 0 } as T];
+      return [];
+    },
+  };
+  const loadDetail = async () => {
+    calls += 1;
+    await gate;
+    return { url: "https://cdn2.onlyfans.com/files/a.mp4", hold: "" };
+  };
+  const base = {
+    sql,
+    creatorId: "c-flight",
+    mediaId: "m-flight",
+    now: Date.now(),
+    force: false,
+    pause: async () => undefined,
+    loadDetail,
+  };
+  const first = reuseOrRefreshVideo({ ...base, variant: "full" });
+  const second = reuseOrRefreshVideo({ ...base, variant: "clip" });
+  release();
+  const [left, right] = await Promise.all([first, second]);
+  assert.equal(calls, 1);
+  assert.equal(left.url, "https://cdn2.onlyfans.com/files/a.mp4");
+  assert.equal(right.url, left.url);
+});
+
+test("Ver abre con un rango acotado, el salto pide bytes=N- con 206 y cancelar corta el CDN", async () => {
+  const previous = globalThis.fetch;
+  const ranges: string[] = [];
+  const cap = VIDEO_OPEN_BYTES - 1;
+  const slice = Uint8Array.from([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70]);
+  const respond = (range: string) => {
+    const start = Number(/^bytes=(\d+)-/.exec(range)?.[1] ?? 0);
+    return new Response(slice, {
+      status: 206,
+      headers: {
+        "content-type": "video/mp4",
+        "content-range": `bytes ${start}-${start + slice.byteLength - 1}/114000000`,
+        "content-length": String(slice.byteLength),
+        "accept-ranges": "bytes",
+      },
+    });
+  };
+  try {
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      const range = new Headers(init?.headers).get("range") ?? "";
+      ranges.push(range);
+      return respond(range);
+    }) as typeof fetch;
+    assert.equal(boundedVideoRange(null), `bytes=0-${cap}`);
+    assert.equal(boundedVideoRange("bytes=0-"), `bytes=0-${cap}`);
+    assert.notEqual(boundedVideoRange("bytes=0-"), "bytes=0-");
+    const opened = await fetchVaultMedia("https://cdn2.onlyfans.com/files/big.mp4", { accept: "video/*" }, true);
+    assert.equal(ranges[0], `bytes=0-${cap}`);
+    assert.equal(opened.status, 206);
+    assert.ok(VIDEO_OPEN_BYTES < 8 * 1024 * 1024);
+    const played = await handleVaultMedia(new Request("http://127.0.0.1/api/vault-media?creatorId=c-1&mediaId=big&variant=full", {
+      headers: { range: "bytes=57000000-" },
+    }), {
+      session: async () => ({ userId: "dueña", role: "owner", perms: ["vault"] }),
+      findPreview: async () => "https://cdn2.onlyfans.com/files/big.mp4",
+      fetchBytes: async (_url, range, signal) => {
+        const served = await fetchVaultMedia("https://cdn2.onlyfans.com/files/big.mp4", { accept: "video/*", range: range ?? "" }, true, signal);
+        return "contentType" in served ? served : null;
+      },
+    });
+    assert.equal(ranges.at(-1), "bytes=57000000-");
+    assert.ok(Number(/^bytes=(\d+)-/.exec(ranges.at(-1) ?? "")?.[1] ?? 0) > 0);
+    assert.equal(played.status, 206);
+    assert.match(played.headers.get("content-range") ?? "", /^bytes 57000000-/);
+  } finally {
+    globalThis.fetch = previous;
+  }
+  let upstream: AbortSignal | undefined;
+  const client = new AbortController();
+  globalThis.fetch = (async (_input: unknown, init?: RequestInit) => new Promise((_resolve, reject) => {
+    upstream = init?.signal ?? undefined;
+    const signal = init?.signal;
+    if (!signal) {
+      reject(new Error("sin señal"));
+      return;
+    }
+    if (signal.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+  })) as typeof fetch;
+  try {
+    const pending = fetchVaultMedia("https://cdn2.onlyfans.com/files/big.mp4", { accept: "video/*", range: "bytes=57000000-" }, true, client.signal);
+    client.abort();
+    const cancelled = await pending;
+    assert.equal(upstream?.aborted, true);
+    assert.equal(cancelled.status, 0);
+  } finally {
+    globalThis.fetch = previous;
+  }
+});
+
+test("un detalle con convertedToVideo=no se reproduce por HLS y no abre OnlyFans", async () => {
   const detail = {
     id: 24,
     type: "video",
@@ -478,7 +587,7 @@ test("un detalle con convertedToVideo=no y drm no trae mp4 y abre OnlyFans", asy
           hls: "https://cdn2.onlyfans.com/hls/files/a.m3u8?Tag=2",
           dash: "https://cdn2.onlyfans.com/dash/files/a.mpd?Tag=2",
         },
-        signature: { hls: { "CloudFront-Policy": "sek", "CloudFront-Signature": "firma" } },
+        signature: { hls: { "CloudFront-Policy": "sek", "CloudFront-Signature": "sigvalue", "CloudFront-Key-Pair-Id": "keypair" } },
       },
     },
     videoSources: { "240": null, "720": null },
@@ -497,20 +606,79 @@ test("un detalle con convertedToVideo=no y drm no trae mp4 y abre OnlyFans", asy
   assert.equal(line.includes("sek"), false);
   assert.equal(line.includes("CloudFront"), false);
   const payload = videoHoldPayload(200, row);
-  assert.equal(payload.texto, "Este vídeo está protegido por OnlyFans y no se puede reproducir aquí.");
-  assert.equal(payload.abrir, true);
-  const held = await handleVaultMedia(new Request("http://127.0.0.1/api/vault-media?creatorId=c-1&mediaId=24&variant=full"), {
-    session: async () => ({ userId: "dueña", role: "owner", perms: ["vault"] }),
-    findPreview: async () => null,
-    videoHold: () => JSON.stringify(payload),
-    fetchBytes: async () => null,
-  });
-  assert.equal(held.status, 409);
-  assert.equal(held.headers.get("content-type"), "application/json; charset=utf-8");
-  const body = await held.text();
-  assert.equal(body.includes("m3u8"), false);
-  assert.equal(body.includes("sek"), false);
-  assert.deepEqual(JSON.parse(body), payload);
+  assert.equal(payload.abrir, false);
+  assert.equal(drmManifestUrl({ files: { drm: { manifest: { hls: "https://evil.example/a.m3u8" } } } }), null);
+  assert.equal(await readBoundedPlaylist("https://evil.example/a.m3u8", async () => {
+    throw new Error("no se pide");
+  }), null);
+  assert.equal(hlsSegmentType("https://cdn2.onlyfans.com/a.ts", "video/mp4"), "video/mp2t");
+  assert.equal(hlsSegmentType("https://cdn2.onlyfans.com/a.m4s", "video/mp4"), "video/iso.segment");
+  assert.equal(hlsSegmentType("https://cdn2.onlyfans.com/a.mpd", "application/vnd.apple.mpegurl"), "application/dash+xml");
+  const master = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000\n720/index.m3u8\n";
+  const media = "#EXTM3U\n#EXT-X-VERSION:7\n#EXTINF:6.0,\nseg-0.m4s\n#EXTINF:6.0,\nseg-1.m4s\n#EXT-X-ENDLIST\n";
+  const ftyp = Uint8Array.from([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d, 1]);
+  const ftypB = Uint8Array.from([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d, 2]);
+  let pauses = 0;
+  const cookies: string[] = [];
+  const fetchImpl = (async (input: unknown, init?: RequestInit) => {
+    const href = String(input);
+    cookies.push(new Headers(init?.headers).get("cookie") ?? "");
+    if (href.includes("/hls/files/a.m3u8")) return new Response(master, { status: 200, headers: { "content-type": "application/vnd.apple.mpegurl" } });
+    if (href.endsWith("/index.m3u8")) return new Response(media, { status: 200, headers: { "content-type": "application/vnd.apple.mpegurl" } });
+    if (href.endsWith("seg-0.m4s")) return new Response(ftyp, { status: 200, headers: { "content-type": "video/mp4" } });
+    if (href.endsWith("seg-1.m4s")) return new Response(ftypB, { status: 200, headers: { "content-type": "video/mp4" } });
+    if (href.includes(".mpd")) return new Response("<MPD></MPD>", { status: 200, headers: { "content-type": "application/dash+xml" } });
+    return new Response("no", { status: 404 });
+  }) as typeof fetch;
+  const logs: string[] = [];
+  const previousInfo = console.info;
+  console.info = (...args: unknown[]) => {
+    logs.push(args.map(String).join(" "));
+  };
+  try {
+    const played = await playVaultHlsDetail(detail, fetchImpl, async () => {
+      pauses += 1;
+    });
+    assert.ok(played);
+    assert.equal(pauses, 1);
+    assert.equal(played.manifest.includes("cdn"), false);
+    assert.equal(played.manifest.includes("sek"), false);
+    assert.equal(played.manifest.includes("sigvalue"), false);
+    assert.equal(played.manifest.includes("keypair"), false);
+    assert.equal(played.mediaPlaylist.includes("cdn"), false);
+    const segmentLines = played.mediaPlaylist.split(/\n/).filter((item) => !item.startsWith("#") && item.includes("variant=hls"));
+    assert.equal(segmentLines.length, 2);
+    assert.equal(played.contentType, "video/iso.segment");
+    assert.equal(hasFtyp(played.segment), true);
+    const secondUrl = new URL(segmentLines[1] ?? "", "https://fanlink.local");
+    const second = await hlsMediaResponse(secondUrl.searchParams.get("k") ?? "", secondUrl.searchParams.get("u") ?? "", null, fetchImpl);
+    assert.equal(second.status, 200);
+    assert.equal(second.headers.get("content-type"), "video/iso.segment");
+    const secondBytes = new Uint8Array(await second.arrayBuffer());
+    assert.equal(secondBytes.at(-1), 2);
+    assert.notEqual(played.segment.at(-1), secondBytes.at(-1));
+    const viewer = await handleVaultMedia(new Request("http://127.0.0.1/api/vault-media?creatorId=c-1&mediaId=24&variant=full"), {
+      session: async () => ({ userId: "dueña", role: "owner", perms: ["vault"] }),
+      findPreview: async () => "https://cdn2.onlyfans.com/hls/media.m3u8",
+      fetchBytes: async () => ({ status: 200, body: new TextEncoder().encode(played.manifest), contentType: "application/vnd.apple.mpegurl" }),
+    });
+    assert.equal(viewer.status, 200);
+    assert.equal(viewer.headers.get("content-type"), "application/vnd.apple.mpegurl");
+    const viewerBody = await viewer.text();
+    assert.equal(viewerBody.includes("sek"), false);
+    assert.equal(viewerBody.includes("cdn2"), false);
+    assert.equal(viewerBody.startsWith("#EXTM3U"), true);
+    const joined = logs.join("\n");
+    assert.match(joined, /reproductor hls tipo=manifest firma=si/);
+    assert.match(joined, /reproductor hls tipo=segmento firma=si/);
+    assert.equal(joined.includes("sek"), false);
+    assert.equal(joined.includes("sigvalue"), false);
+    assert.equal(joined.includes("keypair"), false);
+    assert.ok(cookies.length > 0);
+    assert.ok(cookies.every((cookie) => cookie.includes("CloudFront-Policy=") && !cookie.includes("sess")));
+  } finally {
+    console.info = previousInfo;
+  }
 });
 
 test("convertedToVideo=no con lista usa el mismo reproductor que el mp4", async () => {
@@ -557,11 +725,11 @@ test("convertedToVideo=no con lista usa el mismo reproductor que el mp4", async 
   assert.equal(played.headers.get("content-type"), "video/mp4");
 });
 
-test("un original con ftyp qt se sirve como video/quicktime y un avi no", async () => {
+test("un original con ftyp qt se sirve como video/mp4 porque Chrome no reproduce video/quicktime, y un avi no", async () => {
   const qt = Uint8Array.from([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x71, 0x74, 0x20, 0x20]);
   const avi = Uint8Array.from([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x41, 0x56, 0x49, 0x20]);
   assert.equal(videoContainer({ head: qt }), "mov");
-  assert.equal(browserVideoType("mov"), "video/quicktime");
+  assert.equal(browserVideoType("mov"), "video/mp4");
   assert.equal(videoContainer({ head: avi }), "avi");
   assert.equal(browserVideoType("avi"), null);
   const row = {
@@ -581,7 +749,7 @@ test("un original con ftyp qt se sirve como video/quicktime y un avi no", async 
   globalThis.fetch = (async () => new Response(qt, { status: 200, headers: { "content-type": "application/octet-stream" } })) as typeof fetch;
   try {
     const served = await fetchVaultMedia("https://cdn2.onlyfans.com/files/original.mov", { accept: "video/*", range: "bytes=0-" }, true);
-    assert.equal("contentType" in served ? served.contentType : "", "video/quicktime");
+    assert.equal("contentType" in served ? served.contentType : "", "video/mp4");
   } finally {
     globalThis.fetch = previous;
   }

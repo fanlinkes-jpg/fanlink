@@ -1,5 +1,6 @@
 import { textSaleBlocked } from "./vault-block.ts";
 import { liveViewDebug } from "../live/debug.ts";
+import { mediaHostAllowed } from "./history.ts";
 
 export type VaultKind = "foto" | "video" | "audio" | "gif" | null;
 
@@ -476,7 +477,7 @@ export function drmManifestUrl(row: Record<string, unknown>): string | null {
   if (!manifest) return null;
   for (const key of ["hls", "dash"] as const) {
     const value = textOf(manifest[key]);
-    if (value && /^https:\/\//i.test(value)) return value;
+    if (value && mediaHostAllowed(value)) return value;
   }
   return null;
 }
@@ -494,7 +495,7 @@ export function playlistMediaUrl(body: string, base: string): string | null {
     }
     if (url.protocol !== "https:") continue;
     const href = url.toString();
-    if (isPlaylistUrl(href) || !isCandidateVideoUrl(href)) continue;
+    if (isPlaylistUrl(href) || isSegmentUrl(href) || !isCandidateVideoUrl(href)) continue;
     return href;
   }
   return null;
@@ -523,6 +524,12 @@ export async function resolveDetailPlayback(
 function isPlaylistUrl(url: string): boolean {
   const path = url.split("?")[0]?.toLowerCase() ?? "";
   return path.endsWith(".m3u8") || path.endsWith(".mpd");
+}
+
+/** Un .ts o .m4s es un trozo, no el vídeo entero. */
+function isSegmentUrl(url: string): boolean {
+  const path = url.split("?")[0]?.toLowerCase() ?? "";
+  return /\.(m4s|cmfv|cmfa|ts)$/.test(path);
 }
 
 /** Forma de los campos de vídeo, sin URL ni ids. Sirve para comparar cuentas. */
@@ -584,10 +591,9 @@ export function videoContainer(input: { url?: string | null; contentType?: strin
   return "ausente";
 }
 
-/** El navegador reproduce mp4 y mov. AVI no. */
+/** Chrome no reproduce el MIME video/quicktime. Un ftyp `qt  ` es ISO BMFF y se sirve como video/mp4. AVI no. */
 export function browserVideoType(container: ReturnType<typeof videoContainer>): string | null {
-  if (container === "mov") return "video/quicktime";
-  if (container === "mp4") return "video/mp4";
+  if (container === "mov" || container === "mp4") return "video/mp4";
   return null;
 }
 
@@ -629,7 +635,7 @@ export function videoDrmLine(row: Record<string, unknown>): string {
 }
 
 export function videoNeedsOnlyFans(row: Record<string, unknown> | null): boolean {
-  if (!row || choosePlayableVideo(row)) return false;
+  if (!row || choosePlayableVideo(row) || drmManifestUrl(row)) return false;
   return Boolean(nested(nested(row.files)?.drm));
 }
 
@@ -647,7 +653,7 @@ export function videoDetailHold(status: number | null, row: Record<string, unkno
   return videoHoldText(row);
 }
 
-/** Cuerpo del 409. `abrir` solo cuando el medio es DRM y no hay mp4. */
+/** Cuerpo del 409. `abrir` solo si OnlyFans tampoco tiene manifiesto ni mp4. */
 export function videoHoldPayload(status: number | null, row: Record<string, unknown> | null): { texto: string; abrir: boolean } {
   return { texto: videoDetailHold(status, row), abrir: status !== 401 && status !== 429 && videoNeedsOnlyFans(row) };
 }
