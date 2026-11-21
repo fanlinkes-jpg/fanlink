@@ -126,7 +126,7 @@ test("dos cuentas conservan el conteo y las portadas de cada carpeta, no los de 
       ],
     }],
   });
-  assert.deepEqual(shared.items[0]?.listIds ?? [], []);
+  assert.deepEqual(shared.items[0]?.listIds ?? [], ["501"]);
   assert.deepEqual(stampVaultList(shared.items[0]!, "501", null).listIds, ["501"]);
 });
 

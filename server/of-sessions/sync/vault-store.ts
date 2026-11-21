@@ -166,6 +166,7 @@ export async function persistVaultRead(
   if (requested && requested !== "all" && saved.length > 0) {
     await rememberListMembers(sql, creatorId, requested, saved.map((item) => item.id));
   }
+  await rememberStateMembers(sql, creatorId, saved);
   return saved;
 }
 
@@ -193,6 +194,16 @@ function numberOrNull(value: unknown): number | null {
   return null;
 }
 
+/** `hasMedia` de listStates, no el catálogo entero. */
+async function rememberStateMembers(sql: ReadSql, creatorId: string, items: readonly VaultFile[]): Promise<void> {
+  for (const item of items) {
+    for (const listId of item.listIds ?? []) {
+      if (!listId || listId === "all") continue;
+      await rememberListMembers(sql, creatorId, listId, [item.id]);
+    }
+  }
+}
+
 /** Los medios que devolvió `list_id` pertenecen a esa carpeta. No copia el catálogo de listStates. */
 async function rememberListMembers(sql: ReadSql, creatorId: string, listId: string, itemIds: readonly string[]): Promise<void> {
   if (!(await hasColumn(sql, "of_vault_list_item", "item_key"))) return;
@@ -204,6 +215,16 @@ async function rememberListMembers(sql: ReadSql, creatorId: string, listId: stri
       [creatorId, listId, itemId],
     );
   }
+}
+
+/** Medios guardados en la carpeta. Null si la tabla aún no existe. */
+export async function listMemberCount(sql: ReadSql, creatorId: string, listId: string): Promise<number | null> {
+  if (!listId || listId === "all" || !(await hasColumn(sql, "of_vault_list_item", "item_key"))) return null;
+  const rows = await sql.query<{ n: number | string }>(
+    "select count(*)::int as n from of_vault_list_item where creator_id = $1 and list_key = $2",
+    [creatorId, listId],
+  );
+  return Number(rows[0]?.n ?? 0);
 }
 
 /** Al cerrar un recorrido completo, quita de la carpeta los medios que ya no han salido. */

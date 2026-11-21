@@ -21,6 +21,58 @@ export function liveChallengeUrl(raw: string): boolean {
   return host === "challenges.cloudflare.com" || host.endsWith(".challenges.cloudflare.com") || path.includes("/cdn-cgi/");
 }
 
+const VAULT_SECRET_PARAM = /^(sign|cookie|sess|x-bc|x_bc|token|authorization|user-id|user_id|policy|signature)$/i;
+const VAULT_ENUM_VALUE = /^(all|desc|asc|recent|photo|video|audio|gif|custom|posts|stories|messages|streams|media|main|true|false)$/i;
+const VAULT_PATH_WORD = /^(api2|v2|vault|media|lists|list|categories|processing|hidden)$/;
+
+/**
+ * Método y ruta de la bóveda web. Los números pasan a `<n>`.
+ * Un texto que no es un valor fijo pasa a `<t>`. No salen cabeceras ni secretos.
+ */
+export function vaultWebTrace(method: string, raw: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(raw, "https://onlyfans.com");
+  } catch {
+    return null;
+  }
+  const host = url.hostname.toLowerCase();
+  if (host !== "onlyfans.com" && host !== "www.onlyfans.com") return null;
+  let path = url.pathname;
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    return null;
+  }
+  if (!path.startsWith("/api2/v2/vault")) return null;
+  const safePath = path
+    .split("/")
+    .map((part) => {
+      if (part === "") return "";
+      if (/^\d+$/.test(part)) return "<n>";
+      if (VAULT_PATH_WORD.test(part)) return part;
+      return "<t>";
+    })
+    .join("/");
+  const verb = method.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 8) || "GET";
+  const params: string[] = [];
+  for (const [key, value] of url.searchParams) {
+    if (VAULT_SECRET_PARAM.test(key)) continue;
+    const name = key.replace(/[^\w.-]/g, "").slice(0, 40);
+    if (!name) continue;
+    params.push(`${name}=${redactVaultParam(value)}`);
+  }
+  const query = params.length > 0 ? `?${params.join("&")}` : "";
+  return `${verb} ${safePath}${query}`;
+}
+
+function redactVaultParam(value: string): string {
+  const trimmed = value.trim();
+  if (/^-?\d+$/.test(trimmed)) return "<n>";
+  if (VAULT_ENUM_VALUE.test(trimmed)) return trimmed.toLowerCase();
+  return "<t>";
+}
+
 /**
  * Método, host y ruta. Sin query, sin hash y sin segmentos largos
  * (ahí viaja el token del reto).

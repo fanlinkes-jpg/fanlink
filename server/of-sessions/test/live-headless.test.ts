@@ -9,7 +9,7 @@ import { LOGIN_CLIENT_HINTS, loginUserAgentOverride } from "../live/fingerprint.
 import { isTargetClosedMessage, shouldReviveLive } from "../live/closed.ts";
 import { clearStaleProfileLock, readProfileLock, waitForProfileLock } from "../sessions/profile-lock.ts";
 import { profileHasClearanceName } from "../live/clearance-file.ts";
-import { clearancePresent, liveRequestTrace, liveViewDebug } from "../live/debug.ts";
+import { clearancePresent, liveRequestTrace, liveViewDebug, vaultWebTrace } from "../live/debug.ts";
 import { liveLaunchMode, liveVisibility } from "../live/headless.ts";
 import { profileSaveReason } from "../sessions/profile-owner.ts";
 import { hideLiveProcess, liveContextOpen, liveHideScript, tuckLiveWindow } from "../live/window.ts";
@@ -142,6 +142,16 @@ test("el diagnostico no escribe query, hash ni el valor de cf_clearance", () => 
   assert.equal(traced?.includes("sign="), false);
   assert.equal(clearancePresent(["sess", "cf_clearance"]), true);
   assert.equal(clearancePresent(["sess"]), false);
+  const web = vaultWebTrace(
+    "GET",
+    "https://onlyfans.com/api2/v2/vault/lists/28619188/media?limit=40&offset=0&list=28619188&field=recent&sort=desc&sign=abc&name=B%2FG%20LA%20DUCHA",
+  );
+  assert.equal(web, "GET /api2/v2/vault/lists/<n>/media?limit=<n>&offset=<n>&list=<n>&field=recent&sort=desc&name=<t>");
+  assert.equal(web?.includes("28619188"), false);
+  assert.equal(web?.includes("DUCHA"), false);
+  assert.equal(web?.includes("sign"), false);
+  assert.equal(vaultWebTrace("GET", "https://onlyfans.com/my/vault"), null);
+  assert.equal(vaultWebTrace("GET", "https://onlyfans.com/api2/v2/vault/media?list=all&limit=40"), "GET /api2/v2/vault/media?list=all&limit=<n>");
 });
 
 test("un Chromium vivo bloquea el perfil y uno muerto se puede soltar", async () => {

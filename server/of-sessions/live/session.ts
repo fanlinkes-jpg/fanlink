@@ -11,7 +11,7 @@ import { BROWSER_FINGERPRINT } from "../sessions/browser-factory.ts";
 import { isLiveChallengeText, isLiveLoginText, LIVE_CHALLENGE_NOTICE, LIVE_LOGIN_NOTICE } from "./challenge.ts";
 import { loginUserAgentOverride } from "./fingerprint.ts";
 import { isTargetClosedMessage, LIVE_CLOSED_NOTICE } from "./closed.ts";
-import { clearancePresent, liveChallengeUrl, liveRequestTrace, liveViewDebug } from "./debug.ts";
+import { clearancePresent, liveChallengeUrl, liveRequestTrace, liveViewDebug, vaultWebTrace } from "./debug.ts";
 
 export type LiveFrame = { jpeg: Buffer; width: number; height: number };
 
@@ -266,6 +266,18 @@ export async function startLiveCast(input: {
   if (!challengeOpen) await armGuards();
   await keepHidden("carga");
   cdp = await input.context.newCDPSession(page);
+  if (debug) {
+    cdp.on("Network.requestWillBeSent", (event: { request?: { method?: string; url?: string } }) => {
+      const method = event.request?.method;
+      const target = event.request?.url;
+      if (!method || !target) return;
+      const line = vaultWebTrace(method, target);
+      if (line) console.info(`[fanlink:vault-web] ${line}`);
+    });
+    await cdp.send("Network.enable").catch(() => {
+      console.info("[fanlink:vault-web] red=no");
+    });
+  }
   if (debug) {
     const probe = await page.evaluate(() => {
       const nav = navigator as Navigator & { userAgentData?: { brands?: Array<{ brand: string }> } };

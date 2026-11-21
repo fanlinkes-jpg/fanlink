@@ -683,6 +683,192 @@ test("dos creadoras no comparten los conteos ni las portadas de sus carpetas", a
   }
 });
 
+test("list_id ignorado no deja la carpeta en cero si listStates marca sus medios", async () => {
+  clearSignRulesCache();
+  clearVaultWalkCache();
+  const db = new PGlite();
+  const lines: string[] = [];
+  const previous = console.info;
+  console.info = (line?: unknown) => {
+    lines.push(String(line));
+  };
+  const page = [
+    { id: 11, type: "video", duration: 4, listStates: [{ id: 2901, type: "custom", hasMedia: true, canAddMedia: true }, { id: 2902, type: "custom", hasMedia: false, canAddMedia: true }] },
+    { id: 12, type: "video", duration: 5, listStates: [{ id: 2901, type: "custom", hasMedia: 1, canAddMedia: true }, { id: 2902, type: "custom", hasMedia: false, canAddMedia: true }] },
+    ...Array.from({ length: 38 }, (_, index) => ({
+      id: 100 + index,
+      type: "photo",
+      listStates: [{ id: 2901, type: "custom", hasMedia: false, canAddMedia: true }, { id: 2902, type: "custom", hasMedia: false, canAddMedia: true }],
+    })),
+  ];
+  const fetchImpl = (async (input: RequestInfo | URL) => {
+    const href = String(input);
+    if (href.includes("dynamic-rules")) return Response.json(RULES);
+    const url = new URL(href);
+    if (url.pathname.endsWith("/vault/lists")) {
+      return Response.json({
+        list: [{ id: 2901, type: "custom", name: "B/B/B/G EL CUARTETO", photosCount: 0, videosCount: 2, gifsCount: 0, audiosCount: 0, hasMedia: true }],
+        all: { photosCount: 615, videosCount: 130, gifsCount: 2, audiosCount: 2 },
+        hasMore: false,
+      });
+    }
+    if (url.searchParams.get("list_id") === "2901" || url.searchParams.get("list") === "all") {
+      return Response.json({ list: page, hasMore: false });
+    }
+    return Response.json({ list: [], hasMore: false });
+  }) as typeof fetch;
+  try {
+    for (const file of ["0037_vault_mirror.sql", "0038_vault_fan_filter.sql", "0050_vault_list_counts.sql", "0053_vault_list_covers.sql", "0054_vault_list_members.sql"]) {
+      await db.exec(await readFile(path.join(root, "migrations", file), "utf8"));
+    }
+    await asSql(db).query(
+      "insert into of_vault_list (creator_id, list_key, name, synced_at, cover_ids) values ($1, $2, $3, $4, $5::jsonb)",
+      ["3zk7kbr", "2901", "previa", "2026-01-01T00:00:00.000Z", JSON.stringify([{ id: "todos-1", kind: "foto" }])],
+    );
+    const walked = await walkVault({
+      creatorId: "3zk7kbr",
+      state: storedState(),
+      fetch: fetchImpl,
+      now: () => 1_700_000_000_000,
+      sql: asSql(db),
+      sleep: async () => undefined,
+    });
+    assert.equal(walked.reason, null);
+    const actor = { userId: "dueña", role: "owner" as const, perms: ["vault"] };
+    const opened = await queryVaultForActor(asSql(db), actor, {
+      creatorId: "3zk7kbr",
+      remember: false,
+      query: { ...emptyVaultQuery(), folderId: "2901", scope: "carpeta" },
+    });
+    assert.deepEqual(opened.payload.items.map((item) => item.id).sort(), ["11", "12"]);
+    const covers = await asSql(db).query<{ cover_ids: unknown }>(
+      "select cover_ids from of_vault_list where creator_id = $1 and list_key = $2",
+      ["3zk7kbr", "2901"],
+    );
+    assert.equal(JSON.stringify(covers[0]?.cover_ids ?? []).includes("todos-1"), false);
+    assert.equal(lines.some((line) => line.includes("sospechosa") && line.includes("param=list_id") && line.includes("respaldo=si") && line.includes("enLista=2")), true);
+    assert.equal(lines.some((line) => line.includes("2901") || line.includes("CUARTETO")), false);
+  } finally {
+    console.info = previous;
+    clearSignRulesCache();
+    clearVaultWalkCache();
+    await db.close();
+  }
+});
+
+test("un 400 de list_id no guarda el list hinchado", async () => {
+  clearSignRulesCache();
+  clearVaultWalkCache();
+  const db = new PGlite();
+  const seen: string[] = [];
+  const lines: string[] = [];
+  const previous = console.info;
+  console.info = (line?: unknown) => {
+    lines.push(String(line));
+  };
+  const fetchImpl = (async (input: RequestInfo | URL) => {
+    const href = String(input);
+    seen.push(href);
+    if (href.includes("dynamic-rules")) return Response.json(RULES);
+    const url = new URL(href);
+    if (url.pathname.endsWith("/vault/lists")) {
+      return Response.json({
+        list: [{ id: 77001, type: "custom", name: "Carpeta", photosCount: 0, videosCount: 2, gifsCount: 0, audiosCount: 0, hasMedia: true }],
+        hasMore: false,
+      });
+    }
+    if (url.searchParams.get("list") === "all") return Response.json({ list: [{ id: 1, type: "photo" }], hasMore: false });
+    if (url.searchParams.get("list_id") === "77001") return new Response("{}", { status: 400 });
+    if (url.searchParams.get("list") === "77001") {
+      return Response.json({ list: Array.from({ length: 40 }, (_, index) => ({ id: 3000 + index, type: "photo" })), hasMore: true });
+    }
+    return Response.json({ list: [], hasMore: false });
+  }) as typeof fetch;
+  try {
+    for (const file of ["0037_vault_mirror.sql", "0050_vault_list_counts.sql", "0054_vault_list_members.sql"]) {
+      await db.exec(await readFile(path.join(root, "migrations", file), "utf8"));
+    }
+    await walkVault({
+      creatorId: "3zk7kbr",
+      state: storedState(),
+      fetch: fetchImpl,
+      now: () => 1_700_000_000_000,
+      sql: asSql(db),
+      sleep: async () => undefined,
+    });
+    assert.equal(seen.filter((href) => href.includes("list_id=77001")).length, 1);
+    assert.equal(seen.filter((href) => href.includes("list=77001") && !href.includes("list_id=77001")).length, 1);
+    assert.equal(lines.some((line) => line.includes("sospechosa") && line.includes("param=list") && !line.includes("param=list_id")), true);
+    assert.equal(lines.some((line) => line.includes("77001") || line.includes("nombre=")), false);
+    const members = await asSql(db).query<{ item_key: string }>(
+      "select item_key from of_vault_list_item where creator_id = $1 and list_key = $2",
+      ["3zk7kbr", "77001"],
+    );
+    assert.deepEqual(members, []);
+  } finally {
+    console.info = previous;
+    clearSignRulesCache();
+    clearVaultWalkCache();
+    await db.close();
+  }
+});
+
+test("una carpeta de más de 40 medios olvida los miembros viejos", async () => {
+  clearSignRulesCache();
+  clearVaultWalkCache();
+  const db = new PGlite();
+  const fetchImpl = (async (input: RequestInfo | URL) => {
+    const href = String(input);
+    if (href.includes("dynamic-rules")) return Response.json(RULES);
+    const url = new URL(href);
+    if (url.pathname.endsWith("/vault/lists")) return Response.json({ list: [], hasMore: false });
+    if (url.searchParams.get("list_id") !== "88041") return Response.json({ list: [], hasMore: false });
+    const offset = Number(url.searchParams.get("offset") ?? "0");
+    if (offset === 0) {
+      return Response.json({
+        list: Array.from({ length: 40 }, (_, index) => ({ id: index + 1, type: "video", duration: 2 })),
+        hasMore: true,
+      });
+    }
+    return Response.json({ list: [{ id: 41, type: "video", duration: 2 }], hasMore: false });
+  }) as typeof fetch;
+  try {
+    for (const file of ["0037_vault_mirror.sql", "0050_vault_list_counts.sql", "0054_vault_list_members.sql"]) {
+      await db.exec(await readFile(path.join(root, "migrations", file), "utf8"));
+    }
+    await asSql(db).query(
+      "insert into of_vault_list (creator_id, list_key, name, synced_at, photos_count, videos_count, gifs_count, audios_count) values ($1, $2, $3, $4, $5, $6, $7, $8)",
+      ["3zk7kbr", "88041", "grande", "2026-01-01T00:00:00.000Z", 0, 41, 0, 0],
+    );
+    await asSql(db).query(
+      "insert into of_vault_list_item (creator_id, list_key, item_key) values ($1, $2, $3)",
+      ["3zk7kbr", "88041", "viejo"],
+    );
+    const opened = await walkVault({
+      creatorId: "3zk7kbr",
+      listId: "88041",
+      singlePage: true,
+      state: storedState(),
+      fetch: fetchImpl,
+      now: () => 1_700_000_000_000,
+      sql: asSql(db),
+      sleep: async () => undefined,
+    });
+    assert.equal(opened.items.length, 40);
+    await opened.membersSettled;
+    const members = await asSql(db).query<{ item_key: string }>(
+      "select item_key from of_vault_list_item where creator_id = $1 and list_key = $2 order by item_key",
+      ["3zk7kbr", "88041"],
+    );
+    assert.equal(members.some((row) => row.item_key === "viejo"), false);
+    assert.equal(members.length, 41);
+  } finally {
+    clearSignRulesCache();
+    clearVaultWalkCache();
+    await db.close();
+  }
+});
+
 function creatorLists(
   all: [number, number, number, number],
   folders: Array<{ id: number; name: string; counts: [number, number, number, number]; covers: number[] }>,

@@ -242,6 +242,8 @@ export type SignedVaultRead = {
   sessionRejected: boolean;
   signatureRejected: boolean;
   retryAfterMs: number;
+  /** Parámetro que salió en la URL de vault/media. `list` también es el reintento. */
+  queryParam: "list" | "list_id" | null;
 };
 
 export type VaultFetchOptions = {
@@ -257,8 +259,9 @@ export type VaultFetchOptions = {
 export const VAULT_LIST_LIMIT = 50;
 /**
  * La web pagina con `limit` 40, `offset` y `sort=desc`.
- * `list=all` es toda la bóveda. Una carpeta va con `list_id`:
- * `list=<id>` responde 200 y `list:[]`.
+ * `list=all` es toda la bóveda. Una carpeta va con `list_id`.
+ * En alguna cuenta OnlyFans ignora `list_id` y devuelve la página de Todos.
+ * Si `list_id` responde 400, se reintenta una vez con `list` y el log dice ese parámetro.
  * No van `type` ni `field`.
  */
 export const VAULT_MEDIA_LIMIT = 40;
@@ -313,6 +316,7 @@ export async function fetchSignedVault(state: StorageStateFile, deps: {
     sessionRejected: false,
     signatureRejected: false,
     retryAfterMs: 0,
+    queryParam: null,
   };
   const auth = sessionForApi(state, deps.now());
   if ("reason" in auth) return { ...empty, reason: auth.reason };
@@ -336,39 +340,39 @@ export async function fetchSignedVault(state: StorageStateFile, deps: {
     if (read.ok) payloads.push(read.body);
     else return { ...empty, status: read.status, reason: read.reason };
   }
+  let queryParam: "list" | "list_id" | null = null;
   if (wantMedia) {
     let primary = vaultMediaPath(list, skip);
+    queryParam = list === "all" ? "list" : "list_id";
     let read = await readVaultPath(deps, () => getJson(deps.fetch, primary, signedHeaders(rules, primary, auth, deps.now()), deps.now()));
     if (list !== "all" && read.status === 400) {
       console.info("[fanlink:vault] list_id status=400 reintento=list");
       primary = vaultMediaPath(list, skip, "list");
+      queryParam = "list";
       read = await readVaultPath(deps, () => getJson(deps.fetch, primary, signedHeaders(rules, primary, auth, deps.now()), deps.now()));
     }
     const mediaCount = mediaCountOf(read.body);
     if (list === "all") {
       console.info(vaultPageLog({ route: primary, status: read.status, count: mediaCount, hasMore: hasMoreLabelOf(read.body), offset: skip, listId: "all" }));
-    } else {
-      const param = primary.includes("list_id=") ? "list_id" : "list";
-      console.info(`[fanlink:vault] carpeta=${vaultFolderMark(list)} pagina param=${param} offset=${skip} n=${mediaCount} status=${read.status ?? "sin"}`);
     }
     status = read.status;
-    const stopped = stopVaultRead(payloads, read);
+    const stopped = stopVaultRead(payloads, read, queryParam);
     if (stopped) return stopped;
     if (read.ok) payloads.push(read.body);
-    else return { ...empty, payloads, status: read.status, reason: read.reason };
+    else return { ...empty, payloads, status: read.status, reason: read.reason, queryParam };
   }
-  return { ...empty, payloads, status, reason: payloads.length === 0 ? "No se ha podido leer la bóveda." : null };
+  return { ...empty, payloads, status, queryParam, reason: payloads.length === 0 ? "No se ha podido leer la bóveda." : null };
 }
 
-function stopVaultRead(payloads: unknown[], read: JsonPage): SignedVaultRead | null {
+function stopVaultRead(payloads: unknown[], read: JsonPage, queryParam: "list" | "list_id" | null = null): SignedVaultRead | null {
   if (read.sessionRejected) {
-    return { payloads, status: 401, reason: SESSION_EXPIRED_LABEL, sessionRejected: true, signatureRejected: false, retryAfterMs: 0 };
+    return { payloads, status: 401, reason: SESSION_EXPIRED_LABEL, sessionRejected: true, signatureRejected: false, retryAfterMs: 0, queryParam };
   }
   if (read.signatureRejected) {
-    return { payloads, status: 400, reason: "OnlyFans ha rechazado la firma", sessionRejected: false, signatureRejected: true, retryAfterMs: 0 };
+    return { payloads, status: 400, reason: "OnlyFans ha rechazado la firma", sessionRejected: false, signatureRejected: true, retryAfterMs: 0, queryParam };
   }
   if (read.retryAfterMs > 0) {
-    return { payloads, status: 429, reason: "OnlyFans respondió 429", sessionRejected: false, signatureRejected: false, retryAfterMs: read.retryAfterMs };
+    return { payloads, status: 429, reason: "OnlyFans respondió 429", sessionRejected: false, signatureRejected: false, retryAfterMs: read.retryAfterMs, queryParam };
   }
   return null;
 }

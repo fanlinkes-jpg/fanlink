@@ -1,8 +1,8 @@
 import type { StorageStateFile } from "../sessions/storage-state.ts";
 import { fetchSignedVault, VAULT_MEDIA_LIMIT } from "./of-chat-api.ts";
 import type { ReadSql } from "./store.ts";
-import { folderMediaCap, mergeVaultList, parseVaultBundle, vaultAllList, vaultFolderMark, vaultKeyNames, vaultPayloadKind, type VaultFile, type VaultList } from "./vault-model.ts";
-import { finishListMembers, persistVaultRead, storedFolderCounts } from "./vault-store.ts";
+import { folderMediaCap, mediaStateHits, mergeVaultList, parseVaultBundle, vaultAllList, vaultFolderMark, vaultKeyNames, vaultMediaMatching, vaultPayloadKind, type VaultFile, type VaultList } from "./vault-model.ts";
+import { finishListMembers, listMemberCount, persistVaultRead, storedFolderCounts } from "./vault-store.ts";
 
 /** Pausa entre páginas. Más lenta que el chat: la bóveda pesa. */
 export const VAULT_PAGE_GAP_MS = 800;
@@ -23,6 +23,8 @@ export type VaultWalk = {
   sessionRejected: boolean;
   signatureRejected: boolean;
   retryAfterMs: number;
+  /** El recorrido largo que borra miembros viejos después de la primera página. */
+  membersSettled: Promise<void>;
 };
 
 type CacheMark = {
@@ -57,19 +59,28 @@ export async function walkVault(input: WalkInput & { listId?: string; offset?: n
   const flight = `${input.creatorId}\n${listId}\n${offset}`;
   const pending = inflight.get(flight);
   if (pending) return pending;
-  const run = runWalk(input, listId, offset, input.singlePage === true).finally(() => {
+  const run = runWalk(input, listId, offset, input.singlePage === true).then((main) => {
     inflight.delete(flight);
+    if (main.cached) return main;
+    const walk = publicWalk(main);
+    if (main.needsFullMembers) {
+      walk.membersSettled = walkVault({ ...input, listId, offset: 0, singlePage: false }).then(() => undefined, () => undefined);
+    }
+    return walk;
+  }).catch((error: unknown) => {
+    inflight.delete(flight);
+    throw error;
   });
   inflight.set(flight, run);
   return run;
 }
 
-async function runWalk(input: WalkInput, listId: string, offset: number, singlePage = false): Promise<VaultWalk> {
+async function runWalk(input: WalkInput, listId: string, offset: number, singlePage = false): Promise<PageWalk> {
   if (offset === 0) {
     const hit = fresh(input.creatorId, listId, input.now());
     if (hit) {
       console.info(`[fanlink:vault] cache lista=${vaultFolderMark(listId)} medios=${hit.items.length}`);
-      return done(hit.items, hit.thumbItems, false, 0, true, null);
+      return { ...done(hit.items, hit.thumbItems, false, 0, true, null), payloads: [], needsFullMembers: false };
     }
   }
   const budget = { left: VAULT_WALK_BUDGET };
@@ -78,7 +89,7 @@ async function runWalk(input: WalkInput, listId: string, offset: number, singleP
     if (offset === 0 && main.items.length > 0 && !main.hasMore && !main.sessionRejected && !main.signatureRejected && main.retryAfterMs === 0) {
       remember(input.creatorId, listId, input.now(), main.items, main.thumbItems);
     }
-    return publicWalk(main);
+    return main;
   }
   let payloads = main.payloads;
   const extraLists = await walkListPages(input, payloads, budget);
@@ -107,10 +118,10 @@ async function runWalk(input: WalkInput, listId: string, offset: number, singleP
   if (!main.hasMore && main.retryAfterMs === 0 && !main.sessionRejected && !main.signatureRejected) {
     remember(input.creatorId, listId, input.now(), main.items, main.thumbItems);
   }
-  return publicWalk(main);
+  return main;
 }
 
-type PageWalk = VaultWalk & { payloads: unknown[] };
+type PageWalk = VaultWalk & { payloads: unknown[]; needsFullMembers: boolean };
 
 async function walkOne(
   input: WalkInput,
@@ -135,7 +146,8 @@ async function walkOne(
   let sessionRejected = false;
   let signatureRejected = false;
   let retryAfterMs = 0;
-  const cap = listId === "all" ? null : folderMediaCap(await storedFolderCounts(input.sql, input.creatorId, listId));
+  const counts = listId === "all" ? null : await storedFolderCounts(input.sql, input.creatorId, listId);
+  const cap = folderMediaCap(counts);
   let suspicious = false;
   while (pages < VAULT_WALK_CAP) {
     if (budget.left <= 0) {
@@ -163,12 +175,30 @@ async function walkOne(
     }
     const peeked = mediaBody(read.payloads);
     const peekedCount = mediaCount(peeked);
+    const param = read.queryParam === "list" ? "list" : read.queryParam === "list_id" ? "list_id" : "sin";
+    const hits = listId === "all" ? 0 : mediaStateHits(peeked, listId);
     if (listId !== "all" && cap != null && items.length + peekedCount > cap) {
       suspicious = true;
-      console.info(`[fanlink:vault] carpeta=${vaultFolderMark(listId)} sospechosa param=list_id n=${peekedCount} tope=${cap}`);
+      const matches = vaultMediaMatching(peeked, listId);
+      console.info(`[fanlink:vault] carpeta=${vaultFolderMark(listId)} pagina param=${param} offset=${offset} n=${peekedCount} status=${read.status ?? "sin"} enLista=${hits} respaldo=${matches.length > 0 ? "si" : "no"} sospechosa tope=${cap}`);
+      const stored = await listMemberCount(input.sql, input.creatorId, listId);
+      if (stored != null && stored > cap) await finishListMembers(input.sql, input.creatorId, listId, []);
+      if (matches.length > 0) {
+        const saved = await persistVaultRead(input.sql, input.creatorId, [{ list: matches, hasMore: false }], { listId, offset, listName });
+        for (const item of saved) {
+          if (seen.has(item.id)) continue;
+          seen.add(item.id);
+          items.push(item);
+        }
+        if (thumbItems.length === 0) thumbItems = saved;
+      }
       hasMore = false;
       nextOffset = offset;
+      pages += 1;
       break;
+    }
+    if (listId !== "all") {
+      console.info(`[fanlink:vault] carpeta=${vaultFolderMark(listId)} pagina param=${param} offset=${offset} n=${peekedCount} status=${read.status ?? "sin"} enLista=${hits} respaldo=no`);
     }
     payloads.push(...read.payloads);
     for (const payload of read.payloads) logPayload(payload);
@@ -212,9 +242,10 @@ async function walkOne(
   if (store && start === 0 && items.length > 0 && !hasMore && !sessionRejected && !signatureRejected && retryAfterMs === 0) {
     remember(input.creatorId, listId, input.now(), items, thumbItems);
   }
-  if (listId !== "all" && start === 0 && !hasMore && !suspicious && !sessionRejected && !signatureRejected) {
+  if (listId !== "all" && start === 0 && !hasMore && !suspicious && !sessionRejected && !signatureRejected && (items.length > 0 || countsAreEmpty(counts))) {
     await finishListMembers(input.sql, input.creatorId, listId, items.map((item) => item.id));
   }
+  const needsFullMembers = singlePage && listId !== "all" && start === 0 && hasMore && !suspicious && items.length > 0 && !sessionRejected && !signatureRejected && retryAfterMs === 0;
   console.info(`[fanlink:vault] fin lista=${vaultFolderMark(listId)} paginas=${pages} medios=${items.length} hasMore=${hasMore ? "si" : "no"}`);
   console.info(`[fanlink:vault] carpeta=${vaultFolderMark(listId)} n=${items.length}`);
   return {
@@ -229,6 +260,8 @@ async function walkOne(
     sessionRejected,
     signatureRejected,
     retryAfterMs,
+    membersSettled: Promise.resolve(),
+    needsFullMembers,
   };
 }
 
@@ -277,6 +310,7 @@ function publicWalk(walk: PageWalk): VaultWalk {
     sessionRejected: walk.sessionRejected,
     signatureRejected: walk.signatureRejected,
     retryAfterMs: walk.retryAfterMs,
+    membersSettled: Promise.resolve(),
   };
 }
 
@@ -310,7 +344,13 @@ function done(
     sessionRejected: false,
     signatureRejected: false,
     retryAfterMs: 0,
+    membersSettled: Promise.resolve(),
   };
+}
+
+function countsAreEmpty(counts: { photos: number | null; videos: number | null; gifs: number | null; audios: number | null } | null): boolean {
+  if (!counts) return false;
+  return [counts.photos, counts.videos, counts.gifs, counts.audios].every((value) => value == null || value === 0);
 }
 
 function listsOf(payloads: readonly unknown[]): VaultList[] {

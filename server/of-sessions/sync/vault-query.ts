@@ -1,7 +1,7 @@
 import { creatorIdsForChats } from "../../../src/lib/access-policy.ts";
 import { emptyVaultQuery, folderAndChildren, searchVaultLists, vaultQueryFromUnknown, type VaultQuery } from "./vault-filter.ts";
 import { itemSaleBlocked } from "./vault-block.ts";
-import { suggestVaultPrice, trailerPackages, vaultFolderMark, vaultKindOf, type VaultFile, type VaultKind } from "./vault-model.ts";
+import { folderMediaCap, suggestVaultPrice, trailerPackages, vaultFolderMark, vaultKindOf, type VaultFile, type VaultKind } from "./vault-model.ts";
 import type { ReadSql } from "./store.ts";
 import { fanVaultUses, loadVaultMirror, loadVaultQuery, piecePurchaseCents, saveVaultQuery } from "./vault-store.ts";
 
@@ -130,7 +130,11 @@ export async function queryVaultForActor(sql: ReadSql, actor: VaultActor, body: 
   const uses = fanKey ? await fanVaultUses(sql, creatorId, fanKey) : [];
   const sentIds = new Set(uses.map((use) => use.itemKey));
   const boughtIds = new Set(uses.filter((use) => use.purchased === true).map((use) => use.itemKey));
-  const rows = await selectVaultItems(sql, creatorId, query, fanKey, mirror.folders);
+  const openList = query.scope === "carpeta" && query.folderId
+    ? mirror.lists.find((list) => list.id === query.folderId)
+    : undefined;
+  const cap = openList ? folderMediaCap({ photos: openList.photos, videos: openList.videos, gifs: openList.gifs, audios: openList.audios }) : null;
+  const rows = await selectVaultItems(sql, creatorId, query, fanKey, mirror.folders, cap);
   const ranked = query.bestSeller ? bestOf(rows) : rows;
   const bestIds = new Set(bestOf(rows).map((item) => item.id));
   const sorted = [...ranked].sort((left, right) => compare(left, right, query.sort));
@@ -249,6 +253,7 @@ async function selectVaultItems(
   query: VaultQuery,
   fanKey: string | null,
   folders: ReadonlyArray<{ id: string; name: string; parentId: string | null }>,
+  cap: number | null = null,
 ): Promise<VaultFile[]> {
   const where = ["creator_id = $1", "item_key is not null"];
   const params: unknown[] = [creatorId];
@@ -324,9 +329,14 @@ async function selectVaultItems(
     sales_count: number | null; sent_count: number | null; list_ids?: unknown; clip_url?: string | null;
   }>(text, params);
   if (query.scope === "carpeta" && query.folderId) {
-    console.info(`[fanlink:vault] carpeta=${vaultFolderMark(query.folderId)} n=${rows.length}`);
+    const over = cap != null && rows.length > cap;
+    console.info(`[fanlink:vault] espejo carpeta=${vaultFolderMark(query.folderId)} n=${rows.length} tope=${cap ?? "sin"} descartada=${over ? "si" : "no"}`);
+    if (over) return [];
   }
-  return rows.map((row) => ({
+  return rows.map((row) => {
+    const listIds = idList(row.list_ids);
+    if (query.scope === "carpeta" && query.folderId && !listIds.includes(query.folderId)) listIds.push(query.folderId);
+    return {
     id: row.item_key,
     title: row.title ?? "Sin datos",
     kind: vaultKindOf(row.kind),
@@ -335,15 +345,16 @@ async function selectVaultItems(
     clipUrl: row.clip_url ?? null,
     folder: row.folder ?? row.list_name,
     tags: tagsOf(row.tags),
-    listId: row.list_key,
+    listId: row.list_key ?? (query.scope === "carpeta" ? query.folderId : null),
     listName: row.list_name,
-    listIds: idList(row.list_ids),
+    listIds,
     description: row.description,
     uploadedAt: row.uploaded_at == null ? null : row.uploaded_at instanceof Date ? row.uploaded_at.toISOString() : String(row.uploaded_at),
     priceCents: row.price_cents,
     salesCount: row.sales_count,
     sentCount: row.sent_count,
-  }));
+    };
+  });
 }
 
 function bestOf(items: readonly VaultFile[]): VaultFile[] {

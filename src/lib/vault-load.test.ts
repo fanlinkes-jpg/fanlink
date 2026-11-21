@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { folderGridItems, mergeVaultPage, sameVaultId, vaultLoadAllowed } from "./vault-load.ts";
+import { folderGridCap, folderGridItems, ignoreStaleVaultView, mergeVaultPage, nextVaultLibrary, sameVaultId, vaultLoadAllowed } from "./vault-load.ts";
 
 test("una carpeta entra aunque Todos siga ocupado", () => {
   const busyAll = { busy: true, listId: "all" };
@@ -29,4 +29,15 @@ test("un id numérico de la lista casa con el string de la UI y no hereda Todos"
   assert.deepEqual(folderGridItems(mirror, page, 29012649, "29012649").map((item) => item.id), ["clip"]);
   assert.deepEqual(folderGridItems(mirror, [], "29012649", "all").map((item) => item.id), ["ducha"]);
   assert.deepEqual(folderGridItems(mirror, [], 28619188, "28619188"), []);
+  const cap = folderGridCap({ photos: 0, videos: 2, gifs: 0, audios: 0 });
+  assert.equal(cap, 6);
+  const swollen = Array.from({ length: 40 }, (_, index) => ({ id: `todo-${index}`, listId: "2901" as string | null, listIds: [] as string[] }));
+  const own = [{ id: "clip-a", listId: null as string | null, listIds: ["2901"] }, { id: "clip-b", listId: null as string | null, listIds: ["2901"] }];
+  assert.deepEqual(folderGridItems(own, swollen, "2901", "2901", cap).map((item) => item.id), ["clip-a", "clip-b"]);
+  assert.deepEqual(folderGridItems(swollen, [], "2901", "2901", cap), []);
+  assert.deepEqual(folderGridItems(own, [{ id: "clip-a", listId: "2901", listIds: [] }], "2901", "2901", cap).map((item) => item.id), ["clip-a"]);
+  assert.equal(ignoreStaleVaultView("2901", null), true);
+  assert.equal(ignoreStaleVaultView("2901", "2901"), false);
+  assert.deepEqual(nextVaultLibrary("2901", [{ id: "todos" }], [{ id: "clip-a" }]), [{ id: "todos" }]);
+  assert.deepEqual(nextVaultLibrary(null, [], [{ id: "todos" }]), [{ id: "todos" }]);
 });

@@ -3,7 +3,7 @@
  * Escribe la forma sanitizada en data/vault-probe.json.
  * No imprime cookies, sign, sess, x-bc ni tokens.
  */
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { loadConfig } from "../config.ts";
@@ -13,12 +13,17 @@ import { AccountStore } from "../store/account-store.ts";
 import type { Account } from "../types.ts";
 import { sessionForApi, signedHeaders, vaultListsPath, vaultMediaPath } from "./of-chat-api.ts";
 import { loadSignRules } from "./of-sign.ts";
+import { mediaStateHits, vaultFolderMark } from "./vault-model.ts";
 
 const SECRET = /cookie|sign|sess|token|x-bc|x_bc|policy|signature|authorization/i;
 const ENUMS = new Set([
   "photo", "image", "video", "audio", "gif", "custom", "posts", "stories",
   "messages", "streams", "media", "all", "desc", "asc", "recent",
 ]);
+
+export function readProbeFolders(argv: readonly string[]): boolean {
+  return argv.includes("--folders");
+}
 
 export function readProbeAccount(argv: readonly string[]): string {
   const index = argv.indexOf("--account");
@@ -99,8 +104,144 @@ function countText(value: unknown): string {
   return typeof value === "number" && Number.isFinite(value) ? String(value) : "sin";
 }
 
+function countNum(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+async function readFolderVariants(
+  input: {
+    fetch: typeof fetch;
+    now: () => number;
+    stdout: (line: string) => void;
+    pause?: (ms: number) => Promise<void>;
+  },
+  rules: Awaited<ReturnType<typeof loadSignRules>>,
+  auth: { cookie: string; userId: string; xBc: string },
+  listBodies: readonly unknown[],
+  reads: Array<{ name: string; path: string; status: number | null; body: unknown }>,
+): Promise<void> {
+  const folder = pickSmallVideoFolder(listBodies);
+  if (!folder) {
+    input.stdout("[fanlink:vault] sonda carpetas ninguna videos=1-10");
+    reads.push({ name: "folders", path: "/api2/v2/vault/media", status: null, body: { variantes: [] } });
+    return;
+  }
+  const expected = probeExpectedCount(folder);
+  input.stdout(`[fanlink:vault] sonda carpeta=${vaultFolderMark(folder.id)} fotos=${countText(folder.photos)} videos=${folder.videos} gifs=${countText(folder.gifs)} audios=${countText(folder.audios)}`);
+  const pause = input.pause ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const rows: Array<{ name: string; status: number | null; n: number; hasMore: string; enLista: number; body: unknown }> = [];
+  let first = true;
+  for (const variant of folderProbePaths(folder.id)) {
+    if (!first) await pause(300);
+    first = false;
+    const response = await probeGet(input.fetch, variant.path, signedHeaders(rules, variant.path, auth, input.now()));
+    const stats = probeVariantStats(response.body, folder.id);
+    const status = response.status;
+    rows.push({ name: variant.name, status, ...stats, body: response.body });
+    input.stdout(`[fanlink:vault] sonda variante=${variant.name} status=${status ?? "sin"} n=${stats.n} hasMore=${stats.hasMore} enLista=${stats.enLista}`);
+  }
+  const verdict = folderProbeVerdict(expected, rows);
+  input.stdout(`[fanlink:vault] sonda resumen cuadra=${verdict} esperado=${expected ?? "sin"}`);
+  reads.push({
+    name: "folders",
+    path: "/api2/v2/vault/media",
+    status: rows.find((row) => row.name === verdict.split(",")[0])?.status ?? rows[0]?.status ?? null,
+    body: {
+      esperado: expected,
+      cuadra: verdict,
+      variantes: rows.map((row) => ({
+        name: row.name,
+        status: row.status,
+        n: row.n,
+        hasMore: row.hasMore,
+        enLista: row.enLista,
+        shape: sanitizeVaultShape(row.body),
+      })),
+    },
+  });
+}
+
+function probeVariantStats(body: unknown, folderId: string): { n: number; hasMore: string; enLista: number } {
+  return {
+    n: probeItems(body).length,
+    hasMore: probeHasMoreLabel(body),
+    enLista: mediaStateHits(body, folderId),
+  };
+}
+
+function probeItems(body: unknown): unknown[] {
+  if (!body || typeof body !== "object") return [];
+  const raw = body as Record<string, unknown>;
+  for (const key of ["list", "items", "media"]) {
+    if (Array.isArray(raw[key])) return raw[key] as unknown[];
+  }
+  return [];
+}
+
+function probeHasMoreLabel(body: unknown): string {
+  if (!body || typeof body !== "object") return "ausente";
+  const raw = body as Record<string, unknown>;
+  if (!("hasMore" in raw) && !("has_more" in raw)) return "ausente";
+  return raw.hasMore === true || raw.has_more === true ? "si" : "no";
+}
+
 export function assertProbeFileSafe(raw: string): void {
   if (/sess=|x-bc|app-token|"sign"\s*:|Policy=|Signature=/i.test(raw)) throw new Error("El sondeo iba a guardar un secreto.");
+}
+
+export type ProbeFolder = {
+  id: string;
+  photos: number | null;
+  videos: number;
+  gifs: number | null;
+  audios: number | null;
+};
+
+/** La primera custom con entre 1 y 10 vídeos. */
+export function pickSmallVideoFolder(bodies: readonly unknown[]): ProbeFolder | null {
+  for (const body of bodies) {
+    for (const row of listRows(body)) {
+      if (text(row.type) !== "custom") continue;
+      const videos = countNum(row.videosCount);
+      if (videos == null || videos < 1 || videos > 10) continue;
+      const id = row.id;
+      if (typeof id !== "number" && typeof id !== "string") continue;
+      const key = String(id).trim();
+      if (!/^\d+$/.test(key)) continue;
+      return {
+        id: key,
+        photos: countNum(row.photosCount),
+        videos,
+        gifs: countNum(row.gifsCount),
+        audios: countNum(row.audiosCount),
+      };
+    }
+  }
+  return null;
+}
+
+export function folderProbePaths(folderId: string): Array<{ name: string; path: string }> {
+  const id = encodeURIComponent(folderId);
+  return [
+    { name: "list_id", path: `/api2/v2/vault/media?list_id=${id}&limit=40&offset=0` },
+    { name: "list_id+field", path: `/api2/v2/vault/media?list_id=${id}&limit=40&offset=0&field=recent&sort=desc` },
+    { name: "list", path: `/api2/v2/vault/media?list=${id}&limit=40&offset=0` },
+    { name: "lists/media", path: `/api2/v2/vault/lists/${id}/media?limit=40&offset=0` },
+    { name: "listId", path: `/api2/v2/vault/media?listId=${id}&limit=40&offset=0` },
+    { name: "vaultListId", path: `/api2/v2/vault/media?vaultListId=${id}&limit=40&offset=0` },
+  ];
+}
+
+export function probeExpectedCount(folder: { photos: number | null; videos: number | null; gifs: number | null; audios: number | null }): number | null {
+  const values = [folder.photos, folder.videos, folder.gifs, folder.audios];
+  if (values.every((value) => value == null)) return null;
+  return values.reduce<number>((sum, value) => sum + (value ?? 0), 0);
+}
+
+export function folderProbeVerdict(expected: number | null, rows: readonly { name: string; status: number | null; n: number }[]): string {
+  if (expected == null) return "sin-conteo";
+  const hits = rows.filter((row) => row.status === 200 && row.n === expected).map((row) => row.name);
+  return hits.length > 0 ? hits.join(",") : "ninguna";
 }
 
 export async function executeVaultProbe(input: {
@@ -110,6 +251,8 @@ export async function executeVaultProbe(input: {
   now: () => number;
   stdout: (line: string) => void;
   write?: (file: string, body: string) => Promise<void>;
+  folders?: boolean;
+  pause?: (ms: number) => Promise<void>;
 }): Promise<string> {
   const config = loadConfig(input.env);
   if (!config.sessionKey) throw new Error("Falta FANLINK_SESSION_KEY.");
@@ -120,6 +263,9 @@ export async function executeVaultProbe(input: {
   const reads: Array<{ name: string; path: string; status: number | null; body: unknown }> = [];
   const listBodies = await readListPages(input, rules, auth, reads);
   for (const line of vaultListLines(listBodies)) input.stdout(line);
+  if (input.folders) {
+    await readFolderVariants(input, rules, auth, listBodies, reads);
+  } else {
   const tally = await readMediaPages(input, rules, auth, "all", "media-all");
   reads.push({ name: "media-all", path: "/api2/v2/vault/media", status: tally.status, body: tally.body });
   input.stdout(`[fanlink:vault] sonda media-all paginas=${tally.pages} medios=${tally.total}`);
@@ -137,6 +283,7 @@ export async function executeVaultProbe(input: {
     reads.push({ name: "media-list-id", path: "/api2/v2/vault/media", status: ided.status, body: { n: probeListCount(ided.body), sample: firstMedia(ided.body) } });
     input.stdout(`[fanlink:vault] sonda ruta=/api2/v2/vault/media list_id=carpeta status=${ided.status ?? "sin"} n=${probeListCount(ided.body)}`);
   }
+  }
   const file = path.join(config.dataDir, "vault-probe.json");
   const body = JSON.stringify({
     at: new Date(input.now()).toISOString(),
@@ -144,7 +291,7 @@ export async function executeVaultProbe(input: {
       name: read.name,
       path: read.path,
       status: read.status,
-      shape: sanitizeVaultShape(read.body),
+      shape: read.name === "folders" ? read.body : sanitizeVaultShape(read.body),
     })),
   }, null, 2);
   assertProbeFileSafe(body);
@@ -152,6 +299,7 @@ export async function executeVaultProbe(input: {
   else {
     await mkdir(config.dataDir, { recursive: true });
     await writeFile(file, body, { mode: 0o600 });
+    await chmod(file, 0o600);
   }
   input.stdout(`[fanlink:vault] sonda archivo=${file}`);
   return file;
@@ -300,6 +448,7 @@ const isMain = process.argv[1] != null && import.meta.url === pathToFileURL(proc
 if (isMain) {
   executeVaultProbe({
     account: readProbeAccount(process.argv),
+    folders: readProbeFolders(process.argv),
     env: process.env,
     fetch: globalThis.fetch,
     now: () => Date.now(),

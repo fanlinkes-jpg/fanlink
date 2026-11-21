@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { vaultMediaPath, vaultPageLog } from "../sync/of-chat-api.ts";
-import { assertProbeFileSafe, probePageContinues, sanitizeVaultShape, vaultListLines } from "../sync/vault-probe.ts";
+import { assertProbeFileSafe, folderProbePaths, folderProbeVerdict, pickSmallVideoFolder, probeExpectedCount, probePageContinues, readProbeFolders, sanitizeVaultShape, vaultListLines } from "../sync/vault-probe.ts";
 import { VAULT_LISTS_FIXTURE } from "./fixtures/vault-of-shape.ts";
 import { mediaAcceptHeader, vaultPlayerLog } from "../sync/media-bytes.ts";
 import { boundVaultOffset, VAULT_OFFSET_CAP } from "../sync/vault-walk.ts";
@@ -96,4 +96,23 @@ test("el sondeo guarda la forma y no un secreto", () => {
   assert.equal(boundVaultOffset(9000, 40, (line) => lines.push(line)), VAULT_OFFSET_CAP);
   assert.match(lines[0] ?? "", /corte offset tope=2000 pedido=9000 desde=40/);
   assert.equal(boundVaultOffset(80, 40, () => undefined), 80);
+  assert.equal(readProbeFolders(["--account", "3zk7kbr", "--folders"]), true);
+  const picked = pickSmallVideoFolder([{
+    list: [
+      { id: 11, type: "custom", name: "B/G LA DUCHA", videosCount: 0, photosCount: 4 },
+      { id: 28619188, type: "custom", name: "B/B/B/G EL CUARTETO", videosCount: 2, photosCount: 0, gifsCount: 0, audiosCount: 0 },
+      { id: 30, type: "custom", videosCount: 11 },
+    ],
+  }]);
+  assert.equal(picked?.id, "28619188");
+  assert.equal(picked?.videos, 2);
+  assert.equal(probeExpectedCount(picked!), 2);
+  const paths = folderProbePaths("28619188").map((row) => row.name);
+  assert.deepEqual(paths, ["list_id", "list_id+field", "list", "lists/media", "listId", "vaultListId"]);
+  assert.equal(folderProbePaths("28619188").some((row) => row.path.startsWith("POST")), false);
+  assert.equal(folderProbeVerdict(2, [{ name: "list_id", status: 200, n: 40 }, { name: "listId", status: 200, n: 2 }]), "listId");
+  assert.equal(folderProbeVerdict(2, [{ name: "list_id", status: 200, n: 40 }]), "ninguna");
+  const line = `[fanlink:vault] sonda variante=list_id status=200 n=40 hasMore=si enLista=2`;
+  assert.equal(line.includes("28619188"), false);
+  assert.equal(line.includes("CUARTETO"), false);
 });

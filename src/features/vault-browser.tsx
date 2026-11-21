@@ -3,7 +3,7 @@ import { queryVaultMirror } from "@/lib/of-sessions";
 import { VAULT_THUMB_MISSING, vaultMediaSrc } from "@/lib/chat-media";
 import { VAULT_CARD_FRAME, VAULT_CARD_IMAGE } from "@/lib/vault-card-frame";
 import { folderColumnView, type FolderCover } from "@/lib/vault-folder-label";
-import { folderGridItems, sameVaultId } from "@/lib/vault-load";
+import { folderGridCap, folderGridItems, ignoreStaleVaultView, nextVaultLibrary, sameVaultId } from "@/lib/vault-load";
 import { VAULT_GRID_CLASS } from "@/lib/vault-grid";
 import { vaultSentPill, vaultUsageText } from "@/lib/vault-usage";
 import { VAULT_FILTER_DEBOUNCE_MS } from "@/lib/vault-debounce";
@@ -132,13 +132,13 @@ export function VaultBrowser({
         ...(layout === "of" ? { query: { ...EMPTY_QUERY, folderId, scope: folderId ? "carpeta" as const : "todas" as const } } : {}),
       },
     }).then((payload) => {
-      if (!alive || wantedFolder.current !== ticket) return;
+      if (!alive || ignoreStaleVaultView(wantedFolder.current, ticket)) return;
       const view = payload as VaultPayload;
       if (layout !== "of") setQuery({ ...EMPTY_QUERY, ...(view.query ?? {}) });
       applyView(view);
       setReady(true);
     }).catch(() => {
-      if (!alive) return;
+      if (!alive || ignoreStaleVaultView(wantedFolder.current, ticket)) return;
       setItems([]);
       setLists([]);
       setNotice("Sin datos");
@@ -148,10 +148,11 @@ export function VaultBrowser({
       alive = false;
     };
     function applyView(view: VaultPayload) {
-      setItems(view.items ?? []);
-      setLibrary(view.items ?? []);
+      const incoming = view.items ?? [];
+      setItems(incoming);
+      setLibrary((current) => nextVaultLibrary(folderId, current, incoming));
       setLists(view.lists ?? []);
-      setNotice(view.notice ?? (view.items && view.items.length > 0 ? null : "Sin datos"));
+      setNotice(view.notice ?? (incoming.length > 0 ? null : "Sin datos"));
     }
   }, [creatorId, fanKey, reloadToken, layout, thumbPage.listId]);
 
@@ -163,7 +164,10 @@ export function VaultBrowser({
         if (!alive) return;
         const view = payload as VaultPayload;
         setItems(view.items ?? []);
-        setLibrary((current) => current.length > 0 ? current : (view.items ?? []));
+        setLibrary((current) => {
+          if (query.scope === "carpeta" && query.folderId) return current;
+          return current.length > 0 ? current : (view.items ?? []);
+        });
         setLists(view.lists ?? []);
         setNotice(view.notice ?? (view.items && view.items.length > 0 ? null : "Sin datos"));
       }).catch(() => {
@@ -181,7 +185,8 @@ export function VaultBrowser({
 
   const kind = query.kinds[0] ?? "";
   const openFolderId = query.scope === "carpeta" ? query.folderId : null;
-  const grid = folderGrid(items, pageItems, openFolderId, thumbPage.listId);
+  const openFolder = lists.find((folder) => sameVaultId(folder.id, openFolderId));
+  const grid = folderGrid(items, pageItems, openFolderId, thumbPage.listId, folderGridCap(openFolder));
   const folderName = lists.find((folder) => sameVaultId(folder.id, query.folderId))?.name ?? "Todos los medios";
   if (layout === "of") {
     return (
@@ -481,12 +486,14 @@ function folderGrid(
   pageItems: ReadonlyArray<{ id: string; title: string; kind: VaultCard["kind"] }>,
   folderId: string | null,
   pageListId: string,
+  cap: number | null,
 ): VaultCard[] {
   const rows = folderGridItems(
     mirror.map((item) => ({ ...item, listId: item.listId ?? null })),
     pageItems.map((item) => ({ ...stubCard(item), listId: folderId })),
     folderId,
     pageListId,
+    cap,
   );
   return rows.map((item) => mirror.find((row) => row.id === item.id) ?? item);
 }

@@ -424,15 +424,75 @@ function isVideoUrl(url: string): boolean {
 }
 
 /**
- * `listStates` es el catálogo de listas (canAddMedia), no la pertenencia.
- * La pertenencia la pone el recorrido con `list_id` vía `stampVaultList`.
+ * En el medio, `listStates` trae el catálogo. `hasMedia: true` (o 1, o `has_media`)
+ * es la lista en la que está ese medio. Sin esa marca no es pertenencia:
+ * antes cada medio acababa en todas las listas.
  */
-function listMembership(_row: Record<string, unknown>, _lists: readonly VaultList[]): {
+export function mediaMemberIds(row: Record<string, unknown>): string[] {
+  const raw = row.listStates ?? row.listsStates ?? row.list_states;
+  if (!Array.isArray(raw)) return [];
+  const ids: string[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const state = entry as Record<string, unknown>;
+    if (!stateSaysMember(state)) continue;
+    const id = textOf(state.id ?? state.listId ?? state.list_id);
+    if (!id || id === "all") continue;
+    ids.push(id);
+  }
+  return [...new Set(ids)];
+}
+
+/** Cuántos medios de la página dicen, por listStates, que están en esa carpeta. */
+export function mediaStateHits(body: unknown, listId: string): number {
+  return vaultMediaMatching(body, listId).length;
+}
+
+/** Medios de una página cuyo listStates marca esa carpeta. El resto no entra. */
+export function vaultMediaMatching(body: unknown, listId: string): Record<string, unknown>[] {
+  const needle = listId.trim();
+  if (!needle) return [];
+  return mediaRows(body).filter((row) => mediaMemberIds(row).some((id) => id === needle));
+}
+
+function listMembership(row: Record<string, unknown>, _lists: readonly VaultList[]): {
   listId: string | null;
   listName: string | null;
   listIds: string[];
 } {
-  return { listId: null, listName: null, listIds: [] };
+  const listIds = mediaMemberIds(row);
+  const listId = listIds[0] ?? null;
+  return { listId, listName: listId ? memberName(row, listId) : null, listIds };
+}
+
+function stateSaysMember(state: Record<string, unknown>): boolean {
+  const flag = state.hasMedia ?? state.has_media;
+  if (flag === true || flag === 1) return true;
+  if (flag === false || flag === 0) return false;
+  return state.inList === true || state.isInList === true || state.added === true || state.isAdded === true;
+}
+
+function memberName(row: Record<string, unknown>, listId: string): string | null {
+  const raw = row.listStates ?? row.listsStates ?? row.list_states;
+  if (!Array.isArray(raw)) return null;
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const state = entry as Record<string, unknown>;
+    const id = textOf(state.id ?? state.listId ?? state.list_id);
+    if (id !== listId) continue;
+    return textOf(state.name ?? state.title);
+  }
+  return null;
+}
+
+function mediaRows(body: unknown): Record<string, unknown>[] {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return [];
+  const raw = body as Record<string, unknown>;
+  for (const key of ["list", "items", "media"]) {
+    if (!Array.isArray(raw[key])) continue;
+    return raw[key].filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item));
+  }
+  return [];
 }
 
 /** Marca corta de una carpeta. No es el id ni el nombre. */
