@@ -3,7 +3,7 @@ export type VaultUsage = {
   posted: boolean | null;
   sent: boolean | null;
   sentCount: number | null;
-  priceCents: number | null;
+  priceLabel: string | null;
   dateLabel: string | null;
   seconds: number | null;
   kind: string | null;
@@ -16,7 +16,7 @@ export function vaultUsageText(usage: VaultUsage): string {
     : usage.sent
       ? usage.sentCount == null ? "Sent · Sin datos" : `Sent ${usage.sentCount}`
       : "No enviado";
-  const price = usage.priceCents == null ? "Sin datos" : usage.priceCents <= 0 ? "Free" : `$${(usage.priceCents / 100).toFixed(2)}`;
+  const price = usage.priceLabel ?? "Sin datos";
   const date = usage.dateLabel ?? "Sin datos";
   const parts = [`Feed ${feed}`, `Envíos ${sent}`, `Precio ${price}`, `Fecha ${date}`];
   if (usage.kind === "video") parts.push(`Duración ${usage.seconds == null ? "Sin datos" : clock(usage.seconds)}`);

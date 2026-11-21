@@ -18,7 +18,7 @@ type VaultCard = {
   salesCount: number | null;
   sentCount?: number | null;
   sent?: boolean | null;
-  priceCents?: number | null;
+  priceLabel?: string | null;
   posted?: boolean | null;
   ventasLabel: string;
   bestSellerLabel: string | null;
@@ -269,13 +269,7 @@ export function VaultBrowser({
                   <span className={`absolute left-1.5 top-1.5 z-10 grid h-5 w-5 place-items-center rounded-full text-[11px] font-semibold ${selected ? "bg-[#00aff0] text-white" : "bg-white/80 text-transparent"}`}>{selected ? picked.indexOf(item.id) + 1 : ""}</span>
                   <span className="absolute right-1.5 top-1.5 z-10 flex max-w-[70%] flex-col items-end gap-1">
                     {item.posted ? <span className="rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white">Posted</span> : null}
-                    {item.priceCents == null ? (
-                      <span className="rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white">Sin datos</span>
-                    ) : item.priceCents <= 0 ? (
-                      <span className="rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white">Free</span>
-                    ) : (
-                      <span className="rounded-full bg-[#ff5a7a] px-1.5 py-0.5 text-[10px] font-semibold text-white">{item.offerLabel}</span>
-                    )}
+                    <span className={`rounded-full px-1.5 py-0.5 text-[10px] text-white ${item.priceLabel && item.priceLabel !== "Free" && item.priceLabel !== "Sin datos" ? "bg-[#ff5a7a] font-semibold" : "bg-black/70"}`}>{item.priceLabel ?? "Sin datos"}</span>
                   </span>
                   <span className="absolute inset-x-1.5 bottom-1.5 z-10 flex items-center gap-1">
                     <span
@@ -459,7 +453,7 @@ function usageOf(item: VaultCard): string {
     posted: item.posted ?? null,
     sent: item.sent ?? null,
     sentCount: item.sentCount ?? null,
-    priceCents: item.priceCents ?? null,
+    priceLabel: item.priceLabel ?? null,
     dateLabel: item.dateLabel ?? null,
     seconds: item.seconds,
     kind: item.kind,

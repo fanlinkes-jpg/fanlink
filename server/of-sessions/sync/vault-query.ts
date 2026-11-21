@@ -37,7 +37,8 @@ export type VaultCard = {
   dateLabel: string | null;
   posted: boolean | null;
   sent: boolean | null;
-  priceCents: number | null;
+  /** Free, el importe o «Sin datos». No es el campo priceCents. */
+  priceLabel: string;
   listId: string | null;
   listIds: string[];
   packageLabel: "Tráiler gratis + vídeo de pago" | "Sin datos";
@@ -216,7 +217,7 @@ export function presentCard(
     dateLabel: vaultDateLabel(item.uploadedAt),
     posted: item.tags.includes("Feed") ? true : item.tags.includes("Feed:no") ? false : null,
     sent: item.tags.includes("Sent") ? true : item.tags.includes("Sent:no") ? false : null,
-    priceCents: item.priceCents,
+    priceLabel: item.priceCents == null ? "Sin datos" : item.priceCents <= 0 ? "Free" : (vaultOfferLabel(item.priceCents) ?? "Sin datos"),
     listId: item.listId,
     listIds: item.listIds ?? [],
     packageLabel: pack?.label ?? "Sin datos",

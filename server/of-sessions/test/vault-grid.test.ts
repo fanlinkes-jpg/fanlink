@@ -134,10 +134,10 @@ function vaultView() {
       { id: "ducha", name: "B/G LA DUCHA", parentId: null, photos: 4, videos: 2, gifs: 0, audios: 0, hasMedia: true },
     ],
     items: [
-      { ...card, id: "m1", title: "foto", kind: "foto", seconds: null, folder: "B/G LA DUCHA", listId: "ducha", listIds: ["ducha"], sentCount: 2, sent: true, priceCents: 0, posted: true, offerLabel: null, dateLabel: "2 ene 26" },
-      { ...card, id: "m2", title: "clip", kind: "video", seconds: 12, folder: "B/G LA DUCHA", listId: "ducha", listIds: ["ducha"], sentCount: null, sent: null, priceCents: 500, posted: null, offerLabel: "$5.00", dateLabel: "3 ene 26" },
-      { ...card, id: "m3", title: "otra", kind: "foto", seconds: null, folder: "B/G LA DUCHA", listId: "ducha", listIds: ["ducha"], sentCount: null, sent: false, priceCents: null, posted: false, offerLabel: null, dateLabel: null },
-      { ...card, id: "m4", title: "mas", kind: "foto", seconds: null, folder: null, listId: null, listIds: [], sentCount: null, sent: null, priceCents: null, posted: null, offerLabel: null, dateLabel: null },
+      { ...card, id: "m1", title: "foto", kind: "foto", seconds: null, folder: "B/G LA DUCHA", listId: "ducha", listIds: ["ducha"], sentCount: 2, sent: true, priceLabel: "Free", posted: true, offerLabel: null, dateLabel: "2 ene 26" },
+      { ...card, id: "m2", title: "clip", kind: "video", seconds: 12, folder: "B/G LA DUCHA", listId: "ducha", listIds: ["ducha"], sentCount: null, sent: null, priceLabel: "$5.00", posted: null, offerLabel: "$5.00", dateLabel: "3 ene 26" },
+      { ...card, id: "m3", title: "otra", kind: "foto", seconds: null, folder: "B/G LA DUCHA", listId: "ducha", listIds: ["ducha"], sentCount: null, sent: false, priceLabel: "Sin datos", posted: false, offerLabel: null, dateLabel: null },
+      { ...card, id: "m4", title: "mas", kind: "foto", seconds: null, folder: null, listId: null, listIds: [], sentCount: null, sent: null, priceLabel: "Sin datos", posted: null, offerLabel: null, dateLabel: null },
     ],
     query: {
       text: "", kinds: [], minSeconds: null, maxSeconds: null, uploadedFrom: null, uploadedTo: null, list: null, folderId: null,
