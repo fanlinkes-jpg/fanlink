@@ -1,3 +1,4 @@
+import { browserVideoType, videoContainer } from "./vault-model.ts";
 import { sessionForApi } from "./of-chat-api.ts";
 import { mediaHostAllowed, nextMediaUrl } from "./history.ts";
 import { BROWSER_FINGERPRINT } from "../sessions/browser-factory.ts";
@@ -251,11 +252,21 @@ async function loadMedia(target: string, headers: Record<string, string>, expect
     if (expectVideo && ambiguousVideoType(upstreamType) && atStart && media.stream) {
       const peeked = await peekFtyp(media.stream);
       media.stream = peeked.stream;
-      if (!hasFtyp(peeked.head)) {
+      const container = videoContainer({ url: target, contentType: upstreamType, head: peeked.head });
+      console.info(`[fanlink:vault] reproductor contenedor=${container}`);
+      if (container === "avi") {
+        console.info("[fanlink:vault] reproductor error tipo=avi motivo=navegador");
+        return { status: 415 };
+      }
+      const served = browserVideoType(container);
+      if (!served) {
         console.info(`[fanlink:vault] reproductor error tipo=${upstreamType || "sin"} motivo=sin-ftyp`);
         return { status: response.status };
       }
-      media.contentType = "video/mp4";
+      media.contentType = served;
+    } else if (expectVideo && videoContainer({ url: target, contentType: media.contentType }) === "avi") {
+      console.info("[fanlink:vault] reproductor error tipo=avi motivo=navegador");
+      return { status: 415 };
     } else if (expectVideo && !ambiguousVideoType(upstreamType) && !videoBytesAccepted(media.contentType)) {
       console.info(`[fanlink:vault] reproductor error tipo=${media.contentType || "sin"}`);
       return { status: response.status };

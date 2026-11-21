@@ -558,7 +558,61 @@ export function vaultDetailRow(body: unknown): Record<string, unknown> | null {
 }
 
 export function videoFlagLine(row: Record<string, unknown>): string {
-  return `convertedToVideo=${flagWord(row.convertedToVideo)} canView=${flagWord(row.canView)} hasError=${flagWord(row.hasError)} isReady=${flagWord(row.isReady)} ${videoDrmLine(row)}`;
+  const files = nested(row.files);
+  const source = nested(row.source) ?? nested(files?.source);
+  const sample = textOf(nested(files?.full)?.url) ?? textOf(nested(files?.source)?.url) ?? textOf(source?.source) ?? textOf(source?.url);
+  return `convertedToVideo=${flagWord(row.convertedToVideo)} canView=${flagWord(row.canView)} hasError=${flagWord(row.hasError)} isReady=${flagWord(row.isReady)} tipo=${videoContainer({ url: sample })} ${videoDrmLine(row)}`;
+}
+
+/** Extensión, content-type o bytes. `qt  ` es QuickTime. RIFF/AVI no se reproduce en el navegador. */
+export function videoContainer(input: { url?: string | null; contentType?: string | null; head?: Uint8Array | null }): "mp4" | "mov" | "avi" | "otro" | "ausente" {
+  const head = input.head ?? null;
+  if (head && head.length >= 12 && asciiAt(head, 0) === "RIFF" && asciiAt(head, 8) === "AVI ") return "avi";
+  const ftypAt = head ? indexOfAscii(head, "ftyp") : -1;
+  if (head && ftypAt >= 0 && head.length >= ftypAt + 8) {
+    return asciiAt(head, ftypAt + 4) === "qt  " ? "mov" : "mp4";
+  }
+  const type = (input.contentType ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
+  if (type === "video/quicktime") return "mov";
+  if (type === "video/mp4") return "mp4";
+  if (type === "video/avi" || type === "video/msvideo" || type === "video/x-msvideo" || type === "video/x-avi") return "avi";
+  const path = (input.url ?? "").split("?")[0]?.toLowerCase() ?? "";
+  if (path.endsWith(".mov")) return "mov";
+  if (path.endsWith(".avi")) return "avi";
+  if (path.endsWith(".mp4") || path.endsWith(".m4v")) return "mp4";
+  if (input.url || input.contentType || input.head) return "otro";
+  return "ausente";
+}
+
+/** El navegador reproduce mp4 y mov. AVI no. */
+export function browserVideoType(container: ReturnType<typeof videoContainer>): string | null {
+  if (container === "mov") return "video/quicktime";
+  if (container === "mp4") return "video/mp4";
+  return null;
+}
+
+export function videoFormatHold(container: ReturnType<typeof videoContainer>): { texto: string; abrir: boolean } | null {
+  if (container !== "avi") return null;
+  return { texto: "Este vídeo es AVI y el navegador no puede reproducirlo.", abrir: true };
+}
+
+function asciiAt(bytes: Uint8Array, offset: number): string {
+  return String.fromCharCode(bytes[offset] ?? 0, bytes[offset + 1] ?? 0, bytes[offset + 2] ?? 0, bytes[offset + 3] ?? 0);
+}
+
+function indexOfAscii(bytes: Uint8Array, needle: string): number {
+  const limit = Math.min(bytes.length - needle.length, 32);
+  for (let index = 0; index <= limit; index += 1) {
+    let found = true;
+    for (let cursor = 0; cursor < needle.length; cursor += 1) {
+      if (bytes[index + cursor] !== needle.charCodeAt(cursor)) {
+        found = false;
+        break;
+      }
+    }
+    if (found) return index;
+  }
+  return -1;
 }
 
 /**

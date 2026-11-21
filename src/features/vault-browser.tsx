@@ -628,7 +628,11 @@ function VaultPlayback({ src }: { src: string }) {
       className="h-full w-full bg-black object-contain"
       src={local}
       onCanPlay={() => setState("ok")}
-      onError={() => setState("error")}
+      onError={() => {
+        setNote((current) => current || "El navegador no puede reproducir este formato.");
+        setOpenVault(true);
+        setState("error");
+      }}
     />
   );
 }

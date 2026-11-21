@@ -7,7 +7,7 @@ import { handleVaultMedia, noteVaultPlayRequest } from "../../../server/of-sessi
 import { readSessionMediaResult, videoBytesAccepted, videoFollowUp } from "../../../server/of-sessions/sync/media-bytes.ts";
 import { accountCreatorIds } from "../../../server/of-sessions/http/vault-accounts.ts";
 import { fetchSignedMediaDetail, fetchSignedVault } from "../../../server/of-sessions/sync/of-chat-api.ts";
-import { parseVaultBundle, resolveDetailPlayback, vaultDetailRow, vaultFolderMark, videoFlagLine, videoHoldPayload } from "../../../server/of-sessions/sync/vault-model.ts";
+import { parseVaultBundle, resolveDetailPlayback, vaultDetailRow, vaultFolderMark, videoContainer, videoFlagLine, videoFormatHold, videoHoldPayload } from "../../../server/of-sessions/sync/vault-model.ts";
 import { loadFreshPreview, normalizeVaultOffset, reloadVaultPreview, signedUrlExpired } from "../../../server/of-sessions/sync/vault-thumbs.ts";
 import { openProfileThumbs } from "../../../server/of-sessions/sync/vault-owner.ts";
 import { playbackUrl, reuseOrRefreshVideo, saveVaultPreview, storedVaultMediaUrls, storedVaultPage, VIDEO_DETAIL_PAUSE_MS } from "../../../server/of-sessions/sync/vault-store.ts";
@@ -69,8 +69,18 @@ export const Route = createFileRoute("/api/vault-media")({
               return refreshOnce(Boolean(picked));
             },
             fetchBytes: async (target, range) => {
+              if (expectVideo && videoContainer({ url: target }) === "avi") {
+                hold = aviHold();
+                rememberHold(creatorId, mediaId, hold);
+                return null;
+              }
               if (expectVideo || range) {
                 const first = await readSessionMediaResult(creatorId, target, range, { expectVideo });
+                if (first.status === 415) {
+                  hold = aviHold();
+                  rememberHold(creatorId, mediaId, hold);
+                  return null;
+                }
                 if (first.media && (!expectVideo || videoBytesAccepted(first.media.contentType))) return first.media;
                 const plan = videoFollowUp(first.status, first.media?.contentType ?? null, expectVideo);
                 if (expectVideo && plan === "refresh") {
@@ -134,9 +144,16 @@ async function loadMediaDetail(creatorId: string, mediaId: string): Promise<{ ur
   const playback = row
     ? await resolveDetailPlayback(row, readPlaylist, () => new Promise((resolve) => setTimeout(resolve, VIDEO_DETAIL_PAUSE_MS)))
     : { url: null, via: "sin-url" as const };
-  console.info(`[fanlink:vault] video medio=${vaultFolderMark(mediaId)} detalle=${playback.via} status=${read.status ?? "sin"} ${flags}`.slice(0, 320));
+  const tipo = videoContainer({ url: playback.url });
+  console.info(`[fanlink:vault] video medio=${vaultFolderMark(mediaId)} detalle=${playback.via} tipo=${tipo} status=${read.status ?? "sin"} ${flags}`.slice(0, 360));
+  const format = videoFormatHold(tipo);
+  if (format) return { url: null, hold: aviHold() };
   if (playback.url && !signedUrlExpired(playback.url, Date.now())) return { url: playback.url, hold: "" };
   return { url: null, hold: JSON.stringify(videoHoldPayload(read.status, row)) };
+}
+
+function aviHold(): string {
+  return JSON.stringify(videoFormatHold("avi") ?? { texto: "Este vídeo es AVI y el navegador no puede reproducirlo.", abrir: true });
 }
 
 async function readPlaylist(url: string): Promise<string | null> {

@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { PGlite } from "@electric-sql/pglite";
-import { choosePlayableVideo, parseVaultBundle, resolveDetailPlayback, stampVaultList, vaultDetailRow, videoDetailHold, videoDrmLine, videoHoldPayload, videoHoldText, videoShapeLine } from "../sync/vault-model.ts";
+import { browserVideoType, choosePlayableVideo, parseVaultBundle, resolveDetailPlayback, stampVaultList, vaultDetailRow, videoContainer, videoDetailHold, videoDrmLine, videoFlagLine, videoFormatHold, videoHoldPayload, videoHoldText, videoShapeLine } from "../sync/vault-model.ts";
 import { fetchSignedMediaDetail, vaultMediaDetailPath } from "../sync/of-chat-api.ts";
 import { clearSignRulesCache } from "../sync/of-sign.ts";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
@@ -555,6 +555,48 @@ test("convertedToVideo=no con lista usa el mismo reproductor que el mp4", async 
   });
   assert.equal(played.status, 206);
   assert.equal(played.headers.get("content-type"), "video/mp4");
+});
+
+test("un original con ftyp qt se sirve como video/quicktime y un avi no", async () => {
+  const qt = Uint8Array.from([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x71, 0x74, 0x20, 0x20]);
+  const avi = Uint8Array.from([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x41, 0x56, 0x49, 0x20]);
+  assert.equal(videoContainer({ head: qt }), "mov");
+  assert.equal(browserVideoType("mov"), "video/quicktime");
+  assert.equal(videoContainer({ head: avi }), "avi");
+  assert.equal(browserVideoType("avi"), null);
+  const row = {
+    type: "video",
+    convertedToVideo: false,
+    canView: true,
+    hasError: false,
+    isReady: true,
+    files: { source: { url: "https://cdn2.onlyfans.com/files/original.mov?Policy=sek" }, full: { url: null } },
+  };
+  const line = videoFlagLine(row);
+  assert.match(line, /convertedToVideo=no/);
+  assert.match(line, /tipo=mov/);
+  assert.equal(line.includes("sek"), false);
+  assert.equal(line.includes("onlyfans"), false);
+  const previous = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(qt, { status: 200, headers: { "content-type": "application/octet-stream" } })) as typeof fetch;
+  try {
+    const served = await fetchVaultMedia("https://cdn2.onlyfans.com/files/original.mov", { accept: "video/*", range: "bytes=0-" }, true);
+    assert.equal("contentType" in served ? served.contentType : "", "video/quicktime");
+  } finally {
+    globalThis.fetch = previous;
+  }
+  const blocked = videoFormatHold("avi");
+  assert.equal(blocked?.abrir, true);
+  assert.match(blocked?.texto ?? "", /AVI/);
+  const held = await handleVaultMedia(new Request("http://127.0.0.1/api/vault-media?creatorId=u1fpdnp&mediaId=24&variant=full"), {
+    session: async () => ({ userId: "dueña", role: "owner", perms: ["vault"] }),
+    findPreview: async () => null,
+    videoHold: () => JSON.stringify(blocked),
+    fetchBytes: async () => null,
+  });
+  const body = await held.text();
+  assert.equal(body.includes("sek"), false);
+  assert.equal(JSON.parse(body).abrir, true);
 });
 
 function asSql(db: PGlite): ReadSql {
