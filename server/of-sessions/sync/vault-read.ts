@@ -66,6 +66,7 @@ export async function readChatVaultView(
     sql: deps.sql,
     accountId: account.id,
     sleep: deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
+    singlePage: list !== "all",
   });
   console.info(`[fanlink:vault] creator=${input.creatorId} status=${walked.status ?? "sin"}`);
   const blocked = vaultAuthReason(walked);

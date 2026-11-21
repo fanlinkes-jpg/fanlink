@@ -446,6 +446,21 @@ export function vaultFolderMark(id: string): string {
   return (hash >>> 0).toString(16).padStart(8, "0").slice(0, 6);
 }
 
+/** Tope de medios de una carpeta: la suma de sus conteos más un margen. */
+export function folderMediaCap(counts: { photos?: number | null; videos?: number | null; gifs?: number | null; audios?: number | null } | null | undefined): number | null {
+  if (!counts) return null;
+  const values = [counts.photos, counts.videos, counts.gifs, counts.audios].map(countOrZero);
+  if (values.every((value) => value == null)) return null;
+  let sum = 0;
+  for (const value of values) sum += value ?? 0;
+  return sum + Math.max(4, Math.ceil(sum * 0.2));
+}
+
+function countOrZero(value: number | null | undefined): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  return null;
+}
+
 function collectFolders(payload: unknown, lists: VaultList[]): void {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
   for (const value of Object.values(payload as Record<string, unknown>)) {

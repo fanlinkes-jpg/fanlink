@@ -1,6 +1,6 @@
 import type { ReadSql } from "./store.ts";
 import { emptyVaultQuery, vaultQueryFromUnknown, type VaultQuery } from "./vault-filter.ts";
-import { historyFromMedia, historyFromSends, mergeFanUses, mergeVaultList, parseVaultBundle, stampVaultList, vaultKindOf, type FanVaultUse, type VaultFile, type VaultList } from "./vault-model.ts";
+import { folderMediaCap, historyFromMedia, historyFromSends, mergeFanUses, mergeVaultList, parseVaultBundle, stampVaultList, vaultKindOf, type FanVaultUse, type VaultFile, type VaultList } from "./vault-model.ts";
 import type { SaleFolder } from "./vault-block.ts";
 import { itemSaleBlocked } from "./vault-block.ts";
 import { planVaultPieces, type VaultSendPiece } from "../send/vault-piece.ts";
@@ -170,6 +170,30 @@ export async function persistVaultRead(
     }
   }
   return saved;
+}
+
+/** Conteos guardados de una carpeta. Sirven para no aceptar la bóveda entera como si fuera la carpeta. */
+export async function storedFolderCounts(sql: ReadSql, creatorId: string, listId: string): Promise<{ photos: number | null; videos: number | null; gifs: number | null; audios: number | null } | null> {
+  if (!(await hasColumn(sql, "of_vault_list", "photos_count"))) return null;
+  const rows = await sql.query<{ photos_count: number | null; videos_count: number | null; gifs_count: number | null; audios_count: number | null }>(
+    "select photos_count, videos_count, gifs_count, audios_count from of_vault_list where creator_id = $1 and list_key = $2",
+    [creatorId, listId],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  const counts = {
+    photos: numberOrNull(row.photos_count),
+    videos: numberOrNull(row.videos_count),
+    gifs: numberOrNull(row.gifs_count),
+    audios: numberOrNull(row.audios_count),
+  };
+  return folderMediaCap(counts) == null ? null : counts;
+}
+
+function numberOrNull(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) return Number(value);
+  return null;
 }
 
 /** Los medios que devolvió `list_id` pertenecen a esa carpeta. No copia el catálogo de listStates. */

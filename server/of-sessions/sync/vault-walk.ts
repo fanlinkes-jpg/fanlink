@@ -1,8 +1,8 @@
 import type { StorageStateFile } from "../sessions/storage-state.ts";
 import { fetchSignedVault, VAULT_MEDIA_LIMIT } from "./of-chat-api.ts";
 import type { ReadSql } from "./store.ts";
-import { mergeVaultList, parseVaultBundle, vaultAllList, vaultFolderMark, vaultKeyNames, vaultPayloadKind, type VaultFile, type VaultList } from "./vault-model.ts";
-import { persistVaultRead } from "./vault-store.ts";
+import { folderMediaCap, mergeVaultList, parseVaultBundle, vaultAllList, vaultFolderMark, vaultKeyNames, vaultPayloadKind, type VaultFile, type VaultList } from "./vault-model.ts";
+import { persistVaultRead, storedFolderCounts } from "./vault-store.ts";
 
 /** Pausa entre páginas. Más lenta que el chat: la bóveda pesa. */
 export const VAULT_PAGE_GAP_MS = 800;
@@ -51,29 +51,29 @@ export function clearVaultWalkCache(): void {
   inflight.clear();
 }
 
-export async function walkVault(input: WalkInput & { listId?: string; offset?: number }): Promise<VaultWalk> {
+export async function walkVault(input: WalkInput & { listId?: string; offset?: number; singlePage?: boolean }): Promise<VaultWalk> {
   const listId = input.listId?.trim().slice(0, 80) || "all";
   const offset = normalize(input.offset ?? 0);
   const flight = `${input.creatorId}\n${listId}\n${offset}`;
   const pending = inflight.get(flight);
   if (pending) return pending;
-  const run = runWalk(input, listId, offset).finally(() => {
+  const run = runWalk(input, listId, offset, input.singlePage === true).finally(() => {
     inflight.delete(flight);
   });
   inflight.set(flight, run);
   return run;
 }
 
-async function runWalk(input: WalkInput, listId: string, offset: number): Promise<VaultWalk> {
+async function runWalk(input: WalkInput, listId: string, offset: number, singlePage = false): Promise<VaultWalk> {
   if (offset === 0) {
     const hit = fresh(input.creatorId, listId, input.now());
     if (hit) {
-      console.info(`[fanlink:vault] cache lista=${safe(listId)} medios=${hit.items.length}`);
+      console.info(`[fanlink:vault] cache lista=${vaultFolderMark(listId)} medios=${hit.items.length}`);
       return done(hit.items, hit.thumbItems, false, 0, true, null);
     }
   }
   const budget = { left: VAULT_WALK_BUDGET };
-  const main = await walkOne(input, listId, offset, offset === 0, budget, false);
+  const main = await walkOne(input, listId, offset, offset === 0, budget, false, null, singlePage);
   if (listId !== "all" || offset !== 0 || main.sessionRejected || main.signatureRejected) {
     if (offset === 0 && main.items.length > 0 && !main.hasMore && !main.sessionRejected && !main.signatureRejected && main.retryAfterMs === 0) {
       remember(input.creatorId, listId, input.now(), main.items, main.thumbItems);
@@ -92,7 +92,7 @@ async function runWalk(input: WalkInput, listId: string, offset: number): Promis
       }
       const cachedFolder = fresh(input.creatorId, folder.id, input.now());
       if (cachedFolder && cachedFolder.items.length > 0) {
-        console.info(`[fanlink:vault] cache lista=${safe(folder.id)} medios=guardada`);
+        console.info(`[fanlink:vault] cache lista=${vaultFolderMark(folder.id)} medios=guardada`);
         continue;
       }
       logList(folder);
@@ -120,6 +120,7 @@ async function walkOne(
   budget: { left: number },
   store: boolean,
   listName: string | null = null,
+  singlePage = false,
 ): Promise<PageWalk> {
   let offset = start;
   let pages = 0;
@@ -134,11 +135,12 @@ async function walkOne(
   let sessionRejected = false;
   let signatureRejected = false;
   let retryAfterMs = 0;
+  const cap = listId === "all" ? null : folderMediaCap(await storedFolderCounts(input.sql, input.creatorId, listId));
   while (pages < VAULT_WALK_CAP) {
     if (budget.left <= 0) {
       hasMore = true;
       nextOffset = offset;
-      console.info(`[fanlink:vault] corte presupuesto lista=${safe(listId)} offset=${offset}`);
+      console.info(`[fanlink:vault] corte presupuesto lista=${vaultFolderMark(listId)} offset=${offset}`);
       break;
     }
     budget.left -= 1;
@@ -155,7 +157,15 @@ async function walkOne(
       if (items.length === 0) break;
       hasMore = true;
       nextOffset = offset;
-      console.info(`[fanlink:vault] corte lista=${safe(listId)} offset=${offset} status=${read.status ?? "sin"}`);
+      console.info(`[fanlink:vault] corte lista=${vaultFolderMark(listId)} offset=${offset} status=${read.status ?? "sin"}`);
+      break;
+    }
+    const peeked = mediaBody(read.payloads);
+    const peekedCount = mediaCount(peeked);
+    if (listId !== "all" && cap != null && items.length + peekedCount > cap) {
+      console.info(`[fanlink:vault] carpeta=${vaultFolderMark(listId)} sospechosa param=list_id n=${peekedCount} tope=${cap}`);
+      hasMore = false;
+      nextOffset = offset;
       break;
     }
     payloads.push(...read.payloads);
@@ -175,9 +185,8 @@ async function walkOne(
     const pageFull = count === VAULT_MEDIA_LIMIT;
     hasMore = flagged || pageFull;
     pages += 1;
-    console.info(`[fanlink:vault] pagina ruta=/api2/v2/vault/media status=${status ?? "sin"} n=${count} hasMore=${hasMoreLabel(body)} offset=${offset} list=${safe(listId)}`);
-    if (pageFull) {
-      console.info(`[fanlink:vault] sin hasMore lista=${safe(listId)} offset=${offset} medios=${count} sigue=pagina-llena`);
+    if (pageFull && !singlePage) {
+      console.info(`[fanlink:vault] sin hasMore lista=${vaultFolderMark(listId)} offset=${offset} medios=${count} sigue=pagina-llena`);
     }
     if (!hasMore) {
       nextOffset = offset;
@@ -185,22 +194,23 @@ async function walkOne(
     }
     const next = followingOffset(body, offset, count);
     if (next <= offset || freshCount === 0) {
-      console.info(`[fanlink:vault] lista no avanza lista=${safe(listId)} offset=${offset}`);
+      console.info(`[fanlink:vault] lista no avanza lista=${vaultFolderMark(listId)} offset=${offset}`);
       hasMore = false;
       nextOffset = offset;
       break;
     }
     offset = next;
     nextOffset = next;
+    if (singlePage) break;
     if (input.sleep) await input.sleep(VAULT_PAGE_GAP_MS);
   }
   if (hasMore && pages >= VAULT_WALK_CAP) {
-    console.info(`[fanlink:vault] corte tope lista=${safe(listId)} offset=${nextOffset}`);
+    console.info(`[fanlink:vault] corte tope lista=${vaultFolderMark(listId)} offset=${nextOffset}`);
   }
   if (store && start === 0 && items.length > 0 && !hasMore && !sessionRejected && !signatureRejected && retryAfterMs === 0) {
     remember(input.creatorId, listId, input.now(), items, thumbItems);
   }
-  console.info(`[fanlink:vault] fin lista=${safe(listId)} paginas=${pages} medios=${items.length} hasMore=${hasMore ? "si" : "no"}`);
+  console.info(`[fanlink:vault] fin lista=${vaultFolderMark(listId)} paginas=${pages} medios=${items.length} hasMore=${hasMore ? "si" : "no"}`);
   console.info(`[fanlink:vault] carpeta=${vaultFolderMark(listId)} n=${items.length}`);
   return {
     items,
@@ -315,7 +325,7 @@ function richerList(prev: VaultList, next: VaultList): VaultList {
 }
 
 function logList(list: VaultList): void {
-  console.info(`[fanlink:vault] lista id=${safe(list.id)} nombre=${safe(list.name)} fotos=${num(list.photos)} videos=${num(list.videos)} gifs=${num(list.gifs)} audios=${num(list.audios)} claves=${safe(list.sourceKeys ?? "ninguna")}`);
+  console.info(`[fanlink:vault] carpeta=${vaultFolderMark(list.id)} fotos=${num(list.photos)} videos=${num(list.videos)} gifs=${num(list.gifs)} audios=${num(list.audios)} claves=${safe(list.sourceKeys ?? "ninguna")}`);
 }
 
 function logPayload(payload: unknown): void {

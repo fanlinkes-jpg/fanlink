@@ -90,6 +90,7 @@ export function VaultBrowser({
   onOpenFolder,
   thumbPage = { listId: "all", offset: 0 },
   pageItems = [],
+  reading = false,
 }: {
   creatorId: string;
   fanKey: string | null;
@@ -102,6 +103,7 @@ export function VaultBrowser({
   thumbPage?: { listId: string; offset: number };
   /** Medios que acaba de devolver el recorrido de esa carpeta. */
   pageItems?: ReadonlyArray<{ id: string; title: string; kind: VaultCard["kind"] }>;
+  reading?: boolean;
 }) {
   const [listText, setListText] = useState("");
   const [query, setQuery] = useState(EMPTY_QUERY);
@@ -247,7 +249,7 @@ export function VaultBrowser({
                 if (el.scrollTop + el.clientHeight >= el.scrollHeight - 160) onMore?.();
               }}
             >
-              {grid.length === 0 ? <p className="col-span-4 text-sm text-[#8a96a3]">Sin datos</p> : null}
+              {grid.length === 0 ? <p className="col-span-4 text-sm text-[#8a96a3]">{reading ? "Cargando…" : "Sin datos"}</p> : null}
               {grid.map((item) => {
                 const selected = picked.includes(item.id);
                 const sentLabel = vaultSentPill(item.sent ?? null, item.sentCount ?? null);

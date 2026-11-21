@@ -7,6 +7,7 @@ import { awaitAccountGap, REQUEST_GAP_MS, withAccountApi } from "./api-list-pace
 import { noteMissingUnread } from "./unread-chats.ts";
 import { usersMeKeepsSession, usersMeVerdict } from "../identity.ts";
 import { loadSignRules, signedUserId, signOnlyfans, type SignRules } from "./of-sign.ts";
+import { vaultFolderMark } from "./vault-model.ts";
 import { SESSION_EXPIRED_LABEL } from "./session-link.ts";
 
 const HOST = "onlyfans.com";
@@ -343,7 +344,13 @@ export async function fetchSignedVault(state: StorageStateFile, deps: {
       primary = vaultMediaPath(list, skip, "list");
       read = await readVaultPath(deps, () => getJson(deps.fetch, primary, signedHeaders(rules, primary, auth, deps.now()), deps.now()));
     }
-    console.info(vaultPageLog({ route: primary, status: read.status, count: mediaCountOf(read.body), hasMore: hasMoreLabelOf(read.body), offset: skip, listId: list }));
+    const mediaCount = mediaCountOf(read.body);
+    if (list === "all") {
+      console.info(vaultPageLog({ route: primary, status: read.status, count: mediaCount, hasMore: hasMoreLabelOf(read.body), offset: skip, listId: "all" }));
+    } else {
+      const param = primary.includes("list_id=") ? "list_id" : "list";
+      console.info(`[fanlink:vault] carpeta=${vaultFolderMark(list)} pagina param=${param} offset=${skip} n=${mediaCount} status=${read.status ?? "sin"}`);
+    }
     status = read.status;
     const stopped = stopVaultRead(payloads, read);
     if (stopped) return stopped;

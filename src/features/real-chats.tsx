@@ -12,6 +12,7 @@ import { NOTIFICATION_TABS, TAB_LABEL, isOwnerOnlyKind, tabOf, type Notification
 import { NotificationFanCard } from "@/features/notification-card";
 import { useCrm, type VaultItem } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
+import { mergeVaultPage, vaultLoadAllowed } from "@/lib/vault-load";
 import { clearOpenThread, peekOpenThread } from "@/lib/open-thread";
 import { useChatFanCards } from "@/lib/use-chat-fan-cards";
 import { chatFanCardFor, fanCardTransactions } from "@/lib/chat-fan-cards";
@@ -256,6 +257,7 @@ export function RealChatsPage() {
   const [vaultReload, setVaultReload] = useState(0);
   const [vaultReading, setVaultReading] = useState(false);
   const vaultPage = useRef({ listId: "all", offset: 0, busy: false });
+  const vaultGen = useRef(0);
   const [thumbPage, setThumbPage] = useState({ listId: "all", offset: 0 });
   const offerPriceId = useRef<string | null>(null);
 
@@ -775,24 +777,28 @@ export function RealChatsPage() {
   async function loadOfVault(listId = "all", offset = 0) {
     setPanel("vault");
     if (!selected) return;
-    if (offset < 0 || vaultPage.current.busy) return;
+    if (!vaultLoadAllowed(vaultPage.current, { listId, offset })) return;
+    const generation = vaultGen.current + 1;
+    vaultGen.current = generation;
     if (offset === 0 && listId !== vaultPage.current.listId) setOfVault([]);
     vaultPage.current = { listId, offset, busy: true };
-    if (offset === 0) setVaultReading(true);
+    setVaultReading(true);
     try {
       const result = await readChatVault({ data: { creatorId: selected.creatorId, threadKey: selected.threadKey, listId, offset } });
-      setOfVault(result.items);
+      if (generation !== vaultGen.current) return;
+      setOfVault((current) => offset === 0 ? result.items : mergeVaultPage(current, result.items));
       setVaultReload((value) => value + 1);
       setThumbPage({ listId, offset });
-      const step = result.nextOffset > offset ? result.nextOffset : offset + 24;
+      const step = result.nextOffset > offset ? result.nextOffset : offset + 40;
       vaultPage.current = { listId, offset: result.hasMore ? step : -1, busy: false };
-      if (offset === 0 && result.items.length === 0) setError(result.reason ?? "La bóveda de OnlyFans ha llegado vacía.");
+      if (offset === 0 && result.items.length === 0 && listId === "all") setError(result.reason ?? "La bóveda de OnlyFans ha llegado vacía.");
     } catch (err) {
+      if (generation !== vaultGen.current) return;
       vaultPage.current = { listId, offset, busy: false };
       if (offset === 0) setOfVault([]);
       setError(sessionErrorText(err));
     } finally {
-      setVaultReading(false);
+      if (generation === vaultGen.current) setVaultReading(false);
     }
   }
 
@@ -1806,7 +1812,7 @@ function ComposerPanelBody({
         <div role="region" aria-label="Panel Add from media vault" className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {reading ? <p className="px-4 py-2 text-sm text-[#8a96a3]">Leyendo la bóveda de OnlyFans…</p> : null}
           {creatorId && creatorId !== "all" ? (
-            <VaultBrowser layout="of" creatorId={creatorId} fanKey={fanKey} reloadToken={vaultReload} thumbPage={thumbPage} pageItems={ofVault} onAttach={onVault} onClose={onClose} onMore={onVaultMore} onOpenFolder={onOpenFolder} />
+            <VaultBrowser layout="of" creatorId={creatorId} fanKey={fanKey} reloadToken={vaultReload} thumbPage={thumbPage} pageItems={ofVault} reading={reading} onAttach={onVault} onClose={onClose} onMore={onVaultMore} onOpenFolder={onOpenFolder} />
           ) : <p className="p-4 text-sm text-[#8a96a3]">Sin datos</p>}
         </div>
       );

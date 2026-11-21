@@ -1,5 +1,5 @@
 import type { Page } from "playwright";
-import { parseVaultBundle } from "./vault-model.ts";
+import { parseVaultBundle, vaultFolderMark } from "./vault-model.ts";
 
 export type VaultFile = {
   id: string;
@@ -75,7 +75,7 @@ export async function readVaultFromPage(page: Page, listId = "all", offset = 0):
   const cleanList = listId.trim().slice(0, 80) || "all";
   const fromPage = await readOpenedVault(page, cleanList, cleanOffset);
   const counts = countVault(fromPage);
-  console.info(`[fanlink:vault] pagina una vez lista=${cleanList} offset=${cleanOffset} carpetas=${counts.folders} medios=${counts.files}`);
+  console.info(`[fanlink:vault] pagina una vez lista=${vaultFolderMark(cleanList)} offset=${cleanOffset} carpetas=${counts.folders} medios=${counts.files}`);
   return fromPage;
 }
 
