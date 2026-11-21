@@ -37,6 +37,10 @@ export type VaultList = {
   gifs?: number | null;
   audios?: number | null;
   hasMedia?: boolean | null;
+  /** `count` suelto, si no hay desglose. */
+  count?: number | null;
+  /** `custom` o el tipo de sistema. No se guarda. */
+  type?: string;
   /** Claves del JSON, solo para el log. No se guardan. */
   sourceKeys?: string;
 };
@@ -375,8 +379,7 @@ function tagsOf(row: Record<string, unknown>, posted: boolean | null, sent: bool
     const list = entry as Record<string, unknown>;
     const name = textOf(list.name);
     const type = (textOf(list.type) ?? "").toLowerCase();
-    if (posted !== false && (type === "posts" || name === "Posts")) tags.push("Feed");
-    else if (name) tags.push(name);
+    if (name && type !== "posts" && name !== "Posts") tags.push(name);
   }
   return [...new Set(tags)];
 }
@@ -454,9 +457,31 @@ function collectFolders(payload: unknown, lists: VaultList[]): void {
     if (!Array.isArray(value)) continue;
     for (const entry of value) {
       const folder = folderFrom(entry);
-      if (folder && !lists.some((list) => list.id === folder.id)) lists.push(folder);
+      if (folder) mergeFolder(lists, folder);
     }
   }
+}
+
+function mergeFolder(lists: VaultList[], folder: VaultList): void {
+  const index = lists.findIndex((list) => list.id === folder.id);
+  if (index < 0) {
+    lists.push(folder);
+    return;
+  }
+  const prev = lists[index]!;
+  lists[index] = {
+    ...folder,
+    ...prev,
+    name: prev.name || folder.name,
+    photos: prev.photos ?? folder.photos,
+    videos: prev.videos ?? folder.videos,
+    gifs: prev.gifs ?? folder.gifs,
+    audios: prev.audios ?? folder.audios,
+    hasMedia: prev.hasMedia ?? folder.hasMedia,
+    count: prev.count ?? folder.count,
+    type: prev.type ?? folder.type,
+    sourceKeys: [prev.sourceKeys, folder.sourceKeys].filter(Boolean).join(","),
+  };
 }
 
 function folderFrom(entry: unknown): VaultList | null {
@@ -465,7 +490,9 @@ function folderFrom(entry: unknown): VaultList | null {
   const id = textOf(row.id);
   const name = textOf(row.name ?? row.title);
   if (!id || !name) return null;
-  return { id, name, ...listCounts(row), sourceKeys: vaultKeyNames(row) };
+  const counts = listCounts(row);
+  if (counts.hasMedia == null && counts.count != null) counts.hasMedia = counts.count > 0;
+  return { id, name, type: (textOf(row.type) ?? "").toLowerCase() || undefined, ...counts, sourceKeys: vaultKeyNames(row) };
 }
 
 function firstNamedArray(row: Record<string, unknown>, keys: readonly string[]): unknown[] | null {
@@ -486,25 +513,24 @@ function vaultLists(payload: unknown): VaultList[] {
   });
 }
 
-function listCounts(list: Record<string, unknown>): Pick<VaultList, "photos" | "videos" | "gifs" | "audios" | "hasMedia"> {
+function listCounts(list: Record<string, unknown>): Pick<VaultList, "photos" | "videos" | "gifs" | "audios" | "hasMedia" | "count"> {
   const bags = countBags(list);
   return {
-    photos: pickCount(bags, ["photosCount", "photoCount", "photos_count", "photo_count"]),
-    videos: pickCount(bags, ["videosCount", "videoCount", "videos_count", "video_count"]),
-    gifs: pickCount(bags, ["gifsCount", "gifCount", "gifs_count", "gif_count"]),
-    audios: pickCount(bags, ["audiosCount", "audioCount", "audios_count", "audio_count"]),
+    photos: pickCount(bags, ["photosCount", "photoCount", "photos_count", "photo_count", "photos", "photo"]),
+    videos: pickCount(bags, ["videosCount", "videoCount", "videos_count", "video_count", "videos", "video"]),
+    gifs: pickCount(bags, ["gifsCount", "gifCount", "gifs_count", "gif_count", "gifs", "gif"]),
+    audios: pickCount(bags, ["audiosCount", "audioCount", "audios_count", "audio_count", "audios", "audio"]),
     hasMedia: pickBool(bags, ["hasMedia", "has_media"]),
+    count: pickCount(bags, ["count", "mediasCount", "mediaCount", "medias_count"]),
   };
 }
 
 function countBags(list: Record<string, unknown>): Record<string, unknown>[] {
   const bags = [list];
-  for (const key of ["counts", "counters"]) {
-    const child = nested(list[key]);
+  for (const value of Object.values(list)) {
+    const child = nested(value);
     if (child) bags.push(child);
   }
-  const medias = list.medias;
-  if (medias && typeof medias === "object" && !Array.isArray(medias)) bags.push(medias as Record<string, unknown>);
   return bags;
 }
 

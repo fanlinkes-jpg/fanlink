@@ -13,7 +13,7 @@ test("el historial dice Sin datos en lo que OnlyFans no manda y no usa las compr
       seconds: 12,
       kind: "video",
     }),
-    "Feed Posted · Envíos Sent 3 · Precio $5.00 · Fecha 2 ene 26 · Duración 0:12",
+    "Feed Publicado · Envíos Enviado 3 · Precio $5.00 · Fecha 2 ene 26 · Duración 0:12",
   );
   assert.equal(
     vaultUsageText({
@@ -39,8 +39,9 @@ test("el historial dice Sin datos en lo que OnlyFans no manda y no usa las compr
     }),
     "Feed No publicado · Envíos No enviado · Precio Free · Fecha 2 ene 26",
   );
-  assert.equal(vaultSentPill(true, 3), "Sent 3");
-  assert.equal(vaultSentPill(true, null), "Sent · Sin datos");
-  assert.equal(vaultSentPill(null, null), "Sent Sin datos");
+  assert.equal(vaultSentPill(true, 3), "Enviado 3");
+  assert.equal(vaultSentPill(true, null), "Enviado · Sin datos");
+  assert.equal(vaultSentPill(null, null), null);
+  assert.equal(vaultSentPill(null, 2), "Enviado 2");
   assert.equal(vaultSentPill(false, null), null);
 });

@@ -288,12 +288,13 @@ async function selectVaultItems(
   const hasListIds = await hasListIdColumn(sql);
   if (query.scope === "carpeta" && query.folderId) {
     const ids = [...folderAndChildren(folders, query.folderId)];
+    if (!ids.includes(query.folderId)) ids.push(query.folderId);
     if (ids.length > 0) {
       const slot = add(ids);
       const members = hasListIds
         ? ` or exists (select 1 from jsonb_array_elements_text(coalesce(list_ids, '[]'::jsonb)) elem where elem = any(${slot}::text[]))`
         : "";
-      where.push(`(list_key = any(${slot}::text[]) or folder = any(${slot}::text[]) or list_name = any(${slot}::text[])${members})`);
+      where.push(`(list_key = any(${slot}::text[])${members})`);
     }
   }
   if (query.sent !== "cualquiera" || query.bought !== "cualquiera") {

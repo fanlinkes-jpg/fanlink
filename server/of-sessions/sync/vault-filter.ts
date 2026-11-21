@@ -133,19 +133,16 @@ export function searchVaultMedia(
   const open = input.scope === "carpeta" && input.folderId ? folderAndChildren(folders, input.folderId) : null;
   const needle = fold(input.text.trim());
   return items.filter((item) => {
-    if (open && !itemInFolders(item, open, folders)) return false;
+    if (open && !itemInFolders(item, open)) return false;
     if (!needle) return true;
     if (item.tags.some((tag) => fold(tag).includes(needle))) return true;
     return itemFolderNames(item, folders).some((name) => fold(name).includes(needle));
   });
 }
 
-function itemInFolders(item: VaultFile, ids: ReadonlySet<string>, folders: readonly VaultFolder[]): boolean {
-  const names = new Set(folders.filter((folder) => ids.has(folder.id)).map((folder) => fold(folder.name)));
+function itemInFolders(item: VaultFile, ids: ReadonlySet<string>): boolean {
   if (item.listId && ids.has(item.listId)) return true;
-  if (item.listIds?.some((id) => ids.has(id))) return true;
-  const own = [item.folder, item.listName].filter((value): value is string => Boolean(value));
-  return own.some((name) => ids.has(name) || names.has(fold(name)));
+  return item.listIds?.some((id) => ids.has(id)) === true;
 }
 
 function itemFolderNames(item: VaultFile, folders: readonly VaultFolder[]): string[] {

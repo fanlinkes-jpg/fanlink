@@ -75,7 +75,7 @@ async function runWalk(input: WalkInput, listId: string, offset: number): Promis
   const budget = { left: VAULT_WALK_BUDGET };
   const main = await walkOne(input, listId, offset, offset === 0, budget, false);
   if (listId !== "all" || offset !== 0 || main.sessionRejected || main.signatureRejected) {
-    if (offset === 0 && !main.hasMore && !main.sessionRejected && !main.signatureRejected && main.retryAfterMs === 0) {
+    if (offset === 0 && main.items.length > 0 && !main.hasMore && !main.sessionRejected && !main.signatureRejected && main.retryAfterMs === 0) {
       remember(input.creatorId, listId, input.now(), main.items, main.thumbItems);
     }
     return publicWalk(main);
@@ -90,12 +90,13 @@ async function runWalk(input: WalkInput, listId: string, offset: number): Promis
         main.hasMore = true;
         break;
       }
-      if (fresh(input.creatorId, folder.id, input.now())) {
+      const cachedFolder = fresh(input.creatorId, folder.id, input.now());
+      if (cachedFolder && cachedFolder.items.length > 0) {
         console.info(`[fanlink:vault] cache lista=${safe(folder.id)} medios=guardada`);
         continue;
       }
       logList(folder);
-      if (folder.hasMedia === false) continue;
+      if (folder.hasMedia === false && folder.type !== "custom") continue;
       const child = await walkOne(input, folder.id, 0, false, budget, true, folder.name);
       if (child.sessionRejected || child.signatureRejected || child.retryAfterMs > 0 || child.hasMore) {
         main.hasMore = true;
@@ -196,7 +197,7 @@ async function walkOne(
   if (hasMore && pages >= VAULT_WALK_CAP) {
     console.info(`[fanlink:vault] corte tope lista=${safe(listId)} offset=${nextOffset}`);
   }
-  if (store && start === 0 && !hasMore && !sessionRejected && !signatureRejected && retryAfterMs === 0) {
+  if (store && start === 0 && items.length > 0 && !hasMore && !sessionRejected && !signatureRejected && retryAfterMs === 0) {
     remember(input.creatorId, listId, input.now(), items, thumbItems);
   }
   console.info(`[fanlink:vault] fin lista=${safe(listId)} paginas=${pages} medios=${items.length} hasMore=${hasMore ? "si" : "no"}`);
@@ -300,10 +301,28 @@ function listsOf(payloads: readonly unknown[]): VaultList[] {
   const map = new Map<string, VaultList>();
   for (const payload of payloads) {
     for (const list of parseVaultBundle(payload).lists) {
-      if (list.id && list.id !== "all") map.set(list.id, list);
+      if (!list.id || list.id === "all") continue;
+      const prev = map.get(list.id);
+      map.set(list.id, prev ? richerList(prev, list) : list);
     }
   }
   return [...map.values()];
+}
+
+function richerList(prev: VaultList, next: VaultList): VaultList {
+  return {
+    ...next,
+    ...prev,
+    name: prev.name || next.name,
+    photos: prev.photos ?? next.photos,
+    videos: prev.videos ?? next.videos,
+    gifs: prev.gifs ?? next.gifs,
+    audios: prev.audios ?? next.audios,
+    hasMedia: prev.hasMedia ?? next.hasMedia,
+    count: prev.count ?? next.count,
+    type: prev.type || next.type,
+    sourceKeys: [prev.sourceKeys, next.sourceKeys].filter(Boolean).join(","),
+  };
 }
 
 function logList(list: VaultList): void {

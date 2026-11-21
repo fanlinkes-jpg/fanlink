@@ -91,7 +91,7 @@ export function isLiveChallengeExchange(host: string, path: string, method: stri
   if (segments.some((part) => (LIVE_DENIED_SEGMENTS as readonly string[]).includes(part))) return false;
   if (host === "challenges.cloudflare.com" || host.endsWith(".challenges.cloudflare.com")) return true;
   if (!path.includes("/cdn-cgi/")) return false;
-  return host === "onlyfans.com" || host === "www.onlyfans.com" || host === "cloudflare.com" || host.endsWith(".cloudflare.com");
+  return host === "onlyfans.com" || host === "www.onlyfans.com";
 }
 
 /** Solo el chat y sus mensajes. En solo lectura no salen POST, PUT ni DELETE de mensajes, likes o PPV. */

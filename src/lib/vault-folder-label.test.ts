@@ -31,4 +31,8 @@ test("vacío solo cuando OnlyFans dice que la lista no tiene medios", () => {
     vaultFolderLabel({ photos: null, videos: null, gifs: null, audios: null, hasMedia: null }, none),
     "Sin datos",
   );
+  assert.equal(
+    vaultFolderLabel({ photos: null, videos: null, gifs: null, audios: null, hasMedia: null, count: 9 }, none),
+    "9 medios",
+  );
 });

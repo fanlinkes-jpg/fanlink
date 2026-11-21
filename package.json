@@ -2,7 +2,7 @@
   "name": "app-builder-workspace",
   "private": true,
   "engines": {
-    "node": ">=22.3"
+    "node": ">=22.13"
   },
   "sideEffects": false,
   "type": "module",

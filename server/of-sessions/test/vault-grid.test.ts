@@ -5,7 +5,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { chromium } from "playwright";
+import { chromium, type Page } from "playwright";
 import { VAULT_CARD_FRAME, VAULT_CARD_IMAGE } from "../../../src/lib/vault-card-frame.ts";
 
 const root = path.resolve(import.meta.dirname, "../../..");
@@ -43,12 +43,32 @@ test("el panel real del chat monta VaultBrowser con tarjetas cuadradas", async (
   const browser = await chromium.launch();
   const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
   try {
-    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    let vaultReads = 0;
+    const seenExports: string[] = [];
     await page.route("**/*", async (route) => {
       const request = route.request();
       const url = request.url();
       if (url.includes("/api/vault-media")) {
         await route.fulfill({ status: 200, contentType: "image/png", body: png });
+        return;
+      }
+      if (request.headers()["x-tsr-serverfn"] === "true") seenExports.push(serverExport(url));
+      if (request.headers()["x-tsr-serverfn"] === "true" && serverExport(url).includes("listCreatorChats")) {
+        await route.fulfill({
+          status: 200,
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ result: chatList() }),
+        });
+        return;
+      }
+      if (request.headers()["x-tsr-serverfn"] === "true" && serverExport(url).includes("readChatVault")) {
+        vaultReads += 1;
+        await route.fulfill({
+          status: 200,
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ result: { items: [], reason: null, hasMore: true, nextOffset: 24, cached: false } }),
+        });
         return;
       }
       if (request.headers()["x-tsr-serverfn"] === "true" && isVaultQuery(url)) {
@@ -87,6 +107,7 @@ test("el panel real del chat monta VaultBrowser con tarjetas cuadradas", async (
         creatorId: "3zk7kbr",
       });
     });
+    await page.getByText("Fan de prueba").first().waitFor();
     await page.getByRole("button", { name: "Add from media vault", exact: true }).click();
     const panel = page.getByRole("region", { name: "Panel Add from media vault" });
     await panel.getByText("B/G LA DUCHA").waitFor();
@@ -96,28 +117,101 @@ test("el panel real del chat monta VaultBrowser con tarjetas cuadradas", async (
     assert.ok(box, "VaultBrowser no pintó tarjetas");
     assert.ok(box.height >= 80, `alto ${box.height}`);
     assert.ok(Math.abs(box.width - box.height) <= 8, `no es cuadrada ${box.width}x${box.height}`);
-    const heights = await panel.locator("[data-vault-card]").evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect().height));
-    assert.ok(heights.every((height) => height >= 80), `altos ${heights.join(",")}`);
+    const panelBox = await panel.boundingBox();
+    assert.ok(panelBox, "el modal no tiene caja");
+    assert.ok(panelBox.width >= 1440 * 0.9, `ancho modal ${panelBox.width}`);
+    assert.ok(panelBox.height >= 900 * 0.9, `alto modal ${panelBox.height}`);
+    await panel.getByText("Publicado").first().waitFor();
+    await panel.getByText("Enviado 2").waitFor();
+    assert.equal(await panel.getByText("Sin datos", { exact: true }).count(), 0);
     assert.equal(await panel.getByText("Sin miniatura").count(), 0);
-    await panel.getByText("Sent 2").waitFor();
-    const shotDir = process.env.CI ? "/opt/cursor/artifacts" : tmpdir();
-    const shotPath = path.join(shotDir, "boveda-panel.png");
-    try {
-      await mkdir(shotDir, { recursive: true });
-      await panel.screenshot({ path: shotPath });
-    } catch (error) {
-      const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
-      if (code !== "EACCES" || !process.env.CI) throw error;
-      await panel.screenshot({ path: path.join(tmpdir(), "boveda-panel.png") });
-    }
+    const until = Date.now() + 5_000;
+    while (vaultReads < 1 && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 50));
+    const cards = panel.locator("[data-vault-card]");
+    assert.equal(await cards.count(), 40);
+    const last = cards.last();
+    await last.scrollIntoViewIfNeeded();
+    const lastBox = await last.boundingBox();
+    const gridBox = await panel.locator(".overflow-y-auto").last().boundingBox();
+    assert.ok(lastBox && gridBox, "la última tarjeta no se pudo medir");
+    assert.ok(lastBox.y >= gridBox.y - 4 && lastBox.y + lastBox.height <= gridBox.y + gridBox.height + 4, `la última tarjeta queda fuera ${lastBox.y}/${gridBox.y}`);
+    const more = Date.now() + 5_000;
+    while (vaultReads < 2 && Date.now() < more) await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.ok(vaultReads >= 2, `el scroll no pidió otra página (${vaultReads}) vistos ${seenExports.join(" | ")}`);
+    const shotPath = await savePanelShot(page);
+    assert.ok(shotPath.endsWith("boveda-panel-1440.png"));
   } finally {
     await browser.close().catch(() => undefined);
     server.kill("SIGTERM");
   }
 });
 
+function chatList() {
+  const thread = {
+    creatorId: "3zk7kbr",
+    threadKey: "t1",
+    fanKey: "fan",
+    fanHandle: "@fan",
+    fanName: "Fan de prueba",
+    lastMessageAt: "2026-01-02T00:00:00.000Z",
+    excerpt: "hola",
+    unread: 0,
+    lastFromFan: true,
+    spentCents: null,
+    subscribesCents: null,
+    tipsCents: null,
+    postsCents: null,
+    messagesCents: null,
+    avatarUrl: null,
+    online: null,
+    subPriceCents: null,
+    subExpiresAt: null,
+    renewAuto: null,
+    lists: null,
+  };
+  return {
+    runningCreatorIds: [],
+    threads: [thread],
+    messages: [],
+    meta: [],
+    pending: [],
+    notes: [],
+    profiles: [],
+    accounts: [],
+    sessionNotices: [],
+  };
+}
+
 function isVaultQuery(url: string): boolean {
-  return url.includes("cXVlcnlWYXVsdE1pcnJvc");
+  return url.includes("cXVlcnlWYXVsdE1pcnJvc") || serverExport(url).includes("queryVaultMirror");
+}
+
+function serverExport(url: string): string {
+  const raw = decodeURIComponent(url.split("/_serverFn/")[1]?.split("?")[0] ?? "");
+  if (!raw) return "";
+  try {
+    const parsed = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as { export?: string };
+    return parsed.export ?? "";
+  } catch {
+    return "";
+  }
+}
+
+async function savePanelShot(page: Page): Promise<string> {
+  const name = "boveda-panel-1440.png";
+  const artifacts = "/opt/cursor/artifacts";
+  try {
+    await mkdir(artifacts, { recursive: true });
+    const shotPath = path.join(artifacts, name);
+    await page.screenshot({ path: shotPath });
+    return shotPath;
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+    if (code !== "EACCES" && code !== "ENOENT") throw error;
+    const shotPath = path.join(tmpdir(), name);
+    await page.screenshot({ path: shotPath });
+    return shotPath;
+  }
 }
 
 function vaultView() {
@@ -146,6 +240,22 @@ function vaultView() {
       { ...card, id: "m2", title: "clip", kind: "video", seconds: 12, folder: "B/G LA DUCHA", listId: "ducha", listIds: ["ducha"], sentCount: null, sent: null, priceLabel: "$5.00", posted: null, offerLabel: "$5.00", dateLabel: "3 ene 26" },
       { ...card, id: "m3", title: "otra", kind: "foto", seconds: null, folder: "B/G LA DUCHA", listId: "ducha", listIds: ["ducha"], sentCount: null, sent: false, priceLabel: "Sin datos", posted: false, offerLabel: null, dateLabel: null },
       { ...card, id: "m4", title: "mas", kind: "foto", seconds: null, folder: null, listId: null, listIds: [], sentCount: null, sent: null, priceLabel: "Sin datos", posted: null, offerLabel: null, dateLabel: null },
+      ...Array.from({ length: 36 }, (_, index) => ({
+        ...card,
+        id: `m${index + 5}`,
+        title: index === 35 ? "ultimo" : `medio ${index + 5}`,
+        kind: "foto",
+        seconds: null,
+        folder: null,
+        listId: null,
+        listIds: [] as string[],
+        sentCount: null,
+        sent: null,
+        priceLabel: null,
+        posted: null,
+        offerLabel: null,
+        dateLabel: null,
+      })),
     ],
     query: {
       text: "", kinds: [], minSeconds: null, maxSeconds: null, uploadedFrom: null, uploadedTo: null, list: null, folderId: null,

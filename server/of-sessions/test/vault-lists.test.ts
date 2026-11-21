@@ -9,6 +9,7 @@ import { fetchSignedVault } from "../sync/of-chat-api.ts";
 import { clearSignRulesCache } from "../sync/of-sign.ts";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
 import type { ReadSql } from "../sync/store.ts";
+import { vaultFolderLabel } from "../../../src/lib/vault-folder-label.ts";
 import { emptyVaultQuery } from "../sync/vault-filter.ts";
 import { queryVaultForActor } from "../sync/vault-query.ts";
 import { clearVaultWalkCache, walkVault } from "../sync/vault-walk.ts";
@@ -251,6 +252,110 @@ test("dos lecturas de la misma cuenta esperan el hueco y no salen a la vez", asy
   } finally {
     clearSignRulesCache();
     clearAccountChatPace();
+  }
+});
+
+test("una subcarpeta custom usa photos, videos y list_id, y no se filtra por el título", async () => {
+  clearSignRulesCache();
+  clearVaultWalkCache();
+  const db = new PGlite();
+  const seen: string[] = [];
+  const lines: string[] = [];
+  const previous = console.info;
+  console.info = (line?: unknown) => {
+    lines.push(String(line));
+  };
+  try {
+    for (const file of ["0037_vault_mirror.sql", "0038_vault_fan_filter.sql", "0040_vault_full_tags.sql", "0042_vault_paid_with.sql", "0044_vault_thumb_page.sql", "0050_vault_list_counts.sql", "0051_vault_list_media.sql"]) {
+      await db.exec(await readFile(path.join(root, "migrations", file), "utf8"));
+    }
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const href = String(input);
+      seen.push(href);
+      if (href.includes("dynamic-rules")) return Response.json(RULES);
+      if (href.includes("/vault/lists")) {
+        const offset = Number(new URL(href).searchParams.get("offset") ?? "0");
+        if (offset === 0) {
+          return Response.json({
+            list: [
+              { id: 88001, type: "custom", name: "Custom Num", photos: 7, videos: 1 },
+              { id: "88001", name: "Custom Num", stats: { gifs: 2, audios: 0 } },
+            ],
+            all: { photos: 22, videos: 18 },
+            hasMore: true,
+          });
+        }
+        return Response.json({
+          list: [
+            { id: "sub", type: "custom", name: "Sub", bag: { photos: 3, videos: 4 } },
+            { id: "solo", type: "custom", name: "Solo", count: 9 },
+          ],
+          hasMore: false,
+        });
+      }
+      const url = new URL(href);
+      const list = url.searchParams.get("list_id");
+      const offset = Number(url.searchParams.get("offset") ?? "0");
+      if (!list && offset === 0) {
+        return Response.json({
+          list: [
+            ...Array.from({ length: 23 }, (_, index) => ({ id: index + 1, type: "photo" })),
+            { id: 500, type: "photo", listStates: [{ id: "otra", type: "custom", name: "Custom Num" }] },
+          ],
+          hasMore: true,
+        });
+      }
+      if (!list) return Response.json({ list: [{ id: 600, type: "video", duration: 2 }, { id: 601, type: "photo" }], hasMore: false });
+      if (list === "88001") return Response.json({ list: [{ id: 701, type: "photo" }, { id: "702", type: "video", duration: 4 }], hasMore: false });
+      if (list === "sub") return Response.json({ list: [{ id: "801", type: "photo" }], hasMore: false });
+      if (list === "solo") return Response.json({ list: [{ id: 901, type: "photo" }], hasMore: false });
+      return Response.json({ list: [], hasMore: false });
+    }) as typeof fetch;
+    const walked = await walkVault({
+      creatorId: "3zk7kbr",
+      state: storedState(),
+      fetch: fetchImpl,
+      now: () => 1_700_000_000_000,
+      sql: asSql(db),
+      sleep: async () => undefined,
+    });
+    assert.equal(walked.reason, null);
+    assert.ok(walked.items.length > 24);
+    assert.equal(seen.some((href) => href.includes("/vault/lists") && href.includes("offset=2")), true);
+    assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("list_id=88001")), true);
+    assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("list_id=sub")), true);
+    assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("list_id=solo")), true);
+    assert.equal(lines.some((line) => line.includes("itemClaves=") && line.includes("photos") && line.includes("videos")), true);
+    const actor = { userId: "dueña", role: "owner" as const, perms: ["vault"] };
+    const opened = await queryVaultForActor(asSql(db), actor, {
+      creatorId: "3zk7kbr",
+      remember: false,
+      query: { ...emptyVaultQuery(), folderId: "88001", scope: "carpeta" },
+    });
+    const folder = opened.payload.lists.find((list) => list.id === "88001");
+    assert.equal(folder?.photos, 7);
+    assert.equal(folder?.videos, 1);
+    assert.equal(folder?.gifs, 2);
+    assert.notEqual(vaultFolderLabel({
+      photos: folder?.photos ?? null,
+      videos: folder?.videos ?? null,
+      gifs: folder?.gifs ?? null,
+      audios: folder?.audios ?? null,
+      hasMedia: folder?.hasMedia ?? null,
+    }, { photos: 0, videos: 0, gifs: 0 }), "Sin datos");
+    assert.deepEqual(opened.payload.items.map((item) => item.id).sort(), ["701", "702"]);
+    const sub = await queryVaultForActor(asSql(db), actor, {
+      creatorId: "3zk7kbr",
+      remember: false,
+      query: { ...emptyVaultQuery(), folderId: "sub", scope: "carpeta" },
+    });
+    assert.deepEqual(sub.payload.items.map((item) => item.id), ["801"]);
+    assert.equal(sub.payload.lists.find((list) => list.id === "sub")?.photos, 3);
+  } finally {
+    console.info = previous;
+    clearSignRulesCache();
+    clearVaultWalkCache();
+    await db.close();
   }
 });
 

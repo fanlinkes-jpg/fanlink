@@ -60,6 +60,8 @@ test("la pestaña no sale de OnlyFans ni de su CDN", () => {
   assert.equal(liveRequestAllowed("https://challenges.cloudflare.com/cdn-cgi/challenge-platform/scripts/jsd/main.js"), true);
   assert.equal(liveRequestAllowed("https://challenges.cloudflare.com/cdn-cgi/challenge-platform/scripts/jsd/main.js", "POST"), true);
   assert.equal(liveRequestAllowed("https://www.cloudflare.com/login", "POST"), false);
+  assert.equal(liveRequestAllowed("https://evil.cloudflare.com/cdn-cgi/challenge", "POST"), false);
+  assert.equal(liveRequestAllowed("https://onlyfans.com/cdn-cgi/challenge-platform/h/b/flow", "POST"), true);
   assert.equal(liveRequestAllowed("https://example.com/"), false);
   assert.equal(liveRequestAllowed("https://onlyfans.com.evil/x"), false);
   assert.equal(liveRequestAllowed("about:blank"), true);

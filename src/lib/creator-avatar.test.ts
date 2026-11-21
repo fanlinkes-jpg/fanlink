@@ -9,11 +9,12 @@ import { readCreatorAvatar, writeCreatorAvatar } from "../../server/of-sessions/
 const accountId = "7816f9e7-3d30-4fe8-8719-c09cb516bca6";
 
 test("la foto sale de users/me y rechaza http, query y secretos", () => {
-  assert.equal(creatorAvatarOf({ avatar: "https://cdn.example/a.jpg" }), "https://cdn.example/a.jpg");
-  assert.equal(creatorAvatarOf({ avatarThumbs: { c50: "https://cdn.example/t.jpg" } }), "https://cdn.example/t.jpg");
-  assert.equal(creatorAvatarOf({ avatar: "http://cdn.example/a.jpg" }), null);
-  assert.equal(creatorAvatarOf({ avatar: "https://cdn.example/a.jpg?token=secreto" }), null);
-  assert.equal(creatorAvatarOf({ user: { avatar: "https://user:secreto@cdn.example/a.jpg" } }), null);
+  assert.equal(creatorAvatarOf({ avatar: "https://public.onlyfans.com/a.jpg" }), "https://public.onlyfans.com/a.jpg");
+  assert.equal(creatorAvatarOf({ avatarThumbs: { c50: "https://cdn2.onlyfans.com/t.jpg" } }), "https://cdn2.onlyfans.com/t.jpg");
+  assert.equal(creatorAvatarOf({ avatar: "https://cdn.example/a.jpg" }), null);
+  assert.equal(creatorAvatarOf({ avatar: "http://public.onlyfans.com/a.jpg" }), null);
+  assert.equal(creatorAvatarOf({ avatar: "https://public.onlyfans.com/a.jpg?token=secreto" }), null);
+  assert.equal(creatorAvatarOf({ user: { avatar: "https://user:secreto@public.onlyfans.com/a.jpg" } }), null);
   assert.equal(creatorAvatarOf({ name: "Jose" }), null);
 });
 
@@ -21,8 +22,8 @@ test("la caché de la foto caduca y no hace falta volver a pedirla antes", async
   const dir = await mkdtemp(path.join(tmpdir(), "fanlink-avatar-"));
   try {
     const now = 1_000_000;
-    await writeCreatorAvatar(dir, accountId, "https://cdn.example/jose.jpg", now);
-    assert.equal(await readCreatorAvatar(dir, accountId, now + 1000), "https://cdn.example/jose.jpg");
+    await writeCreatorAvatar(dir, accountId, "https://public.onlyfans.com/jose.jpg", now);
+    assert.equal(await readCreatorAvatar(dir, accountId, now + 1000), "https://public.onlyfans.com/jose.jpg");
     assert.equal(await readCreatorAvatar(dir, accountId, now + 6 * 60 * 60 * 1000 + 1), null);
   } finally {
     await rm(dir, { recursive: true, force: true });

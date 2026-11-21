@@ -5,11 +5,14 @@ export type VaultFolderCounts = {
   audios: number | null;
   /** null si el JSON de la lista no trae hasMedia. */
   hasMedia: boolean | null;
+  /** Total suelto, si no hay desglose. */
+  count?: number | null;
 };
 
 /** El texto de la carpeta. «vacío» solo si OnlyFans dice que no hay medios. */
 export function vaultFolderLabel(counts: VaultFolderCounts, loaded: { photos: number; videos: number; gifs: number }): string {
   const known = counts.photos != null || counts.videos != null || counts.gifs != null || counts.audios != null;
+  if (!known && counts.count != null && counts.count > 0) return `${counts.count} medios`;
   const photos = shownCount(counts.photos, loaded.photos);
   const videos = shownCount(counts.videos, loaded.videos);
   const gifs = shownCount(counts.gifs, loaded.gifs);

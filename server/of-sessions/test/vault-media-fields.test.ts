@@ -56,6 +56,14 @@ test("el medio usa hasPosts, hasMessages y messagesCount, no las compras", () =>
   assert.equal(video?.clipUrl, "https://cdn2.onlyfans.com/files/light.mp4");
   const photo = bundle.items.find((item) => item.id === "10");
   assert.equal(photo?.tags.includes("Feed"), false);
+  const inPosts = parseVaultBundle({
+    list: [{
+      id: 11,
+      type: "photo",
+      listStates: [{ id: "30436422", type: "posts", name: "Posts" }],
+    }],
+  }).items.find((item) => item.id === "11");
+  assert.equal(inPosts?.tags.includes("Feed"), false);
   assert.equal(photo?.tags.includes("Feed:no"), false);
   assert.equal(photo?.sentCount, null);
   assert.equal(photo?.priceCents, null);

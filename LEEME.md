@@ -11,7 +11,7 @@ Son dos cosas distintas.
 
 ## Cómo ejecutarlo
 
-Hace falta Node `>=22.3`. `.nvmrc` fija `22.3.0`. La huella de una clave larga usa `process.getBuiltinModule`.
+Hace falta Node `>=22.13`. `.nvmrc` fija `22.13.0`. En 22.3 y 22.12 `node:sqlite` no existe y tumba el proceso. La huella de una clave larga usa `process.getBuiltinModule`.
 
 ```bash
 npm install
@@ -189,7 +189,10 @@ Con Postgres (`DATABASE_URL`) la tabla persiste. Sin esa variable el CRM usa el 
 - `FANLINK_ENABLE_SEND` — `true` solo si vas a enviar chats de verdad. Sin esta variable, o con otro valor, no se envía nada.
 - `FANLINK_SEND_ALLOW_ACCOUNTS` — ids o handles de las creadoras que sí pueden enviar. Ejemplo de la cuenta de prueba: `9ikis52,@bigpoppa1111`. El resto sigue apagado. La misma lista abre la pestaña OnlyFans en directo.
 - `FANLINK_LIVE_VIEW_ENABLED` — `true` solo para ver la página real de OnlyFans dentro del CRM. Sin esta variable sigue apagada y Mensajes es la bandeja del CRM: no se borra. Teclear y subir archivos exigen también `FANLINK_ENABLE_SEND=true`; si no, la pestaña es solo lectura. El socket solo existe con `npm run dev`. En el proceso de despliegue (`node .output/server`) no hay directo: se queda la bandeja.
-- `FANLINK_LIVE_FPS` — fotogramas del screencast, de 1 a 8. Por defecto 4. Hay como máximo 4 visores.
+- `FANLINK_LIVE_FPS` — fotogramas del screencast, de 1 a 30. Por defecto 16 (`liveFps("100")` también devuelve 16). Hay como máximo 4 visores.
+- `FANLINK_LIVE_VIEW_CHROME_PATH` — binario de Chrome o Chromium para la vista nativa. Si no está, se usa el de Playwright.
+- `FANLINK_LIVE_VIEW_DEBUG` — `true` escribe el diagnóstico `[fanlink:live]`. Apagado si no se define.
+- `FANLINK_LIVE_VIEW_HEADLESS` — `true` abre la vista sin ventana. Sin esta variable, en un escritorio se ve la ventana.
 - `FANLINK_LIVE_QUALITY` — calidad JPEG, de 20 a 80. Por defecto 40.
 - `FANLINK_LIVE_IDLE_MS` — suelta el control si quien lo tiene no toca la pestaña. Quien solo mira sigue dentro. Por defecto 90 segundos.
 - `FANLINK_LIVE_GRACE_MS` — una sala en directo sin visores se cierra tras esta espera y suelta el perfil. Por defecto 60 segundos, entre 0 y 30 minutos. `FANLINK_LIVE_ROOM_GRACE_MS` sigue valiendo (hasta 120 segundos) si la otra no está.
