@@ -196,6 +196,8 @@ export function DashboardPage() {
               vista={zone.vista}
               allowed={reportsOk}
               panelOk={panelOk}
+              period={period}
+              onPeriod={setPeriod}
               onView={openReport}
             />
           ) : current === "resumen" ? (
@@ -215,11 +217,15 @@ function ReportsPanel({
   vista,
   allowed,
   panelOk,
+  period,
+  onPeriod,
   onView,
 }: {
   vista: ReportView;
   allowed: boolean;
   panelOk: boolean;
+  period: MetricPeriod;
+  onPeriod: (period: MetricPeriod) => void;
   onView: (vista: ReportView) => void;
 }) {
   const tabs = reportTabsFor(panelOk);
@@ -244,16 +250,16 @@ function ReportsPanel({
           </button>
         ))}
       </div>
-      <ReportBody vista={vista} panelOk={panelOk} />
+      <ReportBody vista={vista} panelOk={panelOk} period={period} onPeriod={onPeriod} />
     </div>
   );
 }
 
-function ReportBody({ vista, panelOk }: { vista: ReportView; panelOk: boolean }) {
+function ReportBody({ vista, panelOk, period, onPeriod }: { vista: ReportView; panelOk: boolean; period: MetricPeriod; onPeriod: (period: MetricPeriod) => void }) {
   const kind = reportBodyKind(vista, panelOk);
   switch (kind) {
     case "analytics":
-      return <AnalyticsPage key={vista} initialView={vista === "mensajes" ? "creadoras" : vista} embedded />;
+      return <AnalyticsPage key={vista} initialView={vista === "mensajes" ? "creadoras" : vista} embedded period={period} onPeriod={onPeriod} />;
     case "audit":
       return <AuditPage />;
     case "denied":
