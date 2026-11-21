@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseVaultBundle, stampVaultList } from "../sync/vault-model.ts";
+import { parseVaultBundle, stampVaultList, videoShapeLine } from "../sync/vault-model.ts";
 import { playbackUrl } from "../sync/vault-store.ts";
 import { clearVaultThumbs, getVaultThumb, hasFtyp, putVaultThumb, videoBytesAccepted, videoFollowUp } from "../sync/media-bytes.ts";
 import { folderColumnView } from "../../../src/lib/vault-folder-label.ts";
@@ -169,6 +169,37 @@ test("un vídeo con la forma real usa el mp4 y no la miniatura", () => {
     }],
   }).items[0];
   assert.equal(bare?.fullUrl, "https://cdn3.onlyfans.com/files/abc?Policy=sek");
+  const jose = videoShapeLine({
+    files: { full: { url: "https://cdn2.onlyfans.com/files/a.mp4" } },
+    videoSources: { "240": "https://cdn2.onlyfans.com/files/240.mp4", "720": null },
+  });
+  assert.equal(jose.includes("https"), false);
+  assert.match(jose, /files\.full=objeto url:ext/);
+  assert.match(jose, /240:ext/);
+  assert.match(jose, /720:ausente/);
+  const allisonRow = {
+    id: 3,
+    type: "video",
+    files: { full: { url: "https://cdn2.onlyfans.com/files/poster.jpg" } },
+    videoSources: { "720": { src: "https://cdn3.onlyfans.com/file/abc?Policy=sek&Signature=abc" } },
+  };
+  const allison = videoShapeLine(allisonRow);
+  assert.equal(allison.includes("https://"), false);
+  assert.equal(allison.includes("sek"), false);
+  assert.match(allison, /files\.full=objeto url:imagen/);
+  assert.match(allison, /720:objeto url:ausente src:sin-ext\+firma/);
+  const played = parseVaultBundle({ list: [allisonRow] }).items[0];
+  assert.equal(played?.fullUrl, "https://cdn3.onlyfans.com/file/abc?Policy=sek&Signature=abc");
+  assert.equal(played?.clipUrl, played?.fullUrl);
+  const poster = parseVaultBundle({
+    list: [{
+      id: 4,
+      type: "video",
+      files: { full: { url: "https://cdn2.onlyfans.com/files/poster.jpg", src: "https://cdn3.onlyfans.com/file/abc?Policy=sek" } },
+    }],
+  }).items[0];
+  assert.equal(poster?.fullUrl, "https://cdn3.onlyfans.com/file/abc?Policy=sek");
+  assert.equal(poster?.clipUrl ?? null, null);
   clearVaultThumbs();
   putVaultThumb("c-1", "9", Uint8Array.from([1]), "image/jpeg", "preview");
   assert.equal(getVaultThumb("c-1", "9", "full"), null);

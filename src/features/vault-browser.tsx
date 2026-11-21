@@ -526,7 +526,9 @@ function HoverClip({ src, title }: { src: string; title: string }) {
   const node = useRef<HTMLVideoElement>(null);
   useEffect(() => {
     const video = node.current;
+    const handle = setTimeout(() => setFailed(true), 12_000);
     return () => {
+      clearTimeout(handle);
       if (!video) return;
       video.pause();
       video.removeAttribute("src");
@@ -551,8 +553,14 @@ function HoverClip({ src, title }: { src: string; title: string }) {
 }
 
 function VaultPlayback({ src }: { src: string }) {
-  const [failed, setFailed] = useState(false);
-  if (failed) return <p className="text-sm text-white">Vídeo no disponible</p>;
+  const [state, setState] = useState<"carga" | "ok" | "error" | "timeout">("carga");
+  useEffect(() => {
+    setState("carga");
+    const handle = setTimeout(() => setState((current) => current === "carga" ? "timeout" : current), 20_000);
+    return () => clearTimeout(handle);
+  }, [src]);
+  if (state === "timeout") return <p className="text-sm text-white">No se ha podido cargar el vídeo</p>;
+  if (state === "error") return <p className="text-sm text-white">Vídeo no disponible</p>;
   return (
     <video
       controls
@@ -560,7 +568,8 @@ function VaultPlayback({ src }: { src: string }) {
       playsInline
       className="h-full w-full bg-black object-contain"
       src={src}
-      onError={() => setFailed(true)}
+      onCanPlay={() => setState("ok")}
+      onError={() => setState("error")}
     />
   );
 }

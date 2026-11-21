@@ -5,13 +5,16 @@ import { loadSaleContext } from "../sync/vault-store.ts";
 import type { ReadSql } from "../sync/store.ts";
 import { creatorAllowed, queryVaultForActor, type VaultActor } from "../sync/vault-query.ts";
 import type { MassEnv } from "../../../src/lib/mass/gates.ts";
+import { liveViewDebug } from "../live/debug.ts";
+import { vaultFolderMark } from "../sync/vault-model.ts";
 import { getVaultThumb, type MediaBytes } from "../sync/media-bytes.ts";
 
 export type SessionActor = VaultActor | null;
 
 export function mediaLogLine(creatorId: string, messageKey: string): string {
   const clean = (value: string) => value.replace(/https?:\/\/\S+/gi, "").replace(/\s+/g, " ").trim().slice(0, 80);
-  return `[fanlink:media] creator=${clean(creatorId)} message=${clean(messageKey)}`;
+  const message = liveViewDebug() ? clean(messageKey) : vaultFolderMark(messageKey);
+  return `[fanlink:media] creator=${clean(creatorId)} message=${message}`;
 }
 
 export async function handleVaultQuery(request: Request, deps: {

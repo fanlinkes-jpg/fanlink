@@ -7,7 +7,7 @@ import { handleVaultMedia } from "../../../server/of-sessions/http/vault-http.ts
 import { readSessionMediaResult, videoBytesAccepted, videoFollowUp } from "../../../server/of-sessions/sync/media-bytes.ts";
 import { accountCreatorIds } from "../../../server/of-sessions/http/vault-accounts.ts";
 import { fetchSignedVault } from "../../../server/of-sessions/sync/of-chat-api.ts";
-import { parseVaultBundle } from "../../../server/of-sessions/sync/vault-model.ts";
+import { parseVaultBundle, vaultFolderMark } from "../../../server/of-sessions/sync/vault-model.ts";
 import { loadFreshPreview, normalizeVaultOffset, reloadVaultPreview } from "../../../server/of-sessions/sync/vault-thumbs.ts";
 import { openProfileThumbs } from "../../../server/of-sessions/sync/vault-owner.ts";
 import { playbackUrl, saveVaultPreview, storedVaultMediaUrls, storedVaultPage } from "../../../server/of-sessions/sync/vault-store.ts";
@@ -33,7 +33,9 @@ export const Route = createFileRoute("/api/vault-media")({
             findPreview: async (creator, id, wanted) => {
               const urls = await storedVaultMediaUrls(sql, creator, id);
               expectVideo = urls.kind === "video" && (wanted === "full" || wanted === "clip");
-              return playbackUrl(urls, wanted ?? "preview", urls.kind);
+              const picked = playbackUrl(urls, wanted ?? "preview", urls.kind);
+              if (expectVideo && !picked) console.info(`[fanlink:vault] video medio=${vaultFolderMark(id)} motivo=sin-url`);
+              return picked;
             },
             fetchBytes: async (target, range) => {
               if (expectVideo || range) {

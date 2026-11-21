@@ -203,9 +203,11 @@ export function videoFollowUp(status: number, contentType: string | null, expect
 
 async function loadMedia(target: string, headers: Record<string, string>, expectVideo = false): Promise<LoadResult> {
   let response: Response;
+  const signal = expectVideo ? AbortSignal.timeout(20_000) : undefined;
   try {
-    response = await fetch(target, { headers, redirect: "manual" });
-  } catch {
+    response = await fetch(target, { headers, redirect: "manual", signal });
+  } catch (error) {
+    if (expectVideo && isTimeoutError(error)) console.info("[fanlink:vault] reproductor error motivo=timeout");
     return { status: 0 };
   }
   if (response.status >= 300 && response.status < 400) {
@@ -213,8 +215,9 @@ async function loadMedia(target: string, headers: Record<string, string>, expect
     await response.body?.cancel().catch(() => undefined);
     if (!next) return { status: response.status };
     try {
-      response = await fetch(next, { headers, redirect: "manual" });
-    } catch {
+      response = await fetch(next, { headers, redirect: "manual", signal });
+    } catch (error) {
+      if (expectVideo && isTimeoutError(error)) console.info("[fanlink:vault] reproductor error motivo=timeout");
       return { status: 0 };
     }
   }
@@ -270,6 +273,10 @@ const thumbRecovered = new Set<string>();
 export function mediaAcceptHeader(target: string, _range: string | null, expectVideo = false): string {
   if (expectVideo || isVideoTarget(target)) return "video/*,*/*";
   return "image/avif,image/webp,image/apng,image/*,*/*;q=0.8";
+}
+
+function isTimeoutError(error: unknown): boolean {
+  return error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
 }
 
 function ambiguousVideoType(type: string): boolean {

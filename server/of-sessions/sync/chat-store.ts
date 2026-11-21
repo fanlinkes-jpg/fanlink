@@ -1,3 +1,5 @@
+import { liveViewDebug } from "../live/debug.ts";
+import { vaultFolderMark } from "./vault-model.ts";
 import { normalizeOutboundText, outboundTextDelta, OUTBOUND_TIE_MS, type OutboundDraft } from "./author-match.ts";
 import { ONLINE_STALE_REASON } from "../send/online-claim.ts";
 import { newFanEvents, collapseFans, type ChatMessage, type ChatThread, type ChatUser, type FanMessageEvent } from "./chats.ts";
@@ -256,9 +258,11 @@ export async function saveChatRead(
     throw error;
   }
   for (const event of events) {
-    console.info(
-      `[fanlink:chat] new_fan_message creator=${event.creatorId} fan=${event.fanName ?? event.fanKey ?? "fan"} at=${event.sentAt} excerpt=${event.excerpt}`,
-    );
+    const fan = liveViewDebug()
+      ? (event.fanName ?? event.fanKey ?? "fan")
+      : vaultFolderMark(event.fanKey ?? event.fanName ?? "fan");
+    const excerpt = liveViewDebug() ? ` excerpt=${event.excerpt}` : "";
+    console.info(`[fanlink:chat] new_fan_message creator=${event.creatorId} fan=${fan} at=${event.sentAt}${excerpt}`);
   }
   return events;
 }
