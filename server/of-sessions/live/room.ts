@@ -5,7 +5,9 @@ import {
   claimControl,
   draftAfterKey,
   draftAfterPaste,
+  liveChallengeControl,
   liveControlAllowed,
+  liveDeskBrowse,
   liveFps,
   liveLog,
   liveRoomKey,
@@ -17,7 +19,10 @@ import {
   takeLiveEventSlot,
   type LiveRole,
 } from "./desk.ts";
+import { LIVE_LOGIN_NOTICE } from "./challenge.ts";
+import { isTargetClosedMessage, LIVE_CLOSED_NOTICE, shouldReviveLive } from "./closed.ts";
 import { startLiveCast, type LiveCast } from "./session.ts";
+import { liveContextOpen } from "./window.ts";
 import { noteLiveHold, registerLiveStopper, releaseLiveHold } from "./hold.ts";
 import { takeLiveTicket, type LiveTicket } from "./tickets.ts";
 
@@ -34,7 +39,13 @@ type Room = {
   draftBody: string;
   holderUsedAt: number;
   cast: LiveCast | null;
+  context: BrowserContext | null;
   release: (() => Promise<void>) | null;
+  reviving: boolean;
+  revives: number;
+  opening: boolean;
+  closing: boolean;
+  loginSeen: boolean;
   controlTimer: ReturnType<typeof setTimeout> | null;
   idle: ReturnType<typeof setTimeout> | null;
   notice: string;
@@ -124,7 +135,17 @@ export async function joinLive(socket: WebSocket, ticketId: string): Promise<voi
     return;
   }
   try {
-    const room = await ensureRoom(ticket);
+    sendJson(socket, { type: "phase", name: "navegador" });
+    const earlySize: { current: { width: number; height: number } | null } = { current: null };
+    const rememberSize = (data: RawData, isBinary: boolean) => {
+      if (isBinary) return;
+      const text = typeof data === "string" ? data : data.toString("utf8");
+      const event = parseLiveEvent(text);
+      if (event?.type === "resize") earlySize.current = { width: event.width, height: event.height };
+    };
+    socket.on("message", rememberSize);
+    const room = await ensureRoom(ticket, (name) => sendJson(socket, { type: "phase", name }));
+    socket.off("message", rememberSize);
     if (room.idle) {
       clearTimeout(room.idle);
       room.idle = null;
@@ -141,6 +162,9 @@ export async function joinLive(socket: WebSocket, ticketId: string): Promise<voi
   room.holder = claimed.holder;
   const viewer: Viewer = { socket, userId: ticket.userId, role: claimed.role, stamps: [] };
   room.viewers.push(viewer);
+  if (earlySize.current && room.cast) {
+    void room.cast.send({ type: "resize", width: earlySize.current.width, height: earlySize.current.height });
+  }
   sendJson(socket, statusOf(room, viewer.role));
   if (room.notice) sendJson(socket, { type: "notice", reason: room.notice });
   if (claimed.role === "control") {
@@ -177,20 +201,24 @@ function liveFailureText(error: unknown): string {
   return line.replace(/\/Users\/\S+/g, "…").slice(0, 160);
 }
 
-async function ensureRoom(ticket: LiveTicket): Promise<Room> {
+async function ensureRoom(ticket: LiveTicket, onPhase?: (name: string) => void): Promise<Room> {
   const key = liveRoomKey(ticket.accountId, ticket.threadKey, ticket.section);
   const pending = opening.get(key);
   if (pending) {
     const room = await pending;
     room.ticket = ticket;
+    onPhase?.("carga");
+    console.info(`[fanlink:navegador] vista=live reutilizo sala perfil=${ticket.accountId}`);
     return room;
   }
   const existing = rooms.get(key);
   if (existing) {
     existing.ticket = ticket;
+    onPhase?.("carga");
+    console.info(`[fanlink:navegador] vista=live reutilizo sala perfil=${ticket.accountId}`);
     return existing;
   }
-  const job = openFreshRoom(ticket, key);
+  const job = openFreshRoom(ticket, key, onPhase);
   opening.set(key, job);
   try {
     return await job;
@@ -199,7 +227,7 @@ async function ensureRoom(ticket: LiveTicket): Promise<Room> {
   }
 }
 
-async function openFreshRoom(ticket: LiveTicket, key: string): Promise<Room> {
+async function openFreshRoom(ticket: LiveTicket, key: string, onPhase?: (name: string) => void): Promise<Room> {
   const room: Room = {
     key,
     accountId: ticket.accountId,
@@ -211,7 +239,13 @@ async function openFreshRoom(ticket: LiveTicket, key: string): Promise<Room> {
     draftBody: "",
     holderUsedAt: Date.now(),
     cast: null,
+    context: null,
     release: null,
+    reviving: false,
+    revives: 0,
+    opening: false,
+    closing: false,
+    loginSeen: false,
     controlTimer: null,
     idle: null,
     notice: "",
@@ -219,77 +253,7 @@ async function openFreshRoom(ticket: LiveTicket, key: string): Promise<Room> {
   rooms.set(key, room);
   noteLiveHold(ticket.accountId);
   try {
-    const borrowed = liveOpener
-      ? await liveOpener.borrow(ticket.accountId)
-      : await borrowAccount(ticket.accountId);
-    if (rooms.get(key) !== room) {
-      await borrowed.release().catch(() => undefined);
-      throw new Error("La sala se cerró.");
-    }
-    room.release = borrowed.release;
-    const openCast = liveOpener?.open ?? startLiveCast;
-    room.cast = await openCast({
-      context: borrowed.context,
-      accountId: ticket.accountId,
-      threadKey: ticket.threadKey,
-      fanKey: ticket.fanKey,
-      accountUserId: ticket.accountUserId,
-      section: ticket.section,
-      onFrame: (frame) => {
-        for (const viewer of room.viewers) {
-          if (viewer.socket.readyState === viewer.socket.OPEN) viewer.socket.send(frame.jpeg);
-        }
-      },
-      onFile: () => {
-        const controller = room.viewers.find((viewer) => viewer.role === "control" && liveTypingEnabled());
-        if (controller) sendJson(controller.socket, { type: "file" });
-      },
-      onNotice: (reason) => {
-        room.notice = reason;
-        for (const viewer of room.viewers) {
-          sendJson(viewer.socket, { type: "notice", reason });
-        }
-      },
-      onOwnMessage: (message) => {
-        const holder = room.holder;
-        const since = room.heldSince;
-        if (!holder || !since) return;
-        const observedAt = new Date().toISOString();
-        if (!liveSendMatchesGesture({
-          messageId: message.messageId,
-          sentAt: message.sentAt,
-          controlSince: since,
-          existingAuthorId: null,
-          gestureAt: room.lastGestureAt,
-          now: observedAt,
-          body: message.body,
-          draftBody: room.draftBody,
-        })) return;
-        void import("../../../src/lib/db.ts").then(async ({ getSql }) => attributeLiveSend(await getSql(), {
-          id: crypto.randomUUID(),
-          creatorId: room.ticket.creatorId,
-          threadKey: room.ticket.threadKey,
-          fanKey: room.ticket.fanKey,
-          authorId: holder,
-          body: message.body,
-          priceCents: message.priceCents,
-          messageId: message.messageId,
-          createdAt: new Date().toISOString(),
-          sentAt: message.sentAt,
-          controlSince: since,
-          gestureAt: room.lastGestureAt,
-          observedAt,
-          draftBody: room.draftBody,
-        })).catch(() => undefined);
-      },
-    });
-    if (rooms.get(key) !== room) {
-      await room.cast?.stop().catch(() => undefined);
-      await room.release?.().catch(() => undefined);
-      room.cast = null;
-      room.release = null;
-      throw new Error("La sala se cerró.");
-    }
+    await openBorrowed(room, ticket, onPhase);
   } catch (error) {
     console.info(liveLog("error", { accountId: ticket.accountId, detail: error instanceof Error ? error.message.split("\n")[0] : "no se pudo abrir" }));
     if (rooms.get(key) === room) await stopRoom(room);
@@ -304,11 +268,186 @@ async function openFreshRoom(ticket: LiveTicket, key: string): Promise<Room> {
   return room;
 }
 
+async function openCast(room: Room, ticket: LiveTicket, context: BrowserContext): Promise<void> {
+  const open = liveOpener?.open ?? startLiveCast;
+  room.cast = await open({
+    context,
+    accountId: ticket.accountId,
+    threadKey: ticket.threadKey,
+    fanKey: ticket.fanKey,
+    accountUserId: ticket.accountUserId,
+    section: ticket.section,
+    onFrame: (frame) => {
+      for (const viewer of room.viewers) {
+        const socket = viewer.socket;
+        if (socket.readyState !== socket.OPEN) continue;
+        if (socket.bufferedAmount > 180_000) continue;
+        socket.send(frame.jpeg);
+      }
+    },
+    onFile: () => {
+      const controller = room.viewers.find((viewer) => viewer.role === "control" && liveTypingEnabled());
+      if (controller) sendJson(controller.socket, { type: "file" });
+    },
+    onNotice: (reason) => {
+      room.notice = reason;
+      for (const viewer of room.viewers) {
+        sendJson(viewer.socket, { type: "notice", reason });
+      }
+    },
+    onClosed: (reason) => {
+      void reviveOrStop(room, ticket, reason);
+    },
+    onLogin: () => {
+      room.loginSeen = true;
+    },
+    onOwnMessage: (message) => {
+      const holder = room.holder;
+      const since = room.heldSince;
+      if (!holder || !since) return;
+      const observedAt = new Date().toISOString();
+      if (!liveSendMatchesGesture({
+        messageId: message.messageId,
+        sentAt: message.sentAt,
+        controlSince: since,
+        existingAuthorId: null,
+        gestureAt: room.lastGestureAt,
+        now: observedAt,
+        body: message.body,
+        draftBody: room.draftBody,
+      })) return;
+      void import("../../../src/lib/db.ts").then(async ({ getSql }) => attributeLiveSend(await getSql(), {
+        id: crypto.randomUUID(),
+        creatorId: room.ticket.creatorId,
+        threadKey: room.ticket.threadKey,
+        fanKey: room.ticket.fanKey,
+        authorId: holder,
+        body: message.body,
+        priceCents: message.priceCents,
+        messageId: message.messageId,
+        createdAt: new Date().toISOString(),
+        sentAt: message.sentAt,
+        controlSince: since,
+        gestureAt: room.lastGestureAt,
+        observedAt,
+        draftBody: room.draftBody,
+      })).catch(() => undefined);
+    },
+  });
+}
+
+async function openBorrowed(room: Room, ticket: LiveTicket, onPhase?: (name: string) => void): Promise<void> {
+  onPhase?.("perfil");
+  const borrowed = liveOpener
+    ? await liveOpener.borrow(ticket.accountId)
+    : await borrowAccount(ticket.accountId);
+  if (rooms.get(room.key) !== room) {
+    await borrowed.release().catch(() => undefined);
+    throw new Error("La sala se cerró.");
+  }
+  room.release = borrowed.release;
+  room.context = borrowed.context;
+  room.opening = true;
+  onPhase?.("carga");
+  try {
+    await openCast(room, ticket, borrowed.context);
+    if (rooms.get(room.key) !== room) {
+      await room.cast?.stop().catch(() => undefined);
+      await room.release?.().catch(() => undefined);
+      room.cast = null;
+      room.release = null;
+      throw new Error("La sala se cerró.");
+    }
+    if (room.loginSeen) {
+      room.revives = 1;
+      await room.cast?.stop().catch(() => undefined);
+      await room.release?.().catch(() => undefined);
+      room.cast = null;
+      room.release = null;
+      throw new Error(LIVE_LOGIN_NOTICE);
+    }
+  } catch (error) {
+    await room.cast?.stop().catch(() => undefined);
+    await room.release?.().catch(() => undefined);
+    room.cast = null;
+    room.release = null;
+    const message = error instanceof Error ? error.message : "";
+    if (rooms.get(room.key) === room && shouldReviveLive(room.revives) && isTargetClosedMessage(message)) {
+      room.revives += 1;
+      console.info(liveLog("error", { accountId: ticket.accountId, detail: "reabre" }));
+      await openBorrowed(room, ticket);
+      return;
+    }
+    throw error;
+  } finally {
+    room.opening = false;
+  }
+}
+
+async function reviveOrStop(room: Room, ticket: LiveTicket, reason: string): Promise<void> {
+  if (room.closing || room.opening || room.reviving || rooms.get(room.key) !== room) return;
+  if (room.viewers.length === 0) return;
+  room.reviving = true;
+  room.revives = 1;
+  console.info(`[fanlink:navegador] vista=live relanzo perfil=${room.accountId}`);
+  let failure = reason;
+  try {
+    await room.cast?.stop().catch(() => undefined);
+    room.cast = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const alive = room.context != null && room.release != null && liveContextOpen(room.context);
+      if (!alive) {
+        await room.release?.().catch(() => undefined);
+        room.release = null;
+        room.context = null;
+      }
+      try {
+        if (alive && room.context) {
+          await openCast(room, ticket, room.context);
+          if (room.loginSeen) throw new Error(LIVE_LOGIN_NOTICE);
+        } else {
+          await openBorrowed(room, ticket);
+        }
+        room.revives = 0;
+        console.info(`[fanlink:navegador] vista=live relanzo perfil=${room.accountId} ok=si`);
+        return;
+      } catch (error) {
+        const message = error instanceof Error ? error.message.split("\n")[0] ?? "" : "";
+        failure = message.length > 0 ? message : LIVE_CLOSED_NOTICE;
+        if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
+      }
+    }
+  } finally {
+    room.reviving = false;
+  }
+  room.closing = true;
+  console.info(liveLog("error", { accountId: room.accountId, detail: failure }));
+  if (rooms.get(room.key) === room) await stopRoom(room, failure.slice(0, 160));
+}
+
 async function onClientMessage(room: Room, viewer: Viewer, raw: string): Promise<void> {
   const event = parseLiveEvent(raw);
   if (!event || event.type === "auth") return;
-  if (!takeLiveEventSlot(viewer.stamps, Date.now())) return;
+  if (event.type === "mouse" && event.action === "move" && !takeLiveEventSlot(viewer.stamps, Date.now())) return;
   const typing = liveTypingEnabled();
+  if (
+    room.cast &&
+    (event.type === "mouse" || event.type === "wheel" || event.type === "key" || event.type === "text" || event.type === "resize") &&
+    liveDeskBrowse(room.ticket.section, viewer.role, event.type)
+  ) {
+    noteControl(room);
+    await room.cast.send(event);
+    return;
+  }
+  if (
+    (event.type === "mouse" || event.type === "wheel" || event.type === "key" || event.type === "text") &&
+    liveChallengeControl(room.notice.trim().length > 0, viewer.role, event.type)
+  ) {
+    if (!room.cast) return;
+    noteControl(room);
+    await room.cast.send(event);
+    return;
+  }
   if ((event.type === "mouse" || event.type === "wheel") && viewer.role === "control" && room.cast) {
     if (event.type === "wheel" || (event.type === "mouse" && event.action === "move")) {
       if (!liveControlAllowed(typing, viewer.role, event.type, "scroll")) return;

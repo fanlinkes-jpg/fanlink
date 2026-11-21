@@ -1,13 +1,54 @@
-import { accountOnAllowlist, allowTokens, type SendAccount } from "../send/gate.ts";
 import { liveSectionPrefixes, liveSectionPathAllowed, type LiveSection } from "./sections.ts";
 
 export type LiveRole = "control" | "view";
 
 export function liveFps(raw: string | undefined): number {
-  if (raw == null || raw.trim() === "") return 4;
+  if (raw == null || raw.trim() === "") return 16;
   const value = Number(raw);
-  if (!Number.isInteger(value) || value < 1 || value > 8) return 4;
+  if (!Number.isInteger(value) || value < 1 || value > 30) return 16;
   return value;
+}
+
+/** Más fotogramas mientras hay puntero o teclado. En reposo se baja. */
+export function liveCastFps(base: number, hot: boolean): number {
+  const floor = Math.min(30, Math.max(1, Math.round(base)));
+  if (hot) return Math.min(30, Math.max(floor, 24));
+  return Math.min(floor, 10);
+}
+
+/** JPEG más pequeño cuando el ritmo sube, para no llenar el socket. */
+export function liveCastQuality(base: number, hot: boolean): number {
+  const floor = Math.min(80, Math.max(20, Math.round(base)));
+  if (hot) return Math.min(floor, 48);
+  return Math.min(80, Math.max(floor, 64));
+}
+
+/** La pantalla de la huella. El visor puede ser otro tamaño; `screen` no. */
+export const LIVE_SCREEN = { width: 1440, height: 900 } as const;
+
+export function livePageMetrics(width: number, height: number): {
+  width: number;
+  height: number;
+  deviceScaleFactor: number;
+  mobile: false;
+  screenWidth: number;
+  screenHeight: number;
+} {
+  return {
+    width: Math.min(2560, Math.max(320, Math.round(width))),
+    height: Math.min(1600, Math.max(240, Math.round(height))),
+    deviceScaleFactor: 1,
+    mobile: false,
+    screenWidth: LIVE_SCREEN.width,
+    screenHeight: LIVE_SCREEN.height,
+  };
+}
+
+/** 8 s sin imagen: reinicia el screencast una vez y, si sigue mudo, relanza. */
+export function liveCastStall(silentMs: number, restarts: number): "espera" | "reinicio" | "relanzo" {
+  if (silentMs < 8_000) return "espera";
+  if (restarts < 1) return "reinicio";
+  return "relanzo";
 }
 
 export function liveQuality(raw: string | undefined): number {
@@ -17,16 +58,13 @@ export function liveQuality(raw: string | undefined): number {
   return value;
 }
 
-/** Teclear en la pestaña es enviar. Mismo candado que el envío: flag y allowlist. */
-export function liveViewGate(
-  flag: string | undefined,
-  allowlist: string | undefined,
-  account: SendAccount,
-): { allowed: boolean; reason: string } {
+/**
+ * La vista nativa no abre envíos. Solo el flag y una sesión guardada.
+ * La dueña se comprueba aparte. No usa FANLINK_SEND_ALLOW_ACCOUNTS.
+ */
+export function liveViewGate(flag: string | undefined, hasSession: boolean): { allowed: boolean; reason: string } {
   if (flag !== "true") return { allowed: false, reason: "Vista en directo desactivada" };
-  if (allowTokens(allowlist).length === 0 || !accountOnAllowlist(allowlist, account)) {
-    return { allowed: false, reason: "Esta cuenta no tiene la vista en directo." };
-  }
+  if (!hasSession) return { allowed: false, reason: "Esta cuenta no tiene sesión guardada." };
   return { allowed: true, reason: "" };
 }
 
@@ -41,6 +79,21 @@ const LIVE_MEDIA_HOST = /^(cdn\d*|static\d*|public|media|thumbs|assets|files|upl
 const LIVE_API_HOST = /^(api\d*|ws\d*|socket)\.onlyfans\.com$/;
 const LIVE_WRITES = new Set(["POST", "PUT", "DELETE", "PATCH"]);
 
+/**
+ * El reto de Cloudflare termina con un GET del script y un POST del resultado,
+ * en `challenges.cloudflare.com` o en `/cdn-cgi/` del propio OnlyFans.
+ * No abre banca, estados ni la API de la cuenta.
+ */
+export function isLiveChallengeExchange(host: string, path: string, method: string): boolean {
+  const verb = method.toUpperCase();
+  if (verb !== "GET" && verb !== "HEAD" && verb !== "POST" && verb !== "OPTIONS") return false;
+  const segments = path.split("/").filter(Boolean);
+  if (segments.some((part) => (LIVE_DENIED_SEGMENTS as readonly string[]).includes(part))) return false;
+  if (host === "challenges.cloudflare.com" || host.endsWith(".challenges.cloudflare.com")) return true;
+  if (!path.includes("/cdn-cgi/")) return false;
+  return host === "onlyfans.com" || host === "www.onlyfans.com" || host === "cloudflare.com" || host.endsWith(".cloudflare.com");
+}
+
 /** Solo el chat y sus mensajes. En solo lectura no salen POST, PUT ni DELETE de mensajes, likes o PPV. */
 export function liveRequestAllowed(raw: string, method = "GET", typing = false, section: LiveSection = "chat"): boolean {
   if (raw.startsWith("data:") || raw.startsWith("blob:") || raw.startsWith("about:")) return true;
@@ -52,8 +105,6 @@ export function liveRequestAllowed(raw: string, method = "GET", typing = false, 
   }
   if (url.protocol !== "https:" && url.protocol !== "http:" && url.protocol !== "wss:" && url.protocol !== "ws:") return false;
   const host = url.hostname.toLowerCase();
-  if (liveChallengeHost(host)) return method.toUpperCase() === "GET" || method.toUpperCase() === "HEAD";
-  if (host !== "onlyfans.com" && !host.endsWith(".onlyfans.com")) return false;
   let path = url.pathname.toLowerCase();
   try {
     path = decodeURIComponent(path);
@@ -61,6 +112,9 @@ export function liveRequestAllowed(raw: string, method = "GET", typing = false, 
     return false;
   }
   if (path.includes("..") || path.includes("\\")) return false;
+  if (isLiveChallengeExchange(host, path, method)) return true;
+  if (liveChallengeHost(host)) return method.toUpperCase() === "GET" || method.toUpperCase() === "HEAD";
+  if (host !== "onlyfans.com" && !host.endsWith(".onlyfans.com")) return false;
   if (isChatReadWrite(method, path)) return false;
   if (liveBootPath(path)) return method.toUpperCase() === "GET" || method.toUpperCase() === "HEAD";
   if (!liveHostPathAllowed(host, path)) return false;
@@ -192,10 +246,12 @@ export function liveHistoryGuardSource(chatUrl = "", section: LiveSection = "cha
     denied: LIVE_DENIED_SEGMENTS,
     media: LIVE_MEDIA_HOST.source,
     api: LIVE_API_HOST.source,
-    pageOnly: section !== "chat",
+    pageOnly: false,
   });
   return `(() => {
     const allow = ${allow};
+    const here = location.hostname.toLowerCase();
+    if (here === "challenges.cloudflare.com" || here.endsWith(".challenges.cloudflare.com")) return true;
     const ok = (raw) => {
       try {
         const url = new URL(String(raw), location.origin);
@@ -212,6 +268,7 @@ export function liveHistoryGuardSource(chatUrl = "", section: LiveSection = "cha
           return false;
         }
         if (parts.some((part) => allow.denied.includes(part))) return false;
+        if (path.includes("/cdn-cgi/")) return true;
         if (allow.pageOnly) {
           return allow.prefixes.some((prefix) => path === prefix || path.startsWith(prefix + "/"));
         }
@@ -309,7 +366,7 @@ export type DeskCommand =
   | { method: "Input.dispatchMouseEvent"; params: Record<string, unknown> }
   | { method: "Input.dispatchKeyEvent"; params: Record<string, unknown> }
   | { method: "Input.insertText"; params: { text: string } }
-  | { method: "resize"; params: { width: number; height: number } };
+  | { method: "resize"; params: ReturnType<typeof livePageMetrics> };
 
 export type DeskInput =
   | { type: "mouse"; action: "down" | "up" | "move"; x: number; y: number; canvasWidth: number; canvasHeight: number; button?: "left" | "right" | "middle" }
@@ -322,9 +379,9 @@ export type DeskInput =
 export function deskCommand(input: DeskInput, viewport: { width: number; height: number }, typing = true): DeskCommand | null {
   if (!typing && (input.type === "key" || input.type === "text")) return null;
   if (input.type === "resize") {
-    const width = Math.min(1920, Math.max(320, Math.round(input.width)));
-    const height = Math.min(1200, Math.max(240, Math.round(input.height)));
-    return { method: "resize", params: { width, height } };
+    const width = Math.min(2560, Math.max(320, Math.round(input.width)));
+    const height = Math.min(1600, Math.max(240, Math.round(input.height)));
+    return { method: "resize", params: livePageMetrics(input.width, input.height) };
   }
   if (input.type === "text") {
     if (!input.text) return null;
@@ -347,6 +404,7 @@ export function deskCommand(input: DeskInput, viewport: { width: number; height:
         x: point.x,
         y: point.y,
         button: input.button ?? "left",
+        buttons: input.action === "up" || (input.action === "move" && !input.button) ? 0 : 1,
         clickCount: input.action === "move" ? 0 : 1,
       },
     };
@@ -519,6 +577,49 @@ export function takeLiveEventSlot(stamps: number[], now: number, limit = LIVE_EV
   if (stamps.length >= limit) return false;
   stamps.push(now);
   return true;
+}
+
+/** La pantalla Operativa se maneja con el ratón y el teclado. No abre el envío real ni archivos. */
+export function liveDeskBrowse(section: LiveSection, role: LiveRole, kind: LiveClientEvent["type"]): boolean {
+  if (role !== "control" || section !== "notifications") return false;
+  return kind === "mouse" || kind === "wheel" || kind === "key" || kind === "text" || kind === "resize";
+}
+
+export const LIVE_BLOCKED_NOTICE =
+  "Esa parte de OnlyFans está bloqueada: banca, estados, pagos o ajustes.";
+
+/** Cualquier página de OnlyFans que no sea banca, estados, pagos ni ajustes. */
+export function liveOpenPageAllowed(raw: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(raw, "https://onlyfans.com");
+  } catch {
+    return false;
+  }
+  const host = url.hostname.toLowerCase();
+  if (host !== "onlyfans.com" && host !== "www.onlyfans.com") return false;
+  let path = url.pathname.toLowerCase();
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    return false;
+  }
+  if (path.includes("..") || path.includes("\\")) return false;
+  const segments = path.split("/").filter(Boolean);
+  return !segments.some((part) => (LIVE_DENIED_SEGMENTS as readonly string[]).includes(part));
+}
+
+/** El marco principal de Operativa puede recorrer OnlyFans, menos las zonas cerradas. */
+export function liveFrameAllowed(raw: string, section: LiveSection): boolean {
+  if (liveRequestAllowed(raw, "GET", false, section)) return true;
+  if (section !== "notifications") return false;
+  return liveOpenPageAllowed(raw);
+}
+
+/** El reto se resuelve en el visor. No habilita el envío ni los archivos. */
+export function liveChallengeControl(solving: boolean, role: LiveRole, kind: LiveClientEvent["type"]): boolean {
+  if (!solving || role !== "control") return false;
+  return kind === "mouse" || kind === "wheel" || kind === "key" || kind === "text";
 }
 
 /** Sin el flag de envío solo quedan el scroll y el clic que abre otro hilo. */

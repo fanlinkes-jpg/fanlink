@@ -1,3 +1,4 @@
+import { creatorAvatarOf } from "../../../src/lib/creator-avatar.ts";
 import type { NotificationCounts, ParsedNotification } from "../../../src/lib/notifications.ts";
 import {
   NOTIFICATION_LIST_LIMIT,
@@ -61,6 +62,8 @@ export type CollectedNotifications = {
   signatureRejected: boolean;
   status: number | null;
   retryAfterMs: number;
+  /** Foto de users/me de esta misma lectura. No es una petición extra. */
+  avatarUrl?: string | null;
 };
 
 export type MarkNotificationsResult = {
@@ -143,6 +146,7 @@ export async function fetchSignedNotifications(state: StorageStateFile, deps: Si
 
   const mePage = await request(NOTIFICATION_ME_PATH);
   const tags = mePage.ok ? newTagsCountOf(mePage.body) : null;
+  const avatarUrl = mePage.ok ? creatorAvatarOf(mePage.body) : null;
   routes.push(routeLog("etiquetas", mePage, tags ?? 0));
   if (mePage.retryAfterMs > 0) {
     return {
@@ -154,6 +158,7 @@ export async function fetchSignedNotifications(state: StorageStateFile, deps: Si
       countMotivo,
       signatureRejected: false,
       sessionRejected: false,
+      avatarUrl,
     };
   }
   const withTagCounts = nextCounts ? withTags(nextCounts, mePage.ok ? tags : nextCounts.tags) : null;
@@ -171,6 +176,7 @@ export async function fetchSignedNotifications(state: StorageStateFile, deps: Si
     signatureRejected: false,
     status: listPage.status,
     retryAfterMs: 0,
+    avatarUrl,
   };
 }
 

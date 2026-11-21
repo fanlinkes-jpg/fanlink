@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { chmod, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
 import type { DisplayEnv, FanlinkConfig } from "../config.ts";
@@ -39,7 +39,11 @@ import {
   type ManagedBrowser,
 } from "./browser-factory.ts";
 import { assertLoginDisplay } from "./display.ts";
-import { liveViewHeadless } from "../live/headless.ts";
+import { profileHasClearanceName } from "../live/clearance-file.ts";
+import { liveLaunchMode, liveVisibility } from "../live/headless.ts";
+import { chooseLiveChrome, liveChromeOrigin, rememberLiveChrome, type LiveChromeChoice } from "../live/chrome.ts";
+import { hideLiveProcess, liveContextOpen, setLiveProcessHide, tuckLiveWindow } from "../live/window.ts";
+import { waitForProfileLock } from "./profile-lock.ts";
 import { openWorkPage } from "./work-page.ts";
 import { closeIfIdle } from "../live/pages.ts";
 import { readAccountProxy } from "../proxy.ts";
@@ -54,6 +58,7 @@ import { chatPaceOf, planChatPull, rememberChatPace, withAccountApi } from "../s
 import { fetchSignedChats, fetchSignedUsersMe, type SignedChatOptions } from "../sync/of-chat-api.ts";
 import { applySignedRead, sessionRejectionConfirmed, signedReadsBlocked, successfulLoginPatch, SESSION_EXPIRED_LABEL, type SessionConfirmProbe } from "../sync/session-link.ts";
 import { collectChats, type CollectedChats } from "../sync/collect-chats.ts";
+import { writeCreatorAvatar } from "../sync/creator-avatar-cache.ts";
 import { dispatchNotificationMark, fetchSignedNotifications, type CollectedNotifications, type MarkNotificationsResult } from "../sync/of-notifications-api.ts";
 import { notificationMarkReadGate } from "../send/gate.ts";
 import { fetchSignedOnlineFans, readOnlineSubscribers, type OnlineFan, type OnlineRead } from "../sync/online-fans.ts";
@@ -95,6 +100,9 @@ const CONFIRM_BACKOFF_MS = 30_000;
 export class SessionManager {
   private readonly loginTasks = new Map<string, Promise<void>>();
   private readonly openContexts = new Set<BrowserContext>();
+  private readonly closeReasons = new WeakMap<BrowserContext, string>();
+  /** La vista nativa no reescribe la sesión cifrada si OnlyFans pide login. */
+  private readonly liveContexts = new WeakSet<BrowserContext>();
   private readonly profiles: ProfileOwner;
   private background: ManagedBrowser | null = null;
   private readTail: Promise<void> = Promise.resolve();
@@ -115,7 +123,8 @@ export class SessionManager {
       openExclusive: (accountId) => this.launchLoginContext(accountId),
       openVisible: (accountId) => this.newLiveContext(accountId),
       persist: (accountId, context) => this.rememberProfile(accountId, context),
-      closeContext: (context) => this.forgetContext(context),
+      closeContext: (context, reason) => this.forgetContext(context, reason),
+      hurry: (context) => this.hurrySharedRead(context),
       isStopped: () => this.closed,
     });
   }
@@ -317,8 +326,8 @@ export class SessionManager {
   }
 
   /**
-   * Misma cuenta, perfil y proxy que las lecturas, pero en el modo visible
-   * de Conectar. No cambia el Chromium headless de las lecturas en segundo plano.
+   * Vista nativa. Espera a que las lecturas suelten el perfil, lo cierra y
+   * abre ese mismo directorio. Mientras la vista vive, las lecturas no lo piden.
    */
   async borrowLiveProfile(accountId: string): Promise<{ context: BrowserContext; release: () => Promise<void> }> {
     await this.assertUsable(accountId);
@@ -455,6 +464,9 @@ export class SessionManager {
       }
       if (read.signatureRejected) {
         await this.noteSignatureRejected(accountId).catch(() => undefined);
+      }
+      if (read.avatarUrl) {
+        await writeCreatorAvatar(this.options.config.dataDir, accountId, read.avatarUrl, this.now().getTime()).catch(() => undefined);
       }
       return read;
     } catch (error) {
@@ -1398,32 +1410,61 @@ export class SessionManager {
   }
 
   /**
-   * Vista nativa: el mismo perfil persistente y proxy que Conectar, con
-   * headless según liveViewHeadless (visible en un Mac). Siembra la sesión
-   * cifrada; no usa headlessWork.
+   * Vista nativa: el mismo perfil, proxy, UA, locale y timezone que Conectar.
+   * En un Mac la ventana queda fuera de la pantalla. No usa headlessWork.
    */
   private async newLiveContext(accountId: string): Promise<BrowserContext> {
-    const headless = liveViewHeadless(process.env, this.options.displayEnv);
-    if (!headless) assertLoginDisplay(false, this.options.displayEnv);
     const profile = this.profileDir(accountId);
+    const asked = liveLaunchMode(process.env, this.options.displayEnv);
+    const fromSession = await this.hasClearanceCookie(accountId);
+    const fromProfile = await profileHasClearanceName(profile).catch(() => false);
+    const seen = await this.liveAlreadySeen(accountId);
+    const choice = liveVisibility(asked);
+    const mode = choice.visibility === "headless" ? "headless" : "window";
+    const clearanceFrom = fromSession ? "sesion" : fromProfile ? "perfil" : "no";
+    if (mode !== "headless") assertLoginDisplay(false, this.options.displayEnv);
     let profileExists = false;
     try {
       profileExists = (await stat(profile)).isDirectory();
     } catch {
       profileExists = false;
     }
+    const headlessNote = choice.visibility === "headless" ? "si" : "no";
+    const because = choice.visibility === "minimized" ? " porque=headless-new-dispara-el-reto" : "";
+    console.info(`[fanlink:navegador] vista=live pide perfil=${accountId} modo=${choice.visibility} motivo=${choice.reason} cf_clearance=${clearanceFrom} ya-vista=${seen ? "si" : "no"} directorio=${profileExists ? "si" : "no"} headless=${headlessNote}${because}`);
     if (profileExists) {
+      const lock = await waitForProfileLock(profile);
+      if (lock === "ajeno") {
+        console.info(`[fanlink:navegador] vista=live perfil=${accountId} lock=ajeno`);
+        throw new Error(messages.profileInUse);
+      }
       const proxy = await this.accountProxy(accountId);
-      console.info(`[fanlink:navegador] vista=live perfil=${accountId} headless=${String(headless)} proxy=${proxy ? "si" : "no"}`);
-      const context = await this.options.browsers.launchPersistentContext(profile, {
-        headless,
-        proxy,
-      });
+      const chrome = chooseLiveChrome(process.env);
+      rememberLiveChrome(chrome);
+      setLiveProcessHide(chrome.source === "testing");
+      const missing = chrome.missingPath ? " motivo=ruta-ausente" : "";
+      console.info(`[fanlink:navegador] vista=live lanza perfil=${accountId} modo=${choice.visibility} origen=${chrome.source} proxy=${proxy ? "si" : "no"}${missing}`);
+      const context = await this.launchLiveBrowser(profile, mode, choice.visibility === "minimized", proxy, chrome);
       this.openContexts.add(context);
+      this.liveContexts.add(context);
+      const origen = liveChromeOrigin();
+      console.info(`[fanlink:navegador] vista=live binario=${context.browser()?.version() ?? "desconocida"} origen=${origen} ua-forzado=si oculto=${origen === "testing" ? "cdp+testing" : "cdp"}`);
+      if (choice.visibility === "minimized") {
+        const hidden = await this.minimizeLive(context);
+        const dock = origen === "testing" && hidden ? await hideLiveProcess(this.options.displayEnv.platform) : false;
+        const oculto = origen === "testing" ? (dock ? "osascript" : "no") : "cdp";
+        console.info(`[fanlink:navegador] vista=live minimizo perfil=${accountId} motivo=${choice.reason} ok=${hidden ? "si" : "no"} oculto=${oculto}`);
+      } else {
+        console.info(`[fanlink:navegador] vista=live ventana=si motivo=${choice.reason}`);
+      }
+      context.once("close", () => {
+        const reason = this.closeReasons.get(context) ?? "ajeno";
+        console.info(`[fanlink:navegador] vista=live perfil=${accountId} cerrado motivo=${reason}`);
+      });
       try {
-        await this.seedPersistentProfile(context, accountId);
+        await this.seedPersistentProfile(context, accountId, false);
       } catch (error) {
-        await this.forgetContext(context);
+        await this.forgetContext(context, "siembra");
         throw error;
       }
       return context;
@@ -1445,7 +1486,94 @@ export class SessionManager {
    * (reescrito al soltar el perfil). Si el perfil ya tiene esa cookie, no se
    * pisa con una copia más vieja.
    */
-  private async seedPersistentProfile(context: BrowserContext, accountId: string): Promise<void> {
+  private liveSeenPath(accountId: string): string {
+    return path.join(this.options.config.dataDir, "live-ready", accountId);
+  }
+
+  private async liveAlreadySeen(accountId: string): Promise<boolean> {
+    try {
+      return (await stat(this.liveSeenPath(accountId))).isFile();
+    } catch {
+      return false;
+    }
+  }
+
+  private async markLiveSeen(accountId: string): Promise<void> {
+    const file = this.liveSeenPath(accountId);
+    await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+    await writeFile(file, "", { flag: "a", mode: 0o600 });
+    console.info(`[fanlink:navegador] vista=live lista=si`);
+  }
+
+  private async launchLiveBrowser(
+    profile: string,
+    mode: "headless" | "window",
+    minimized: boolean,
+    proxy: Awaited<ReturnType<SessionManager["accountProxy"]>>,
+    chrome: LiveChromeChoice,
+  ): Promise<BrowserContext> {
+    const options = {
+      headless: false as const,
+      live: mode,
+      minimized,
+      proxy,
+      ...(chrome.executablePath ? { executablePath: chrome.executablePath } : {}),
+      ...(chrome.channel ? { channel: chrome.channel } : {}),
+    };
+    try {
+      return await this.options.browsers.launchPersistentContext(profile, options);
+    } catch (error) {
+      if (chrome.source === "testing") throw error;
+      console.info(`[fanlink:navegador] vista=live origen=testing motivo=no-arranca`);
+      rememberLiveChrome({ source: "testing", missingPath: false });
+      setLiveProcessHide(true);
+      return this.options.browsers.launchPersistentContext(profile, {
+        headless: false,
+        live: mode,
+        minimized,
+        proxy,
+      });
+    }
+  }
+
+  /** La vista pide el perfil: las pestañas de la lectura se cierran y sueltan el cerrojo. */
+  private async hurrySharedRead(context: BrowserContext): Promise<void> {
+    let pages: ReturnType<BrowserContext["pages"]> = [];
+    try {
+      pages = context.pages();
+    } catch {
+      return;
+    }
+    for (const page of pages) {
+      await page.close().catch(() => undefined);
+    }
+  }
+
+  private async minimizeLive(context: BrowserContext): Promise<boolean> {
+    const pages = context.pages().length > 0 ? context.pages() : [await context.newPage()];
+    let ok = false;
+    for (const page of pages) {
+      const cdp = await context.newCDPSession(page);
+      try {
+        const state = await tuckLiveWindow((method, params) => cdp.send(method as "Browser.getWindowForTarget", params as never));
+        if (state !== "fail") ok = true;
+      } finally {
+        await cdp.detach().catch(() => undefined);
+      }
+    }
+    return ok;
+  }
+
+  private async hasClearanceCookie(accountId: string): Promise<boolean> {
+    try {
+      const state = await this.readStorageState(accountId);
+      return state.cookies.some((cookie) => cookie.name === "cf_clearance");
+    } catch {
+      return false;
+    }
+  }
+
+  private async seedPersistentProfile(context: BrowserContext, accountId: string, scripts = true): Promise<void> {
     const encrypted = await readFile(this.storagePath(accountId));
     const state = parseStorageState(
       JSON.parse(decryptBytes(encrypted, this.requireSessionKey()).toString("utf8")) as unknown,
@@ -1457,7 +1585,7 @@ export class SessionManager {
       return savedCookieIsFresher(cookie, current);
     });
     if (missing.length > 0) await context.addCookies(missing);
-    if (state.origins.length === 0) return;
+    if (!scripts || state.origins.length === 0) return;
     await context.addInitScript((origins) => {
       const match = origins.find((item) => item.origin === location.origin);
       if (!match) return;
@@ -1554,12 +1682,19 @@ export class SessionManager {
   private async rememberProfile(accountId: string, context: BrowserContext): Promise<void> {
     const sessionKey = this.options.config.sessionKey;
     if (!sessionKey) return;
+    if (this.liveContexts.has(context) && await this.contextShowsLogin(context)) {
+      console.info(`[fanlink:navegador] vista=live sesion=no-guardo`);
+      return;
+    }
+    if (this.liveContexts.has(context)) await this.markLiveSeen(accountId).catch(() => undefined);
     let state: StorageStateFile;
     try {
       state = parseStorageState(await context.storageState());
     } catch (error) {
-      const kind = error instanceof Error ? error.name : "error";
-      console.warn(`[fanlink:perfil] cuenta=${accountId} tipo=${kind}`);
+      if (!liveContextOpen(context)) {
+        console.info(`[fanlink:perfil] cuenta=${accountId} motivo=navegador-cerrado`);
+        return;
+      }
       throw error;
     }
     if (state.cookies.length === 0 && state.origins.length === 0) return;
@@ -1568,7 +1703,23 @@ export class SessionManager {
     await writeEncryptedSession(storagePath, state, sessionKey);
   }
 
-  private async forgetContext(context: BrowserContext): Promise<void> {
+  private async contextShowsLogin(context: BrowserContext): Promise<boolean> {
+    const selector = this.options.site.loggedOutSelector;
+    for (const page of context.pages()) {
+      try {
+        if (this.options.site.isLoginUrl(page.url())) return true;
+        if (!selector) continue;
+        if ((await page.locator(`${selector}:visible`).count()) > 0) return true;
+      } catch {
+        continue;
+      }
+    }
+    return false;
+  }
+
+  private async forgetContext(context: BrowserContext, reason = "soltar"): Promise<void> {
+    this.closeReasons.set(context, reason);
+    console.info(`[fanlink:navegador] cierro motivo=${reason}`);
     this.openContexts.delete(context);
     for (const page of context.pages()) {
       await page.close().catch(() => undefined);

@@ -1,34 +1,63 @@
 import { useEffect, useRef, useState, type MouseEvent, type WheelEvent } from "react";
 import { ComingSoonPage } from "@/features/coming-soon-page";
+import { containedCanvasPoint } from "@/lib/live-pointer";
 import { openLiveView } from "@/lib/of-sessions";
 
 type LiveStatus = { type: "status"; role: "control" | "view"; send: boolean };
 
 export function LiveOfViewer({ creatorId, section }: { creatorId: string; section: "notifications" }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const boxRef = useRef<HTMLDivElement | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const statusRef = useRef<LiveStatus | null>(null);
-  const [message, setMessage] = useState("Abriendo la página de OnlyFans…");
+  const [message, setMessage] = useState("Preparando el navegador…");
   const [notice, setNotice] = useState("");
   const [ready, setReady] = useState(false);
+  const [full, setFull] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     let socket: WebSocket | null = null;
-    const frameUrl = { current: null as string | null };
+    const paint = {
+      busy: false,
+      pending: null as ArrayBuffer | null,
+      draw: async function draw(data: ArrayBuffer): Promise<void> {
+        paint.busy = true;
+        try {
+          const bitmap = await createImageBitmap(new Blob([data], { type: "image/jpeg" }));
+          const canvas = canvasRef.current;
+          if (canvas && !cancelled) {
+            canvas.width = bitmap.width;
+            canvas.height = bitmap.height;
+            canvas.getContext("2d")?.drawImage(bitmap, 0, 0);
+            if (!readyOnce.current) {
+              readyOnce.current = true;
+              setReady(true);
+              setMessage((current) => (openingMessage(current) ? "" : current));
+            }
+          }
+          bitmap.close();
+        } catch {
+          // Un JPEG a medias no se pinta.
+        }
+        paint.busy = false;
+        const next = paint.pending;
+        paint.pending = null;
+        if (next) void draw(next);
+      },
+    };
+    const readyOnce = { current: false };
 
     const disconnect = () => {
       socket?.close();
       socket = null;
       socketRef.current = null;
-      if (frameUrl.current) URL.revokeObjectURL(frameUrl.current);
-      frameUrl.current = null;
     };
 
     const start = async () => {
       setReady(false);
       setNotice("");
-      setMessage("Abriendo la página de OnlyFans…");
+      setMessage("Preparando el navegador…");
       const result = await openLiveView({ data: { creatorId, section } }).catch(() => ({
         ok: false as const,
         ticket: null,
@@ -46,19 +75,26 @@ export function LiveOfViewer({ creatorId, section }: { creatorId: string; sectio
       socket.addEventListener("open", () => {
         if (cancelled || !socket) return;
         socket.send(JSON.stringify({ type: "auth", ticket: result.ticket }));
+        publishSize();
       });
       socket.addEventListener("message", (event) => {
         if (cancelled) return;
         if (typeof event.data === "string") {
           try {
-            const payload = JSON.parse(event.data) as { type?: string; reason?: string; role?: "control" | "view"; send?: boolean };
+            const payload = JSON.parse(event.data) as { type?: string; reason?: string; name?: string; role?: "control" | "view"; send?: boolean };
             if (payload.type === "bye") {
               setReady(false);
               setMessage(payload.reason || "La vista nativa se ha cerrado.");
               return;
             }
+            if (payload.type === "phase" && !readyOnce.current) {
+              setMessage(phaseMessage(payload.name));
+              return;
+            }
             if (payload.type === "notice") {
-              setNotice(payload.reason?.trim() || "");
+              const text = payload.reason?.trim() || "";
+              setNotice(text);
+              if (!readyOnce.current && text.startsWith("Preparando")) setMessage(text);
               return;
             }
             if (payload.type === "status" && payload.role) {
@@ -69,23 +105,13 @@ export function LiveOfViewer({ creatorId, section }: { creatorId: string; sectio
           }
           return;
         }
-        const canvas = canvasRef.current;
-        if (!canvas || !(event.data instanceof ArrayBuffer)) return;
-        const blob = new Blob([event.data], { type: "image/jpeg" });
-        const next = URL.createObjectURL(blob);
-        const image = new Image();
-        image.onload = () => {
-          if (frameUrl.current) URL.revokeObjectURL(frameUrl.current);
-          frameUrl.current = next;
-          canvas.width = image.naturalWidth || 1440;
-          canvas.height = image.naturalHeight || 900;
-          const ctx = canvas.getContext("2d");
-          ctx?.drawImage(image, 0, 0);
-          setReady(true);
-          setMessage((current) => (current === "Abriendo la página de OnlyFans…" ? "" : current));
-        };
-        image.onerror = () => URL.revokeObjectURL(next);
-        image.src = next;
+        if (!(event.data instanceof ArrayBuffer)) return;
+        const buffer = event.data;
+        if (paint.busy) {
+          paint.pending = buffer;
+          return;
+        }
+        void paint.draw(buffer);
       });
       socket.addEventListener("close", () => {
         if (cancelled) return;
@@ -94,12 +120,35 @@ export function LiveOfViewer({ creatorId, section }: { creatorId: string; sectio
       });
     };
 
-    void start();
+    const box = boxRef.current;
+    let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+    const publishSize = () => {
+      if (!box || !socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) return;
+      const width = Math.round(box.clientWidth);
+      const height = Math.round(box.clientHeight);
+      if (width < 320 || height < 240) return;
+      socketRef.current.send(JSON.stringify({ type: "resize", width, height }));
+    };
+    const scheduleSize = () => {
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(publishSize, 120);
+    };
+    const observer = box ? new ResizeObserver(() => scheduleSize()) : null;
+    if (box && observer) observer.observe(box);
+    void start().then(() => publishSize());
     return () => {
       cancelled = true;
+      if (resizeTimer) clearTimeout(resizeTimer);
+      observer?.disconnect();
       disconnect();
     };
   }, [creatorId, section]);
+
+  useEffect(() => {
+    const onChange = () => setFull(document.fullscreenElement === boxRef.current);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
 
   const sendInput = (payload: Record<string, unknown>) => {
     const socket = socketRef.current;
@@ -109,22 +158,39 @@ export function LiveOfViewer({ creatorId, section }: { creatorId: string; sectio
 
   const point = (event: MouseEvent<HTMLCanvasElement> | WheelEvent<HTMLCanvasElement>) => {
     const canvas = event.currentTarget;
-    return {
-      x: event.nativeEvent.offsetX,
-      y: event.nativeEvent.offsetY,
-      canvasWidth: canvas.clientWidth,
-      canvasHeight: canvas.clientHeight,
-    };
+    return containedCanvasPoint(
+      event.nativeEvent.offsetX,
+      event.nativeEvent.offsetY,
+      { width: canvas.clientWidth, height: canvas.clientHeight },
+      { width: canvas.width, height: canvas.height },
+    );
   };
 
-  const canType = statusRef.current?.role === "control" && statusRef.current.send;
+  const solving = notice.length > 0;
+  const canType = solving || statusRef.current?.role !== "view";
 
-  if (!ready && message && message !== "Abriendo la página de OnlyFans…") {
-    return <ComingSoonPage title="Notificaciones" hint={message} />;
+  const toggleFull = () => {
+    const node = boxRef.current;
+    if (!node) return;
+    if (document.fullscreenElement) void document.exitFullscreen();
+    else void node.requestFullscreen();
+  };
+
+  if (!ready && message && !openingMessage(message)) {
+    return <ComingSoonPage title="Operativa" hint={message} />;
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-[#0c100f]">
+    <div ref={boxRef} className="relative flex min-h-0 flex-1 flex-col bg-[#0c100f]">
+      <div className="absolute top-2 right-2 z-10 flex gap-2">
+        <button
+          type="button"
+          onClick={toggleFull}
+          className="rounded-md bg-black/60 px-2 py-1 text-xs text-white hover:bg-black/80"
+        >
+          {full ? "Salir" : "Pantalla completa"}
+        </button>
+      </div>
       {notice ? (
         <p className="shrink-0 border-b border-amber-500/40 bg-amber-950/90 px-4 py-3 text-sm text-amber-100" role="alert">
           {notice}
@@ -135,9 +201,8 @@ export function LiveOfViewer({ creatorId, section }: { creatorId: string; sectio
       <canvas
         ref={canvasRef}
         tabIndex={0}
-        aria-label="Página de notificaciones de OnlyFans"
-        className="min-h-0 flex-1 w-full cursor-crosshair bg-black object-contain outline-none"
-        style={{ display: ready || message ? "block" : "block" }}
+        aria-label="Página de OnlyFans"
+        className="min-h-0 w-full flex-1 cursor-default bg-black outline-none"
         onMouseDown={(event) => {
           event.preventDefault();
           event.currentTarget.focus();
@@ -157,11 +222,13 @@ export function LiveOfViewer({ creatorId, section }: { creatorId: string; sectio
         }}
         onKeyDown={(event) => {
           if (!canType) return;
+          if (event.metaKey || event.ctrlKey || event.altKey) return;
           event.preventDefault();
           sendInput({ type: "key", key: event.key, code: event.code, down: true });
         }}
         onKeyUp={(event) => {
           if (!canType) return;
+          if (event.metaKey || event.ctrlKey || event.altKey) return;
           event.preventDefault();
           sendInput({ type: "key", key: event.key, code: event.code, down: false });
         }}
@@ -170,12 +237,23 @@ export function LiveOfViewer({ creatorId, section }: { creatorId: string; sectio
   );
 }
 
+function openingMessage(text: string): boolean {
+  return text.startsWith("Preparando") || text.startsWith("Esperando") || text.startsWith("Cargando");
+}
+
+function phaseMessage(name: string | undefined): string {
+  if (name === "perfil") return "Esperando el perfil…";
+  if (name === "carga") return "Cargando la página…";
+  if (name === "listo") return "";
+  return "Preparando el navegador…";
+}
+
 function explainLiveReason(reason: string | null | undefined): string {
   if (!reason || reason === "Vista en directo desactivada") {
-    return "La vista nativa de Notificaciones está apagada. Activa FANLINK_LIVE_VIEW_ENABLED y añade la cuenta a FANLINK_SEND_ALLOW_ACCOUNTS para ver la página real de OnlyFans.";
+    return "La vista nativa está apagada. Activa FANLINK_LIVE_VIEW_ENABLED para ver la página real de OnlyFans.";
   }
-  if (reason === "Esta cuenta no tiene la vista en directo.") {
-    return "Esta creadora no está en la lista de cuentas con vista nativa (FANLINK_SEND_ALLOW_ACCOUNTS).";
+  if (reason === "Esta cuenta no tiene sesión guardada.") {
+    return "Esta creadora no tiene sesión guardada. Conéctala antes de abrir la vista.";
   }
   return reason;
 }

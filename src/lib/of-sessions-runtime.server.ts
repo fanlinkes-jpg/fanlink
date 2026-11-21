@@ -19,6 +19,7 @@ import type { Account } from "../../server/of-sessions/types.ts";
 import type { CollectedChats } from "../../server/of-sessions/sync/collect-chats.ts";
 import type { CreatorChatList, CreatorReadList, CreatorReadView, CreatorSessionView } from "./of-sessions.ts";
 import { parseAccountProxy, proxyLabel, readAccountProxy, removeAccountProxy, writeAccountProxy } from "../../server/of-sessions/proxy.ts";
+import { readCreatorAvatar } from "../../server/of-sessions/sync/creator-avatar-cache.ts";
 import { syncAssignments } from "../../server/of-sessions/metrics/assignments.ts";
 import { dashboardViewFor } from "../../server/of-sessions/metrics/dashboard.ts";
 import { apiListStep, passApiListAccounts, shouldReadApiList } from "../../server/of-sessions/sync/api-list-cycle.ts";
@@ -495,10 +496,11 @@ export async function listCreatorSessionViews(userId: string): Promise<CreatorSe
     if (access.role !== "owner" && !access.creatorIds.includes(view.creatorId)) return [];
     return [view];
   });
-  if (access.role !== "owner" || !config.sessionKey) return views;
   return Promise.all(views.map(async (view) => {
-    const stored = await readAccountProxy(path.join(config.dataDir, "proxies", `${view.accountId}.bin`), config.sessionKey!);
-    return { ...view, proxyLabel: proxyLabel(stored) };
+    const avatarUrl = await readCreatorAvatar(config.dataDir, view.accountId, Date.now());
+    if (access.role !== "owner" || !config.sessionKey) return { ...view, avatarUrl };
+    const stored = await readAccountProxy(path.join(config.dataDir, "proxies", `${view.accountId}.bin`), config.sessionKey);
+    return { ...view, avatarUrl, proxyLabel: proxyLabel(stored) };
   }));
 }
 
@@ -1231,14 +1233,14 @@ export async function openLiveViewTicket(
   const accessSection = liveViewSectionAccess(input.section ?? "chat", access.role);
   if (!accessSection.ok) return { ok: false, ticket: null, reason: accessSection.reason };
   const section = accessSection.section;
-  if (access.role !== "owner" && !access.perms.includes("mensajes")) {
-    throw new WorkspaceAccessError("No tienes permiso para escribir.");
+  if (access.role !== "owner") {
+    return { ok: false, ticket: null, reason: "Solo la dueña puede abrir la vista nativa." };
   }
   const threadKey = (input.threadKey ?? "").trim() || (section === "notifications" ? "notifications" : "inbox");
   const sessions = await getOfSessionManager();
   const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
   if (!account) return { ok: false, ticket: null, reason: "Vista en directo desactivada" };
-  const gate = liveViewGate(process.env.FANLINK_LIVE_VIEW_ENABLED, process.env.FANLINK_SEND_ALLOW_ACCOUNTS, sendAccount(account));
+  const gate = liveViewGate(process.env.FANLINK_LIVE_VIEW_ENABLED, account.hasStorageState);
   if (!gate.allowed) return { ok: false, ticket: null, reason: gate.reason };
   const ticket = issueLiveTicket({
     userId,
@@ -1297,6 +1299,7 @@ function toView(account: Account): CreatorSessionView | null {
     identityHandle: account.identityHandle,
     identityName: account.identityName,
     identityUserId: account.identityUserId,
+    avatarUrl: null,
     identityCheckedAt: account.identityCheckedAt,
     identityReason: publicSyncReason(account.identityReason),
     readsBlocked: account.identityState === "mismatch",

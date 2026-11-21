@@ -8,6 +8,7 @@ export const messages = {
   noSession: "No hay sesión guardada",
   loginInProgress: "El login está en curso en la ventana del navegador",
   liveViewInProgress: "La vista nativa está usando el perfil de esta cuenta.",
+  profileInUse: "Hay otro Chromium con el perfil de esta cuenta. Ciérralo y vuelve a abrir Notificaciones.",
   displayRequired:
     "Hace falta un escritorio gráfico (variable DISPLAY) para abrir la ventana de login.",
   credentialsRejected:

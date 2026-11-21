@@ -9,8 +9,11 @@ import {
   deskCommand,
   draftAfterKey,
   draftAfterPaste,
+  liveChallengeControl,
   liveControlAllowed,
+  liveCastStall,
   liveFps,
+  livePageMetrics,
   liveLog,
   liveOriginAllowed,
   liveOutgoingSocketBlocked,
@@ -30,11 +33,24 @@ import {
 
 const account = { creatorId: "9ikis52", accountId: "acc", handle: "bigpoppa1111", userId: "42", label: "Prueba" };
 
-test("la vista en directo sigue apagada sin el flag o fuera de la allowlist", () => {
-  assert.equal(liveViewGate(undefined, "9ikis52", account).allowed, false);
-  assert.equal(liveViewGate("true", "", account).allowed, false);
-  assert.equal(liveViewGate("true", "otra", account).allowed, false);
-  assert.equal(liveViewGate("true", "@bigpoppa1111", account).allowed, true);
+test("el visor cambia de tamaño y la pantalla de la huella no", () => {
+  const metrics = livePageMetrics(900, 600);
+  assert.equal(metrics.width, 900);
+  assert.equal(metrics.height, 600);
+  assert.equal(metrics.deviceScaleFactor, 1);
+  assert.equal(metrics.screenWidth, 1440);
+  assert.equal(metrics.screenHeight, 900);
+  assert.equal(livePageMetrics(10, 10).width, 320);
+  assert.equal(liveCastStall(1000, 0), "espera");
+  assert.equal(liveCastStall(8000, 0), "reinicio");
+  assert.equal(liveCastStall(8000, 1), "relanzo");
+});
+
+test("la vista en directo solo pide el flag y una sesión guardada", () => {
+  assert.equal(liveViewGate(undefined, true).allowed, false);
+  assert.equal(liveViewGate("true", false).allowed, false);
+  assert.equal(liveViewGate("true", false).reason, "Esta cuenta no tiene sesión guardada.");
+  assert.equal(liveViewGate("true", true).allowed, true);
 });
 
 test("la pestaña no sale de OnlyFans ni de su CDN", () => {
@@ -42,7 +58,8 @@ test("la pestaña no sale de OnlyFans ni de su CDN", () => {
   assert.equal(liveRequestAllowed("https://cdn2.onlyfans.com/v.mp4"), true);
   assert.equal(liveRequestAllowed("https://static2.onlyfans.com/theme/onlyfans/spa/app.js"), true);
   assert.equal(liveRequestAllowed("https://challenges.cloudflare.com/cdn-cgi/challenge-platform/scripts/jsd/main.js"), true);
-  assert.equal(liveRequestAllowed("https://challenges.cloudflare.com/cdn-cgi/challenge-platform/scripts/jsd/main.js", "POST"), false);
+  assert.equal(liveRequestAllowed("https://challenges.cloudflare.com/cdn-cgi/challenge-platform/scripts/jsd/main.js", "POST"), true);
+  assert.equal(liveRequestAllowed("https://www.cloudflare.com/login", "POST"), false);
   assert.equal(liveRequestAllowed("https://example.com/"), false);
   assert.equal(liveRequestAllowed("https://onlyfans.com.evil/x"), false);
   assert.equal(liveRequestAllowed("about:blank"), true);
@@ -69,6 +86,12 @@ test("sin FANLINK_ENABLE_SEND no hay teclado, Enter ni archivos", () => {
   assert.equal(deskCommand({ type: "key", key: "Enter", code: "Enter", down: true }, viewport, false), null);
   assert.equal(deskCommand({ type: "text", text: "hola" }, viewport, false), null);
   assert.equal(deskCommand({ type: "mouse", action: "move", x: 1, y: 1, canvasWidth: 10, canvasHeight: 10 }, viewport, false)?.method, "Input.dispatchMouseEvent");
+  assert.equal(liveChallengeControl(true, "control", "mouse"), true);
+  assert.equal(liveChallengeControl(true, "control", "key"), true);
+  assert.equal(liveChallengeControl(true, "control", "text"), true);
+  assert.equal(liveChallengeControl(true, "control", "file"), false);
+  assert.equal(liveChallengeControl(true, "view", "mouse"), false);
+  assert.equal(liveChallengeControl(false, "control", "key"), false);
   assert.equal(liveControlAllowed(false, "control", "key"), false);
   assert.equal(liveControlAllowed(false, "control", "text"), false);
   assert.equal(liveControlAllowed(false, "control", "file"), false);
@@ -171,8 +194,10 @@ test("ceder el control no echa a quien mira y cada hilo va aparte", () => {
   assert.notEqual(liveRoomKey("acc", "7"), liveRoomKey("acc", "8"));
   assert.equal(liveViewerAccepted(3), true);
   assert.equal(liveViewerAccepted(4), false);
-  assert.equal(liveFps("100"), 4);
+  assert.equal(liveFps("100"), 16);
   assert.equal(liveFps("8"), 8);
+  assert.equal(liveFps("24"), 24);
+  assert.equal(liveFps(undefined), 16);
 });
 
 test("el socket exige el origen de la app y no lleva el ticket en la URL", () => {

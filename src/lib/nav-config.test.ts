@@ -30,32 +30,18 @@ function linkIds(role: "owner" | "manager" | "chatter" | "model", access: TeamAc
 test("los bloques del menú siguen el orden acordado", () => {
   assert.deepEqual(
     NAV_BLOCKS.map((block) => block.id),
-    ["dashboard", "operativa", "chat", "informes", "funciones-inteligentes", "administrar", "proxys", "ajustes-app"],
+    ["dashboard", "operativa", "chat", "estadisticas", "informes", "funciones-inteligentes", "administrar", "proxys", "ajustes-app"],
   );
 });
 
-test("Operativa, Informes, Funciones inteligentes y Ajustes conservan el orden de las secciones", () => {
+test("Informes, Funciones inteligentes y Ajustes conservan el orden de las secciones", () => {
   const byId = new Map(NAV_BLOCKS.map((block) => [block.id, block]));
   const groupIds = (id: string) => {
     const block = byId.get(id);
     assert.ok(block && block.kind === "group");
     return block.items.map((item) => item.id);
   };
-  assert.deepEqual(groupIds("operativa"), [
-    "operativa-inicio",
-    "nuevo-post",
-    "notificaciones",
-    "mensajes",
-    "boveda",
-    "archivo",
-    "colecciones",
-    "estados-cuenta",
-    "estadisticas",
-    "banco",
-    "mi-perfil",
-    "ajustes-of",
-    "release-forms",
-  ]);
+  assert.equal(byId.get("operativa")?.kind, "link");
   assert.deepEqual(groupIds("informes"), [
     "informes-creador",
     "informes-empleados",
@@ -81,7 +67,7 @@ test("el rol de la dueña ve todos los bloques y la facturación", () => {
   assert.equal(linkIds("owner", ownerAccess).includes("facturacion"), true);
   assert.equal(linkIds("owner", ownerAccess).includes("administrar"), true);
   assert.equal(linkIds("owner", ownerAccess).includes("proxys"), true);
-  assert.equal(linkIds("owner", ownerAccess).includes("notificaciones"), true);
+  assert.equal(linkIds("owner", ownerAccess).includes("operativa"), true);
   assert.equal(canAccessPath("/notificaciones", "owner", ownerAccess), true);
 });
 
@@ -107,10 +93,10 @@ test("el chatter no ve informes de agencia, administrar, proxys ni facturación"
   assert.equal(seen.includes("banco"), false);
   assert.equal(seen.includes("release-forms"), false);
   assert.equal(blocks.includes("dashboard"), true);
-  assert.equal(blocks.includes("operativa"), true);
+  assert.equal(blocks.includes("operativa"), false);
   assert.equal(blocks.includes("chat"), true);
-  assert.equal(seen.includes("mensajes"), true);
-  assert.equal(seen.includes("notificaciones"), false);
+  assert.equal(seen.includes("chat"), true);
+  assert.equal(seen.includes("operativa"), false);
   assert.equal(seen.includes("estadisticas"), true);
   assert.equal(seen.includes("cuenta"), true);
   assert.equal(canAccessPath("/notificaciones", "chatter", chatterAccess), false);
@@ -125,7 +111,7 @@ test("el chatter no ve informes de agencia, administrar, proxys ni facturación"
 
 test("el chatter sigue sujeto a los permisos existentes", () => {
   const seen = linkIds("chatter", chatterLimited);
-  assert.equal(seen.includes("mensajes"), true);
+  assert.equal(seen.includes("chat"), true);
   assert.equal(seen.includes("estadisticas"), false);
   assert.equal(seen.includes("boveda"), false);
   assert.equal(seen.includes("mensajes-masivos"), false);
@@ -143,26 +129,17 @@ test("la modelo no ve informes, funciones inteligentes, administrar, proxys ni f
   assert.equal(blocks.includes("proxys"), false);
   assert.equal(seen.includes("facturacion"), false);
   assert.equal(blocks.includes("dashboard"), true);
-  assert.equal(blocks.includes("operativa"), true);
+  assert.equal(blocks.includes("operativa"), false);
   assert.equal(blocks.includes("chat"), true);
 });
 
 test("las secciones sin pantalla propia quedan como Próximamente", () => {
   const coming = allNavLinks().filter((item) => item.comingSoon).map((item) => item.id);
   assert.deepEqual(coming, [
-    "operativa-inicio",
-    "nuevo-post",
-    "archivo",
-    "colecciones",
-    "estados-cuenta",
-    "banco",
-    "mi-perfil",
-    "ajustes-of",
-    "release-forms",
     "promocion-perfil",
     "enlaces-prueba",
     "facturacion",
   ]);
-  assert.equal(comingSoonSection("nuevo-post")?.label, "Nuevo post");
+  assert.equal(comingSoonSection("nuevo-post"), undefined);
   assert.equal(comingSoonSection("facturacion")?.roles.includes("chatter"), false);
 });
