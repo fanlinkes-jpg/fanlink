@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { parseVaultBundle, stampVaultList, videoShapeLine } from "../sync/vault-model.ts";
 import { playbackUrl } from "../sync/vault-store.ts";
-import { clearVaultThumbs, getVaultThumb, hasFtyp, putVaultThumb, videoBytesAccepted, videoFollowUp } from "../sync/media-bytes.ts";
+import { clearVaultThumbs, fetchVaultMedia, getVaultThumb, hasFtyp, putVaultThumb, VIDEO_FETCH_TIMEOUT_MS, videoBytesAccepted, videoFollowUp } from "../sync/media-bytes.ts";
+import { noteVaultPlayRequest } from "../http/vault-http.ts";
 import { folderColumnView } from "../../../src/lib/vault-folder-label.ts";
 
 test("los conteos aceptan string, snake_case y el objeto counts, y Todos se guarda", () => {
@@ -56,7 +57,7 @@ test("el medio usa hasPosts, hasMessages y messagesCount, no las compras", () =>
   assert.equal(video?.tags.includes("Sent"), true);
   assert.equal(video?.thumbUrl, "https://cdn2.onlyfans.com/files/t.jpg");
   assert.equal(video?.fullUrl, "https://cdn2.onlyfans.com/files/f.mp4");
-  assert.equal(video?.clipUrl, "https://cdn2.onlyfans.com/files/light.mp4");
+  assert.equal(video?.clipUrl, video?.fullUrl);
   const photo = bundle.items.find((item) => item.id === "10");
   assert.equal(photo?.tags.includes("Feed"), false);
   const inPosts = parseVaultBundle({
@@ -199,7 +200,7 @@ test("un vídeo con la forma real usa el mp4 y no la miniatura", () => {
     }],
   }).items[0];
   assert.equal(poster?.fullUrl, "https://cdn3.onlyfans.com/file/abc?Policy=sek");
-  assert.equal(poster?.clipUrl ?? null, null);
+  assert.equal(poster?.clipUrl, poster?.fullUrl);
   clearVaultThumbs();
   putVaultThumb("c-1", "9", Uint8Array.from([1]), "image/jpeg", "preview");
   assert.equal(getVaultThumb("c-1", "9", "full"), null);
@@ -208,6 +209,68 @@ test("un vídeo con la forma real usa el mp4 y no la miniatura", () => {
     list: [{ id: 1, type: "photo", listStates: [{ id: 10, hasMedia: true }, { id: 11, hasMedia: true }] }],
   }).items[0];
   assert.deepEqual(catalog?.listIds ?? [], []);
+});
+
+test("cada Ver deja una línea y la descarga de un vídeo se aborta a los 20 s", async () => {
+  const lines: string[] = [];
+  const previousInfo = console.info;
+  console.info = ((line?: unknown) => { lines.push(String(line ?? "")); }) as typeof console.info;
+  noteVaultPlayRequest(new Request("http://127.0.0.1/api/vault-media?creatorId=3zk7kbr&mediaId=v9&variant=full"));
+  assert.equal(lines.some((line) => line.startsWith("[fanlink:vault] ver variant=full medio=") && !line.includes("v9") && !line.includes("http")), true);
+  assert.equal(VIDEO_FETCH_TIMEOUT_MS, 20_000);
+  const original = AbortSignal.timeout;
+  let armed = 0;
+  const timeout = ((ms: number) => {
+    armed = ms;
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(new DOMException("timeout", "TimeoutError")), 30);
+    return controller.signal;
+  }) as typeof AbortSignal.timeout;
+  Object.defineProperty(AbortSignal, "timeout", { configurable: true, writable: true, value: timeout });
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = ((_input: unknown, init?: RequestInit) => new Promise((_resolve, reject) => {
+    const signal = init?.signal;
+    if (!signal) {
+      reject(new Error("sin señal"));
+      return;
+    }
+    if (signal.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+  })) as typeof fetch;
+  try {
+    const result = await fetchVaultMedia("https://cdn2.onlyfans.com/files/a.mp4?Policy=sek", { accept: "video/*" }, true);
+    assert.equal(armed, 20_000);
+    assert.equal(result.status, 0);
+    assert.equal(lines.some((line) => line.includes("reproductor error motivo=timeout")), true);
+    assert.equal(lines.some((line) => line.includes("Policy") || line.includes("onlyfans")), false);
+  } finally {
+    Object.defineProperty(AbortSignal, "timeout", { configurable: true, writable: true, value: original });
+    globalThis.fetch = previousFetch;
+    console.info = previousInfo;
+  }
+});
+
+test("un 206 a mitad de archivo no exige ftyp y el principio sin ftyp no se sirve", async () => {
+  const previous = globalThis.fetch;
+  try {
+    globalThis.fetch = (async () => new Response(Uint8Array.from([1, 2, 3, 4]), {
+      status: 206,
+      headers: { "content-type": "application/octet-stream", "content-range": "bytes 1000-1003/9000" },
+    })) as typeof fetch;
+    const middle = await fetchVaultMedia("https://cdn2.onlyfans.com/files/abc", { accept: "video/*", range: "bytes=1000-1003" }, true);
+    assert.equal("contentType" in middle, true);
+    globalThis.fetch = (async () => new Response(Uint8Array.from([1, 2, 3, 4]), {
+      status: 200,
+      headers: { "content-type": "application/octet-stream" },
+    })) as typeof fetch;
+    const head = await fetchVaultMedia("https://cdn2.onlyfans.com/files/abc", { accept: "video/*", range: "bytes=0-" }, true);
+    assert.equal("contentType" in head, false);
+  } finally {
+    globalThis.fetch = previous;
+  }
 });
 
 function accountShape(

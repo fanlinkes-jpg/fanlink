@@ -46,12 +46,14 @@ test("el panel real del chat monta VaultBrowser con tarjetas cuadradas", async (
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     let vaultReads = 0;
+    const playback: string[] = [];
     let lastVaultBody = "";
     const seenExports: string[] = [];
     await page.route("**/*", async (route) => {
       const request = route.request();
       const url = request.url();
       if (url.includes("/api/vault-media")) {
+        playback.push(url);
         await route.fulfill({ status: 200, contentType: "image/png", body: png });
         return;
       }
@@ -166,6 +168,15 @@ test("el panel real del chat monta VaultBrowser con tarjetas cuadradas", async (
     await page.waitForFunction(() => document.querySelectorAll("[data-vault-card]").length === 3);
     assert.equal(await panel.locator("[data-vault-card]").count(), 3);
     assert.equal(await panel.getByText("ultimo").count(), 0);
+    await panel.getByRole("button", { name: "Ver clip" }).click();
+    const untilPlay = Date.now() + 5_000;
+    while (!playback.some((item) => item.includes("variant=full") && item.includes("mediaId=m2")) && Date.now() < untilPlay) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.ok(
+      playback.some((item) => item.includes("/api/vault-media") && item.includes("variant=full") && item.includes("mediaId=m2")),
+      `ver no pidió el vídeo: ${playback.join(" | ")}`,
+    );
   } finally {
     await browser.close().catch(() => undefined);
     server.kill("SIGTERM");

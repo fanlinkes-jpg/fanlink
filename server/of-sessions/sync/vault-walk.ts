@@ -112,7 +112,8 @@ async function runWalk(input: WalkInput, listId: string, offset: number, singleP
       logList(folder);
       if (folder.hasMedia === false && folder.type !== "custom") continue;
       const child = await walkOne(input, folder.id, 0, false, budget, true, folder.name);
-      if (child.sessionRejected || child.signatureRejected || child.retryAfterMs > 0 || child.hasMore) {
+      if (child.hasMore) main.hasMore = true;
+      if (child.sessionRejected || child.signatureRejected || child.retryAfterMs > 0) {
         main.hasMore = true;
         break;
       }

@@ -11,10 +11,18 @@ import { getVaultThumb, type MediaBytes } from "../sync/media-bytes.ts";
 
 export type SessionActor = VaultActor | null;
 
-export function mediaLogLine(creatorId: string, messageKey: string): string {
-  const clean = (value: string) => value.replace(/https?:\/\/\S+/gi, "").replace(/\s+/g, " ").trim().slice(0, 80);
-  const message = liveViewDebug() ? clean(messageKey) : vaultFolderMark(messageKey);
-  return `[fanlink:media] creator=${clean(creatorId)} message=${message}`;
+export function mediaLogLine(creatorId: string, messageKey: string): string | null {
+  if (!liveViewDebug()) return null;
+  return `[fanlink:media] creator=${vaultFolderMark(creatorId)} message=${vaultFolderMark(messageKey)}`;
+}
+
+/** Cada «Ver» o clip deja una línea antes de leer la sesión. Sin URL ni id. */
+export function noteVaultPlayRequest(request: Request): void {
+  const url = new URL(request.url);
+  const variant = url.searchParams.get("variant");
+  if (variant !== "full" && variant !== "clip") return;
+  const mediaId = url.searchParams.get("mediaId") ?? "";
+  console.info(`[fanlink:vault] ver variant=${variant} medio=${vaultFolderMark(mediaId)}`);
 }
 
 export async function handleVaultQuery(request: Request, deps: {
@@ -42,7 +50,8 @@ export async function handleChatMedia(request: Request, deps: {
   const threadKey = url.searchParams.get("threadKey") ?? "";
   const messageKey = url.searchParams.get("messageKey") ?? "";
   const index = Number(url.searchParams.get("index") ?? "0");
-  deps.log?.(mediaLogLine(creatorId, messageKey));
+  const mediaLine = mediaLogLine(creatorId, messageKey);
+  if (mediaLine) deps.log?.(mediaLine);
   if (!creatorId || !messageKey || !Number.isInteger(index) || index < 0) return new Response("Sin datos", { status: 404 });
   if (!creatorAllowed(actor, creatorId)) return new Response("Sin datos", { status: 403 });
   const row = await deps.findMedia(creatorId, threadKey, messageKey, index);
@@ -63,7 +72,8 @@ export async function handleVaultMedia(request: Request, deps: {
   const mediaId = url.searchParams.get("mediaId") ?? "";
   const rawVariant = url.searchParams.get("variant");
   const variant = rawVariant === "full" || rawVariant === "clip" ? rawVariant : "preview";
-  deps.log?.(mediaLogLine(creatorId, mediaId));
+  const mediaLine = mediaLogLine(creatorId, mediaId);
+  if (mediaLine) deps.log?.(mediaLine);
   if (!creatorId || !mediaId) return new Response("Sin datos", { status: 404 });
   if (!creatorAllowed(actor, creatorId)) return new Response("Sin datos", { status: 403 });
   if (variant === "preview" && !request.headers.get("range")) {

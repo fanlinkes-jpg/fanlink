@@ -3,7 +3,7 @@ import { authConfigured, DEV_USER_ID, requireUserId, UnauthorizedError } from "@
 import { getSql } from "@/lib/db";
 import { getOfSessionManager } from "@/lib/of-sessions-runtime.server";
 import { ensureStaff } from "@/lib/workspace-store";
-import { handleVaultMedia } from "../../../server/of-sessions/http/vault-http.ts";
+import { handleVaultMedia, noteVaultPlayRequest } from "../../../server/of-sessions/http/vault-http.ts";
 import { readSessionMediaResult, videoBytesAccepted, videoFollowUp } from "../../../server/of-sessions/sync/media-bytes.ts";
 import { accountCreatorIds } from "../../../server/of-sessions/http/vault-accounts.ts";
 import { fetchSignedVault } from "../../../server/of-sessions/sync/of-chat-api.ts";
@@ -16,6 +16,7 @@ export const Route = createFileRoute("/api/vault-media")({
   server: {
     handlers: {
       GET: async ({ request }) => {
+        noteVaultPlayRequest(request);
         try {
           const userId = await requireUserId();
           const sql = await getSql();

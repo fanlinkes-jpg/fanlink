@@ -396,16 +396,9 @@ function thumbOf(row: Record<string, unknown>): string | null {
   return firstFileUrl(files?.thumb) ?? firstFileUrl(row.thumb);
 }
 
-/** Clip de verdad: la rendición más pequeña de `videoSources`, o preview/squarePreview si el archivo es vídeo. Una jpg no se reproduce. */
+/** Misma elección que «Ver». Una jpg no se reproduce. */
 function clipOf(row: Record<string, unknown>): string | null {
-  const sources = nested(row.videoSources);
-  if (!sources) return null;
-  const keys = Object.keys(sources).filter((key) => /^\d+$/.test(key)).sort((left, right) => Number(left) - Number(right));
-  for (const key of keys) {
-    const url = playableFrom(sources[key]);
-    if (url) return url;
-  }
-  return null;
+  return choosePlayableVideo(row)?.url ?? null;
 }
 
 /** La CDN de OnlyFans suele firmar el archivo sin extensión. Una jpg sigue sin valer. */
@@ -440,6 +433,19 @@ export function mediaMemberIds(row: Record<string, unknown>): string[] {
  * Una jpg de thumb, preview o squarePreview no vale.
  */
 export function videoFileOf(row: Record<string, unknown>): string | null {
+  const chosen = choosePlayableVideo(row);
+  const mark = vaultFolderMark(textOf(row.id) ?? "");
+  const shape = videoShapeLine(row);
+  if (chosen) {
+    if (liveViewDebug()) console.info(`[fanlink:vault] video medio=${mark} elige=${chosen.name} ${shape}`.slice(0, 360));
+    return chosen.url;
+  }
+  console.info(`[fanlink:vault] video medio=${mark} motivo=sin-url ${shape}`.slice(0, 360));
+  return null;
+}
+
+/** «Ver» y el hover recorren los campos en el mismo orden y se quedan con el primero que es vídeo. */
+export function choosePlayableVideo(row: Record<string, unknown>): { name: string; url: string } | null {
   const files = nested(row.files);
   const full = nested(files?.full);
   const source = nested(row.source) ?? nested(files?.source);
@@ -457,23 +463,10 @@ export function videoFileOf(row: Record<string, unknown>): string | null {
       fields.push({ name: `videoSources.${key}`, value: sources[key] });
     }
   }
-  const notes: string[] = [];
-  let chosen: { name: string; url: string } | null = null;
   for (const field of fields) {
     const url = playableFrom(field.value);
-    if (url) {
-      chosen = { name: field.name, url };
-      break;
-    }
-    notes.push(`campo=${field.name} motivo=${fieldReason(field.value)}`);
+    if (url) return { name: field.name, url };
   }
-  const mark = vaultFolderMark(textOf(row.id) ?? "");
-  const shape = videoShapeLine(row);
-  if (chosen) {
-    if (liveViewDebug()) console.info(`[fanlink:vault] video medio=${mark} elige=${chosen.name} ${shape}`.slice(0, 360));
-    return chosen.url;
-  }
-  console.info(`[fanlink:vault] video medio=${mark} motivo=sin-url ${shape} ${notes.join(" ")}`.slice(0, 360));
   return null;
 }
 
@@ -495,12 +488,6 @@ export function videoShapeLine(row: Record<string, unknown>): string {
     parts.push(keys.length ? `videoSources=${keys.map((key) => `${key}:${valueKind(sources[key])}`).join(",")}` : "videoSources=vacio");
   }
   return parts.join(" ");
-}
-
-function fieldReason(value: unknown): string {
-  if (value == null || value === "") return "ausente";
-  if (Array.isArray(value) && value.length === 0) return "vacio";
-  return valueKind(value) === "imagen" ? "imagen" : "rechazado";
 }
 
 function valueKind(value: unknown): string {

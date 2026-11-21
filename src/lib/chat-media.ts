@@ -20,7 +20,7 @@ export function vaultMediaSrc(
   page?: { list?: string | null; listId?: string | null; offset?: number | null; part?: "head" | null },
 ): string {
   const params = new URLSearchParams({ creatorId, mediaId, variant });
-  const list = page?.list?.trim();
+  const list = (page?.list ?? page?.listId)?.trim();
   if (list) params.set("list", list.slice(0, 80));
   if (page?.offset != null && Number.isFinite(page.offset) && page.offset > 0) {
     params.set("offset", String(Math.min(2_000, Math.floor(page.offset))));

@@ -955,15 +955,15 @@ test("una carpeta con conteo pide su página aunque el presupuesto se haya acaba
       });
     }
     const list = url.searchParams.get("list");
-    if (list === "81001") return Response.json({ list: [{ id: 1, type: "video", duration: 3 }], hasMore: false });
+    if (list === "81001") return Response.json({ list: [{ id: 1, type: "video", duration: 3 }], hasMore: true });
     if (list === "81002") return Response.json({ list: [{ id: 2, type: "photo" }], hasMore: false });
     return Response.json({ list: [{ id: 9, type: "photo" }], hasMore: false });
   }) as typeof fetch;
   try {
-    for (const file of ["0037_vault_mirror.sql", "0050_vault_list_counts.sql", "0054_vault_list_members.sql"]) {
+    for (const file of ["0037_vault_mirror.sql", "0038_vault_fan_filter.sql", "0050_vault_list_counts.sql", "0054_vault_list_members.sql"]) {
       await db.exec(await readFile(path.join(root, "migrations", file), "utf8"));
     }
-    await walkVault({
+    const walked = await walkVault({
       creatorId: "3zk7kbr",
       budget: 1,
       state: storedState(),
@@ -974,6 +974,19 @@ test("una carpeta con conteo pide su página aunque el presupuesto se haya acaba
     });
     assert.equal(seen.some((href) => href.includes("list=81001") && href.includes("field=recent")), true);
     assert.equal(seen.some((href) => href.includes("list=81002") && href.includes("field=recent")), true);
+    assert.equal(walked.hasMore, true);
+    const pending = await queryVaultForActor(asSql(db), { userId: "dueña", role: "owner", perms: ["vault"] }, {
+      creatorId: "3zk7kbr",
+      remember: false,
+      query: { ...emptyVaultQuery(), folderId: "81001", scope: "carpeta" },
+    });
+    assert.deepEqual(pending.payload.items.map((item) => item.id), ["1"]);
+    const next = await queryVaultForActor(asSql(db), { userId: "dueña", role: "owner", perms: ["vault"] }, {
+      creatorId: "3zk7kbr",
+      remember: false,
+      query: { ...emptyVaultQuery(), folderId: "81002", scope: "carpeta" },
+    });
+    assert.deepEqual(next.payload.items.map((item) => item.id), ["2"]);
   } finally {
     clearSignRulesCache();
     clearVaultWalkCache();

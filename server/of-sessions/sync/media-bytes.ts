@@ -2,6 +2,9 @@ import { sessionForApi } from "./of-chat-api.ts";
 import { mediaHostAllowed, nextMediaUrl } from "./history.ts";
 import { BROWSER_FINGERPRINT } from "../sessions/browser-factory.ts";
 
+/** La descarga de un vídeo no espera más que esto. */
+export const VIDEO_FETCH_TIMEOUT_MS = 20_000;
+
 /** Dos páginas de la bóveda (40 + 40) y un margen, para no perder la anterior al pasar de página. */
 export const VAULT_THUMB_CACHE_MAX = 160;
 /** Tope de bytes vivos. Una miniatura que no cabe no entra. */
@@ -162,12 +165,14 @@ export async function readSessionMediaResult(
       const loaded = await loadMedia(target, attempt, options?.expectVideo === true);
       const media = asMedia(loaded);
       if (media) {
-        if (index > 0) noteVaultThumbRecovered(creatorId, media.status);
+        if (index > 0 && !options?.expectVideo) noteVaultThumbRecovered(creatorId, media.status);
         return { status: media.status, media };
       }
       lastStatus = loaded.status;
-      if (lastStatus === 403 || lastStatus === 410) noteVaultThumb(lastStatus, attempt.cookie ? "sesion" : "sin-cookie");
-      else break;
+      if (lastStatus === 403 || lastStatus === 410) {
+        if (options?.expectVideo) console.info(`[fanlink:vault] reproductor error status=${lastStatus} motivo=cdn`);
+        else noteVaultThumb(lastStatus, attempt.cookie ? "sesion" : "sin-cookie");
+      } else break;
     }
     return { status: lastStatus, media: null };
   } catch {
@@ -201,9 +206,13 @@ export function videoFollowUp(status: number, contentType: string | null, expect
   return "drop";
 }
 
+export async function fetchVaultMedia(target: string, headers: Record<string, string>, expectVideo = false): Promise<LoadResult> {
+  return loadMedia(target, headers, expectVideo);
+}
+
 async function loadMedia(target: string, headers: Record<string, string>, expectVideo = false): Promise<LoadResult> {
   let response: Response;
-  const signal = expectVideo ? AbortSignal.timeout(20_000) : undefined;
+  const signal = expectVideo ? AbortSignal.timeout(VIDEO_FETCH_TIMEOUT_MS) : undefined;
   try {
     response = await fetch(target, { headers, redirect: "manual", signal });
   } catch (error) {
@@ -238,7 +247,8 @@ async function loadMedia(target: string, headers: Record<string, string>, expect
       await response.body?.cancel().catch(() => undefined);
       return { status: response.status };
     }
-    if (expectVideo && ambiguousVideoType(upstreamType) && media.stream) {
+    const atStart = rangeOpensAtZero(headers.range);
+    if (expectVideo && ambiguousVideoType(upstreamType) && atStart && media.stream) {
       const peeked = await peekFtyp(media.stream);
       media.stream = peeked.stream;
       if (!hasFtyp(peeked.head)) {
@@ -246,7 +256,7 @@ async function loadMedia(target: string, headers: Record<string, string>, expect
         return { status: response.status };
       }
       media.contentType = "video/mp4";
-    } else if (expectVideo && !videoBytesAccepted(media.contentType)) {
+    } else if (expectVideo && !ambiguousVideoType(upstreamType) && !videoBytesAccepted(media.contentType)) {
       console.info(`[fanlink:vault] reproductor error tipo=${media.contentType || "sin"}`);
       return { status: response.status };
     }
@@ -273,6 +283,13 @@ const thumbRecovered = new Set<string>();
 export function mediaAcceptHeader(target: string, _range: string | null, expectVideo = false): string {
   if (expectVideo || isVideoTarget(target)) return "video/*,*/*";
   return "image/avif,image/webp,image/apng,image/*,*/*;q=0.8";
+}
+
+function rangeOpensAtZero(range: string | undefined): boolean {
+  if (!range) return true;
+  const match = /^bytes=(\d+)-/i.exec(range.trim());
+  if (!match) return true;
+  return Number(match[1]) === 0;
 }
 
 function isTimeoutError(error: unknown): boolean {

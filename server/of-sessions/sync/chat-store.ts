@@ -257,12 +257,11 @@ export async function saveChatRead(
     await sql.query("rollback").catch(() => undefined);
     throw error;
   }
-  for (const event of events) {
-    const fan = liveViewDebug()
-      ? (event.fanName ?? event.fanKey ?? "fan")
-      : vaultFolderMark(event.fanKey ?? event.fanName ?? "fan");
-    const excerpt = liveViewDebug() ? ` excerpt=${event.excerpt}` : "";
-    console.info(`[fanlink:chat] new_fan_message creator=${event.creatorId} fan=${fan} at=${event.sentAt}${excerpt}`);
+  if (liveViewDebug()) {
+    for (const event of events) {
+      const fan = vaultFolderMark(event.fanKey ?? event.fanName ?? "fan");
+      console.info(`[fanlink:chat] new_fan_message creator=${vaultFolderMark(event.creatorId)} fan=${fan} at=${event.sentAt}`);
+    }
   }
   return events;
 }

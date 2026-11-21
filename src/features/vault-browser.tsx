@@ -267,21 +267,24 @@ export function VaultBrowser({
                 const selected = picked.includes(item.id);
                 const sentLabel = vaultSentPill(item.sent ?? null, item.sentCount ?? null);
                 return (
-                <button
+                <div
                   key={item.id}
-                  type="button"
-                  aria-pressed={selected}
-                  disabled={item.blocked || !onAttach}
                   title={usageOf(item)}
-                  className={`flex w-full flex-col bg-white text-left shadow-sm disabled:opacity-50 ${selected ? "ring-2 ring-[#00aff0]" : ""}`}
+                  className={`flex w-full flex-col bg-white text-left shadow-sm ${selected ? "ring-2 ring-[#00aff0]" : ""}`}
                   onMouseEnter={() => { if (item.kind === "video") setHoverId(item.id); }}
                   onMouseLeave={() => setHoverId((current) => current === item.id ? null : current)}
-                  onClick={() => setPicked((current) => current.includes(item.id) ? current.filter((id) => id !== item.id) : [...current, item.id])}
                 >
+                  <button
+                    type="button"
+                    aria-pressed={selected}
+                    disabled={item.blocked || !onAttach}
+                    className="block w-full disabled:opacity-50"
+                    onClick={() => setPicked((current) => current.includes(item.id) ? current.filter((id) => id !== item.id) : [...current, item.id])}
+                  >
                   <span data-vault-card style={VAULT_CARD_FRAME}>
                     <VaultThumb creatorId={creatorId} itemId={item.id} title={item.title} listId={thumbPage.listId} offset={thumbPage.offset} />
                     {hoverId === item.id && item.kind === "video" && item.hoverClip ? (
-                      <HoverClip src={vaultMediaSrc(creatorId, item.id, "clip", thumbPage)} title={item.title} />
+                      <HoverClip src={vaultMediaSrc(creatorId, item.id, "clip", { ...thumbPage, part: "head" })} title={item.title} />
                     ) : null}
                     <span className={`absolute left-1.5 top-1.5 z-10 grid h-5 w-5 place-items-center rounded-full text-[11px] font-semibold ${selected ? "bg-[#00aff0] text-white" : "bg-white/80 text-transparent"}`}>{selected ? picked.indexOf(item.id) + 1 : ""}</span>
                     <span className="absolute right-1.5 top-1.5 z-10 flex max-w-[70%] flex-col items-end gap-1">
@@ -292,6 +295,7 @@ export function VaultBrowser({
                       ) : null}
                     </span>
                   </span>
+                  </button>
                   <span className="line-clamp-2 flex flex-wrap items-center gap-1 px-1 py-1">
                     {item.dateLabel && item.dateLabel !== "Sin datos" ? (
                       <span className="rounded-full bg-[#1c2333] px-1.5 py-0.5 text-[10px] text-white">{item.dateLabel}</span>
@@ -302,16 +306,14 @@ export function VaultBrowser({
                     {item.priceLabel && item.priceLabel !== "Sin datos" && item.priceLabel !== "Free" ? (
                       <span className="rounded-full bg-[#1c2333] px-1.5 py-0.5 text-[10px] text-white">{item.priceLabel}</span>
                     ) : null}
-                    <span
-                      role="button"
-                      tabIndex={0}
+                    <button
+                      type="button"
                       aria-label={`Ver ${item.title}`}
                       className="rounded-full bg-[#1c2333] px-1.5 py-0.5 text-[10px] text-white"
-                      onClick={(event) => { event.stopPropagation(); setPreview(item); }}
-                      onKeyDown={(event) => { if (event.key === "Enter") { event.stopPropagation(); setPreview(item); } }}
-                    >Ver</span>
+                      onClick={() => setPreview(item)}
+                    >Ver</button>
                   </span>
-                </button>
+                </div>
                 );
               })}
             </div>
@@ -553,19 +555,33 @@ function HoverClip({ src, title }: { src: string; title: string }) {
 }
 
 function VaultPlayback({ src }: { src: string }) {
+  const node = useRef<HTMLVideoElement>(null);
   const [state, setState] = useState<"carga" | "ok" | "error" | "timeout">("carga");
   useEffect(() => {
+    const video = node.current;
     setState("carga");
+    if (!src || !video) return;
+    video.src = src;
+    video.load();
     const handle = setTimeout(() => setState((current) => current === "carga" ? "timeout" : current), 20_000);
-    return () => clearTimeout(handle);
+    return () => {
+      clearTimeout(handle);
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+    };
   }, [src]);
+  if (!src) return <p className="text-sm text-white">Vídeo no disponible</p>;
   if (state === "timeout") return <p className="text-sm text-white">No se ha podido cargar el vídeo</p>;
   if (state === "error") return <p className="text-sm text-white">Vídeo no disponible</p>;
   return (
     <video
+      ref={node}
+      data-playback={src}
       controls
       autoPlay
       playsInline
+      preload="auto"
       className="h-full w-full bg-black object-contain"
       src={src}
       onCanPlay={() => setState("ok")}
