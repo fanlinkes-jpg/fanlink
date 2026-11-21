@@ -291,7 +291,7 @@ describe("miniaturas de la bóveda", { concurrency: 1 }, () => {
       }),
     });
     assert.equal(media?.contentType, "image/jpeg");
-    assert.equal(seen.some((href) => href.includes("offset=40") && href.includes("list=sets")), true);
+    assert.equal(seen.some((href) => href.includes("offset=40") && href.includes("list_id=sets")), true);
     assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("offset=0")), false);
     const db = new PGlite();
     try {

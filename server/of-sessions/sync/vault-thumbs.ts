@@ -1,6 +1,6 @@
 import { BROWSER_FINGERPRINT } from "../sessions/browser-factory.ts";
 import { mediaHostAllowed, nextMediaUrl } from "./history.ts";
-import { getVaultThumb, mediaHeaderAttempts, noteVaultThumb, putVaultThumb, type MediaBytes } from "./media-bytes.ts";
+import { getVaultThumb, mediaHeaderAttempts, noteVaultThumb, noteVaultThumbRecovered, putVaultThumb, type MediaBytes } from "./media-bytes.ts";
 import { sessionForApi } from "./of-chat-api.ts";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
 
@@ -89,8 +89,8 @@ export function signedUrlExpired(raw: string, nowMs: number): boolean {
   }
 }
 
-export function logThumbStatus(status: number): void {
-  noteVaultThumb(status);
+export function logThumbStatus(status: number, intento?: string): void {
+  noteVaultThumb(status, intento);
 }
 
 /**
@@ -141,7 +141,6 @@ async function readImage(
     logThumbStatus(read.status);
     return null;
   }
-  logThumbStatus(read.status);
   return "rejected";
 }
 
@@ -164,7 +163,7 @@ async function borrowOnce(
       putVaultThumb(input.creatorId, input.mediaId, got.body, got.contentType);
       return { status: got.status || 200, body: got.body, contentType: got.contentType, contentLength: got.body.byteLength };
     }
-    logThumbStatus(got.status);
+    logThumbStatus(got.status, "perfil");
     return null;
   } finally {
     await browser.release();
@@ -200,14 +199,13 @@ export async function preloadVaultThumbs(input: {
       failed.push({ id: item.id, url, expired: true });
       continue;
     }
-    const hit = await fetchThumb(input.fetch, url, input.headers);
+    const hit = await fetchThumb(input.fetch, url, input.headers, input.creatorId);
     if (hit.body) {
       putVaultThumb(input.creatorId, item.id, hit.body, hit.contentType);
       stored += 1;
       continue;
     }
     if (hit.status === 403 || hit.status === 410) {
-      note(hit.status);
       failed.push({ id: item.id, url, expired: false });
       continue;
     }
@@ -231,13 +229,13 @@ export async function preloadVaultThumbs(input: {
       continue;
     }
     if (next === item.url) continue;
-    const hit = await fetchThumb(input.fetch, next, input.headers);
+    const hit = await fetchThumb(input.fetch, next, input.headers, input.creatorId);
     if (hit.body) {
       putVaultThumb(input.creatorId, item.id, hit.body, hit.contentType);
       stored += 1;
       continue;
     }
-    note(hit.status);
+    if (hit.status !== 403 && hit.status !== 410) note(hit.status);
     if ((hit.status === 403 || hit.status === 410) && !signedUrlExpired(next, input.now)) {
       forBrowser.push({ id: item.id, url: next });
     }
@@ -314,13 +312,21 @@ async function fetchThumb(
   fetchImpl: typeof fetch,
   target: string,
   headers: Record<string, string>,
+  creatorId: string,
 ): Promise<{ status: number; body: Uint8Array | null; contentType: string }> {
   if (!mediaHostAllowed(target)) return { status: 0, body: null, contentType: "" };
   let last = { status: 0, body: null as Uint8Array | null, contentType: "" };
-  for (const attempt of mediaHeaderAttempts(headers)) {
+  const attempts = mediaHeaderAttempts(headers);
+  for (let index = 0; index < attempts.length; index += 1) {
+    const attempt = attempts[index] ?? headers;
     last = await fetchThumbOnce(fetchImpl, target, attempt);
-    if (last.body) return last;
-    if (last.status !== 403 && last.status !== 410) return last;
+    const intento = attempt.cookie ? "sesion" : "sin-cookie";
+    if (last.body) {
+      if (index > 0) noteVaultThumbRecovered(creatorId, last.status);
+      return last;
+    }
+    if (last.status === 403 || last.status === 410) noteVaultThumb(last.status, intento);
+    else return last;
   }
   return last;
 }

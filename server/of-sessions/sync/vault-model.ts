@@ -84,16 +84,42 @@ export function suggestVaultPrice(input: {
 
 export function parseVaultBundle(payload: unknown): { items: VaultFile[]; lists: VaultList[] } {
   const lists = vaultLists(payload);
+  collectFolders(payload, lists);
   const raw = vaultList(payload);
-  for (const entry of raw) {
-    if (!isFolderRow(entry)) continue;
-    const row = entry as Record<string, unknown>;
-    const id = textOf(row.id);
-    const name = textOf(row.name ?? row.title);
-    if (id && name && !lists.some((list) => list.id === id)) lists.push({ id, name });
-  }
   const items = raw.filter((entry) => !isFolderRow(entry)).flatMap((item) => parseVaultItem(item, lists));
   return { items, lists };
+}
+
+/** `list` de carpetas y `list` de medios comparten la clave. El de carpetas no pagina el otro. */
+export function vaultPayloadKind(payload: unknown): "lists" | "media" | "other" {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return "other";
+  const row = payload as Record<string, unknown>;
+  const list = firstNamedArray(row, ["list", "lists", "folders"]);
+  if (!list) return "other";
+  if (list.length === 0) {
+    const folders = Array.isArray(row.lists) || Array.isArray(row.folders) || "all" in row || "canCreateVaultLists" in row;
+    return folders ? "lists" : "media";
+  }
+  const folders = list.filter((item) => isFolderRow(item)).length;
+  if (folders === list.length) return "lists";
+  return "media";
+}
+
+/** Nombres de claves, nunca valores. Sirve para ver qué manda OF cuando el conteo sale vacío. */
+export function vaultKeyNames(value: unknown): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "ninguna";
+  const keys = Object.keys(value).filter((key) => /^[a-z][a-z0-9_]{0,40}$/i.test(key)).slice(0, 16);
+  return keys.length ? keys.join(",") : "ninguna";
+}
+
+/** Conteos de "Todos los medios". OF los manda en `all`, aparte del array `list`. */
+export function vaultAllList(payload: unknown): VaultList | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const all = (payload as Record<string, unknown>).all;
+  if (!all || typeof all !== "object" || Array.isArray(all)) return null;
+  const counts = listCounts(all as Record<string, unknown>);
+  if (counts.photos == null && counts.videos == null && counts.gifs == null && counts.audios == null) return null;
+  return { id: "all", name: "Todos", ...counts, sourceKeys: vaultKeyNames(all) };
 }
 
 function isFolderRow(item: unknown): boolean {
@@ -351,18 +377,41 @@ function listMembership(row: Record<string, unknown>, lists: readonly VaultList[
   return { listId, listName, listIds: [...new Set(parsed.map((list) => list.id))] };
 }
 
+function collectFolders(payload: unknown, lists: VaultList[]): void {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
+  for (const value of Object.values(payload as Record<string, unknown>)) {
+    if (!Array.isArray(value)) continue;
+    for (const entry of value) {
+      const folder = folderFrom(entry);
+      if (folder && !lists.some((list) => list.id === folder.id)) lists.push(folder);
+    }
+  }
+}
+
+function folderFrom(entry: unknown): VaultList | null {
+  if (!isFolderRow(entry)) return null;
+  const row = entry as Record<string, unknown>;
+  const id = textOf(row.id);
+  const name = textOf(row.name ?? row.title);
+  if (!id || !name) return null;
+  return { id, name, ...listCounts(row), sourceKeys: vaultKeyNames(row) };
+}
+
+function firstNamedArray(row: Record<string, unknown>, keys: readonly string[]): unknown[] | null {
+  for (const key of keys) {
+    if (Array.isArray(row[key])) return row[key] as unknown[];
+  }
+  return null;
+}
+
 function vaultLists(payload: unknown): VaultList[] {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return [];
   const row = payload as Record<string, unknown>;
   const raw = row.lists ?? row.folders;
   if (!Array.isArray(raw)) return [];
   return raw.flatMap((item) => {
-    if (!item || typeof item !== "object") return [];
-    const list = item as Record<string, unknown>;
-    const id = textOf(list.id);
-    const name = textOf(list.name ?? list.title);
-    if (!id || !name) return [];
-    return [{ id, name, ...listCounts(list), sourceKeys: listSourceKeys(list) }];
+    const folder = folderFrom(item);
+    return folder ? [folder] : [];
   });
 }
 
@@ -376,10 +425,6 @@ function listCounts(list: Record<string, unknown>): Pick<VaultList, "photos" | "
   };
 }
 
-function listSourceKeys(list: Record<string, unknown>): string {
-  const keys = Object.keys(list).filter((key) => /^[a-z][a-z0-9_]{0,40}$/i.test(key)).slice(0, 12);
-  return keys.length ? keys.join(",") : "ninguna";
-}
 
 /** El medio pedido con `list=<id>` pertenece a esa lista aunque el JSON no traiga listStates. */
 export function stampVaultList(item: VaultFile, listId: string, listName: string | null): VaultFile {

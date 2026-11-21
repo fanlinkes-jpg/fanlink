@@ -156,16 +156,17 @@ export async function readSessionMediaResult(
     let lastStatus = 0;
     const attempts = mediaHeaderAttempts(headers);
     for (let index = 0; index < attempts.length; index += 1) {
-      const loaded = await loadMedia(target, attempts[index] ?? headers, Boolean(header));
+      const attempt = attempts[index] ?? headers;
+      const loaded = await loadMedia(target, attempt, Boolean(header));
       const media = asMedia(loaded);
       if (media) {
-        if (index > 0) noteRecovered(creatorId, lastStatus);
+        if (index > 0) noteVaultThumbRecovered(creatorId, media.status);
         return { status: media.status, media };
       }
       lastStatus = loaded.status;
-      if (lastStatus !== 403 && lastStatus !== 410) break;
+      if (lastStatus === 403 || lastStatus === 410) noteVaultThumb(lastStatus, attempt.cookie ? "sesion" : "sin-cookie");
+      else break;
     }
-    if (lastStatus === 403 || lastStatus === 410) noteVaultThumb(lastStatus);
     return { status: lastStatus, media: null };
   } catch {
     return { status: 0, media: null };
@@ -211,14 +212,15 @@ async function loadMedia(target: string, headers: Record<string, string>, ranged
 const thumbNotes = new Set<string>();
 const thumbRecovered = new Set<string>();
 
-export function noteVaultThumb(status: number): void {
-  const key = String(status);
+export function noteVaultThumb(status: number, intento?: string): void {
+  const key = `${status}:${intento ?? ""}`;
   if (thumbNotes.has(key)) return;
   thumbNotes.add(key);
-  console.info(`[fanlink:vault] miniatura status=${status}`);
+  const suffix = intento ? ` intento=${intento}` : "";
+  console.info(`[fanlink:vault] miniatura status=${status}${suffix}`);
 }
 
-function noteRecovered(creatorId: string, status: number): void {
+export function noteVaultThumbRecovered(creatorId: string, status: number): void {
   if (thumbRecovered.has(creatorId)) return;
   thumbRecovered.add(creatorId);
   console.info(`[fanlink:vault] miniatura status=${status} reintento=sesion`);

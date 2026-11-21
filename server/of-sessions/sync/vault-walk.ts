@@ -1,7 +1,7 @@
 import type { StorageStateFile } from "../sessions/storage-state.ts";
 import { fetchSignedVault } from "./of-chat-api.ts";
 import type { ReadSql } from "./store.ts";
-import { parseVaultBundle, type VaultFile, type VaultList } from "./vault-model.ts";
+import { parseVaultBundle, vaultAllList, vaultKeyNames, vaultPayloadKind, type VaultFile, type VaultList } from "./vault-model.ts";
 import { persistVaultRead } from "./vault-store.ts";
 
 /** Pausa entre páginas. Más lenta que el chat: la bóveda pesa. */
@@ -93,6 +93,7 @@ async function runWalk(input: WalkInput, listId: string, offset: number): Promis
         continue;
       }
       logList(folder);
+      if (folder.hasMedia === false) continue;
       const child = await walkOne(input, folder.id, 0, false, budget, true);
       if (child.sessionRejected || child.signatureRejected || child.retryAfterMs > 0 || child.hasMore) {
         main.hasMore = true;
@@ -154,6 +155,7 @@ async function walkOne(
       break;
     }
     payloads.push(...read.payloads);
+    for (const payload of read.payloads) logPayload(payload);
     const saved = await persistVaultRead(input.sql, input.creatorId, read.payloads, { listId, offset });
     if (thumbItems.length === 0) thumbItems = saved;
     let freshCount = 0;
@@ -228,6 +230,7 @@ async function walkListPages(input: WalkInput, payloads: readonly unknown[], bud
     });
     if (read.sessionRejected || read.signatureRejected || read.retryAfterMs > 0 || !read.payloads.length) break;
     extra.push(...read.payloads);
+    for (const payload of read.payloads) logPayload(payload);
     await persistVaultRead(input.sql, input.creatorId, read.payloads, { listId: "all", offset: 0 });
     body = listsBody(read.payloads);
     console.info(`[fanlink:vault] listas offset=${offset} n=${listCount(body)} hasMore=${explicitHasMore(body) ? "si" : "no"}`);
@@ -295,23 +298,32 @@ function listsOf(payloads: readonly unknown[]): VaultList[] {
 }
 
 function logList(list: VaultList): void {
-  const missing = list.photos == null && list.videos == null && list.gifs == null && list.audios == null;
-  const clues = missing ? ` claves=${safe(list.sourceKeys ?? "ninguna")}` : "";
-  console.info(`[fanlink:vault] lista id=${safe(list.id)} nombre=${safe(list.name)} fotos=${num(list.photos)} videos=${num(list.videos)} gifs=${num(list.gifs)} audios=${num(list.audios)}${clues}`);
+  console.info(`[fanlink:vault] lista id=${safe(list.id)} nombre=${safe(list.name)} fotos=${num(list.photos)} videos=${num(list.videos)} gifs=${num(list.gifs)} audios=${num(list.audios)} claves=${safe(list.sourceKeys ?? "ninguna")}`);
+}
+
+function logPayload(payload: unknown): void {
+  const kind = vaultPayloadKind(payload);
+  if (kind === "other" || !payload || typeof payload !== "object" || Array.isArray(payload)) return;
+  const row = payload as Record<string, unknown>;
+  const list = Array.isArray(row.list) ? row.list : Array.isArray(row.lists) ? row.lists : [];
+  const first = list.find((item) => item && typeof item === "object" && !Array.isArray(item));
+  const route = kind === "lists" ? "lists" : "media";
+  const itemKeys = first ? vaultKeyNames(first) : "ausente";
+  console.info(`[fanlink:vault] respuesta ruta=${route} claves=${safe(vaultKeyNames(row))} n=${list.length} hasMore=${hasMoreLabel(row)} itemClaves=${safe(itemKeys)}`);
+  const all = kind === "lists" ? vaultAllList(payload) : null;
+  if (all) logList(all);
 }
 
 function mediaBody(payloads: readonly unknown[]): unknown {
-  return payloads.find((payload) => {
-    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
-    return Array.isArray((payload as Record<string, unknown>).list);
-  }) ?? null;
+  for (let index = payloads.length - 1; index >= 0; index -= 1) {
+    if (vaultPayloadKind(payloads[index]) === "media") return payloads[index];
+  }
+  return null;
 }
 
 function listsBody(payloads: readonly unknown[]): unknown {
   for (let index = payloads.length - 1; index >= 0; index -= 1) {
-    const payload = payloads[index];
-    if (!payload || typeof payload !== "object" || Array.isArray(payload)) continue;
-    if (Array.isArray((payload as Record<string, unknown>).lists)) return payload;
+    if (vaultPayloadKind(payloads[index]) === "lists") return payloads[index];
   }
   return null;
 }
@@ -323,9 +335,12 @@ function mediaCount(body: unknown): number {
 }
 
 function listCount(body: unknown): number {
-  if (!body || typeof body !== "object") return 0;
-  const list = (body as Record<string, unknown>).lists;
-  return Array.isArray(list) ? list.length : 0;
+  if (!body || typeof body !== "object" || vaultPayloadKind(body) !== "lists") return 0;
+  const raw = body as Record<string, unknown>;
+  if (Array.isArray(raw.list)) return raw.list.length;
+  if (Array.isArray(raw.lists)) return raw.lists.length;
+  if (Array.isArray(raw.folders)) return raw.folders.length;
+  return 0;
 }
 
 function explicitHasMore(body: unknown): boolean {
@@ -338,6 +353,11 @@ function hasMoreField(body: unknown): boolean {
   if (!body || typeof body !== "object") return false;
   const raw = body as Record<string, unknown>;
   return "hasMore" in raw || "has_more" in raw;
+}
+
+function hasMoreLabel(body: unknown): string {
+  if (!hasMoreField(body)) return "ausente";
+  return explicitHasMore(body) ? "si" : "no";
 }
 
 function followingOffset(body: unknown, offset: number, count: number): number {

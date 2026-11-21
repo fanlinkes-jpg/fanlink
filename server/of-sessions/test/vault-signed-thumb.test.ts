@@ -45,7 +45,9 @@ test("un 403 sin cookie se recupera con la sesión y no se anota una vez por min
     assert.equal(stored, 8);
     assert.equal(bare, 8);
     assert.equal(authed, 8);
-    assert.equal(lines.filter((line) => line.includes("miniatura status=403")).length, 0);
+    assert.equal(lines.filter((line) => line.includes("status=403 intento=sin-cookie")).length, 1);
+    assert.equal(lines.filter((line) => line.includes("reintento=sesion")).length, 1);
+    assert.equal(lines.filter((line) => line.includes("miniatura status=403") && !line.includes("intento=")).length, 0);
     assert.equal(getVaultThumb("vtdcoi5", "m7")?.contentType, "image/jpeg");
   } finally {
     console.info = previous;
@@ -90,7 +92,9 @@ test("si la sesión también recibe 403 se refresca la URL firmada una sola vez"
     });
     assert.equal(refreshes, 1);
     assert.equal(stored, 2);
-    assert.equal(lines.filter((line) => line.includes("[fanlink:vault] miniatura status=403")).length, 1);
+    assert.equal(lines.filter((line) => line.includes("status=403 intento=sin-cookie")).length, 1);
+    assert.equal(lines.filter((line) => line.includes("status=403 intento=sesion")).length, 1);
+    assert.equal(lines.some((line) => line.includes("reintento=sesion")), false);
     assert.equal(getVaultThumb("3zk7kbr", "v0")?.contentType, "image/jpeg");
   } finally {
     console.info = previous;

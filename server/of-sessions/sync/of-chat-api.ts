@@ -248,8 +248,29 @@ export type VaultFetchOptions = {
   includeLists?: boolean;
   /** false: no pide vault/media. */
   includeMedia?: boolean;
-  /** Página de vault/lists. El límite sigue siendo 100. */
+  /** Página de vault/lists. El límite es el de la web: 50. */
   listOffset?: number;
+}
+
+/** La web pide las carpetas de 50 en 50 (`view=main`) y sigue con offset mientras `hasMore`. */
+export const VAULT_LIST_LIMIT = 50;
+/** La web pide los medios de 24 en 24: type=all, field=recent, sort=desc, list_id solo con carpeta. */
+export const VAULT_MEDIA_LIMIT = 24;
+
+export function vaultListsPath(offset: number): string {
+  return `/api2/v2/vault/lists?view=main&offset=${offset}&limit=${VAULT_LIST_LIMIT}`;
+}
+
+export function vaultMediaPath(listId: string, offset: number): string {
+  const params = new URLSearchParams({
+    limit: String(VAULT_MEDIA_LIMIT),
+    offset: String(offset),
+    type: "all",
+    field: "recent",
+    sort: "desc",
+  });
+  if (listId !== "all") params.set("list_id", listId);
+  return `/api2/v2/vault/media?${params.toString()}`;
 };
 
 /**
@@ -280,8 +301,8 @@ export async function fetchSignedVault(state: StorageStateFile, deps: {
   const wantLists = options?.includeLists ?? skip === 0;
   const wantMedia = options?.includeMedia !== false;
   const paths = [
-    ...(wantLists ? [`/api2/v2/vault/lists?view=main&offset=${listSkip}&limit=100`] : []),
-    ...(wantMedia ? [`/api2/v2/vault/media?limit=40&offset=${skip}&field=recent&sort=desc&list=${encodeURIComponent(list)}`] : []),
+    ...(wantLists ? [vaultListsPath(listSkip)] : []),
+    ...(wantMedia ? [vaultMediaPath(list, skip)] : []),
   ];
   const payloads: unknown[] = [];
   let status: number | null = null;
