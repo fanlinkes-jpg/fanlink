@@ -1,6 +1,6 @@
 import type { ReadSql } from "./store.ts";
 import { emptyVaultQuery, vaultQueryFromUnknown, type VaultQuery } from "./vault-filter.ts";
-import { folderMediaCap, historyFromMedia, historyFromSends, mergeFanUses, mergeVaultList, parseVaultBundle, stampVaultList, vaultKindOf, type FanVaultUse, type VaultFile, type VaultList } from "./vault-model.ts";
+import { folderMediaCap, historyFromMedia, historyFromSends, isCandidateVideoUrl, mergeFanUses, mergeVaultList, parseVaultBundle, stampVaultList, vaultKindOf, type FanVaultUse, type VaultFile, type VaultList } from "./vault-model.ts";
 import type { SaleFolder } from "./vault-block.ts";
 import { itemSaleBlocked } from "./vault-block.ts";
 import { planVaultPieces, type VaultSendPiece } from "../send/vault-piece.ts";
@@ -220,8 +220,8 @@ async function rememberListMembers(sql: ReadSql, creatorId: string, listId: stri
 /** Medios ya guardados de esa carpeta. Si pasan del tope, el espejo está hinchado y no se usa. */
 export async function mirroredFolderItems(sql: ReadSql, creatorId: string, listId: string, cap: number): Promise<VaultFile[]> {
   if (!listId || listId === "all" || !(await hasColumn(sql, "of_vault_list_item", "item_key"))) return [];
-  const rows = await sql.query<{ item_key: string; title: string | null; kind: string | null }>(
-    `select item.item_key, item.title, item.kind
+  const rows = await sql.query<{ item_key: string; title: string | null; kind: string | null; seconds: number | null; preview: string | null }>(
+    `select item.item_key, item.title, item.kind, item.seconds, item.preview
      from of_vault_list_item member
      join of_vault_item item on item.creator_id = member.creator_id and item.item_key = member.item_key
      where member.creator_id = $1 and member.list_key = $2
@@ -233,8 +233,8 @@ export async function mirroredFolderItems(sql: ReadSql, creatorId: string, listI
     id: row.item_key,
     title: row.title ?? "Sin datos",
     kind: vaultKindOf(row.kind),
-    seconds: null,
-    preview: null,
+    seconds: row.seconds,
+    preview: row.preview,
     folder: null,
     tags: [],
     listId,
@@ -323,10 +323,8 @@ export async function storedVaultMediaUrls(sql: ReadSql, creatorId: string, medi
 }
 
 function videoUrlOnly(url: string | null): string | null {
-  if (!url) return null;
-  const path = url.split("?")[0]?.toLowerCase() ?? "";
-  if (path.endsWith(".mp4") || path.endsWith(".webm") || path.endsWith(".mov") || path.endsWith(".m4v")) return url;
-  return null;
+  if (!url || !isCandidateVideoUrl(url)) return null;
+  return url;
 }
 
 /** URL que puede reproducir un vídeo. Una miniatura no cuenta. */

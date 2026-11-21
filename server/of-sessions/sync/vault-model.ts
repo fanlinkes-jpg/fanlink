@@ -1,4 +1,5 @@
 import { textSaleBlocked } from "./vault-block.ts";
+import { liveViewDebug } from "../live/debug.ts";
 
 export type VaultKind = "foto" | "video" | "audio" | "gif" | null;
 
@@ -402,13 +403,13 @@ function clipOf(row: Record<string, unknown>): string | null {
     const keys = Object.keys(sources).filter((key) => /^\d+$/.test(key)).sort((left, right) => Number(left) - Number(right));
     for (const key of keys) {
       const url = mediaUrl(sources[key]);
-      if (url && isVideoUrl(url)) return url;
+      if (url && isCandidateVideoUrl(url)) return url;
     }
   }
   const files = nested(row.files);
-  for (const key of ["src", "source", "full", "preview", "squarePreview"]) {
+  for (const key of ["src", "source", "full"]) {
     const url = firstFileUrl(files?.[key]) ?? firstFileUrl(row[key]);
-    if (url && isVideoUrl(url)) return url;
+    if (url && isCandidateVideoUrl(url)) return url;
   }
   return null;
 }
@@ -425,6 +426,17 @@ function mediaUrl(value: unknown): string | null {
 }
 
 function isVideoUrl(url: string): boolean {
+  return isCandidateVideoUrl(url) && hasVideoExtension(url);
+}
+
+/** La CDN de OnlyFans suele firmar el archivo sin extensión. Una jpg sigue sin valer. */
+export function isCandidateVideoUrl(url: string): boolean {
+  if (!/^https?:\/\//i.test(url)) return false;
+  const path = url.split("?")[0]?.toLowerCase() ?? "";
+  return !/\.(jpe?g|png|gif|webp|avif|bmp)$/.test(path);
+}
+
+function hasVideoExtension(url: string): boolean {
   const path = url.split("?")[0]?.toLowerCase() ?? "";
   return path.endsWith(".mp4") || path.endsWith(".webm") || path.endsWith(".mov") || path.endsWith(".m4v");
 }
@@ -458,25 +470,44 @@ export function videoFileOf(row: Record<string, unknown>): string | null {
   const full = nested(files?.full);
   const source = nested(row.source) ?? nested(files?.source);
   const sources = nested(row.videoSources);
-  const candidates: unknown[] = [
-    directMediaUrl(files?.full),
-    full?.sources,
-    directMediaUrl(source?.source ?? source),
-    directMediaUrl(row.source),
-    sources?.["720"],
-    sources?.["240"],
+  const fields: Array<{ name: string; value: unknown }> = [
+    { name: "files.full", value: directMediaUrl(files?.full) },
+    { name: "files.full.sources", value: full?.sources },
+    { name: "source.source", value: directMediaUrl(source?.source ?? source) },
+    { name: "source", value: directMediaUrl(row.source) },
+    { name: "videoSources.720", value: sources?.["720"] },
+    { name: "videoSources.240", value: sources?.["240"] },
   ];
   if (sources) {
     for (const key of Object.keys(sources).filter((item) => /^\d+$/.test(item) && item !== "720" && item !== "240").sort((left, right) => Number(right) - Number(left))) {
-      candidates.push(sources[key]);
+      fields.push({ name: `videoSources.${key}`, value: sources[key] });
     }
   }
-  for (const candidate of candidates) {
-    const urls = Array.isArray(candidate) ? candidate : [candidate];
-    for (const item of urls) {
-      const url = mediaUrl(item);
-      if (url && isVideoUrl(url)) return url;
+  const notes: string[] = [];
+  for (const field of fields) {
+    const values = Array.isArray(field.value) ? field.value : [field.value];
+    if (values.every((item) => item == null || item === "")) {
+      notes.push(`campo=${field.name} motivo=ausente`);
+      continue;
     }
+    let accepted: string | null = null;
+    let rejected = false;
+    for (const item of values) {
+      const url = mediaUrl(item);
+      if (!url) continue;
+      if (!isCandidateVideoUrl(url)) {
+        rejected = true;
+        continue;
+      }
+      accepted = url;
+      break;
+    }
+    if (accepted) return accepted;
+    notes.push(`campo=${field.name} motivo=${rejected ? "imagen" : "vacia"}`);
+  }
+  if (liveViewDebug()) {
+    const mark = vaultFolderMark(textOf(row.id) ?? "");
+    console.info(`[fanlink:vault] video medio=${mark} ${notes.join(" ")}`.slice(0, 240));
   }
   return null;
 }

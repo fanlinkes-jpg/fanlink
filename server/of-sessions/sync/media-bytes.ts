@@ -148,7 +148,7 @@ export async function readSessionMediaResult(
     const auth = sessionForApi(state, Date.now());
     const cookie = "cookie" in auth ? auth.cookie : "";
     const headers: Record<string, string> = {
-      accept: mediaAcceptHeader(target, header),
+      accept: mediaAcceptHeader(target, header, options?.expectVideo === true),
       referer: "https://onlyfans.com/",
       origin: "https://onlyfans.com",
       "user-agent": BROWSER_FINGERPRINT.userAgent,
@@ -175,9 +175,30 @@ export async function readSessionMediaResult(
   }
 }
 
-/** Un vídeo no se sirve si el CDN manda una imagen. */
-export function videoBytesAccepted(contentType: string): boolean {
-  return contentType.split(";")[0]?.trim().toLowerCase().startsWith("video/") === true;
+/** Un vídeo no se sirve si el CDN manda una imagen. Un binario vale si trae `ftyp`. */
+export function videoBytesAccepted(contentType: string, head?: Uint8Array): boolean {
+  const type = contentType.split(";")[0]?.trim().toLowerCase() ?? "";
+  if (type.startsWith("video/")) return true;
+  if (type.startsWith("image/")) return false;
+  if (type === "" || type === "application/octet-stream" || type === "binary/octet-stream") return head ? hasFtyp(head) : false;
+  return false;
+}
+
+export function hasFtyp(bytes: Uint8Array): boolean {
+  const limit = Math.min(bytes.length - 3, 32);
+  for (let index = 0; index <= limit; index += 1) {
+    if (bytes[index] === 0x66 && bytes[index + 1] === 0x74 && bytes[index + 2] === 0x79 && bytes[index + 3] === 0x70) return true;
+  }
+  return false;
+}
+
+/** Tras un 403 de un vídeo no se pide la miniatura. Una imagen no se reintenta como vídeo. */
+export function videoFollowUp(status: number, contentType: string | null, expectVideo: boolean): "serve" | "refresh" | "drop" {
+  const type = (contentType ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
+  if (expectVideo && type.startsWith("image/")) return "drop";
+  if (status === 403 || status === 410) return "refresh";
+  if (status === 200 || status === 206) return "serve";
+  return "drop";
 }
 
 async function loadMedia(target: string, headers: Record<string, string>, expectVideo = false): Promise<LoadResult> {
@@ -203,19 +224,26 @@ async function loadMedia(target: string, headers: Record<string, string>, expect
   }
   const upstreamType = (response.headers.get("content-type") ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
   const video = expectVideo || upstreamType.startsWith("video/") || isVideoTarget(target);
-  if (expectVideo && !videoBytesAccepted(upstreamType)) {
+  if (expectVideo && !videoBytesAccepted(upstreamType) && !ambiguousVideoType(upstreamType)) {
     await response.body?.cancel().catch(() => undefined);
     console.info(`[fanlink:vault] reproductor error tipo=${upstreamType || "sin"}`);
     return { status: response.status };
   }
-  if (video) {
+  if (video || (expectVideo && ambiguousVideoType(upstreamType))) {
     const media = mediaFromFetchResponse(response);
     if (!media) {
       await response.body?.cancel().catch(() => undefined);
       return { status: response.status };
     }
-    if (expectVideo && !videoBytesAccepted(media.contentType)) {
-      await response.body?.cancel().catch(() => undefined);
+    if (expectVideo && ambiguousVideoType(upstreamType) && media.stream) {
+      const peeked = await peekFtyp(media.stream);
+      media.stream = peeked.stream;
+      if (!hasFtyp(peeked.head)) {
+        console.info(`[fanlink:vault] reproductor error tipo=${upstreamType || "sin"} motivo=sin-ftyp`);
+        return { status: response.status };
+      }
+      media.contentType = "video/mp4";
+    } else if (expectVideo && !videoBytesAccepted(media.contentType)) {
       console.info(`[fanlink:vault] reproductor error tipo=${media.contentType || "sin"}`);
       return { status: response.status };
     }
@@ -239,9 +267,38 @@ const thumbNotes = new Set<string>();
 const thumbRecovered = new Set<string>();
 
 /** Una miniatura pide imagen, aunque lleve Range. Solo un vídeo pide vídeo. */
-export function mediaAcceptHeader(target: string, _range: string | null): string {
-  if (isVideoTarget(target)) return "video/*,*/*";
+export function mediaAcceptHeader(target: string, _range: string | null, expectVideo = false): string {
+  if (expectVideo || isVideoTarget(target)) return "video/*,*/*";
   return "image/avif,image/webp,image/apng,image/*,*/*;q=0.8";
+}
+
+function ambiguousVideoType(type: string): boolean {
+  return type === "" || type === "application/octet-stream" || type === "binary/octet-stream";
+}
+
+async function peekFtyp(stream: ReadableStream<Uint8Array>): Promise<{ head: Uint8Array; stream: ReadableStream<Uint8Array> }> {
+  const reader = stream.getReader();
+  const first = await reader.read();
+  const chunk = first.value ?? new Uint8Array();
+  const head = chunk.subarray(0, 32);
+  const rest = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      if (chunk.byteLength > 0) controller.enqueue(chunk);
+      if (first.done) {
+        controller.close();
+        return;
+      }
+      while (true) {
+        const next = await reader.read();
+        if (next.done) {
+          controller.close();
+          return;
+        }
+        if (next.value) controller.enqueue(next.value);
+      }
+    },
+  });
+  return { head, stream: rest };
 }
 
 function isVideoTarget(url: string): boolean {

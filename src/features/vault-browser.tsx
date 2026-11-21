@@ -523,9 +523,20 @@ function usageOf(item: VaultCard): string {
 function HoverClip({ src, title }: { src: string; title: string }) {
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState(false);
+  const node = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    const video = node.current;
+    return () => {
+      if (!video) return;
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+    };
+  }, []);
   if (failed) return null;
   return (
     <video
+      ref={node}
       muted
       playsInline
       autoPlay

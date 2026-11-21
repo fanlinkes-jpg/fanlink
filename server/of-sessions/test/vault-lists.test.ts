@@ -935,6 +935,113 @@ test("una carpeta vacía con field=recent usa el espejo de Todos", async () => {
   }
 });
 
+test("una carpeta con conteo pide su página aunque el presupuesto se haya acabado", async () => {
+  clearSignRulesCache();
+  clearVaultWalkCache();
+  const db = new PGlite();
+  const seen: string[] = [];
+  const fetchImpl = (async (input: RequestInfo | URL) => {
+    const href = String(input);
+    seen.push(href);
+    if (href.includes("dynamic-rules")) return Response.json(RULES);
+    const url = new URL(href);
+    if (url.pathname.endsWith("/vault/lists")) {
+      return Response.json({
+        list: [
+          { id: 81001, type: "custom", name: "Una", photosCount: 0, videosCount: 2, hasMedia: true },
+          { id: 81002, type: "custom", name: "Otra", photosCount: 4, videosCount: 0, hasMedia: true },
+        ],
+        hasMore: false,
+      });
+    }
+    const list = url.searchParams.get("list");
+    if (list === "81001") return Response.json({ list: [{ id: 1, type: "video", duration: 3 }], hasMore: false });
+    if (list === "81002") return Response.json({ list: [{ id: 2, type: "photo" }], hasMore: false });
+    return Response.json({ list: [{ id: 9, type: "photo" }], hasMore: false });
+  }) as typeof fetch;
+  try {
+    for (const file of ["0037_vault_mirror.sql", "0050_vault_list_counts.sql", "0054_vault_list_members.sql"]) {
+      await db.exec(await readFile(path.join(root, "migrations", file), "utf8"));
+    }
+    await walkVault({
+      creatorId: "3zk7kbr",
+      budget: 1,
+      state: storedState(),
+      fetch: fetchImpl,
+      now: () => 1_700_000_000_000,
+      sql: asSql(db),
+      sleep: async () => undefined,
+    });
+    assert.equal(seen.some((href) => href.includes("list=81001") && href.includes("field=recent")), true);
+    assert.equal(seen.some((href) => href.includes("list=81002") && href.includes("field=recent")), true);
+  } finally {
+    clearSignRulesCache();
+    clearVaultWalkCache();
+    await db.close();
+  }
+});
+
+test("una carpeta vacía pagina Todos si el espejo aún no tiene sus medios", async () => {
+  clearSignRulesCache();
+  clearVaultWalkCache();
+  const db = new PGlite();
+  const seen: string[] = [];
+  const fetchImpl = (async (input: RequestInfo | URL) => {
+    const href = String(input);
+    seen.push(href);
+    if (href.includes("dynamic-rules")) return Response.json(RULES);
+    const url = new URL(href);
+    if (url.pathname.endsWith("/vault/lists")) {
+      return Response.json({
+        list: [{ id: 2905, type: "custom", name: "Tarde", photosCount: 0, videosCount: 2, hasMedia: true }],
+        hasMore: false,
+      });
+    }
+    const list = url.searchParams.get("list");
+    const offset = Number(url.searchParams.get("offset") ?? "0");
+    if (list === "2905") return Response.json({ list: [], hasMore: false });
+    if (offset === 0) {
+      return Response.json({
+        list: Array.from({ length: 40 }, (_, index) => ({ id: index + 1, type: "photo", listStates: [{ id: 2905, hasMedia: false }] })),
+        hasMore: true,
+      });
+    }
+    return Response.json({
+      list: [
+        { id: 41, type: "video", duration: 4, listStates: [{ id: 2905, hasMedia: true }] },
+        { id: 42, type: "video", duration: 6, listStates: [{ id: 2905, hasMedia: true }] },
+      ],
+      hasMore: false,
+    });
+  }) as typeof fetch;
+  try {
+    for (const file of ["0037_vault_mirror.sql", "0050_vault_list_counts.sql", "0054_vault_list_members.sql"]) {
+      await db.exec(await readFile(path.join(root, "migrations", file), "utf8"));
+    }
+    await asSql(db).query(
+      "insert into of_vault_list (creator_id, list_key, name, synced_at, photos_count, videos_count, gifs_count, audios_count) values ($1, $2, $3, $4, 0, 2, 0, 0)",
+      ["3zk7kbr", "2905", "Tarde", "2026-01-01T00:00:00.000Z"],
+    );
+    const opened = await walkVault({
+      creatorId: "3zk7kbr",
+      listId: "2905",
+      singlePage: true,
+      state: storedState(),
+      fetch: fetchImpl,
+      now: () => 1_700_000_000_000,
+      sql: asSql(db),
+      sleep: async () => undefined,
+    });
+    assert.deepEqual(opened.items.map((item) => item.id).sort(), ["41", "42"]);
+    assert.equal(seen.some((href) => href.includes("list=2905")), true);
+    assert.equal(seen.some((href) => href.includes("list=all") && href.includes("offset=40")), true);
+  } finally {
+    clearSignRulesCache();
+    clearVaultWalkCache();
+    await db.close();
+  }
+});
+
 function creatorLists(
   all: [number, number, number, number],
   folders: Array<{ id: number; name: string; counts: [number, number, number, number]; covers: number[] }>,

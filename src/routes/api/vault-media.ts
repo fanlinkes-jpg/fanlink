@@ -4,7 +4,7 @@ import { getSql } from "@/lib/db";
 import { getOfSessionManager } from "@/lib/of-sessions-runtime.server";
 import { ensureStaff } from "@/lib/workspace-store";
 import { handleVaultMedia } from "../../../server/of-sessions/http/vault-http.ts";
-import { readSessionMediaResult } from "../../../server/of-sessions/sync/media-bytes.ts";
+import { readSessionMediaResult, videoBytesAccepted, videoFollowUp } from "../../../server/of-sessions/sync/media-bytes.ts";
 import { accountCreatorIds } from "../../../server/of-sessions/http/vault-accounts.ts";
 import { fetchSignedVault } from "../../../server/of-sessions/sync/of-chat-api.ts";
 import { parseVaultBundle } from "../../../server/of-sessions/sync/vault-model.ts";
@@ -38,11 +38,15 @@ export const Route = createFileRoute("/api/vault-media")({
             fetchBytes: async (target, range) => {
               if (expectVideo || range) {
                 const first = await readSessionMediaResult(creatorId, target, range, { expectVideo });
-                if (first.media) return first.media;
-                if (first.status !== 403 && first.status !== 410) return null;
-                const fresh = await reloadPreview(sql, creatorId, mediaId, page.listId, page.offset);
+                if (first.media && (!expectVideo || videoBytesAccepted(first.media.contentType))) return first.media;
+                const plan = videoFollowUp(first.status, first.media?.contentType ?? null, expectVideo);
+                if (plan !== "refresh") return null;
+                const fresh = expectVideo
+                  ? await reloadPreview(sql, creatorId, mediaId, page.listId, page.offset, "full")
+                  : await reloadPreview(sql, creatorId, mediaId, page.listId, page.offset);
                 if (!fresh) return null;
-                const second = await readSessionMediaResult(creatorId, fresh, range);
+                const second = await readSessionMediaResult(creatorId, fresh, range, { expectVideo });
+                if (expectVideo && (!second.media || !videoBytesAccepted(second.media.contentType))) return null;
                 return second.media;
               }
               return loadFreshPreview({
@@ -91,12 +95,14 @@ async function reloadPreview(
   mediaId: string,
   listId: string,
   offset: number,
+  pick: "preview" | "full" = "preview",
 ): Promise<string | null> {
   return reloadVaultPreview({
     creatorId,
     mediaId,
     listId,
     offset,
+    pick,
     loadPage: async (list, skip) => {
       const sessions = await getOfSessionManager();
       const account = (await sessions.listAccounts()).find((item) => item.creatorId === creatorId && item.status === "active" && item.hasStorageState);

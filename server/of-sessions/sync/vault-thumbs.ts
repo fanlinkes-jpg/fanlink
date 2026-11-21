@@ -13,7 +13,7 @@ export type ThumbBrowser = {
   release(): Promise<void>;
 };
 
-export type ThumbItem = { id: string; preview: string | null };
+export type ThumbItem = { id: string; preview: string | null; fullUrl?: string | null; clipUrl?: string | null };
 
 const refreshInflight = new Map<string, Promise<readonly ThumbItem[]>>();
 
@@ -51,14 +51,17 @@ export async function reloadVaultPreview(input: {
   now?: number;
   loadPage: (listId: string, offset: number) => Promise<readonly ThumbItem[]>;
   savePreview?: (url: string) => Promise<void>;
+  /** `full` relee el mp4. `preview` relee la miniatura. */
+  pick?: "preview" | "full";
 }): Promise<string | null> {
   const listId = input.listId.trim().slice(0, 80) || "all";
   const offset = normalizeVaultOffset(input.offset);
   const now = input.now ?? Date.now();
   const items = await shareRefresh(vaultThumbPageKey(input.creatorId, listId, offset), () => input.loadPage(listId, offset));
-  const preview = items.find((item) => item.id === input.mediaId)?.preview ?? null;
+  const item = items.find((row) => row.id === input.mediaId);
+  const preview = input.pick === "full" ? (item?.fullUrl ?? item?.clipUrl ?? null) : (item?.preview ?? null);
   if (!preview || !mediaHostAllowed(preview) || signedUrlExpired(preview, now)) return null;
-  await input.savePreview?.(preview);
+  if (input.pick !== "full") await input.savePreview?.(preview);
   return preview;
 }
 

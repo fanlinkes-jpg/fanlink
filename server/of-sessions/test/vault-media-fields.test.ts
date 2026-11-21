@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { parseVaultBundle, stampVaultList } from "../sync/vault-model.ts";
 import { playbackUrl } from "../sync/vault-store.ts";
-import { clearVaultThumbs, getVaultThumb, putVaultThumb, videoBytesAccepted } from "../sync/media-bytes.ts";
+import { clearVaultThumbs, getVaultThumb, hasFtyp, putVaultThumb, videoBytesAccepted, videoFollowUp } from "../sync/media-bytes.ts";
 import { folderColumnView } from "../../../src/lib/vault-folder-label.ts";
 
 test("los conteos aceptan string, snake_case y el objeto counts, y Todos se guarda", () => {
@@ -153,6 +153,22 @@ test("un vídeo con la forma real usa el mp4 y no la miniatura", () => {
   assert.equal(playbackUrl({ full: "https://cdn2.onlyfans.com/files/t.jpg", clip: null, preview: "https://cdn2.onlyfans.com/files/p.jpg", thumb: "https://cdn2.onlyfans.com/files/t.jpg" }, "full", "video"), null);
   assert.equal(videoBytesAccepted("video/mp4"), true);
   assert.equal(videoBytesAccepted("image/jpeg"), false);
+  assert.equal(videoBytesAccepted("application/octet-stream", Uint8Array.from([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70])), true);
+  assert.equal(videoBytesAccepted(""), false);
+  assert.equal(hasFtyp(Uint8Array.from([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70])), true);
+  assert.equal(videoFollowUp(403, "image/jpeg", true), "drop");
+  assert.equal(videoFollowUp(403, null, true), "refresh");
+  const bare = parseVaultBundle({
+    list: [{
+      id: 8,
+      type: "video",
+      files: {
+        full: { url: "https://cdn3.onlyfans.com/files/abc?Policy=sek" },
+        thumb: { url: "https://cdn2.onlyfans.com/files/t.jpg" },
+      },
+    }],
+  }).items[0];
+  assert.equal(bare?.fullUrl, "https://cdn3.onlyfans.com/files/abc?Policy=sek");
   clearVaultThumbs();
   putVaultThumb("c-1", "9", Uint8Array.from([1]), "image/jpeg", "preview");
   assert.equal(getVaultThumb("c-1", "9", "full"), null);
