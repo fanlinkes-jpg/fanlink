@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { PGlite } from "@electric-sql/pglite";
-import { choosePlayableVideo, parseVaultBundle, stampVaultList, vaultDetailRow, videoDetailHold, videoHoldText, videoShapeLine } from "../sync/vault-model.ts";
+import { choosePlayableVideo, parseVaultBundle, stampVaultList, vaultDetailRow, videoDetailHold, videoDrmLine, videoHoldPayload, videoHoldText, videoShapeLine } from "../sync/vault-model.ts";
 import { fetchSignedMediaDetail, vaultMediaDetailPath } from "../sync/of-chat-api.ts";
 import { clearSignRulesCache } from "../sync/of-sign.ts";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
@@ -461,6 +461,56 @@ test("una URL caducada en SQL pide el detalle y responde video/mp4", async () =>
     clearSignRulesCache();
     await db.close();
   }
+});
+
+test("un detalle con convertedToVideo=no y drm no trae mp4 y abre OnlyFans", async () => {
+  const detail = {
+    id: 24,
+    type: "video",
+    convertedToVideo: false,
+    canView: true,
+    hasError: false,
+    isReady: true,
+    files: {
+      full: { url: null, src: null, source: null, sources: [] },
+      drm: {
+        manifest: {
+          hls: "https://cdn2.onlyfans.com/hls/files/a.m3u8?Tag=2",
+          dash: "https://cdn2.onlyfans.com/dash/files/a.mpd?Tag=2",
+        },
+        signature: { hls: { "CloudFront-Policy": "sek", "CloudFront-Signature": "firma" } },
+      },
+    },
+    videoSources: { "240": null, "720": null },
+  };
+  const row = vaultDetailRow(detail);
+  assert.ok(row);
+  assert.equal(choosePlayableVideo(row), null);
+  const line = `${videoShapeLine(row)} ${videoDrmLine(row)}`;
+  assert.match(line, /convertedToVideo=no/);
+  assert.match(line, /canView=si/);
+  assert.match(line, /hasError=no/);
+  assert.match(line, /isReady=si/);
+  assert.match(line, /drm=si manifest=hls\+dash/);
+  assert.equal(line.includes("m3u8"), false);
+  assert.equal(line.includes("mpd"), false);
+  assert.equal(line.includes("sek"), false);
+  assert.equal(line.includes("CloudFront"), false);
+  const payload = videoHoldPayload(200, row);
+  assert.equal(payload.texto, "Este vídeo está protegido por OnlyFans y no se puede reproducir aquí.");
+  assert.equal(payload.abrir, true);
+  const held = await handleVaultMedia(new Request("http://127.0.0.1/api/vault-media?creatorId=c-1&mediaId=24&variant=full"), {
+    session: async () => ({ userId: "dueña", role: "owner", perms: ["vault"] }),
+    findPreview: async () => null,
+    videoHold: () => JSON.stringify(payload),
+    fetchBytes: async () => null,
+  });
+  assert.equal(held.status, 409);
+  assert.equal(held.headers.get("content-type"), "application/json; charset=utf-8");
+  const body = await held.text();
+  assert.equal(body.includes("m3u8"), false);
+  assert.equal(body.includes("sek"), false);
+  assert.deepEqual(JSON.parse(body), payload);
 });
 
 function asSql(db: PGlite): ReadSql {

@@ -558,6 +558,7 @@ function VaultPlayback({ src }: { src: string }) {
   const node = useRef<HTMLVideoElement>(null);
   const [state, setState] = useState<"carga" | "ok" | "error" | "timeout">("carga");
   const [note, setNote] = useState("");
+  const [openVault, setOpenVault] = useState(false);
   const [local, setLocal] = useState<string | null>(null);
   useEffect(() => {
     const video = node.current;
@@ -565,6 +566,7 @@ function VaultPlayback({ src }: { src: string }) {
     let objectUrl: string | null = null;
     setState("carga");
     setNote("");
+    setOpenVault(false);
     setLocal(null);
     if (!src) return;
     const controller = new AbortController();
@@ -575,9 +577,10 @@ function VaultPlayback({ src }: { src: string }) {
     void fetch(src, { signal: controller.signal }).then(async (response) => {
       if (cancelled) return;
       const type = response.headers.get("content-type") ?? "";
-      if (response.status === 409 || type.startsWith("text/plain")) {
-        const text = (await response.text()).replace(/\s+/g, " ").trim().slice(0, 160);
-        setNote(text);
+      if (response.status === 409 || type.startsWith("text/plain") || type.includes("json")) {
+        const hold = readPlaybackHold(await response.text());
+        setNote(hold.texto);
+        setOpenVault(hold.abrir);
         setState("error");
         return;
       }
@@ -604,7 +607,14 @@ function VaultPlayback({ src }: { src: string }) {
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [src]);
-  if (!src || state === "error") return <p className="text-sm text-white">{note || "Vídeo no disponible"}</p>;
+  if (!src || state === "error") {
+    return (
+      <div className="flex max-w-md flex-col items-center gap-3 text-center">
+        <p className="text-sm text-white">{note || "Vídeo no disponible"}</p>
+        {openVault ? <a className="rounded-full bg-white px-3 py-1 text-sm text-black" href="https://onlyfans.com/my/vault" target="_blank" rel="noopener noreferrer">Abrir en OnlyFans</a> : null}
+      </div>
+    );
+  }
   if (state === "timeout") return <p className="text-sm text-white">No se ha podido cargar el vídeo</p>;
   if (!local) return <p className="text-sm text-white">Cargando…</p>;
   return (
@@ -621,6 +631,17 @@ function VaultPlayback({ src }: { src: string }) {
       onError={() => setState("error")}
     />
   );
+}
+
+function readPlaybackHold(raw: string): { texto: string; abrir: boolean } {
+  const text = raw.replace(/\s+/g, " ").trim();
+  try {
+    const parsed = JSON.parse(text) as { texto?: unknown; abrir?: unknown };
+    if (typeof parsed.texto === "string") return { texto: parsed.texto.slice(0, 160), abrir: parsed.abrir === true };
+  } catch {
+    return { texto: text.slice(0, 160), abrir: false };
+  }
+  return { texto: text.slice(0, 160), abrir: false };
 }
 
 function VaultStill({ creatorId, mediaId, className, title = "", listId, offset, imageStyle }: { creatorId: string; mediaId: string; className: string; title?: string; listId: string; offset: number; imageStyle?: typeof VAULT_CARD_IMAGE }) {

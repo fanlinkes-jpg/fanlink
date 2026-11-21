@@ -7,7 +7,7 @@ import { handleVaultMedia, noteVaultPlayRequest } from "../../../server/of-sessi
 import { readSessionMediaResult, videoBytesAccepted, videoFollowUp } from "../../../server/of-sessions/sync/media-bytes.ts";
 import { accountCreatorIds } from "../../../server/of-sessions/http/vault-accounts.ts";
 import { fetchSignedMediaDetail, fetchSignedVault } from "../../../server/of-sessions/sync/of-chat-api.ts";
-import { choosePlayableVideo, parseVaultBundle, vaultDetailRow, vaultFolderMark, videoDetailHold, videoFlagLine } from "../../../server/of-sessions/sync/vault-model.ts";
+import { choosePlayableVideo, parseVaultBundle, vaultDetailRow, vaultFolderMark, videoFlagLine, videoHoldPayload } from "../../../server/of-sessions/sync/vault-model.ts";
 import { loadFreshPreview, normalizeVaultOffset, reloadVaultPreview, signedUrlExpired } from "../../../server/of-sessions/sync/vault-thumbs.ts";
 import { openProfileThumbs } from "../../../server/of-sessions/sync/vault-owner.ts";
 import { playbackUrl, reuseOrRefreshVideo, saveVaultPreview, storedVaultMediaUrls, storedVaultPage } from "../../../server/of-sessions/sync/vault-store.ts";
@@ -134,7 +134,7 @@ async function loadMediaDetail(creatorId: string, mediaId: string): Promise<{ ur
   const flags = row ? videoFlagLine(row) : "convertedToVideo=ausente canView=ausente hasError=ausente isReady=ausente";
   console.info(`[fanlink:vault] video medio=${vaultFolderMark(mediaId)} detalle=${chosen ? "url" : "sin-url"} status=${read.status ?? "sin"} ${flags}`.slice(0, 280));
   if (chosen?.url && !signedUrlExpired(chosen.url, Date.now())) return { url: chosen.url, hold: "" };
-  return { url: null, hold: videoDetailHold(read.status, row) };
+  return { url: null, hold: JSON.stringify(videoHoldPayload(read.status, row)) };
 }
 
 async function thumbPage(

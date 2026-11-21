@@ -503,14 +503,32 @@ export function vaultDetailRow(body: unknown): Record<string, unknown> | null {
 }
 
 export function videoFlagLine(row: Record<string, unknown>): string {
-  return `convertedToVideo=${flagWord(row.convertedToVideo)} canView=${flagWord(row.canView)} hasError=${flagWord(row.hasError)} isReady=${flagWord(row.isReady)}`;
+  return `convertedToVideo=${flagWord(row.convertedToVideo)} canView=${flagWord(row.canView)} hasError=${flagWord(row.hasError)} isReady=${flagWord(row.isReady)} ${videoDrmLine(row)}`;
+}
+
+/**
+ * `files.drm` es el manifiesto HLS o DASH con la firma de CloudFront.
+ * El archivo va cifrado y un reproductor normal no lo descifra.
+ * La línea solo dice si hay manifiesto, nunca la URL ni la firma.
+ */
+export function videoDrmLine(row: Record<string, unknown>): string {
+  const drm = nested(nested(row.files)?.drm);
+  if (!drm) return "drm=no";
+  const manifest = nested(drm.manifest);
+  const kinds = (["hls", "dash"] as const).filter((key) => typeof manifest?.[key] === "string" && (manifest[key] as string).trim() !== "");
+  return `drm=si manifest=${kinds.length ? kinds.join("+") : "ausente"}`;
+}
+
+export function videoNeedsOnlyFans(row: Record<string, unknown> | null): boolean {
+  if (!row || choosePlayableVideo(row)) return false;
+  return Boolean(nested(nested(row.files)?.drm));
 }
 
 export function videoHoldText(row: Record<string, unknown> | null): string {
   if (row?.hasError === true) return "OnlyFans no ha podido procesar el vídeo";
   if (row?.isReady === false) return "Vídeo aún procesándose en OnlyFans";
   if (row?.canView === false) return "No se puede ver este vídeo";
-  if (nested(nested(row?.files)?.drm)) return "OnlyFans no da un mp4 de este vídeo";
+  if (videoNeedsOnlyFans(row)) return "Este vídeo está protegido por OnlyFans y no se puede reproducir aquí.";
   return "Vídeo no disponible";
 }
 
@@ -518,6 +536,11 @@ export function videoHoldText(row: Record<string, unknown> | null): string {
 export function videoDetailHold(status: number | null, row: Record<string, unknown> | null): string {
   if (status === 401 || status === 429) return "OnlyFans está limitando, prueba en un momento";
   return videoHoldText(row);
+}
+
+/** Cuerpo del 409. `abrir` solo cuando el medio es DRM y no hay mp4. */
+export function videoHoldPayload(status: number | null, row: Record<string, unknown> | null): { texto: string; abrir: boolean } {
+  return { texto: videoDetailHold(status, row), abrir: status !== 401 && status !== 429 && videoNeedsOnlyFans(row) };
 }
 
 function flagWord(value: unknown): string {

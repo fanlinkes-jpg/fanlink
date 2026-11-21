@@ -86,13 +86,8 @@ export async function handleVaultMedia(request: Request, deps: {
   }
   const preview = await deps.findPreview(creatorId, mediaId, variant);
   if (!preview && (variant === "full" || variant === "clip")) {
-    const hold = deps.videoHold?.()?.trim();
-    if (hold) {
-      return new Response(hold, {
-        status: 409,
-        headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "private, no-store" },
-      });
-    }
+    const held = holdResponse(deps.videoHold?.()?.trim() || null);
+    if (held.status !== 404) return held;
   }
   const range = url.searchParams.get("part") === "head" ? headRange(request.headers.get("range")) : request.headers.get("range");
   return streamMedia(preview, range, deps.fetchBytes, deps.videoHold);
@@ -193,10 +188,27 @@ async function streamMedia(
 
 function holdResponse(hold: string | null): Response {
   if (!hold) return new Response("Sin datos", { status: 404 });
+  const payload = holdPayload(hold);
+  if (payload) {
+    return new Response(JSON.stringify(payload), {
+      status: 409,
+      headers: { "content-type": "application/json; charset=utf-8", "cache-control": "private, no-store" },
+    });
+  }
   return new Response(hold, {
     status: 409,
     headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "private, no-store" },
   });
+}
+
+function holdPayload(hold: string): { texto: string; abrir: boolean } | null {
+  try {
+    const parsed = JSON.parse(hold) as { texto?: unknown; abrir?: unknown };
+    if (typeof parsed.texto !== "string") return null;
+    return { texto: parsed.texto, abrir: parsed.abrir === true };
+  } catch {
+    return null;
+  }
 }
 
 function thumbResponse(cached: { body: Uint8Array; contentType: string }): Response {
