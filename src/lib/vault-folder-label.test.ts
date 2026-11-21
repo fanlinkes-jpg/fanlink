@@ -15,10 +15,10 @@ test("una lista con contadores no sale vacía aunque aún no se hayan pintado su
   );
 });
 
-test("un photosCount 0 no tapa los medios ya cargados", () => {
+test("un 0 de la carpeta no se sustituye por los medios de Todos", () => {
   assert.equal(
-    vaultFolderLabel({ photos: 0, videos: 0, gifs: 0, audios: 0, hasMedia: true }, { photos: 6, videos: 1, gifs: 0 }),
-    "6 fotos · 1 vídeo",
+    vaultFolderLabel({ photos: 0, videos: 2, gifs: 0, audios: 0, hasMedia: true }, { photos: 615, videos: 2, gifs: 2 }),
+    "0 fotos · 2 vídeos",
   );
 });
 

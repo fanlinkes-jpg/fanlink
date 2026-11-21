@@ -1,6 +1,6 @@
 import type { ReadSql } from "./store.ts";
 import { emptyVaultQuery, vaultQueryFromUnknown, type VaultQuery } from "./vault-filter.ts";
-import { historyFromMedia, historyFromSends, mergeFanUses, parseVaultBundle, stampVaultList, vaultKindOf, type FanVaultUse, type VaultFile, type VaultList } from "./vault-model.ts";
+import { historyFromMedia, historyFromSends, mergeFanUses, mergeVaultList, parseVaultBundle, stampVaultList, vaultKindOf, type FanVaultUse, type VaultFile, type VaultList } from "./vault-model.ts";
 import type { SaleFolder } from "./vault-block.ts";
 import { itemSaleBlocked } from "./vault-block.ts";
 import { planVaultPieces, type VaultSendPiece } from "../send/vault-piece.ts";
@@ -85,14 +85,20 @@ export async function saveVaultMirror(sql: ReadSql, creatorId: string, items: re
   }
   if (await hasColumn(sql, "of_vault_item", "list_ids")) {
     for (const item of items) {
+      if (item.listIds == null && !item.listId) continue;
       const ids = [...new Set([...(item.listIds ?? []), ...(item.listId ? [item.listId] : [])])];
-      if (ids.length === 0) continue;
       await sql.query(
-        `update of_vault_item set list_ids = (
-           select coalesce(jsonb_agg(distinct elem), '[]'::jsonb)
-           from jsonb_array_elements_text(coalesce(list_ids, '[]'::jsonb) || $3::jsonb) elem
-         ) where creator_id = $1 and item_key = $2`,
+        "update of_vault_item set list_ids = $3::jsonb where creator_id = $1 and item_key = $2",
         [creatorId, item.id, JSON.stringify(ids)],
+      );
+    }
+  }
+  if (await hasColumn(sql, "of_vault_list", "cover_ids")) {
+    for (const list of lists) {
+      if (!list.covers || list.covers.length === 0) continue;
+      await sql.query(
+        "update of_vault_list set cover_ids = $3::jsonb where creator_id = $1 and list_key = $2",
+        [creatorId, list.id, JSON.stringify(list.covers.map((cover) => ({ id: cover.id, kind: cover.kind })))],
       );
     }
   }
@@ -144,7 +150,10 @@ export async function persistVaultRead(
   const lists = new Map<string, VaultList>();
   for (const payload of payloads) {
     const bundle = parseVaultBundle(payload);
-    for (const list of bundle.lists) lists.set(list.id, list);
+    for (const list of bundle.lists) {
+      const prev = lists.get(list.id);
+      lists.set(list.id, prev ? mergeVaultList(prev, list) : list);
+    }
     for (const item of bundle.items) items.set(item.id, item);
   }
   const requested = page?.listId?.trim() || "";
@@ -233,6 +242,7 @@ function pageOffset(offset: number): number {
 export async function loadVaultMirror(sql: ReadSql, creatorId: string): Promise<{ items: VaultFile[]; lists: VaultList[]; folders: SaleFolder[]; syncedAt: string | null }> {
   const withCounts = await hasColumn(sql, "of_vault_list", "photos_count");
   const withHasMedia = await hasColumn(sql, "of_vault_list", "has_media");
+  const withCovers = await hasColumn(sql, "of_vault_list", "cover_ids");
   const lists = await sql.query<{
     list_key: string;
     name: string;
@@ -242,10 +252,12 @@ export async function loadVaultMirror(sql: ReadSql, creatorId: string): Promise<
     gifs_count?: number | null;
     audios_count?: number | null;
     has_media?: boolean | null;
+    cover_ids?: unknown;
   }>(
     `select list_key, name, parent_key
             ${withCounts ? ", photos_count, videos_count, gifs_count, audios_count" : ""}
             ${withHasMedia ? ", has_media" : ""}
+            ${withCovers ? ", cover_ids" : ""}
      from of_vault_list where creator_id = $1 order by name`,
     [creatorId],
   );
@@ -275,6 +287,7 @@ export async function loadVaultMirror(sql: ReadSql, creatorId: string): Promise<
       gifs: row.gifs_count ?? null,
       audios: row.audios_count ?? null,
       hasMedia: row.has_media === true ? true : row.has_media === false ? false : null,
+      covers: coverList(row.cover_ids),
     })),
     folders: lists.map((row) => ({ id: row.list_key, name: row.name, parentId: row.parent_key ?? null })),
     items: items.map((row) => ({
@@ -490,6 +503,26 @@ function rowValues(creatorId: string, item: VaultFile, tags: string, syncedAt: s
     creatorId, item.id, item.title, item.kind, item.seconds, item.preview, item.folder, tags,
     item.listId, item.listName, item.description, item.uploadedAt, item.priceCents, item.salesCount, item.sentCount, syncedAt,
   ];
+}
+
+function coverList(value: unknown): Array<{ id: string; kind: ReturnType<typeof vaultKindOf> }> {
+  const rows = Array.isArray(value) ? value : typeof value === "string" ? parsedRows(value) : [];
+  return rows.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const row = entry as Record<string, unknown>;
+    const id = typeof row.id === "string" || typeof row.id === "number" ? String(row.id).trim() : "";
+    if (!id) return [];
+    return [{ id, kind: vaultKindOf(typeof row.kind === "string" ? row.kind : null) }];
+  });
+}
+
+function parsedRows(value: string): unknown[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 function idList(value: unknown): string[] {

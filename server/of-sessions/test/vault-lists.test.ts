@@ -9,10 +9,11 @@ import { fetchSignedVault } from "../sync/of-chat-api.ts";
 import { clearSignRulesCache } from "../sync/of-sign.ts";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
 import type { ReadSql } from "../sync/store.ts";
-import { vaultFolderLabel } from "../../../src/lib/vault-folder-label.ts";
+import { folderColumnView, vaultFolderLabel } from "../../../src/lib/vault-folder-label.ts";
 import { emptyVaultQuery } from "../sync/vault-filter.ts";
 import { queryVaultForActor } from "../sync/vault-query.ts";
 import { clearVaultWalkCache, walkVault } from "../sync/vault-walk.ts";
+import { VAULT_LISTS_FIXTURE, VAULT_MEDIA_ALL_FIXTURE, VAULT_MEDIA_FOLDER_FIXTURE } from "./fixtures/vault-of-shape.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const RULES = {
@@ -49,13 +50,14 @@ test("cada lista trae su conteo y sus medios, paginando hasMore", async () => {
       }
       const url = new URL(href);
       const list = url.searchParams.get("list");
+      const folder = url.searchParams.get("list_id");
       const offset = Number(url.searchParams.get("offset") ?? "0");
-      if (!list || list === "all") {
+      if (folder === "cuarteto") return Response.json({ list: [{ id: 30, type: "video", duration: 9 }, { id: 31, type: "photo" }], hasMore: false });
+      if (folder === "ducha") return Response.json({ list: [{ id: 40, type: "video", duration: 3 }], hasMore: false });
+      if (!folder && (!list || list === "all")) {
         if (offset === 0) return Response.json({ list: [{ id: 1, type: "photo" }], hasMore: true });
         return Response.json({ list: [{ id: 2, type: "video", duration: 4 }], hasMore: false });
       }
-      if (list === "cuarteto") return Response.json({ list: [{ id: 30, type: "video", duration: 9 }, { id: 31, type: "photo" }], hasMore: false });
-      if (list === "ducha") return Response.json({ list: [{ id: 40, type: "video", duration: 3 }], hasMore: false });
       return Response.json({ list: [], hasMore: false });
     }) as typeof fetch;
     const walked = await walkVault({
@@ -69,8 +71,8 @@ test("cada lista trae su conteo y sus medios, paginando hasMore", async () => {
     assert.equal(walked.reason, null);
     assert.equal(seen.filter((href) => href.includes("/vault/media") && href.includes("list=all") && href.includes("offset=0")).length, 1);
     assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("list=all") && href.includes("offset=1")), true);
-    assert.equal(seen.some((href) => href.includes("list=cuarteto")), true);
-    assert.equal(seen.some((href) => href.includes("list=ducha")), true);
+    assert.equal(seen.some((href) => href.includes("list_id=cuarteto")), true);
+    assert.equal(seen.some((href) => href.includes("list_id=ducha")), true);
     assert.equal(seen.some((href) => href.includes("/vault/lists") && href.includes("limit=50")), true);
     assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("limit=40") && href.includes("sort=desc") && href.includes("list=all") && !href.includes("list_id=") && !href.includes("field=")), true);
     const view = await queryVaultForActor(asSql(db), { userId: "dueña", role: "owner", perms: ["vault"] }, {
@@ -140,12 +142,13 @@ test("las carpetas en list no cortan los medios y la página siguiente trae las 
       }
       const url = new URL(href);
       const list = url.searchParams.get("list");
+      const folder = url.searchParams.get("list_id");
       const offset = Number(url.searchParams.get("offset") ?? "0");
-      if (!list || list === "all") {
+      if (folder === "ducha") return Response.json({ list: [{ id: 40, type: "video", duration: 3 }], hasMore: false });
+      if (!folder && (!list || list === "all")) {
         if (offset === 0) return Response.json({ list: Array.from({ length: 24 }, (_, index) => ({ id: index + 1, type: "photo" })), hasMore: true });
         return Response.json({ list: Array.from({ length: 6 }, (_, index) => ({ id: 100 + index, type: "photo" })), hasMore: false });
       }
-      if (list === "ducha") return Response.json({ list: [{ id: 40, type: "video", duration: 3 }], hasMore: false });
       return Response.json({ list: [], hasMore: false });
     }) as typeof fetch;
     const walked = await walkVault({
@@ -160,7 +163,7 @@ test("las carpetas en list no cortan los medios y la página siguiente trae las 
     assert.equal(walked.items.length, 30);
     assert.equal(seen.some((href) => href.includes("/vault/lists") && href.includes("offset=5")), true);
     assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("offset=24") && href.includes("list=all")), true);
-    assert.equal(seen.some((href) => href.includes("list=ducha")), true);
+    assert.equal(seen.some((href) => href.includes("list_id=ducha")), true);
     assert.equal(lines.some((line) => line.includes("pagina ruta=/api2/v2/vault/media") && line.includes("offset=0") && line.includes("n=24") && line.includes("hasMore=si") && line.includes("list=all")), true);
     assert.equal(lines.some((line) => line.includes("respuesta ruta=lists") && line.includes("itemClaves=") && line.includes("photosCount")), true);
     assert.equal(lines.some((line) => line.includes("lista id=ducha") && line.includes("fotos=4") && line.includes("videos=2") && line.includes("photosCount")), true);
@@ -220,7 +223,7 @@ test("sin hasMore sigue mientras la página de medios viene llena", async () => 
   }
 });
 
-test("un 400 de list reintenta la carpeta con list_id y all no lleva type ni field", async () => {
+test("list=all no lleva type ni field y una carpeta sale con list_id", async () => {
   clearSignRulesCache();
   const seen: string[] = [];
   const fetchImpl = (async (input: RequestInfo | URL) => {
@@ -228,25 +231,27 @@ test("un 400 de list reintenta la carpeta con list_id y all no lleva type ni fie
     seen.push(href);
     if (href.includes("dynamic-rules")) return Response.json(RULES);
     const url = new URL(href);
-    if (!href.includes("/vault/media")) return Response.json({ list: [], hasMore: false });
-    if (url.searchParams.get("list") === "all") return Response.json({ list: [{ id: 1, type: "photo" }], hasMore: false });
-    if (url.searchParams.has("list_id")) return Response.json({ list: [{ id: 9, type: "photo" }], hasMore: false });
-    return new Response("no", { status: 400 });
+    if (url.pathname.endsWith("/vault/lists")) return Response.json(VAULT_LISTS_FIXTURE);
+    if (url.searchParams.get("list") === "all") return Response.json(VAULT_MEDIA_ALL_FIXTURE);
+    if (url.searchParams.get("list") === "333") return Response.json({ list: [], hasMore: false });
+    if (url.searchParams.get("list_id") === "333") return Response.json(VAULT_MEDIA_FOLDER_FIXTURE);
+    return Response.json({ list: [], hasMore: false });
   }) as typeof fetch;
   try {
     const all = await fetchSignedVault(storedState(), { fetch: fetchImpl, now: () => 1_700_000_000_000 }, "all", 0, { includeLists: false });
-    assert.equal(all.status, 200);
-    const allUrl = seen.find((href) => href.includes("/vault/media") && href.includes("list=all"));
+    const allUrl = seen.find((href) => href.includes("/vault/media"));
     assert.ok(allUrl);
+    assert.match(allUrl, /list=all/);
     assert.equal(allUrl.includes("type="), false);
     assert.equal(allUrl.includes("field="), false);
     assert.equal(allUrl.includes("list_id="), false);
-    const folder = await fetchSignedVault(storedState(), { fetch: fetchImpl, now: () => 1_700_000_000_000 }, "ducha", 0, { includeLists: false });
-    assert.equal(folder.status, 200);
-    assert.equal(seen.some((href) => href.includes("list=ducha") && !href.includes("list_id=")), true);
-    assert.equal(seen.some((href) => href.includes("list_id=ducha")), true);
+    assert.equal(all.status, 200);
+    const folder = await fetchSignedVault(storedState(), { fetch: fetchImpl, now: () => 1_700_000_000_000 }, "333", 0, { includeLists: false });
+    assert.equal(seen.some((href) => href.includes("list=333")), false);
+    assert.equal(seen.some((href) => href.includes("list_id=333")), true);
     const saved = folder.payloads[0] as { list?: Array<{ id?: number }> };
-    assert.equal(saved.list?.[0]?.id, 9);
+    assert.equal(saved.list?.[0]?.id, 9001);
+    assert.equal(saved.list?.length, 1);
   } finally {
     clearSignRulesCache();
   }
@@ -329,8 +334,9 @@ test("una carpeta custom guarda photos y videos y al abrirla solo salen sus medi
       }
       const url = new URL(href);
       const list = url.searchParams.get("list");
+      const folder = url.searchParams.get("list_id");
       const offset = Number(url.searchParams.get("offset") ?? "0");
-      if (!list || list === "all") {
+      if (!folder && (!list || list === "all")) {
         if (offset !== 0) return Response.json({ list: [{ id: 600, type: "video", duration: 2 }, { id: 601, type: "photo" }], hasMore: false });
         return Response.json({
           list: [
@@ -340,10 +346,9 @@ test("una carpeta custom guarda photos y videos y al abrirla solo salen sus medi
           hasMore: true,
         });
       }
-      if (!list) return Response.json({ list: [{ id: 600, type: "video", duration: 2 }, { id: 601, type: "photo" }], hasMore: false });
-      if (list === "88001") return Response.json({ list: [{ id: 701, type: "photo" }, { id: "702", type: "video", duration: 4 }], hasMore: false });
-      if (list === "sub") return Response.json({ list: [{ id: "801", type: "photo" }], hasMore: false });
-      if (list === "solo") return Response.json({ list: [{ id: 901, type: "photo" }], hasMore: false });
+      if (folder === "88001") return Response.json({ list: [{ id: 701, type: "photo" }, { id: "702", type: "video", duration: 4 }], hasMore: false });
+      if (folder === "sub") return Response.json({ list: [{ id: "801", type: "photo" }], hasMore: false });
+      if (folder === "solo") return Response.json({ list: [{ id: 901, type: "photo" }], hasMore: false });
       return Response.json({ list: [], hasMore: false });
     }) as typeof fetch;
     const walked = await walkVault({
@@ -357,9 +362,9 @@ test("una carpeta custom guarda photos y videos y al abrirla solo salen sus medi
     assert.equal(walked.reason, null);
     assert.ok(walked.items.length > 24);
     assert.equal(seen.some((href) => href.includes("/vault/lists") && href.includes("offset=2")), true);
-    assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("list=88001")), true);
-    assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("list=sub")), true);
-    assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("list=solo")), true);
+    assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("list_id=88001")), true);
+    assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("list_id=sub")), true);
+    assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("list_id=solo")), true);
     assert.equal(lines.some((line) => line.includes("itemClaves=") && line.includes("photos") && line.includes("videos")), true);
     const actor = { userId: "dueña", role: "owner" as const, perms: ["vault"] };
     const opened = await queryVaultForActor(asSql(db), actor, {
@@ -393,6 +398,142 @@ test("una carpeta custom guarda photos y videos y al abrirla solo salen sus medi
     await db.close();
   }
 });
+
+test("dos creadoras no comparten los conteos ni las portadas de sus carpetas", async () => {
+  clearSignRulesCache();
+  clearVaultWalkCache();
+  const db = new PGlite();
+  const shapes: Record<string, ReturnType<typeof creatorLists>> = {
+    "crea-a": creatorLists([400, 80, 3, 1], [
+      { id: 501, name: "Carpeta norte", counts: [9, 2, 0, 0], covers: [701, 702] },
+      { id: 502, name: "Carpeta sur", counts: [1, 6, 1, 0], covers: [703] },
+    ]),
+    "crea-b": creatorLists([20, 4, 0, 0], [
+      { id: 601, name: "Carpeta este", counts: [5, 1, 0, 2], covers: [801] },
+      { id: 602, name: "Carpeta oeste", counts: [0, 3, 0, 0], covers: [802] },
+    ]),
+  };
+  let creator = "crea-a";
+  const seen: string[] = [];
+  const fetchImpl = (async (input: RequestInfo | URL) => {
+    const href = String(input);
+    seen.push(href);
+    if (href.includes("dynamic-rules")) return Response.json(RULES);
+    const url = new URL(href);
+    const shape = shapes[creator]!;
+    if (url.pathname.endsWith("/vault/lists")) return Response.json(shape);
+    const folder = url.searchParams.get("list_id");
+    if (folder) {
+      const row = shape.list.find((item) => String(item.id) === folder);
+      const cover = row && "medias" in row ? row.medias[0] : null;
+      return Response.json({
+        list: cover ? [{ id: cover.id, type: cover.type, listStates: [{ id: Number(folder), type: "custom", name: row?.name, hasMedia: true, canAddMedia: true }] }] : [],
+        hasMore: false,
+      });
+    }
+    return Response.json({
+      list: [{ id: 1, type: "photo", listStates: shape.list.filter((item) => item.type === "custom").map((item) => ({ id: item.id, type: "custom", name: item.name, hasMedia: false, canAddMedia: true })) }],
+      hasMore: false,
+    });
+  }) as typeof fetch;
+  try {
+    for (const file of ["0037_vault_mirror.sql", "0038_vault_fan_filter.sql", "0040_vault_full_tags.sql", "0042_vault_paid_with.sql", "0044_vault_thumb_page.sql", "0050_vault_list_counts.sql", "0051_vault_list_media.sql", "0052_vault_clip.sql", "0053_vault_list_covers.sql"]) {
+      await db.exec(await readFile(path.join(root, "migrations", file), "utf8"));
+    }
+    for (const id of ["crea-a", "crea-b"]) {
+      creator = id;
+      await walkVault({
+        creatorId: id,
+        state: storedState(),
+        fetch: fetchImpl,
+        now: () => 1_700_000_000_000,
+        sql: asSql(db),
+        sleep: async () => undefined,
+      });
+    }
+    const actor = { userId: "dueña", role: "owner" as const, perms: ["vault"] };
+    const expected: Record<string, Array<{ id: string; label: string; covers: string[] }>> = {
+      "crea-a": [
+        { id: "501", label: "9 fotos · 2 vídeos", covers: ["701", "702"] },
+        { id: "502", label: "1 foto · 6 vídeos · 1 GIF", covers: ["703"] },
+      ],
+      "crea-b": [
+        { id: "601", label: "5 fotos · 1 vídeo · 2 audios", covers: ["801"] },
+        { id: "602", label: "0 fotos · 3 vídeos", covers: ["802"] },
+      ],
+    };
+    for (const id of ["crea-a", "crea-b"]) {
+      const view = await queryVaultForActor(asSql(db), actor, { creatorId: id, remember: false, query: emptyVaultQuery() });
+      assert.equal(view.payload.lists.some((list) => list.id === (id === "crea-a" ? "601" : "501")), false);
+      for (const row of expected[id] ?? []) {
+        const folder = view.payload.lists.find((list) => list.id === row.id);
+        const column = folderColumnView({
+          counts: {
+            photos: folder?.photos ?? null,
+            videos: folder?.videos ?? null,
+            gifs: folder?.gifs ?? null,
+            audios: folder?.audios ?? null,
+            hasMedia: folder?.hasMedia ?? null,
+          },
+          covers: folder?.covers ?? [],
+          ownItems: view.payload.items.map((item) => ({ id: item.id, kind: item.kind })),
+        });
+        assert.equal(column.label, row.label);
+        assert.deepEqual(column.coverIds, row.covers);
+      }
+    }
+    const opened = await queryVaultForActor(asSql(db), actor, {
+      creatorId: "crea-a",
+      remember: false,
+      query: { ...emptyVaultQuery(), folderId: "501", scope: "carpeta" },
+    });
+    assert.deepEqual(opened.payload.items.map((item) => item.id), ["701"]);
+    assert.equal(seen.some((href) => href.includes("list=501") || href.includes("list=601")), false);
+    assert.equal(seen.some((href) => href.includes("list_id=501")), true);
+    assert.equal(seen.some((href) => href.includes("list_id=601")), true);
+  } finally {
+    clearSignRulesCache();
+    clearVaultWalkCache();
+    await db.close();
+  }
+});
+
+function creatorLists(
+  all: [number, number, number, number],
+  folders: Array<{ id: number; name: string; counts: [number, number, number, number]; covers: number[] }>,
+) {
+  return {
+    list: folders.map((folder) => ({
+      id: folder.id,
+      type: "custom" as const,
+      name: folder.name,
+      hasMedia: true,
+      canUpdate: true,
+      canDelete: true,
+      photosCount: folder.counts[0],
+      videosCount: folder.counts[1],
+      gifsCount: folder.counts[2],
+      audiosCount: folder.counts[3],
+      medias: folder.covers.map((id, index) => ({
+        id,
+        type: index === 0 && folder.counts[2] > 0 ? "gif" : index === 0 && folder.counts[1] > 0 && folder.counts[0] === 0 ? "video" : "photo",
+        url: "https://cdn2.onlyfans.com/files/cover.jpg",
+      })),
+      echo: { photosCount: all[0], videosCount: all[1], gifsCount: all[2], audiosCount: all[3] },
+    })),
+    all: {
+      photosCount: all[0],
+      videosCount: all[1],
+      gifsCount: all[2],
+      audiosCount: all[3],
+      medias: [{ type: "photo", url: "https://cdn2.onlyfans.com/files/all.jpg" }],
+    },
+    hasMore: false,
+    canCreateVaultLists: true,
+    order: "asc",
+    sort: "custom",
+  };
+}
 
 function asSql(db: PGlite): ReadSql {
   return {

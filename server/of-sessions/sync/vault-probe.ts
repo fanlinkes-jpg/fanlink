@@ -28,19 +28,31 @@ export function readProbeAccount(argv: readonly string[]): string {
   return value.trim();
 }
 
-/** Claves, tipos y conteos. Ids, URLs y textos pasan a marcadores. */
-export function sanitizeVaultShape(value: unknown, depth = 0): unknown {
+function isIdKey(key: string): boolean {
+  return key === "id" || key.endsWith("Id") || key.toLowerCase().endsWith("id");
+}
+
+/**
+ * Claves, tipos y conteos. Ids, URLs y textos pasan a marcadores.
+ * Un array `list` se guarda entero: el corte a 2 escondía las carpetas custom.
+ * El resto de arrays se queda en dos ejemplos.
+ */
+export function sanitizeVaultShape(value: unknown, depth = 0, key = ""): unknown {
   if (depth > 8) return "text";
-  if (Array.isArray(value)) return value.slice(0, 2).map((item) => sanitizeVaultShape(item, depth + 1));
+  if (Array.isArray(value)) {
+    const items = key === "list" ? value : value.slice(0, 2);
+    return items.map((item) => sanitizeVaultShape(item, depth + 1));
+  }
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-      if (SECRET.test(key)) continue;
-      out[key] = sanitizeVaultShape(child, depth + 1);
+    for (const [childKey, child] of Object.entries(value as Record<string, unknown>)) {
+      if (SECRET.test(childKey)) continue;
+      out[childKey] = sanitizeVaultShape(child, depth + 1, childKey);
     }
     return out;
   }
   if (typeof value === "string") {
+    if (isIdKey(key) && /^-?\d/.test(value.trim())) return "id";
     if (SECRET.test(value) || /^https?:\/\//i.test(value)) return /^https?:\/\//i.test(value) ? "url" : "text";
     if (ENUMS.has(value.trim().toLowerCase())) return value.trim().toLowerCase();
     if (/^\d{6,}$/.test(value.trim())) return "id";
@@ -48,11 +60,43 @@ export function sanitizeVaultShape(value: unknown, depth = 0): unknown {
   }
   if (typeof value === "number") {
     if (!Number.isFinite(value)) return null;
-    if (Number.isInteger(value) && Math.abs(value) >= 100_000) return "id";
+    if (isIdKey(key) || value < 0 || !Number.isInteger(value) || Math.abs(value) >= 100_000) return "id";
     return value;
   }
   if (typeof value === "boolean" || value == null) return value;
   return "text";
+}
+
+/** Líneas de consola: cuántas listas hay de cada type, y los conteos de cada custom, sin el nombre. */
+export function vaultListLines(bodies: readonly unknown[]): string[] {
+  const rows = bodies.flatMap(listRows);
+  const byType = new Map<string, number>();
+  for (const row of rows) {
+    const type = text(row.type) || "sin";
+    byType.set(type, (byType.get(type) ?? 0) + 1);
+  }
+  const types = [...byType.entries()].map(([type, count]) => `type=${type} n=${count}`).join(" ");
+  const lines = [`[fanlink:vault] sonda listas ${types}`];
+  for (const row of rows) {
+    if (text(row.type) !== "custom") continue;
+    lines.push(`[fanlink:vault] sonda custom fotos=${countText(row.photosCount)} videos=${countText(row.videosCount)} gifs=${countText(row.gifsCount)} audios=${countText(row.audiosCount)} hasMedia=${row.hasMedia === true ? "si" : row.hasMedia === false ? "no" : "sin"}`);
+  }
+  return lines;
+}
+
+function listRows(body: unknown): Record<string, unknown>[] {
+  if (!body || typeof body !== "object") return [];
+  const list = (body as Record<string, unknown>).list;
+  if (!Array.isArray(list)) return [];
+  return list.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item));
+}
+
+function text(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function countText(value: unknown): string {
+  return typeof value === "number" && Number.isFinite(value) ? String(value) : "sin";
 }
 
 export function assertProbeFileSafe(raw: string): void {
@@ -74,24 +118,24 @@ export async function executeVaultProbe(input: {
   if ("reason" in auth) throw new Error(auth.reason);
   const rules = await loadSignRules(input.fetch, input.now());
   const reads: Array<{ name: string; path: string; status: number | null; body: unknown }> = [];
-  const lists = await readListPages(input, rules, auth, reads);
-  const mediaPath = vaultMediaPath("all", 0, "list");
-  const media = await probeGet(input.fetch, mediaPath, signedHeaders(rules, mediaPath, auth, input.now()));
-  reads.push({ name: "media-all", path: "/api2/v2/vault/media", status: media.status, body: media.body });
-  input.stdout(`[fanlink:vault] sonda ruta=/api2/v2/vault/media list=all status=${media.status ?? "sin"}`);
+  const listBodies = await readListPages(input, rules, auth, reads);
+  for (const line of vaultListLines(listBodies)) input.stdout(line);
+  const tally = await readMediaPages(input, rules, auth, "all", "media-all");
+  reads.push({ name: "media-all", path: "/api2/v2/vault/media", status: tally.status, body: tally.body });
+  input.stdout(`[fanlink:vault] sonda media-all paginas=${tally.pages} medios=${tally.total}`);
   const folderId = reads
     .filter((read) => read.name === "lists" || read.name.startsWith("lists-"))
     .map((read) => firstFolderId(read.body))
     .find((id) => id) ?? null;
   if (folderId) {
-    const byList = vaultMediaPath(folderId, 0, "list");
-    const listed = await probeGet(input.fetch, byList, signedHeaders(rules, byList, auth, input.now()));
-    reads.push({ name: "media-list", path: "/api2/v2/vault/media", status: listed.status, body: listed.body });
-    input.stdout(`[fanlink:vault] sonda ruta=/api2/v2/vault/media list=carpeta status=${listed.status ?? "sin"}`);
-    const byId = vaultMediaPath(folderId, 0, "list_id");
+    const wrong = `/api2/v2/vault/media?limit=40&offset=0&sort=desc&list=${encodeURIComponent(folderId)}`;
+    const listed = await probeGet(input.fetch, wrong, signedHeaders(rules, wrong, auth, input.now()));
+    reads.push({ name: "media-list", path: "/api2/v2/vault/media", status: listed.status, body: { n: probeListCount(listed.body) } });
+    input.stdout(`[fanlink:vault] sonda ruta=/api2/v2/vault/media list=carpeta status=${listed.status ?? "sin"} n=${probeListCount(listed.body)}`);
+    const byId = vaultMediaPath(folderId, 0);
     const ided = await probeGet(input.fetch, byId, signedHeaders(rules, byId, auth, input.now()));
-    reads.push({ name: "media-list-id", path: "/api2/v2/vault/media", status: ided.status, body: ided.body });
-    input.stdout(`[fanlink:vault] sonda ruta=/api2/v2/vault/media list_id=carpeta status=${ided.status ?? "sin"}`);
+    reads.push({ name: "media-list-id", path: "/api2/v2/vault/media", status: ided.status, body: { n: probeListCount(ided.body), sample: firstMedia(ided.body) } });
+    input.stdout(`[fanlink:vault] sonda ruta=/api2/v2/vault/media list_id=carpeta status=${ided.status ?? "sin"} n=${probeListCount(ided.body)}`);
   }
   const file = path.join(config.dataDir, "vault-probe.json");
   const body = JSON.stringify({
@@ -120,9 +164,9 @@ async function readListPages(
   rules: Awaited<ReturnType<typeof loadSignRules>>,
   auth: { cookie: string; userId: string; xBc: string },
   reads: Array<{ name: string; path: string; status: number | null; body: unknown }>,
-): Promise<unknown> {
+): Promise<unknown[]> {
   let offset = 0;
-  let last: unknown = null;
+  const bodies: unknown[] = [];
   for (let page = 0; page < PROBE_LIST_PAGES; page += 1) {
     const listsPath = vaultListsPath(offset);
     const lists = await probeGet(input.fetch, listsPath, signedHeaders(rules, listsPath, auth, input.now()));
@@ -133,15 +177,56 @@ async function readListPages(
       body: lists.body,
     });
     input.stdout(`[fanlink:vault] sonda ruta=/api2/v2/vault/lists offset=${offset} status=${lists.status ?? "sin"}`);
-    last = lists.body;
-    if (!probeHasMore(lists.body)) return last;
+    bodies.push(lists.body);
     const count = probeListCount(lists.body);
+    if (!probePageContinues(lists.body, 50)) return bodies;
     const next = offset + (count > 0 ? count : 50);
-    if (next <= offset) return last;
+    if (next <= offset) return bodies;
     offset = next;
   }
   input.stdout(`[fanlink:vault] sonda ruta=/api2/v2/vault/lists corte=paginas tope=${PROBE_LIST_PAGES}`);
-  return last;
+  return bodies;
+}
+
+/** Sigue si hasMore es true o si la página vino llena. */
+export function probePageContinues(body: unknown, pageSize: number): boolean {
+  if (probeHasMore(body)) return true;
+  return probeListCount(body) >= pageSize;
+}
+
+async function readMediaPages(
+  input: { fetch: typeof fetch; now: () => number; stdout: (line: string) => void },
+  rules: Awaited<ReturnType<typeof loadSignRules>>,
+  auth: { cookie: string; userId: string; xBc: string },
+  listId: string,
+  name: string,
+): Promise<{ status: number | null; pages: number; total: number; body: unknown }> {
+  let offset = 0;
+  let pages = 0;
+  let total = 0;
+  let status: number | null = null;
+  let sample: unknown = null;
+  for (let page = 0; page < 40; page += 1) {
+    const mediaPath = vaultMediaPath(listId, offset);
+    const media = await probeGet(input.fetch, mediaPath, signedHeaders(rules, mediaPath, auth, input.now()));
+    status = media.status;
+    const count = probeListCount(media.body);
+    if (sample == null) sample = firstMedia(media.body);
+    pages += 1;
+    total += count;
+    input.stdout(`[fanlink:vault] sonda ruta=/api2/v2/vault/media nombre=${name} offset=${offset} status=${media.status ?? "sin"} n=${count}`);
+    if (!probePageContinues(media.body, 40)) break;
+    const next = offset + (count > 0 ? count : 40);
+    if (next <= offset) break;
+    offset = next;
+  }
+  return { status, pages, total, body: { pages, total, sample } };
+}
+
+function firstMedia(body: unknown): unknown {
+  if (!body || typeof body !== "object") return null;
+  const list = (body as Record<string, unknown>).list;
+  return Array.isArray(list) ? list[0] ?? null : null;
 }
 
 function probeHasMore(body: unknown): boolean {

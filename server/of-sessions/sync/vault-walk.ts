@@ -1,7 +1,7 @@
 import type { StorageStateFile } from "../sessions/storage-state.ts";
 import { fetchSignedVault, VAULT_MEDIA_LIMIT } from "./of-chat-api.ts";
 import type { ReadSql } from "./store.ts";
-import { parseVaultBundle, vaultAllList, vaultKeyNames, vaultPayloadKind, type VaultFile, type VaultList } from "./vault-model.ts";
+import { mergeVaultList, parseVaultBundle, vaultAllList, vaultKeyNames, vaultPayloadKind, type VaultFile, type VaultList } from "./vault-model.ts";
 import { persistVaultRead } from "./vault-store.ts";
 
 /** Pausa entre páginas. Más lenta que el chat: la bóveda pesa. */
@@ -310,19 +310,7 @@ function listsOf(payloads: readonly unknown[]): VaultList[] {
 }
 
 function richerList(prev: VaultList, next: VaultList): VaultList {
-  return {
-    ...next,
-    ...prev,
-    name: prev.name || next.name,
-    photos: prev.photos ?? next.photos,
-    videos: prev.videos ?? next.videos,
-    gifs: prev.gifs ?? next.gifs,
-    audios: prev.audios ?? next.audios,
-    hasMedia: prev.hasMedia ?? next.hasMedia,
-    count: prev.count ?? next.count,
-    type: prev.type || next.type,
-    sourceKeys: [prev.sourceKeys, next.sourceKeys].filter(Boolean).join(","),
-  };
+  return mergeVaultList(prev, next);
 }
 
 function logList(list: VaultList): void {

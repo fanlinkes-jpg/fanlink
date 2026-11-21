@@ -255,10 +255,10 @@ export type VaultFetchOptions = {
 /** La web pide las carpetas de 50 en 50 (`view=main`) y sigue con offset mientras `hasMore`. */
 export const VAULT_LIST_LIMIT = 50;
 /**
- * La web pagina con `limit` 40, `offset`, `sort=desc` y `list`.
- * `list=all` es toda la bóveda. Una carpeta usa `list=<id>`.
- * `list_id`, `type=all` y `field=recent` no van: un 400 de esa query
- * cortaba el paseo en la primera página.
+ * La web pagina con `limit` 40, `offset` y `sort=desc`.
+ * `list=all` es toda la bóveda. Una carpeta va con `list_id`:
+ * `list=<id>` responde 200 y `list:[]`.
+ * No van `type` ni `field`.
  */
 export const VAULT_MEDIA_LIMIT = 40;
 
@@ -266,14 +266,15 @@ export function vaultListsPath(offset: number): string {
   return `/api2/v2/vault/lists?view=main&offset=${offset}&limit=${VAULT_LIST_LIMIT}`;
 }
 
-export function vaultMediaPath(listId: string, offset: number, folderParam: "list" | "list_id" = "list"): string {
+export function vaultMediaPath(listId: string, offset: number): string {
   const params = new URLSearchParams({
     limit: String(VAULT_MEDIA_LIMIT),
     offset: String(offset),
     sort: "desc",
   });
   const id = listId.trim() || "all";
-  params.set(folderParam, id);
+  if (id === "all") params.set("list", "all");
+  else params.set("list_id", id);
   return `/api2/v2/vault/media?${params.toString()}`;
 }
 
@@ -334,15 +335,9 @@ export async function fetchSignedVault(state: StorageStateFile, deps: {
     else return { ...empty, status: read.status, reason: read.reason };
   }
   if (wantMedia) {
-    const primary = vaultMediaPath(list, skip, "list");
-    let read = await readVaultPath(deps, () => getJson(deps.fetch, primary, signedHeaders(rules, primary, auth, deps.now()), deps.now()));
+    const primary = vaultMediaPath(list, skip);
+    const read = await readVaultPath(deps, () => getJson(deps.fetch, primary, signedHeaders(rules, primary, auth, deps.now()), deps.now()));
     console.info(vaultPageLog({ route: primary, status: read.status, count: mediaCountOf(read.body), hasMore: hasMoreLabelOf(read.body), offset: skip, listId: list }));
-    if (read.status === 400 && list !== "all") {
-      const alt = vaultMediaPath(list, skip, "list_id");
-      const second = await readVaultPath(deps, () => getJson(deps.fetch, alt, signedHeaders(rules, alt, auth, deps.now()), deps.now()));
-      console.info(vaultPageLog({ route: alt, status: second.status, count: mediaCountOf(second.body), hasMore: hasMoreLabelOf(second.body), offset: skip, listId: list }));
-      if (second.ok) read = second;
-    }
     status = read.status;
     const stopped = stopVaultRead(payloads, read);
     if (stopped) return stopped;

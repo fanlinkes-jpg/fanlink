@@ -9,32 +9,55 @@ export type VaultFolderCounts = {
   count?: number | null;
 };
 
-/** El texto de la carpeta. «vacío» solo si OnlyFans dice que no hay medios. */
+export type FolderCover = { id: string; kind: string | null };
+
+/** El texto de la carpeta. Los conteos de la lista mandan, también si son 0. */
 export function vaultFolderLabel(counts: VaultFolderCounts, loaded: { photos: number; videos: number; gifs: number }): string {
-  const known = counts.photos != null || counts.videos != null || counts.gifs != null || counts.audios != null;
+  const known = folderCountsKnown(counts);
   if (!known && counts.count != null && counts.count > 0) return `${counts.count} medios`;
-  const photos = shownCount(counts.photos, loaded.photos);
-  const videos = shownCount(counts.videos, loaded.videos);
-  const gifs = shownCount(counts.gifs, loaded.gifs);
+  const photos = shownCount(counts.photos, known ? 0 : loaded.photos);
+  const videos = shownCount(counts.videos, known ? 0 : loaded.videos);
+  const gifs = shownCount(counts.gifs, known ? 0 : loaded.gifs);
   const audios = shownCount(counts.audios, 0);
   const total = photos + videos + gifs + audios;
-  if (total > 0) {
-    const parts = [piece(photos, "foto", "fotos"), piece(videos, "vídeo", "vídeos")];
-    if (gifs > 0) parts.push(piece(gifs, "GIF", "GIF"));
-    if (audios > 0) parts.push(piece(audios, "audio", "audios"));
-    return parts.join(" · ");
-  }
-  if (counts.hasMedia === false) return "vacío";
-  if (known && counts.hasMedia !== true) return "vacío";
-  return "Sin datos";
+  if (total === 0 && counts.hasMedia === false) return "vacío";
+  if (total === 0 && !known) return "Sin datos";
+  const parts = [piece(photos, "foto", "fotos"), piece(videos, "vídeo", "vídeos")];
+  if (gifs > 0) parts.push(piece(gifs, "GIF", "GIF"));
+  if (audios > 0) parts.push(piece(audios, "audio", "audios"));
+  return parts.join(" · ");
 }
 
-/** Un 0 de OnlyFans no esconde medios que el paseo ya guardó. */
+/**
+ * Columna de una carpeta. Los conteos y las portadas son los de esa lista.
+ * `loadedLibrary` es la bóveda entera y no rellena ni el texto ni las miniaturas.
+ */
+export function folderColumnView(input: {
+  counts: VaultFolderCounts;
+  covers: readonly FolderCover[];
+  ownItems: readonly FolderCover[];
+}): { label: string; coverIds: string[] } {
+  const known = folderCountsKnown(input.counts);
+  const own = {
+    photos: input.ownItems.filter((item) => item.kind === "foto").length,
+    videos: input.ownItems.filter((item) => item.kind === "video").length,
+    gifs: input.ownItems.filter((item) => item.kind === "gif").length,
+  };
+  const label = vaultFolderLabel(input.counts, known ? { photos: 0, videos: 0, gifs: 0 } : own);
+  const source = input.covers.length > 0 ? input.covers : input.ownItems;
+  const coverIds = source.filter((item) => item.id && item.kind !== "audio").slice(0, 4).map((item) => item.id);
+  return { label, coverIds };
+}
+
+function folderCountsKnown(counts: VaultFolderCounts): boolean {
+  return counts.photos != null || counts.videos != null || counts.gifs != null || counts.audios != null;
+}
+
 function piece(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
 }
 
 function shownCount(reported: number | null, loaded: number): number {
-  if (reported == null || (reported === 0 && loaded > 0)) return loaded;
+  if (reported == null) return loaded;
   return reported;
 }

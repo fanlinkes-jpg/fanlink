@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { queryVaultMirror } from "@/lib/of-sessions";
 import { VAULT_THUMB_MISSING, vaultMediaSrc } from "@/lib/chat-media";
 import { VAULT_CARD_FRAME, VAULT_CARD_IMAGE } from "@/lib/vault-card-frame";
-import { vaultFolderLabel } from "@/lib/vault-folder-label";
+import { folderColumnView, type FolderCover } from "@/lib/vault-folder-label";
 import { VAULT_GRID_CLASS } from "@/lib/vault-grid";
 import { vaultSentPill, vaultUsageText } from "@/lib/vault-usage";
 import { VAULT_FILTER_DEBOUNCE_MS } from "@/lib/vault-debounce";
@@ -45,6 +45,7 @@ type VaultList = {
   gifs?: number | null;
   audios?: number | null;
   hasMedia?: boolean | null;
+  covers?: FolderCover[];
 };
 
 type VaultPayload = {
@@ -189,6 +190,7 @@ export function VaultBrowser({
                 listId={thumbPage.listId}
                 offset={thumbPage.offset}
                 counts={lists.find((folder) => folder.id === "all")}
+                covers={[]}
                 items={library.length > 0 ? library : items}
                 onClick={() => { onOpenFolder?.(null); setQuery({ ...query, folderId: null, scope: "todas" }); }}
               />
@@ -197,9 +199,10 @@ export function VaultBrowser({
                   key={folder.id}
                   name={folder.name}
                   creatorId={creatorId}
-                  listId={thumbPage.listId}
-                  offset={thumbPage.offset}
+                  listId={folder.id}
+                  offset={0}
                   counts={folder}
+                  covers={folder.covers ?? []}
                   active={query.folderId === folder.id}
                   items={folderItems(library.length > 0 ? library : items, folder)}
                   onClick={() => { onOpenFolder?.(folder.id); setQuery({ ...query, folderId: folder.id, scope: "carpeta" }); }}
@@ -493,6 +496,7 @@ function VaultFolder({
   name,
   active,
   items,
+  covers,
   creatorId,
   listId,
   offset,
@@ -502,34 +506,34 @@ function VaultFolder({
   name: string;
   active: boolean;
   items: VaultCard[];
+  covers: readonly FolderCover[];
   creatorId: string;
   listId: string;
   offset: number;
   counts?: { photos?: number | null; videos?: number | null; gifs?: number | null; audios?: number | null; hasMedia?: boolean | null };
   onClick: () => void;
 }) {
-  const label = vaultFolderLabel({
-    photos: counts?.photos ?? null,
-    videos: counts?.videos ?? null,
-    gifs: counts?.gifs ?? null,
-    audios: counts?.audios ?? null,
-    hasMedia: counts?.hasMedia ?? null,
-  }, {
-    photos: items.filter((item) => item.kind === "foto").length,
-    videos: items.filter((item) => item.kind === "video").length,
-    gifs: items.filter((item) => item.kind === "gif").length,
+  const column = folderColumnView({
+    counts: {
+      photos: counts?.photos ?? null,
+      videos: counts?.videos ?? null,
+      gifs: counts?.gifs ?? null,
+      audios: counts?.audios ?? null,
+      hasMedia: counts?.hasMedia ?? null,
+    },
+    covers,
+    ownItems: items.map((item) => ({ id: item.id, kind: item.kind })),
   });
-  const covers = items.filter((item) => item.kind !== "audio").slice(0, 4);
   return (
     <button type="button" onClick={onClick} className={`flex w-full flex-col gap-2 px-4 py-3 text-left ${active ? "bg-[#f4f7fb]" : "hover:bg-[#fafbfc]"}`}>
       <span className="min-w-0">
         <span className="line-clamp-2 block text-sm font-semibold">{name}</span>
-        <span className="block text-xs text-[#8a96a3]">{label}</span>
+        <span className="block text-xs text-[#8a96a3]">{column.label}</span>
       </span>
-      {covers.length > 0 ? (
+      {column.coverIds.length > 0 ? (
         <span className="flex gap-1">
-          {covers.map((item) => (
-            <VaultStill key={item.id} creatorId={creatorId} mediaId={item.id} className="h-12 w-12 rounded object-cover object-center" listId={listId} offset={offset} />
+          {column.coverIds.map((id) => (
+            <VaultStill key={id} creatorId={creatorId} mediaId={id} className="h-12 w-12 rounded object-cover object-center" listId={listId} offset={offset} />
           ))}
         </span>
       ) : null}

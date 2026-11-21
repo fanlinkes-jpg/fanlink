@@ -55,7 +55,7 @@ export type VaultMirrorResult = {
   chatterId: string;
   restored: boolean;
   notice: string | null;
-  lists: Array<{ id: string; name: string; parentId: string | null; photos: number | null; videos: number | null; gifs: number | null; audios: number | null; hasMedia: boolean | null }>;
+  lists: Array<{ id: string; name: string; parentId: string | null; photos: number | null; videos: number | null; gifs: number | null; audios: number | null; hasMedia: boolean | null; covers: Array<{ id: string; kind: string | null }> }>;
   items: VaultCard[];
   query: VaultQuery;
   error?: string;
@@ -152,6 +152,7 @@ export async function queryVaultForActor(sql: ReadSql, actor: VaultActor, body: 
       gifs: source?.gifs ?? null,
       audios: source?.audios ?? null,
       hasMedia: source?.hasMedia ?? null,
+      covers: (source?.covers ?? []).map((cover) => ({ id: cover.id, kind: cover.kind })),
     };
   });
   return {

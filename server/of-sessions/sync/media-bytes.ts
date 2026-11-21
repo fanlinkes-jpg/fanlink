@@ -223,9 +223,9 @@ async function loadMedia(target: string, headers: Record<string, string>, ranged
 const thumbNotes = new Set<string>();
 const thumbRecovered = new Set<string>();
 
-/** Una miniatura pide imagen. Un vídeo, o un Range de vídeo, pide vídeo. */
-export function mediaAcceptHeader(target: string, range: string | null): string {
-  if (range || isVideoTarget(target)) return "video/*,*/*";
+/** Una miniatura pide imagen, aunque lleve Range. Solo un vídeo pide vídeo. */
+export function mediaAcceptHeader(target: string, _range: string | null): string {
+  if (isVideoTarget(target)) return "video/*,*/*";
   return "image/avif,image/webp,image/apng,image/*,*/*;q=0.8";
 }
 

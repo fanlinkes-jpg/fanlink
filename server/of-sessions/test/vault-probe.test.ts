@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { vaultMediaPath, vaultPageLog } from "../sync/of-chat-api.ts";
-import { assertProbeFileSafe, sanitizeVaultShape } from "../sync/vault-probe.ts";
+import { assertProbeFileSafe, probePageContinues, sanitizeVaultShape, vaultListLines } from "../sync/vault-probe.ts";
+import { VAULT_LISTS_FIXTURE } from "./fixtures/vault-of-shape.ts";
 import { mediaAcceptHeader, vaultPlayerLog } from "../sync/media-bytes.ts";
 import { boundVaultOffset, VAULT_OFFSET_CAP } from "../sync/vault-walk.ts";
 
@@ -14,8 +15,8 @@ test("la página de medios usa list y limit 40, sin type ni field", () => {
   assert.equal(all.includes("list_id="), false);
   assert.equal(all.includes("field="), false);
   assert.equal(all.includes("type="), false);
-  assert.match(vaultMediaPath("88001", 40), /list=88001/);
-  assert.match(vaultMediaPath("88001", 0, "list_id"), /list_id=88001/);
+  assert.match(vaultMediaPath("88001", 40), /list_id=88001/);
+  assert.equal(vaultMediaPath("88001", 40).includes("list=88001"), false);
   const line = vaultPageLog({ route: all, status: 200, count: 40, hasMore: "si", offset: 0, listId: "all" });
   assert.match(line, /ruta=\/api2\/v2\/vault\/media status=200 n=40 hasMore=si offset=0 list=all/);
   assert.equal(line.includes("sign"), false);
@@ -55,7 +56,28 @@ test("el sondeo guarda la forma y no un secreto", () => {
   assert.match(player, /tipo=video\/mp4 bytes=1048576/);
   assert.equal(player.includes("http"), false);
   assert.equal(mediaAcceptHeader("https://cdn2.onlyfans.com/files/a.mp4", "bytes=0-100"), "video/*,*/*");
-  assert.equal(mediaAcceptHeader("https://cdn2.onlyfans.com/files/a.jpg", null).startsWith("image/"), true);
+  assert.equal(mediaAcceptHeader("https://cdn2.onlyfans.com/files/a.jpg", "bytes=0-100").startsWith("image/"), true);
+  const hidden = sanitizeVaultShape({ id: 12, listId: 34, photosCount: 4, minus: -2, ratio: 1.5 }) as Record<string, unknown>;
+  assert.equal(hidden.id, "id");
+  assert.equal(hidden.listId, "id");
+  assert.equal(hidden.photosCount, 4);
+  assert.equal(hidden.minus, "id");
+  assert.equal(hidden.ratio, "id");
+  const kept = sanitizeVaultShape({
+    list: [
+      { id: 1, type: "stories", photosCount: 0 },
+      { id: 2, type: "posts", photosCount: 3 },
+      { id: 3, type: "custom", photosCount: 5 },
+    ],
+  }) as { list: unknown[] };
+  assert.equal(kept.list.length, 3);
+  const summary = vaultListLines([VAULT_LISTS_FIXTURE]);
+  assert.match(summary[0] ?? "", /type=stories n=1/);
+  assert.match(summary[0] ?? "", /type=custom n=1/);
+  assert.match(summary[1] ?? "", /fotos=5 videos=2/);
+  assert.equal(summary.join(" ").includes("Carpeta"), false);
+  assert.equal(probePageContinues({ list: Array.from({ length: 50 }, () => ({})), hasMore: false }, 50), true);
+  assert.equal(probePageContinues({ list: [{ id: 1 }], hasMore: false }, 50), false);
   assert.throws(() => assertProbeFileSafe('{"u":"https://cdn.example/a?Policy=abc"}'), /secreto/);
   assert.throws(() => assertProbeFileSafe("Signature=abc"), /secreto/);
   assert.equal(sanitizeVaultShape(99999), 99999);

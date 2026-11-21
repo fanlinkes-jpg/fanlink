@@ -39,6 +39,8 @@ export type VaultList = {
   hasMedia?: boolean | null;
   /** `count` suelto, si no hay desglose. */
   count?: number | null;
+  /** Portadas de `medias` de esa lista. Sin URL. */
+  covers?: Array<{ id: string; kind: VaultKind }>;
   /** `custom` o el tipo de sistema. No se guarda. */
   type?: string;
   /** Claves del JSON, solo para el log. No se guardan. */
@@ -373,13 +375,8 @@ function tagsOf(row: Record<string, unknown>, posted: boolean | null, sent: bool
   if (sent === true) tags.push("Sent");
   if (sent === false) tags.push("Sent:no");
   if (row.trailer === true || row.isPreview === true || (textOf(row.type) ?? "").toLowerCase().includes("trailer")) tags.push("Tráiler");
-  const states = Array.isArray(row.listStates) ? row.listStates : [];
-  for (const entry of states) {
-    if (!entry || typeof entry !== "object") continue;
-    const list = entry as Record<string, unknown>;
-    const name = textOf(list.name);
-    const type = (textOf(list.type) ?? "").toLowerCase();
-    if (name && type !== "posts" && name !== "Posts") tags.push(name);
+  for (const list of memberLists(row)) {
+    if (list.name && list.type !== "posts" && list.name !== "Posts") tags.push(list.name);
   }
   return [...new Set(tags)];
 }
@@ -436,19 +433,26 @@ function listMembership(row: Record<string, unknown>, lists: readonly VaultList[
   listName: string | null;
   listIds: string[];
 } {
-  const states = Array.isArray(row.listStates) ? row.listStates : [];
-  const parsed = states.flatMap((entry) => {
-    if (!entry || typeof entry !== "object") return [];
-    const list = entry as Record<string, unknown>;
-    const id = textOf(list.id);
-    if (!id) return [];
-    return [{ id, name: textOf(list.name), type: (textOf(list.type) ?? "").toLowerCase() }];
-  });
+  const parsed = memberLists(row);
   const custom = parsed.find((list) => !SYSTEM_LISTS.has(list.type));
   const chosen = custom ?? parsed[0];
   const listId = chosen?.id ?? null;
   const listName = chosen?.name ?? lists.find((list) => list.id === listId)?.name ?? null;
   return { listId, listName, listIds: [...new Set(parsed.map((list) => list.id))] };
+}
+
+/** `hasMedia: false` es el catálogo de listas, no la pertenencia. Sin el campo, la entrada sí cuenta. */
+function memberLists(row: Record<string, unknown>): Array<{ id: string; name: string | null; type: string }> {
+  const states = Array.isArray(row.listStates) ? row.listStates : [];
+  return states.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const list = entry as Record<string, unknown>;
+    const id = textOf(list.id);
+    if (!id) return [];
+    const flag = list.hasMedia ?? list.has_media;
+    if (typeof flag === "boolean" && flag === false) return [];
+    return [{ id, name: textOf(list.name), type: (textOf(list.type) ?? "").toLowerCase() }];
+  });
 }
 
 function collectFolders(payload: unknown, lists: VaultList[]): void {
@@ -468,19 +472,24 @@ function mergeFolder(lists: VaultList[], folder: VaultList): void {
     lists.push(folder);
     return;
   }
-  const prev = lists[index]!;
-  lists[index] = {
-    ...folder,
+  lists[index] = mergeVaultList(lists[index]!, folder);
+}
+
+/** Une dos vistas de la misma lista. Un conteo ausente no borra el que ya vino, ni copia el de otra lista. */
+export function mergeVaultList(prev: VaultList, next: VaultList): VaultList {
+  return {
+    ...next,
     ...prev,
-    name: prev.name || folder.name,
-    photos: prev.photos ?? folder.photos,
-    videos: prev.videos ?? folder.videos,
-    gifs: prev.gifs ?? folder.gifs,
-    audios: prev.audios ?? folder.audios,
-    hasMedia: prev.hasMedia ?? folder.hasMedia,
-    count: prev.count ?? folder.count,
-    type: prev.type ?? folder.type,
-    sourceKeys: [prev.sourceKeys, folder.sourceKeys].filter(Boolean).join(","),
+    name: prev.name || next.name,
+    photos: prev.photos ?? next.photos,
+    videos: prev.videos ?? next.videos,
+    gifs: prev.gifs ?? next.gifs,
+    audios: prev.audios ?? next.audios,
+    hasMedia: prev.hasMedia ?? next.hasMedia,
+    count: prev.count ?? next.count,
+    type: prev.type || next.type,
+    covers: prev.covers && prev.covers.length > 0 ? prev.covers : next.covers,
+    sourceKeys: [prev.sourceKeys, next.sourceKeys].filter(Boolean).join(","),
   };
 }
 
@@ -492,7 +501,39 @@ function folderFrom(entry: unknown): VaultList | null {
   if (!id || !name) return null;
   const counts = listCounts(row);
   if (counts.hasMedia == null && counts.count != null) counts.hasMedia = counts.count > 0;
-  return { id, name, type: (textOf(row.type) ?? "").toLowerCase() || undefined, ...counts, sourceKeys: vaultKeyNames(row) };
+  return {
+    id,
+    name,
+    type: (textOf(row.type) ?? "").toLowerCase() || undefined,
+    ...counts,
+    covers: coversOf(row),
+    sourceKeys: vaultKeyNames(row),
+  };
+}
+
+/** `medias` de la lista. Solo id y tipo: la URL no sale de aquí. */
+function coversOf(row: Record<string, unknown>): Array<{ id: string; kind: VaultKind }> {
+  const medias = row.medias ?? row.media;
+  if (!Array.isArray(medias)) return [];
+  const covers: Array<{ id: string; kind: VaultKind }> = [];
+  for (const entry of medias) {
+    if (!entry || typeof entry !== "object") continue;
+    const media = entry as Record<string, unknown>;
+    const id = textOf(media.id ?? media.mediaId);
+    if (!id) continue;
+    covers.push({ id, kind: coverKind(media) });
+    if (covers.length >= 4) break;
+  }
+  return covers;
+}
+
+function coverKind(row: Record<string, unknown>): VaultKind {
+  const type = (textOf(row.type ?? row.kind) ?? "").toLowerCase();
+  if (type.includes("video")) return "video";
+  if (type.includes("audio")) return "audio";
+  if (type.includes("gif")) return "gif";
+  if (type.includes("photo") || type.includes("image") || type.includes("foto")) return "foto";
+  return null;
 }
 
 function firstNamedArray(row: Record<string, unknown>, keys: readonly string[]): unknown[] | null {
@@ -525,10 +566,11 @@ function listCounts(list: Record<string, unknown>): Pick<VaultList, "photos" | "
   };
 }
 
+/** Solo el objeto de la lista y su bloque de conteos. `medias` y `all` no cuentan. */
 function countBags(list: Record<string, unknown>): Record<string, unknown>[] {
   const bags = [list];
-  for (const value of Object.values(list)) {
-    const child = nested(value);
+  for (const key of ["counts", "stats", "bag", "counters"]) {
+    const child = nested(list[key]);
     if (child) bags.push(child);
   }
   return bags;
@@ -538,7 +580,9 @@ function pickCount(bags: readonly Record<string, unknown>[], keys: readonly stri
   for (const bag of bags) {
     for (const key of keys) {
       if (!(key in bag)) continue;
-      return countOrNull(bag[key]);
+      const count = countOrNull(bag[key]);
+      if (count == null) continue;
+      return count;
     }
   }
   return null;
@@ -555,7 +599,7 @@ function pickBool(bags: readonly Record<string, unknown>[], keys: readonly strin
 }
 
 
-/** El medio pedido con `list=<id>` pertenece a esa lista aunque el JSON no traiga listStates. */
+/** El medio pedido con `list_id` pertenece a esa lista aunque el JSON no traiga listStates. */
 export function stampVaultList(item: VaultFile, listId: string, listName: string | null): VaultFile {
   if (!listId || listId === "all") return item;
   const listIds = [...new Set([...(item.listIds ?? []), listId])];
