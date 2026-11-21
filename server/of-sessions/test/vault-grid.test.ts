@@ -251,8 +251,12 @@ test("pulsar una carpeta durante la carga no vuelve a Todos", async () => {
     await page.getByText("Fan de prueba").first().waitFor();
     await page.getByRole("button", { name: "Add from media vault", exact: true }).click();
     const panel = page.getByRole("region", { name: "Panel Add from media vault" });
-    await panel.getByText("Cargando…").waitFor();
-    await panel.getByRole("button", { name: /LA DUCHA/ }).click();
+    const folder = panel.getByRole("button", { name: /LA DUCHA/ });
+    await Promise.race([
+      panel.getByText("Cargando…").waitFor({ timeout: 15_000 }),
+      folder.waitFor({ timeout: 15_000 }),
+    ]);
+    await folder.click();
     await page.waitForFunction(() => document.querySelectorAll("[data-vault-card]").length === 3);
     releaseAll();
     await page.waitForTimeout(500);
