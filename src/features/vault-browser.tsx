@@ -3,6 +3,7 @@ import { queryVaultMirror } from "@/lib/of-sessions";
 import { VAULT_THUMB_MISSING, vaultMediaSrc } from "@/lib/chat-media";
 import { VAULT_CARD_FRAME, VAULT_CARD_IMAGE } from "@/lib/vault-card-frame";
 import { folderColumnView, type FolderCover } from "@/lib/vault-folder-label";
+import { folderGridItems, sameVaultId } from "@/lib/vault-load";
 import { VAULT_GRID_CLASS } from "@/lib/vault-grid";
 import { vaultSentPill, vaultUsageText } from "@/lib/vault-usage";
 import { VAULT_FILTER_DEBOUNCE_MS } from "@/lib/vault-debounce";
@@ -181,7 +182,7 @@ export function VaultBrowser({
   const kind = query.kinds[0] ?? "";
   const openFolderId = query.scope === "carpeta" ? query.folderId : null;
   const grid = folderGrid(items, pageItems, openFolderId, thumbPage.listId);
-  const folderName = lists.find((folder) => folder.id === query.folderId)?.name ?? "Todos los medios";
+  const folderName = lists.find((folder) => sameVaultId(folder.id, query.folderId))?.name ?? "Todos los medios";
   if (layout === "of") {
     return (
       <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-white text-[#1c2333]">
@@ -213,9 +214,14 @@ export function VaultBrowser({
                   offset={0}
                   counts={folder}
                   covers={folder.covers ?? []}
-                  active={query.folderId === folder.id}
-                  items={query.folderId === folder.id ? grid : []}
-                  onClick={() => { wantedFolder.current = folder.id; onOpenFolder?.(folder.id); setQuery({ ...query, folderId: folder.id, scope: "carpeta" }); }}
+                  active={sameVaultId(query.folderId, folder.id)}
+                  items={[]}
+                  onClick={() => {
+                    const id = String(folder.id);
+                    wantedFolder.current = id;
+                    onOpenFolder?.(id);
+                    setQuery({ ...query, folderId: id, scope: "carpeta" });
+                  }}
                 />
               ))}
               {lists.length === 0 ? <p className="px-4 py-3 text-xs text-[#8a96a3]">Sin datos</p> : null}
@@ -476,12 +482,13 @@ function folderGrid(
   folderId: string | null,
   pageListId: string,
 ): VaultCard[] {
-  if (!folderId) return [...mirror];
-  if (pageListId === folderId && pageItems.length > 0) {
-    const byId = new Map(mirror.map((item) => [item.id, item]));
-    return pageItems.map((item) => byId.get(item.id) ?? stubCard(item));
-  }
-  return mirror.filter((item) => item.listId === folderId);
+  const rows = folderGridItems(
+    mirror.map((item) => ({ ...item, listId: item.listId ?? null })),
+    pageItems.map((item) => ({ ...stubCard(item), listId: folderId })),
+    folderId,
+    pageListId,
+  );
+  return rows.map((item) => mirror.find((row) => row.id === item.id) ?? item);
 }
 
 function stubCard(item: { id: string; title: string; kind: VaultCard["kind"] }): VaultCard {

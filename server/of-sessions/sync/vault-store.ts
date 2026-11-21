@@ -95,10 +95,11 @@ export async function saveVaultMirror(sql: ReadSql, creatorId: string, items: re
   }
   if (await hasColumn(sql, "of_vault_list", "cover_ids")) {
     for (const list of lists) {
-      if (!list.covers || list.covers.length === 0) continue;
+      if (!list.id || list.id === "all") continue;
+      const covers = list.covers ?? [];
       await sql.query(
         "update of_vault_list set cover_ids = $3::jsonb where creator_id = $1 and list_key = $2",
-        [creatorId, list.id, JSON.stringify(list.covers.map((cover) => ({ id: cover.id, kind: cover.kind })))],
+        [creatorId, list.id, JSON.stringify(covers.map((cover) => ({ id: cover.id, kind: cover.kind })))],
       );
     }
   }
@@ -164,10 +165,6 @@ export async function persistVaultRead(
   if (saved.length > 0 && page) await rememberThumbPage(sql, creatorId, saved.map((item) => item.id), page);
   if (requested && requested !== "all" && saved.length > 0) {
     await rememberListMembers(sql, creatorId, requested, saved.map((item) => item.id));
-    const fromList = lists.get(requested)?.covers ?? [];
-    if (fromList.length === 0) {
-      await fillEmptyCovers(sql, creatorId, requested, saved.filter((item) => item.kind !== "audio").slice(0, 4).map((item) => ({ id: item.id, kind: item.kind })));
-    }
   }
   return saved;
 }
@@ -223,17 +220,6 @@ export async function finishListMembers(sql: ReadSql, creatorId: string, listId:
   await sql.query(
     "delete from of_vault_list_item where creator_id = $1 and list_key = $2 and not (item_key = any($3::text[]))",
     [creatorId, listId, itemIds],
-  );
-}
-
-/** Si la lista no trajo medias[], las primeras del recorrido con list_id sirven de portada. */
-async function fillEmptyCovers(sql: ReadSql, creatorId: string, listId: string, covers: ReadonlyArray<{ id: string; kind: string | null }>): Promise<void> {
-  if (covers.length === 0 || !(await hasColumn(sql, "of_vault_list", "cover_ids"))) return;
-  await sql.query(
-    `update of_vault_list set cover_ids = $3::jsonb
-     where creator_id = $1 and list_key = $2
-       and (cover_ids is null or cover_ids = '[]'::jsonb)`,
-    [creatorId, listId, JSON.stringify(covers)],
   );
 }
 
