@@ -11,7 +11,9 @@ import {
   draftAfterPaste,
   liveChallengeControl,
   liveControlAllowed,
+  liveCastStall,
   liveFps,
+  livePageMetrics,
   liveLog,
   liveOriginAllowed,
   liveOutgoingSocketBlocked,
@@ -30,6 +32,19 @@ import {
 } from "../live/desk.ts";
 
 const account = { creatorId: "9ikis52", accountId: "acc", handle: "bigpoppa1111", userId: "42", label: "Prueba" };
+
+test("el visor cambia de tamaño y la pantalla de la huella no", () => {
+  const metrics = livePageMetrics(900, 600);
+  assert.equal(metrics.width, 900);
+  assert.equal(metrics.height, 600);
+  assert.equal(metrics.deviceScaleFactor, 1);
+  assert.equal(metrics.screenWidth, 1440);
+  assert.equal(metrics.screenHeight, 900);
+  assert.equal(livePageMetrics(10, 10).width, 320);
+  assert.equal(liveCastStall(1000, 0), "espera");
+  assert.equal(liveCastStall(8000, 0), "reinicio");
+  assert.equal(liveCastStall(8000, 1), "relanzo");
+});
 
 test("la vista en directo solo pide el flag y una sesión guardada", () => {
   assert.equal(liveViewGate(undefined, true).allowed, false);

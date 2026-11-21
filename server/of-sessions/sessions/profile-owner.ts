@@ -33,6 +33,8 @@ export type ProfileHooks = {
   openVisible: (accountId: string) => Promise<BrowserContext>;
   persist: (accountId: string, context: BrowserContext) => Promise<void>;
   closeContext: (context: BrowserContext, reason: string) => Promise<void>;
+  /** Cierra las pestañas de una lectura para que suelte el perfil. */
+  hurry?: (context: BrowserContext) => Promise<void>;
   isStopped: () => boolean;
 };
 
@@ -60,8 +62,14 @@ export class ProfileOwner {
       if (current?.exclusive || current?.yielding) {
         throw new SessionPendingError(messages.loginInProgress);
       }
+      if (current?.visible && liveContextOpen(current.context)) {
+        this.clearPark(current);
+        current.users += 1;
+        current.yielding = false;
+        console.info(`[fanlink:navegador] vista=live comparte perfil=${accountId}`);
+        return current;
+      }
       if (current?.visible) {
-        if (current.users > 0) throw new SessionPendingError(messages.liveViewInProgress);
         console.info(`[fanlink:navegador] vista=live suelto perfil=${accountId} motivo=lectura`);
         await this.dropSlot(accountId);
       }
@@ -103,7 +111,7 @@ export class ProfileOwner {
     try {
       for (;;) {
         if (this.hooks.isStopped()) throw new Error(messages.loginCancelled);
-        const reused = await this.withLock(accountId, async () => {
+        const waited = await this.withLock(accountId, async () => {
           const current = this.slots.get(accountId);
           if (current?.exclusive) {
             throw new SessionPendingError(messages.loginInProgress);
@@ -118,14 +126,19 @@ export class ProfileOwner {
               current.users += 1;
               current.yielding = false;
               console.info(`[fanlink:navegador] vista=live reutilizo perfil=${accountId}`);
-              return current;
+              return { slot: current, hurry: null as BrowserContext | null };
             }
           }
-          if (current) current.yielding = true;
-          return null;
+          if (current) {
+            current.yielding = true;
+            console.info(`[fanlink:navegador] vista=live espera lectura perfil=${accountId}`);
+            return { slot: null, hurry: current.context };
+          }
+          return { slot: null, hurry: null as BrowserContext | null };
         });
-        if (reused) return this.hand(accountId, reused);
-        await this.waitUntilIdle(accountId, profileIdleMs(), "El perfil sigue ocupado. No se ha abierto la vista nativa.");
+        if (waited.slot) return this.hand(accountId, waited.slot);
+        if (waited.hurry) await this.hooks.hurry?.(waited.hurry).catch(() => undefined);
+        await this.waitUntilIdle(accountId, liveProfileWaitMs(), "El perfil sigue ocupado. No se ha abierto la vista nativa.");
         const opened = await this.withLock(accountId, async () => {
           const current = this.slots.get(accountId);
           if (current?.exclusive) {
@@ -286,8 +299,7 @@ export class ProfileOwner {
     try {
       await this.hooks.persist(accountId, context);
     } catch (error) {
-      const kind = error instanceof Error ? error.name : "error";
-      console.warn(`[fanlink:perfil] no se pudo guardar la sesión cuenta=${accountId} tipo=${kind}`);
+      console.warn(`[fanlink:perfil] no se pudo guardar la sesión cuenta=${accountId} motivo=${profileSaveReason(error)}`);
     }
   }
 
@@ -400,6 +412,28 @@ export function liveKeepMs(): number {
 function keepLabel(ms: number): string {
   if (ms >= 60_000 && ms % 60_000 === 0) return `${ms / 60_000}min`;
   return `${ms}ms`;
+}
+
+/** La vista espera más que Conectar: la lectura suelta el perfil o se cancela. */
+export function liveProfileWaitMs(): number {
+  const value = Number(process.env.FANLINK_LIVE_PROFILE_WAIT_MS);
+  if (Number.isInteger(value) && value >= 200 && value <= 180_000) return value;
+  return 90_000;
+}
+
+/** Motivo corto, sin URL, ruta ni cookie. */
+export function profileSaveReason(error: unknown): string {
+  const raw = error instanceof Error ? (error.message.split("\n")[0] ?? "") : "";
+  if (/closed|target page|browser has been closed/i.test(raw)) return "navegador-cerrado";
+  if (/timeout|timed out/i.test(raw)) return "tiempo";
+  const clean = raw
+    .replace(/https?:\/\/\S+/gi, "…")
+    .replace(/[A-Za-z0-9+/=]{16,}/g, "…")
+    .replace(/\/[\w./@+-]{8,}/g, "…")
+    .replace(/cookie|sess|token|authorization|password/gi, "…")
+    .trim()
+    .slice(0, 80);
+  return clean || "error";
 }
 
 /** Cuánto espera Reconectar a que las lecturas suelten el perfil. Por defecto 25 s. */

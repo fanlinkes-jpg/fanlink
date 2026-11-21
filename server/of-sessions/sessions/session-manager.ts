@@ -42,7 +42,7 @@ import { assertLoginDisplay } from "./display.ts";
 import { profileHasClearanceName } from "../live/clearance-file.ts";
 import { liveLaunchMode, liveVisibility } from "../live/headless.ts";
 import { chooseLiveChrome, liveChromeOrigin, rememberLiveChrome, type LiveChromeChoice } from "../live/chrome.ts";
-import { hideLiveProcess, setLiveProcessHide, tuckLiveWindow } from "../live/window.ts";
+import { hideLiveProcess, liveContextOpen, setLiveProcessHide, tuckLiveWindow } from "../live/window.ts";
 import { waitForProfileLock } from "./profile-lock.ts";
 import { openWorkPage } from "./work-page.ts";
 import { closeIfIdle } from "../live/pages.ts";
@@ -58,6 +58,7 @@ import { chatPaceOf, planChatPull, rememberChatPace, withAccountApi } from "../s
 import { fetchSignedChats, fetchSignedUsersMe, type SignedChatOptions } from "../sync/of-chat-api.ts";
 import { applySignedRead, sessionRejectionConfirmed, signedReadsBlocked, successfulLoginPatch, SESSION_EXPIRED_LABEL, type SessionConfirmProbe } from "../sync/session-link.ts";
 import { collectChats, type CollectedChats } from "../sync/collect-chats.ts";
+import { writeCreatorAvatar } from "../sync/creator-avatar-cache.ts";
 import { dispatchNotificationMark, fetchSignedNotifications, type CollectedNotifications, type MarkNotificationsResult } from "../sync/of-notifications-api.ts";
 import { notificationMarkReadGate } from "../send/gate.ts";
 import { fetchSignedOnlineFans, readOnlineSubscribers, type OnlineFan, type OnlineRead } from "../sync/online-fans.ts";
@@ -123,6 +124,7 @@ export class SessionManager {
       openVisible: (accountId) => this.newLiveContext(accountId),
       persist: (accountId, context) => this.rememberProfile(accountId, context),
       closeContext: (context, reason) => this.forgetContext(context, reason),
+      hurry: (context) => this.hurrySharedRead(context),
       isStopped: () => this.closed,
     });
   }
@@ -462,6 +464,9 @@ export class SessionManager {
       }
       if (read.signatureRejected) {
         await this.noteSignatureRejected(accountId).catch(() => undefined);
+      }
+      if (read.avatarUrl) {
+        await writeCreatorAvatar(this.options.config.dataDir, accountId, read.avatarUrl, this.now().getTime()).catch(() => undefined);
       }
       return read;
     } catch (error) {
@@ -1531,6 +1536,19 @@ export class SessionManager {
     }
   }
 
+  /** La vista pide el perfil: las pestañas de la lectura se cierran y sueltan el cerrojo. */
+  private async hurrySharedRead(context: BrowserContext): Promise<void> {
+    let pages: ReturnType<BrowserContext["pages"]> = [];
+    try {
+      pages = context.pages();
+    } catch {
+      return;
+    }
+    for (const page of pages) {
+      await page.close().catch(() => undefined);
+    }
+  }
+
   private async minimizeLive(context: BrowserContext): Promise<boolean> {
     const pages = context.pages().length > 0 ? context.pages() : [await context.newPage()];
     let ok = false;
@@ -1673,8 +1691,10 @@ export class SessionManager {
     try {
       state = parseStorageState(await context.storageState());
     } catch (error) {
-      const kind = error instanceof Error ? error.name : "error";
-      console.warn(`[fanlink:perfil] cuenta=${accountId} tipo=${kind}`);
+      if (!liveContextOpen(context)) {
+        console.info(`[fanlink:perfil] cuenta=${accountId} motivo=navegador-cerrado`);
+        return;
+      }
       throw error;
     }
     if (state.cookies.length === 0 && state.origins.length === 0) return;

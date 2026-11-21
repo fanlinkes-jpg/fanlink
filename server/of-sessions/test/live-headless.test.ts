@@ -12,13 +12,12 @@ import { clearStaleProfileLock, readProfileLock, waitForProfileLock } from "../s
 import { profileHasClearanceName } from "../live/clearance-file.ts";
 import { clearancePresent, liveRequestTrace, liveViewDebug } from "../live/debug.ts";
 import { liveLaunchMode, liveVisibility } from "../live/headless.ts";
+import { profileSaveReason } from "../sessions/profile-owner.ts";
 import { hideLiveProcess, liveContextOpen, liveHideScript, tuckLiveWindow } from "../live/window.ts";
 import { LIVE_BASE_ARGS, LIVE_HEADLESS_ARGS, LIVE_IGNORED_DEFAULT_ARGS, LIVE_WINDOW_ARGS, persistentContextLaunchOptions } from "../sessions/browser-factory.ts";
 import { chooseLiveChrome } from "../live/chrome.ts";
 import { minimizeLiveWindow } from "../live/window.ts";
-import { messages } from "../messages.ts";
 import { ProfileOwner } from "../sessions/profile-owner.ts";
-import { SessionPendingError } from "../types.ts";
 
 test("en un Mac la vista queda fuera de pantalla y headless solo si se pide", () => {
   const mac = { platform: "darwin" as const };
@@ -236,13 +235,53 @@ test("la vista nativa no reutiliza un Chromium headless ya abierto", async () =>
   const again = await owner.leaseVisible("acc-1");
   assert.equal(again.context, contexts.visible);
   assert.deepEqual(opened, ["shared", "visible"]);
-  await assert.rejects(() => owner.lease("acc-1"), (error: unknown) => {
-    assert.ok(error instanceof SessionPendingError);
-    assert.equal(error.message, messages.liveViewInProgress);
-    return true;
-  });
+  const sharedRead = await owner.lease("acc-1");
+  assert.equal(sharedRead.context, contexts.visible);
+  assert.deepEqual(opened, ["shared", "visible"]);
+  await sharedRead.release();
   await again.release();
   await live.release();
+});
+
+test("la vista cancela la lectura y abre el mismo perfil", async () => {
+  const opened: string[] = [];
+  let reader: { context: BrowserContext; release: () => Promise<void> } | null = null;
+  const owner = new ProfileOwner({
+    async openShared() {
+      opened.push("shared");
+      return fakeContext();
+    },
+    async openExclusive() {
+      return fakeContext();
+    },
+    async openVisible() {
+      opened.push("visible");
+      return fakeContext();
+    },
+    async persist() {},
+    async closeContext() {},
+    async hurry() {
+      await reader?.release();
+    },
+    isStopped() {
+      return false;
+    },
+  });
+  const held = await owner.lease("acc-cede");
+  reader = held;
+  const live = await owner.leaseVisible("acc-cede");
+  assert.deepEqual(opened, ["shared", "visible"]);
+  assert.notEqual(live.context, held.context);
+  await live.release();
+});
+
+test("el fallo al guardar la sesión no escribe la url ni la cookie", () => {
+  assert.equal(profileSaveReason(new Error("browserContext.storageState: Target page, context or browser has been closed")), "navegador-cerrado");
+  assert.equal(profileSaveReason(new Error("Timeout 30000ms exceeded")), "tiempo");
+  const messy = profileSaveReason(new Error("fallo https://onlyfans.com/api?sess=secreto /Users/ana/perfil cookie=abc"));
+  assert.equal(messy.includes("secreto"), false);
+  assert.equal(messy.includes("onlyfans.com"), false);
+  assert.equal(messy.includes("cookie"), false);
 });
 
 test("la vista guarda el navegador y la siguiente entrada no lanza otro", async () => {
@@ -282,8 +321,9 @@ test("la vista guarda el navegador y la siguiente entrada no lanza otro", async 
     assert.equal(second.context, context);
     await second.release();
     const read = await owner.lease("acc-guarda");
-    assert.equal(closed, 1, "una lectura no recuperó el perfil guardado");
-    assert.equal(shared, 1);
+    assert.equal(read.context, context, "la lectura abrió otro navegador");
+    assert.equal(closed, 0);
+    assert.equal(shared, 0);
     await read.release();
     context.kill();
     assert.equal(liveContextOpen(context), false);

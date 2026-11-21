@@ -135,7 +135,17 @@ export async function joinLive(socket: WebSocket, ticketId: string): Promise<voi
     return;
   }
   try {
-    const room = await ensureRoom(ticket);
+    sendJson(socket, { type: "phase", name: "navegador" });
+    const earlySize: { current: { width: number; height: number } | null } = { current: null };
+    const rememberSize = (data: RawData, isBinary: boolean) => {
+      if (isBinary) return;
+      const text = typeof data === "string" ? data : data.toString("utf8");
+      const event = parseLiveEvent(text);
+      if (event?.type === "resize") earlySize.current = { width: event.width, height: event.height };
+    };
+    socket.on("message", rememberSize);
+    const room = await ensureRoom(ticket, (name) => sendJson(socket, { type: "phase", name }));
+    socket.off("message", rememberSize);
     if (room.idle) {
       clearTimeout(room.idle);
       room.idle = null;
@@ -152,6 +162,9 @@ export async function joinLive(socket: WebSocket, ticketId: string): Promise<voi
   room.holder = claimed.holder;
   const viewer: Viewer = { socket, userId: ticket.userId, role: claimed.role, stamps: [] };
   room.viewers.push(viewer);
+  if (earlySize.current && room.cast) {
+    void room.cast.send({ type: "resize", width: earlySize.current.width, height: earlySize.current.height });
+  }
   sendJson(socket, statusOf(room, viewer.role));
   if (room.notice) sendJson(socket, { type: "notice", reason: room.notice });
   if (claimed.role === "control") {
@@ -188,20 +201,24 @@ function liveFailureText(error: unknown): string {
   return line.replace(/\/Users\/\S+/g, "…").slice(0, 160);
 }
 
-async function ensureRoom(ticket: LiveTicket): Promise<Room> {
+async function ensureRoom(ticket: LiveTicket, onPhase?: (name: string) => void): Promise<Room> {
   const key = liveRoomKey(ticket.accountId, ticket.threadKey, ticket.section);
   const pending = opening.get(key);
   if (pending) {
     const room = await pending;
     room.ticket = ticket;
+    onPhase?.("carga");
+    console.info(`[fanlink:navegador] vista=live reutilizo sala perfil=${ticket.accountId}`);
     return room;
   }
   const existing = rooms.get(key);
   if (existing) {
     existing.ticket = ticket;
+    onPhase?.("carga");
+    console.info(`[fanlink:navegador] vista=live reutilizo sala perfil=${ticket.accountId}`);
     return existing;
   }
-  const job = openFreshRoom(ticket, key);
+  const job = openFreshRoom(ticket, key, onPhase);
   opening.set(key, job);
   try {
     return await job;
@@ -210,7 +227,7 @@ async function ensureRoom(ticket: LiveTicket): Promise<Room> {
   }
 }
 
-async function openFreshRoom(ticket: LiveTicket, key: string): Promise<Room> {
+async function openFreshRoom(ticket: LiveTicket, key: string, onPhase?: (name: string) => void): Promise<Room> {
   const room: Room = {
     key,
     accountId: ticket.accountId,
@@ -236,7 +253,7 @@ async function openFreshRoom(ticket: LiveTicket, key: string): Promise<Room> {
   rooms.set(key, room);
   noteLiveHold(ticket.accountId);
   try {
-    await openBorrowed(room, ticket);
+    await openBorrowed(room, ticket, onPhase);
   } catch (error) {
     console.info(liveLog("error", { accountId: ticket.accountId, detail: error instanceof Error ? error.message.split("\n")[0] : "no se pudo abrir" }));
     if (rooms.get(key) === room) await stopRoom(room);
@@ -319,7 +336,8 @@ async function openCast(room: Room, ticket: LiveTicket, context: BrowserContext)
   });
 }
 
-async function openBorrowed(room: Room, ticket: LiveTicket): Promise<void> {
+async function openBorrowed(room: Room, ticket: LiveTicket, onPhase?: (name: string) => void): Promise<void> {
+  onPhase?.("perfil");
   const borrowed = liveOpener
     ? await liveOpener.borrow(ticket.accountId)
     : await borrowAccount(ticket.accountId);
@@ -330,6 +348,7 @@ async function openBorrowed(room: Room, ticket: LiveTicket): Promise<void> {
   room.release = borrowed.release;
   room.context = borrowed.context;
   room.opening = true;
+  onPhase?.("carga");
   try {
     await openCast(room, ticket, borrowed.context);
     if (rooms.get(room.key) !== room) {

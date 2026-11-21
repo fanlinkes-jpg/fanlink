@@ -10,7 +10,7 @@ export function LiveOfViewer({ creatorId, section }: { creatorId: string; sectio
   const boxRef = useRef<HTMLDivElement | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const statusRef = useRef<LiveStatus | null>(null);
-  const [message, setMessage] = useState("Abriendo la página de OnlyFans…");
+  const [message, setMessage] = useState("Preparando el navegador…");
   const [notice, setNotice] = useState("");
   const [ready, setReady] = useState(false);
   const [full, setFull] = useState(false);
@@ -33,7 +33,7 @@ export function LiveOfViewer({ creatorId, section }: { creatorId: string; sectio
             if (!readyOnce.current) {
               readyOnce.current = true;
               setReady(true);
-              setMessage((current) => (current === "Abriendo la página de OnlyFans…" ? "" : current));
+              setMessage((current) => (openingMessage(current) ? "" : current));
             }
           }
           bitmap.close();
@@ -57,7 +57,7 @@ export function LiveOfViewer({ creatorId, section }: { creatorId: string; sectio
     const start = async () => {
       setReady(false);
       setNotice("");
-      setMessage("Abriendo la página de OnlyFans…");
+      setMessage("Preparando el navegador…");
       const result = await openLiveView({ data: { creatorId, section } }).catch(() => ({
         ok: false as const,
         ticket: null,
@@ -81,14 +81,20 @@ export function LiveOfViewer({ creatorId, section }: { creatorId: string; sectio
         if (cancelled) return;
         if (typeof event.data === "string") {
           try {
-            const payload = JSON.parse(event.data) as { type?: string; reason?: string; role?: "control" | "view"; send?: boolean };
+            const payload = JSON.parse(event.data) as { type?: string; reason?: string; name?: string; role?: "control" | "view"; send?: boolean };
             if (payload.type === "bye") {
               setReady(false);
               setMessage(payload.reason || "La vista nativa se ha cerrado.");
               return;
             }
+            if (payload.type === "phase" && !readyOnce.current) {
+              setMessage(phaseMessage(payload.name));
+              return;
+            }
             if (payload.type === "notice") {
-              setNotice(payload.reason?.trim() || "");
+              const text = payload.reason?.trim() || "";
+              setNotice(text);
+              if (!readyOnce.current && text.startsWith("Preparando")) setMessage(text);
               return;
             }
             if (payload.type === "status" && payload.role) {
@@ -115,18 +121,24 @@ export function LiveOfViewer({ creatorId, section }: { creatorId: string; sectio
     };
 
     const box = boxRef.current;
+    let resizeTimer: ReturnType<typeof setTimeout> | null = null;
     const publishSize = () => {
       if (!box || !socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) return;
       const width = Math.round(box.clientWidth);
       const height = Math.round(box.clientHeight);
-      if (width < 240 || height < 180) return;
+      if (width < 320 || height < 240) return;
       socketRef.current.send(JSON.stringify({ type: "resize", width, height }));
     };
-    const observer = box ? new ResizeObserver(() => publishSize()) : null;
+    const scheduleSize = () => {
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(publishSize, 120);
+    };
+    const observer = box ? new ResizeObserver(() => scheduleSize()) : null;
     if (box && observer) observer.observe(box);
     void start().then(() => publishSize());
     return () => {
       cancelled = true;
+      if (resizeTimer) clearTimeout(resizeTimer);
       observer?.disconnect();
       disconnect();
     };
@@ -164,7 +176,7 @@ export function LiveOfViewer({ creatorId, section }: { creatorId: string; sectio
     else void node.requestFullscreen();
   };
 
-  if (!ready && message && message !== "Abriendo la página de OnlyFans…") {
+  if (!ready && message && !openingMessage(message)) {
     return <ComingSoonPage title="Operativa" hint={message} />;
   }
 
@@ -190,7 +202,7 @@ export function LiveOfViewer({ creatorId, section }: { creatorId: string; sectio
         ref={canvasRef}
         tabIndex={0}
         aria-label="Página de OnlyFans"
-        className="min-h-0 w-full flex-1 cursor-default bg-black object-contain outline-none"
+        className="min-h-0 w-full flex-1 cursor-default bg-black outline-none"
         onMouseDown={(event) => {
           event.preventDefault();
           event.currentTarget.focus();
@@ -223,6 +235,17 @@ export function LiveOfViewer({ creatorId, section }: { creatorId: string; sectio
       />
     </div>
   );
+}
+
+function openingMessage(text: string): boolean {
+  return text.startsWith("Preparando") || text.startsWith("Esperando") || text.startsWith("Cargando");
+}
+
+function phaseMessage(name: string | undefined): string {
+  if (name === "perfil") return "Esperando el perfil…";
+  if (name === "carga") return "Cargando la página…";
+  if (name === "listo") return "";
+  return "Preparando el navegador…";
 }
 
 function explainLiveReason(reason: string | null | undefined): string {

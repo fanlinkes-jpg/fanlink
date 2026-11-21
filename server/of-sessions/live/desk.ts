@@ -23,6 +23,34 @@ export function liveCastQuality(base: number, hot: boolean): number {
   return Math.min(80, Math.max(floor, 64));
 }
 
+/** La pantalla de la huella. El visor puede ser otro tamaño; `screen` no. */
+export const LIVE_SCREEN = { width: 1440, height: 900 } as const;
+
+export function livePageMetrics(width: number, height: number): {
+  width: number;
+  height: number;
+  deviceScaleFactor: number;
+  mobile: false;
+  screenWidth: number;
+  screenHeight: number;
+} {
+  return {
+    width: Math.min(2560, Math.max(320, Math.round(width))),
+    height: Math.min(1600, Math.max(240, Math.round(height))),
+    deviceScaleFactor: 1,
+    mobile: false,
+    screenWidth: LIVE_SCREEN.width,
+    screenHeight: LIVE_SCREEN.height,
+  };
+}
+
+/** 8 s sin imagen: reinicia el screencast una vez y, si sigue mudo, relanza. */
+export function liveCastStall(silentMs: number, restarts: number): "espera" | "reinicio" | "relanzo" {
+  if (silentMs < 8_000) return "espera";
+  if (restarts < 1) return "reinicio";
+  return "relanzo";
+}
+
 export function liveQuality(raw: string | undefined): number {
   if (raw == null || raw.trim() === "") return 40;
   const value = Number(raw);
@@ -338,7 +366,7 @@ export type DeskCommand =
   | { method: "Input.dispatchMouseEvent"; params: Record<string, unknown> }
   | { method: "Input.dispatchKeyEvent"; params: Record<string, unknown> }
   | { method: "Input.insertText"; params: { text: string } }
-  | { method: "resize"; params: { width: number; height: number } };
+  | { method: "resize"; params: ReturnType<typeof livePageMetrics> };
 
 export type DeskInput =
   | { type: "mouse"; action: "down" | "up" | "move"; x: number; y: number; canvasWidth: number; canvasHeight: number; button?: "left" | "right" | "middle" }
@@ -353,7 +381,7 @@ export function deskCommand(input: DeskInput, viewport: { width: number; height:
   if (input.type === "resize") {
     const width = Math.min(2560, Math.max(320, Math.round(input.width)));
     const height = Math.min(1600, Math.max(240, Math.round(input.height)));
-    return { method: "resize", params: { width, height } };
+    return { method: "resize", params: livePageMetrics(input.width, input.height) };
   }
   if (input.type === "text") {
     if (!input.text) return null;

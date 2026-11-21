@@ -1,6 +1,8 @@
+import { CreatorMark } from "@/components/creator-mark";
 import { ComingSoonPage } from "@/features/coming-soon-page";
 import { LiveOfViewer } from "@/features/live-of-viewer";
 import { useCrm } from "@/lib/crm";
+import { useCreatorSessions } from "@/lib/use-creator-sessions";
 
 export function NotificationsLivePage() {
   const teamAccess = useCrm((s) => s.teamAccess);
@@ -8,6 +10,8 @@ export function NotificationsLivePage() {
   const creators = useCrm((s) => s.creators);
   const fans = useCrm((s) => s.fans);
   const setCreator = useCrm((s) => s.setCreator);
+  const { sessions } = useCreatorSessions();
+  const avatars = Object.fromEntries(sessions.map((session) => [session.creatorId, session.avatarUrl]));
   const creator = creators.find((item) => item.id === creatorId);
 
   if (teamAccess?.role !== "owner") {
@@ -34,9 +38,7 @@ export function NotificationsLivePage() {
                   onClick={() => setCreator(item.id)}
                   className={active ? "flex w-full items-center gap-2 bg-primary/10 px-3 py-2 text-left text-sm" : "flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-raised"}
                 >
-                  <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-semibold text-white" style={{ background: `hsl(${item.hue} 55% 42%)` }}>
-                    {item.name.slice(0, 1)}
-                  </span>
+                  <CreatorMark name={item.name} hue={item.hue} avatarUrl={avatars[item.id]} size="md" />
                   <span className="min-w-0 flex-1 truncate">{item.name}</span>
                   {alerts > 0 ? <span className="rounded-full bg-danger px-1.5 text-[10px] font-semibold text-white">{alerts}</span> : null}
                 </button>

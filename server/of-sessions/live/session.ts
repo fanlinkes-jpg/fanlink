@@ -4,7 +4,7 @@ import { parseChatMessages } from "../sync/chats.ts";
 import { markLivePage } from "./pages.ts";
 import { liveChromeOrigin, widevineProbe } from "./chrome.ts";
 import { hideLiveProcess, liveProcessHideEnabled, tuckLiveWindow } from "./window.ts";
-import { deskCommand, LIVE_BLOCKED_NOTICE, liveCastFps, liveCastQuality, liveControlAllowed, liveFrameAllowed, liveFps, liveHistoryGuardSource, liveLog, liveOpenPageAllowed, liveQuality, liveSocketGuardSource, liveThreadClick, liveTypingEnabled, mapPointer, type DeskInput } from "./desk.ts";
+import { deskCommand, LIVE_BLOCKED_NOTICE, liveCastFps, liveCastQuality, liveCastStall, liveControlAllowed, liveFrameAllowed, liveFps, liveHistoryGuardSource, liveLog, liveOpenPageAllowed, livePageMetrics, liveQuality, liveSocketGuardSource, liveThreadClick, liveTypingEnabled, mapPointer, type DeskInput } from "./desk.ts";
 import { lastLivePage, rememberLivePage, safeLivePage } from "./last-page.ts";
 import { liveSectionPageUrl, type LiveSection } from "./sections.ts";
 import { BROWSER_FINGERPRINT } from "../sessions/browser-factory.ts";
@@ -59,6 +59,7 @@ export async function startLiveCast(input: {
   let cdp: CDPSession | null = null;
   let stopped = false;
   let reportedClosed = false;
+  let stall: ReturnType<typeof setInterval> | null = null;
   let keepHidden: (motivo: string) => Promise<void> = async () => {};
   let challengeOpen = false;
   let loginOnPage = false;
@@ -257,6 +258,7 @@ export async function startLiveCast(input: {
       async stop() {
         stopped = true;
         if (windowWatch) clearInterval(windowWatch);
+        if (stall) clearInterval(stall);
         await hints.detach().catch(() => undefined);
       },
     };
@@ -289,6 +291,16 @@ export async function startLiveCast(input: {
   let sawFrame = false;
   let hotUntil = 0;
   let castHot = false;
+  let lastImageAt = Date.now();
+  let castRestarts = 0;
+  const applyMetrics = async (metrics: ReturnType<typeof livePageMetrics>) => {
+    if (!cdp || stopped) return;
+    viewport = { width: metrics.width, height: metrics.height };
+    await cdp.send("Emulation.setDeviceMetricsOverride", metrics).catch(() => undefined);
+    console.info(`[fanlink:navegador] vista=live viewport=${metrics.width}x${metrics.height} screen=${metrics.screenWidth}x${metrics.screenHeight} perfil=${input.accountId}`);
+    await restartCast(castHot);
+    lastImageAt = Date.now();
+  };
   const paintFrame = (jpeg: Buffer, width: number, height: number) => {
     input.onFrame({ jpeg, width, height });
   };
@@ -305,6 +317,8 @@ export async function startLiveCast(input: {
   cdp.on("Page.screencastFrame", (event: { data: string; sessionId: number; metadata?: { deviceWidth?: number; deviceHeight?: number } }) => {
     void cdp?.send("Page.screencastFrameAck", { sessionId: event.sessionId }).catch(() => undefined);
     const now = Date.now();
+    lastImageAt = now;
+    castRestarts = 0;
     const hot = now < hotUntil;
     if (hot !== castHot) void restartCast(hot);
     const gap = Math.round(1000 / liveCastFps(fps, hot));
@@ -320,6 +334,22 @@ export async function startLiveCast(input: {
     }
   });
   await cdp.send("Page.startScreencast", { format: "jpeg", quality: liveCastQuality(quality, false), everyNthFrame: 1 });
+  stall = setInterval(() => {
+    if (stopped || !cdp) return;
+    const action = liveCastStall(Date.now() - lastImageAt, castRestarts);
+    if (action === "espera") return;
+    if (action === "reinicio") {
+      castRestarts += 1;
+      lastImageAt = Date.now();
+      console.info(`[fanlink:navegador] vista=live screencast=reinicio perfil=${input.accountId}`);
+      void restartCast(castHot);
+      return;
+    }
+    console.info(`[fanlink:navegador] vista=live screencast=relanzo perfil=${input.accountId}`);
+    if (stall) clearInterval(stall);
+    input.onClosed?.(LIVE_CLOSED_NOTICE);
+  }, 2_000);
+  stall.unref?.();
 
   return {
     async send(command) {
@@ -330,8 +360,7 @@ export async function startLiveCast(input: {
         const allowed = deskCommand(command, viewport, true);
         if (!allowed) return;
         if (allowed.method === "resize") {
-          viewport = allowed.params;
-          await page.setViewportSize(viewport).catch(() => undefined);
+          await applyMetrics(allowed.params);
           return;
         }
         await cdp.send(allowed.method, allowed.params as never).catch((error: unknown) => {
@@ -354,8 +383,7 @@ export async function startLiveCast(input: {
       const next = deskCommand(command, viewport, typing);
       if (!next) return;
       if (next.method === "resize") {
-        viewport = next.params;
-        await page.setViewportSize(viewport).catch(() => undefined);
+        await applyMetrics(next.params);
         return;
       }
       await cdp.send(next.method, next.params as never).catch((error: unknown) => {
@@ -376,6 +404,7 @@ export async function startLiveCast(input: {
       page.off("framenavigated", onNavigated);
       page.off("response", onResponse);
       if (windowWatch) clearInterval(windowWatch);
+      if (stall) clearInterval(stall);
       await cdp?.detach().catch(() => undefined);
       cdp = null;
     },

@@ -35,7 +35,9 @@ import {
 } from "lucide-react";
 import { Toaster } from "sonner";
 import { cn } from "@/lib/cn";
+import { CreatorMark } from "@/components/creator-mark";
 import { useCrm } from "@/lib/crm";
+import { useCreatorSessions } from "@/lib/use-creator-sessions";
 import {
   canAccessPath,
   navRoleFromAccess,
@@ -197,6 +199,8 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
   }, [user?.id, isPending]);
 
   const unreadChats = useUnreadChats(creatorId);
+  const { sessions } = useCreatorSessions();
+  const avatars = Object.fromEntries(sessions.map((session) => [session.creatorId, session.avatarUrl]));
   const navRole = navRoleFromAccess(teamAccess);
   const blocks = visibleNavBlocks(navRole, teamAccess);
   const currentOk = canAccessPath(path, navRole, teamAccess);
@@ -228,6 +232,7 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
           blocks={blocks}
           currentOk={currentOk}
           unreadChats={unreadChats}
+          avatars={avatars}
         >
           {children}
         </ShellFrame>
@@ -288,6 +293,7 @@ function ShellFrame({
   blocks,
   currentOk,
   unreadChats,
+  avatars,
 }: {
   children: ReactNode;
   bleed?: boolean;
@@ -310,6 +316,7 @@ function ShellFrame({
   blocks: NavBlock[];
   currentOk: boolean;
   unreadChats: number | null;
+  avatars: Record<string, string | null>;
 }) {
 
   return (
@@ -405,9 +412,7 @@ function ShellFrame({
                     active ? "bg-white text-[#1d2433]" : "bg-white/10",
                   )}
                 >
-                  <span className="grid h-5 w-5 place-items-center rounded-full text-[10px] font-semibold text-white" style={{ background: `hsl(${c.hue} 55% 42%)` }}>
-                    {c.name.slice(0, 1)}
-                  </span>
+                  <CreatorMark name={c.name} hue={c.hue} avatarUrl={avatars[c.id]} />
                   <span className="max-w-24 truncate">{c.name}</span>
                   {unread > 0 && <span className="rounded-full bg-danger px-1 text-[10px] text-white">{unread}</span>}
                 </button>
