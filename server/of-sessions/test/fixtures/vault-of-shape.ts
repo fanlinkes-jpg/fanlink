@@ -91,7 +91,7 @@ export const VAULT_MEDIA_ALL_FIXTURE = {
   hasMore: false,
 };
 
-/** `list=<id>` vuelve vacía. Los medios de la carpeta van con `list_id`. */
+/** La web filtra la carpeta con `list=<id>&field=recent`. */
 export const VAULT_MEDIA_LIST_PARAM_FIXTURE = {
   list: [] as unknown[],
   hasMore: false,

@@ -259,10 +259,9 @@ export type VaultFetchOptions = {
 export const VAULT_LIST_LIMIT = 50;
 /**
  * La web pagina con `limit` 40, `offset` y `sort=desc`.
- * `list=all` es toda la bóveda. Una carpeta va con `list_id`.
- * En alguna cuenta OnlyFans ignora `list_id` y devuelve la página de Todos.
- * Si `list_id` responde 400, se reintenta una vez con `list` y el log dice ese parámetro.
- * No van `type` ni `field`.
+ * La web pide `limit`, `offset`, `field=recent`, `sort=desc` y `list`.
+ * `list=all` es Toda la bóveda. Una carpeta usa el mismo parámetro con su id.
+ * No va `type` ni `list_id`.
  */
 export const VAULT_MEDIA_LIMIT = 40;
 
@@ -270,16 +269,15 @@ export function vaultListsPath(offset: number): string {
   return `/api2/v2/vault/lists?view=main&offset=${offset}&limit=${VAULT_LIST_LIMIT}`;
 }
 
-export function vaultMediaPath(listId: string, offset: number, param: "list" | "list_id" = "list_id"): string {
+/** La misma query que la bóveda web: `field=recent`, `sort=desc` y `list`. */
+export function vaultMediaPath(listId: string, offset: number): string {
   const params = new URLSearchParams({
     limit: String(VAULT_MEDIA_LIMIT),
     offset: String(offset),
+    field: "recent",
     sort: "desc",
+    list: listId.trim() || "all",
   });
-  const id = listId.trim() || "all";
-  if (id === "all") params.set("list", "all");
-  else if (param === "list") params.set("list", id);
-  else params.set("list_id", id);
   return `/api2/v2/vault/media?${params.toString()}`;
 }
 
@@ -342,15 +340,9 @@ export async function fetchSignedVault(state: StorageStateFile, deps: {
   }
   let queryParam: "list" | "list_id" | null = null;
   if (wantMedia) {
-    let primary = vaultMediaPath(list, skip);
-    queryParam = list === "all" ? "list" : "list_id";
-    let read = await readVaultPath(deps, () => getJson(deps.fetch, primary, signedHeaders(rules, primary, auth, deps.now()), deps.now()));
-    if (list !== "all" && read.status === 400) {
-      console.info("[fanlink:vault] list_id status=400 reintento=list");
-      primary = vaultMediaPath(list, skip, "list");
-      queryParam = "list";
-      read = await readVaultPath(deps, () => getJson(deps.fetch, primary, signedHeaders(rules, primary, auth, deps.now()), deps.now()));
-    }
+    const primary = vaultMediaPath(list, skip);
+    queryParam = "list";
+    const read = await readVaultPath(deps, () => getJson(deps.fetch, primary, signedHeaders(rules, primary, auth, deps.now()), deps.now()));
     const mediaCount = mediaCountOf(read.body);
     if (list === "all") {
       console.info(vaultPageLog({ route: primary, status: read.status, count: mediaCount, hasMore: hasMoreLabelOf(read.body), offset: skip, listId: "all" }));

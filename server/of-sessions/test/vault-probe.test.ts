@@ -14,10 +14,11 @@ test("la página de medios usa list y limit 40, sin type ni field", () => {
   assert.match(all, /sort=desc/);
   assert.match(all, /list=all/);
   assert.equal(all.includes("list_id="), false);
-  assert.equal(all.includes("field="), false);
+  assert.match(all, /field=recent/);
   assert.equal(all.includes("type="), false);
-  assert.match(vaultMediaPath("88001", 40), /list_id=88001/);
-  assert.equal(vaultMediaPath("88001", 40).includes("list=88001"), false);
+  assert.match(vaultMediaPath("88001", 40), /list=88001/);
+  assert.match(vaultMediaPath("88001", 40), /field=recent/);
+  assert.equal(vaultMediaPath("88001", 40).includes("list_id="), false);
   const line = vaultPageLog({ route: all, status: 200, count: 40, hasMore: "si", offset: 0, listId: "all" });
   assert.match(line, /ruta=\/api2\/v2\/vault\/media status=200 n=40 hasMore=si offset=0 list=todos/);
   const mark = vaultFolderMark("28619188");

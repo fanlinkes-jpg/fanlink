@@ -50,7 +50,7 @@ test("cada lista trae su conteo y sus medios, paginando hasMore", async () => {
       }
       const url = new URL(href);
       const list = url.searchParams.get("list");
-      const folder = url.searchParams.get("list_id");
+      const folder = url.searchParams.get("list_id") || (url.searchParams.get("list") !== "all" ? url.searchParams.get("list") : null);
       const offset = Number(url.searchParams.get("offset") ?? "0");
       if (folder === "cuarteto") return Response.json({ list: [{ id: 30, type: "video", duration: 9 }, { id: 31, type: "photo" }], hasMore: false });
       if (folder === "ducha") return Response.json({ list: [{ id: 40, type: "video", duration: 3 }], hasMore: false });
@@ -71,10 +71,10 @@ test("cada lista trae su conteo y sus medios, paginando hasMore", async () => {
     assert.equal(walked.reason, null);
     assert.equal(seen.filter((href) => href.includes("/vault/media") && href.includes("list=all") && href.includes("offset=0")).length, 1);
     assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("list=all") && href.includes("offset=1")), true);
-    assert.equal(seen.some((href) => href.includes("list_id=cuarteto")), true);
-    assert.equal(seen.some((href) => href.includes("list_id=ducha")), true);
+    assert.equal(seen.some((href) => href.includes("list=cuarteto")), true);
+    assert.equal(seen.some((href) => href.includes("list=ducha")), true);
     assert.equal(seen.some((href) => href.includes("/vault/lists") && href.includes("limit=50")), true);
-    assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("limit=40") && href.includes("sort=desc") && href.includes("list=all") && !href.includes("list_id=") && !href.includes("field=")), true);
+    assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("limit=40") && href.includes("field=recent") && href.includes("sort=desc") && href.includes("list=all") && !href.includes("list_id=")), true);
     const view = await queryVaultForActor(asSql(db), { userId: "dueña", role: "owner", perms: ["vault"] }, {
       creatorId: "vtdcoi5",
       remember: false,
@@ -142,7 +142,7 @@ test("las carpetas en list no cortan los medios y la página siguiente trae las 
       }
       const url = new URL(href);
       const list = url.searchParams.get("list");
-      const folder = url.searchParams.get("list_id");
+      const folder = url.searchParams.get("list_id") || (url.searchParams.get("list") !== "all" ? url.searchParams.get("list") : null);
       const offset = Number(url.searchParams.get("offset") ?? "0");
       if (folder === "ducha") return Response.json({ list: [{ id: 40, type: "video", duration: 3 }], hasMore: false });
       if (!folder && (!list || list === "all")) {
@@ -163,7 +163,7 @@ test("las carpetas en list no cortan los medios y la página siguiente trae las 
     assert.equal(walked.items.length, 30);
     assert.equal(seen.some((href) => href.includes("/vault/lists") && href.includes("offset=5")), true);
     assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("offset=24") && href.includes("list=all")), true);
-    assert.equal(seen.some((href) => href.includes("list_id=ducha")), true);
+    assert.equal(seen.some((href) => href.includes("list=ducha")), true);
     assert.equal(lines.some((line) => line.includes("pagina ruta=/api2/v2/vault/media") && line.includes("offset=0") && line.includes("n=24") && line.includes("hasMore=si") && line.includes("list=todos")), true);
     assert.equal(lines.some((line) => line.includes("respuesta ruta=lists") && line.includes("itemClaves=") && line.includes("photosCount")), true);
     assert.equal(lines.some((line) => line.includes("fotos=4") && line.includes("videos=2") && line.includes("photosCount") && !line.includes("nombre=")), true);
@@ -256,7 +256,7 @@ test("list_id de una carpeta no guarda la bóveda entera", async () => {
       if (url.searchParams.get("list") === "all") {
         return Response.json({ list: [{ id: 1, type: "photo" }], hasMore: false });
       }
-      if (url.searchParams.get("list_id") === "88001") {
+      if ((url.searchParams.get("list_id") || url.searchParams.get("list")) === "88001") {
         return Response.json({
           list: [
             { id: 701, type: "video", duration: 4 },
@@ -265,7 +265,7 @@ test("list_id de una carpeta no guarda la bóveda entera", async () => {
           hasMore: false,
         });
       }
-      if (url.searchParams.get("list_id") === "88002") {
+      if ((url.searchParams.get("list_id") || url.searchParams.get("list")) === "88002") {
         return Response.json({
           list: Array.from({ length: 40 }, (_, index) => ({ id: 1000 + index, type: "photo" })),
           hasMore: true,
@@ -292,11 +292,11 @@ test("list_id de una carpeta no guarda la bóveda entera", async () => {
       sleep: async () => undefined,
     });
     assert.equal(walked.reason, null);
-    assert.equal(seen.some((href) => href.includes("list_id=88001")), true);
-    assert.equal(seen.some((href) => href.includes("list_id=88002")), true);
-    assert.equal(seen.some((href) => href.includes("list=88001") || href.includes("list=88002")), false);
-    assert.equal(seen.some((href) => href.includes("list_id=88002") && href.includes("offset=40")), false);
-    assert.equal(lines.some((line) => line.includes("sospechosa") && line.includes("param=list_id") && !line.includes("88002")), true);
+    assert.equal(seen.some((href) => href.includes("list=88001")), true);
+    assert.equal(seen.some((href) => href.includes("list=88002")), true);
+    assert.equal(seen.some((href) => href.includes("list=88002") && href.includes("field=recent") && href.includes("offset=40")), false);
+    assert.equal(seen.some((href) => href.includes("list_id=")), false);
+    assert.equal(lines.some((line) => line.includes("sospechosa") && line.includes("param=list") && !line.includes("param=list_id") && !line.includes("88002")), true);
     assert.equal(lines.some((line) => line.includes("88001") || line.includes("88002") || line.includes("Carpeta")), false);
     const actor = { userId: "dueña", role: "owner" as const, perms: ["vault"] };
     const good = await queryVaultForActor(asSql(db), actor, {
@@ -338,7 +338,7 @@ test("una carpeta sale con list_id mientras Todos sigue en la primera página", 
     if (href.includes("dynamic-rules")) return Response.json(RULES);
     const url = new URL(href);
     if (url.pathname.endsWith("/vault/lists")) return Response.json({ list: [], hasMore: false });
-    if (url.searchParams.get("list_id") === "nocturno") {
+    if ((url.searchParams.get("list_id") || url.searchParams.get("list")) === "nocturno") {
       order.push("folder");
       return Response.json({ list: [{ id: 501, type: "video", duration: 3 }], hasMore: false });
     }
@@ -393,14 +393,13 @@ test("un 400 de list_id reintenta una vez con list", async () => {
     seen.push(href);
     if (href.includes("dynamic-rules")) return Response.json(RULES);
     const url = new URL(href);
-    if (url.searchParams.get("list_id") === "333") return new Response("{}", { status: 400 });
     if (url.searchParams.get("list") === "333") return Response.json(VAULT_MEDIA_FOLDER_FIXTURE);
     return Response.json({ list: [], hasMore: false });
   }) as typeof fetch;
   try {
     const folder = await fetchSignedVault(storedState(), { fetch: fetchImpl, now: () => 1_700_000_000_000 }, "333", 0, { includeLists: false });
-    assert.equal(seen.filter((href) => href.includes("list_id=333")).length, 1);
-    assert.equal(seen.filter((href) => href.includes("list=333") && !href.includes("list_id=333")).length, 1);
+    assert.equal(seen.filter((href) => href.includes("list=333") && href.includes("field=recent")).length, 1);
+    assert.equal(seen.some((href) => href.includes("list_id=")), false);
     const saved = folder.payloads[0] as { list?: Array<{ id?: number }> };
     assert.equal(saved.list?.[0]?.id, 9001);
   } finally {
@@ -418,8 +417,7 @@ test("list=all no lleva type ni field y una carpeta sale con list_id", async () 
     const url = new URL(href);
     if (url.pathname.endsWith("/vault/lists")) return Response.json(VAULT_LISTS_FIXTURE);
     if (url.searchParams.get("list") === "all") return Response.json(VAULT_MEDIA_ALL_FIXTURE);
-    if (url.searchParams.get("list") === "333") return Response.json({ list: [], hasMore: false });
-    if (url.searchParams.get("list_id") === "333") return Response.json(VAULT_MEDIA_FOLDER_FIXTURE);
+    if (url.searchParams.get("list") === "333") return Response.json(VAULT_MEDIA_FOLDER_FIXTURE);
     return Response.json({ list: [], hasMore: false });
   }) as typeof fetch;
   try {
@@ -428,12 +426,12 @@ test("list=all no lleva type ni field y una carpeta sale con list_id", async () 
     assert.ok(allUrl);
     assert.match(allUrl, /list=all/);
     assert.equal(allUrl.includes("type="), false);
-    assert.equal(allUrl.includes("field="), false);
+    assert.match(allUrl, /field=recent/);
     assert.equal(allUrl.includes("list_id="), false);
     assert.equal(all.status, 200);
     const folder = await fetchSignedVault(storedState(), { fetch: fetchImpl, now: () => 1_700_000_000_000 }, "333", 0, { includeLists: false });
-    assert.equal(seen.some((href) => href.includes("list=333")), false);
-    assert.equal(seen.some((href) => href.includes("list_id=333")), true);
+    assert.equal(seen.some((href) => href.includes("list=333") && href.includes("field=recent")), true);
+    assert.equal(seen.some((href) => href.includes("list_id=")), false);
     const saved = folder.payloads[0] as { list?: Array<{ id?: number }> };
     assert.equal(saved.list?.[0]?.id, 9001);
     assert.equal(saved.list?.length, 1);
@@ -519,7 +517,7 @@ test("una carpeta custom guarda photos y videos y al abrirla solo salen sus medi
       }
       const url = new URL(href);
       const list = url.searchParams.get("list");
-      const folder = url.searchParams.get("list_id");
+      const folder = url.searchParams.get("list_id") || (url.searchParams.get("list") !== "all" ? url.searchParams.get("list") : null);
       const offset = Number(url.searchParams.get("offset") ?? "0");
       if (!folder && (!list || list === "all")) {
         if (offset !== 0) return Response.json({ list: [{ id: 600, type: "video", duration: 2 }, { id: 601, type: "photo" }], hasMore: false });
@@ -547,9 +545,9 @@ test("una carpeta custom guarda photos y videos y al abrirla solo salen sus medi
     assert.equal(walked.reason, null);
     assert.ok(walked.items.length > 24);
     assert.equal(seen.some((href) => href.includes("/vault/lists") && href.includes("offset=2")), true);
-    assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("list_id=88001")), true);
-    assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("list_id=sub")), true);
-    assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("list_id=solo")), true);
+    assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("list=88001")), true);
+    assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("list=sub")), true);
+    assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("list=solo")), true);
     assert.equal(lines.some((line) => line.includes("itemClaves=") && line.includes("photos") && line.includes("videos")), true);
     const actor = { userId: "dueña", role: "owner" as const, perms: ["vault"] };
     const opened = await queryVaultForActor(asSql(db), actor, {
@@ -607,7 +605,7 @@ test("dos creadoras no comparten los conteos ni las portadas de sus carpetas", a
     const url = new URL(href);
     const shape = shapes[creator]!;
     if (url.pathname.endsWith("/vault/lists")) return Response.json(shape);
-    const folder = url.searchParams.get("list_id");
+    const folder = url.searchParams.get("list_id") || (url.searchParams.get("list") !== "all" ? url.searchParams.get("list") : null);
     if (folder) {
       const row = shape.list.find((item) => String(item.id) === folder);
       const cover = row && "medias" in row ? row.medias[0] : null;
@@ -673,9 +671,10 @@ test("dos creadoras no comparten los conteos ni las portadas de sus carpetas", a
       query: { ...emptyVaultQuery(), folderId: "501", scope: "carpeta" },
     });
     assert.deepEqual(opened.payload.items.map((item) => item.id), ["701"]);
-    assert.equal(seen.some((href) => href.includes("list=501") || href.includes("list=601")), false);
-    assert.equal(seen.some((href) => href.includes("list_id=501")), true);
-    assert.equal(seen.some((href) => href.includes("list_id=601")), true);
+    assert.equal(seen.some((href) => href.includes("field=recent") && href.includes("list=501")), true);
+    assert.equal(seen.some((href) => href.includes("list_id=")), false);
+    assert.equal(seen.some((href) => href.includes("list=501")), true);
+    assert.equal(seen.some((href) => href.includes("list=601")), true);
   } finally {
     clearSignRulesCache();
     clearVaultWalkCache();
@@ -712,7 +711,7 @@ test("list_id ignorado no deja la carpeta en cero si listStates marca sus medios
         hasMore: false,
       });
     }
-    if (url.searchParams.get("list_id") === "2901" || url.searchParams.get("list") === "all") {
+    if (url.searchParams.get("list") === "2901" || url.searchParams.get("list") === "all") {
       return Response.json({ list: page, hasMore: false });
     }
     return Response.json({ list: [], hasMore: false });
@@ -746,7 +745,7 @@ test("list_id ignorado no deja la carpeta en cero si listStates marca sus medios
       ["3zk7kbr", "2901"],
     );
     assert.equal(JSON.stringify(covers[0]?.cover_ids ?? []).includes("todos-1"), false);
-    assert.equal(lines.some((line) => line.includes("sospechosa") && line.includes("param=list_id") && line.includes("respaldo=si") && line.includes("enLista=2")), true);
+    assert.equal(lines.some((line) => line.includes("sospechosa") && line.includes("param=list") && !line.includes("param=list_id") && line.includes("respaldo=si") && line.includes("enLista=2")), true);
     assert.equal(lines.some((line) => line.includes("2901") || line.includes("CUARTETO")), false);
   } finally {
     console.info = previous;
@@ -778,7 +777,6 @@ test("un 400 de list_id no guarda el list hinchado", async () => {
       });
     }
     if (url.searchParams.get("list") === "all") return Response.json({ list: [{ id: 1, type: "photo" }], hasMore: false });
-    if (url.searchParams.get("list_id") === "77001") return new Response("{}", { status: 400 });
     if (url.searchParams.get("list") === "77001") {
       return Response.json({ list: Array.from({ length: 40 }, (_, index) => ({ id: 3000 + index, type: "photo" })), hasMore: true });
     }
@@ -796,8 +794,8 @@ test("un 400 de list_id no guarda el list hinchado", async () => {
       sql: asSql(db),
       sleep: async () => undefined,
     });
-    assert.equal(seen.filter((href) => href.includes("list_id=77001")).length, 1);
-    assert.equal(seen.filter((href) => href.includes("list=77001") && !href.includes("list_id=77001")).length, 1);
+    assert.equal(seen.filter((href) => href.includes("list=77001") && href.includes("field=recent")).length, 1);
+    assert.equal(seen.some((href) => href.includes("list_id=")), false);
     assert.equal(lines.some((line) => line.includes("sospechosa") && line.includes("param=list") && !line.includes("param=list_id")), true);
     assert.equal(lines.some((line) => line.includes("77001") || line.includes("nombre=")), false);
     const members = await asSql(db).query<{ item_key: string }>(
@@ -822,7 +820,7 @@ test("una carpeta de más de 40 medios olvida los miembros viejos", async () => 
     if (href.includes("dynamic-rules")) return Response.json(RULES);
     const url = new URL(href);
     if (url.pathname.endsWith("/vault/lists")) return Response.json({ list: [], hasMore: false });
-    if (url.searchParams.get("list_id") !== "88041") return Response.json({ list: [], hasMore: false });
+    if (url.searchParams.get("list") !== "88041") return Response.json({ list: [], hasMore: false });
     const offset = Number(url.searchParams.get("offset") ?? "0");
     if (offset === 0) {
       return Response.json({
