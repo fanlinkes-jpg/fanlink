@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parseVaultBundle, stampVaultList } from "../sync/vault-model.ts";
+import { playbackUrl } from "../sync/vault-store.ts";
+import { clearVaultThumbs, getVaultThumb, putVaultThumb, videoBytesAccepted } from "../sync/media-bytes.ts";
 import { folderColumnView } from "../../../src/lib/vault-folder-label.ts";
 
 test("los conteos aceptan string, snake_case y el objeto counts, y Todos se guarda", () => {
@@ -128,6 +130,37 @@ test("dos cuentas conservan el conteo y las portadas de cada carpeta, no los de 
   });
   assert.deepEqual(shared.items[0]?.listIds ?? [], ["501"]);
   assert.deepEqual(stampVaultList(shared.items[0]!, "501", null).listIds, ["501"]);
+});
+
+test("un vídeo con la forma real usa el mp4 y no la miniatura", () => {
+  const video = parseVaultBundle({
+    list: [{
+      id: 9,
+      type: "video",
+      files: {
+        full: { url: "https://cdn2.onlyfans.com/files/poster.jpg", sources: [{ url: "https://cdn2.onlyfans.com/files/full.mp4" }] },
+        thumb: { url: "https://cdn2.onlyfans.com/files/t.jpg" },
+        preview: { url: "https://cdn2.onlyfans.com/files/p.jpg" },
+        squarePreview: { url: "https://cdn2.onlyfans.com/files/s.jpg" },
+      },
+      source: { source: "https://cdn2.onlyfans.com/files/source.mp4" },
+      videoSources: { "240": "https://cdn2.onlyfans.com/files/240.mp4", "720": "https://cdn2.onlyfans.com/files/720.mp4" },
+    }],
+  }).items[0];
+  assert.equal(video?.fullUrl, "https://cdn2.onlyfans.com/files/full.mp4");
+  assert.equal(video?.fullUrl?.endsWith(".jpg"), false);
+  assert.equal(playbackUrl({ full: video?.fullUrl ?? null, clip: "https://cdn2.onlyfans.com/files/t.jpg", preview: "https://cdn2.onlyfans.com/files/p.jpg", thumb: "https://cdn2.onlyfans.com/files/t.jpg" }, "full", "video"), video?.fullUrl);
+  assert.equal(playbackUrl({ full: "https://cdn2.onlyfans.com/files/t.jpg", clip: null, preview: "https://cdn2.onlyfans.com/files/p.jpg", thumb: "https://cdn2.onlyfans.com/files/t.jpg" }, "full", "video"), null);
+  assert.equal(videoBytesAccepted("video/mp4"), true);
+  assert.equal(videoBytesAccepted("image/jpeg"), false);
+  clearVaultThumbs();
+  putVaultThumb("c-1", "9", Uint8Array.from([1]), "image/jpeg", "preview");
+  assert.equal(getVaultThumb("c-1", "9", "full"), null);
+  assert.equal(getVaultThumb("c-1", "9", "preview")?.contentType, "image/jpeg");
+  const catalog = parseVaultBundle({
+    list: [{ id: 1, type: "photo", listStates: [{ id: 10, hasMedia: true }, { id: 11, hasMedia: true }] }],
+  }).items[0];
+  assert.deepEqual(catalog?.listIds ?? [], []);
 });
 
 function accountShape(

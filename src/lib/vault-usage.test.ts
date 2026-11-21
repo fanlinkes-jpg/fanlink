@@ -25,7 +25,7 @@ test("el historial dice Sin datos en lo que OnlyFans no manda y no usa las compr
       seconds: null,
       kind: "video",
     }),
-    "Feed Sin datos · Envíos Sin datos · Precio Sin datos · Fecha Sin datos · Duración Sin datos",
+    "",
   );
   assert.equal(
     vaultUsageText({

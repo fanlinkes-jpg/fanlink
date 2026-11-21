@@ -109,7 +109,9 @@ test("el sondeo guarda la forma y no un secreto", () => {
   assert.equal(picked?.videos, 2);
   assert.equal(probeExpectedCount(picked!), 2);
   const paths = folderProbePaths("28619188").map((row) => row.name);
-  assert.deepEqual(paths, ["list_id", "list_id+field", "list", "lists/media", "listId", "vaultListId"]);
+  assert.deepEqual(paths, ["panel", "list_id", "list_id+field", "list", "lists/media", "listId", "vaultListId"]);
+  assert.match(folderProbePaths("28619188")[0]?.path ?? "", /field=recent/);
+  assert.match(folderProbePaths("28619188")[0]?.path ?? "", /list=28619188/);
   assert.equal(folderProbePaths("28619188").some((row) => row.path.startsWith("POST")), false);
   assert.equal(folderProbeVerdict(2, [{ name: "list_id", status: 200, n: 40 }, { name: "listId", status: 200, n: 2 }]), "listId");
   assert.equal(folderProbeVerdict(2, [{ name: "list_id", status: 200, n: 40 }]), "ninguna");

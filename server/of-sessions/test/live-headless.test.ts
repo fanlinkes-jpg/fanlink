@@ -150,6 +150,10 @@ test("el diagnostico no escribe query, hash ni el valor de cf_clearance", () => 
   assert.equal(web?.includes("28619188"), false);
   assert.equal(web?.includes("DUCHA"), false);
   assert.equal(web?.includes("sign"), false);
+  const secret = vaultWebTrace("GET", "https://onlyfans.com/api2/v2/vault/media?list=all&session=abc&x-bc-extra=1&field=recent");
+  assert.equal(secret, "GET /api2/v2/vault/media?list=all&field=recent");
+  assert.equal(secret?.includes("session"), false);
+  assert.equal(secret?.includes("x-bc"), false);
   assert.equal(vaultWebTrace("GET", "https://onlyfans.com/my/vault"), null);
   assert.equal(vaultWebTrace("GET", "https://onlyfans.com/api2/v2/vault/media?list=all&limit=40"), "GET /api2/v2/vault/media?list=all&limit=<n>");
 });

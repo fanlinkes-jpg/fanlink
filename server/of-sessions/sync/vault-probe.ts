@@ -223,6 +223,7 @@ export function pickSmallVideoFolder(bodies: readonly unknown[]): ProbeFolder | 
 export function folderProbePaths(folderId: string): Array<{ name: string; path: string }> {
   const id = encodeURIComponent(folderId);
   return [
+    { name: "panel", path: vaultMediaPath(folderId, 0) },
     { name: "list_id", path: `/api2/v2/vault/media?list_id=${id}&limit=40&offset=0` },
     { name: "list_id+field", path: `/api2/v2/vault/media?list_id=${id}&limit=40&offset=0&field=recent&sort=desc` },
     { name: "list", path: `/api2/v2/vault/media?list=${id}&limit=40&offset=0` },

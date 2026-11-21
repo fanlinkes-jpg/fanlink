@@ -2,7 +2,7 @@ import type { StorageStateFile } from "../sessions/storage-state.ts";
 import { fetchSignedVault, VAULT_MEDIA_LIMIT } from "./of-chat-api.ts";
 import type { ReadSql } from "./store.ts";
 import { folderMediaCap, mediaStateHits, mergeVaultList, parseVaultBundle, vaultAllList, vaultFolderMark, vaultKeyNames, vaultMediaMatching, vaultPayloadKind, type VaultFile, type VaultList } from "./vault-model.ts";
-import { finishListMembers, listMemberCount, persistVaultRead, storedFolderCounts } from "./vault-store.ts";
+import { finishListMembers, listMemberCount, mirroredFolderItems, persistVaultRead, storedFolderCounts } from "./vault-store.ts";
 
 /** Pausa entre páginas. Más lenta que el chat: la bóveda pesa. */
 export const VAULT_PAGE_GAP_MS = 800;
@@ -177,14 +177,15 @@ async function walkOne(
     const peekedCount = mediaCount(peeked);
     const param = read.queryParam === "list" ? "list" : read.queryParam === "list_id" ? "list_id" : "sin";
     const hits = listId === "all" ? 0 : mediaStateHits(peeked, listId);
-    if (listId !== "all" && cap != null && items.length + peekedCount > cap) {
-      suspicious = true;
-      const matches = vaultMediaMatching(peeked, listId);
-      console.info(`[fanlink:vault] carpeta=${vaultFolderMark(listId)} pagina param=${param} offset=${offset} n=${peekedCount} status=${read.status ?? "sin"} enLista=${hits} respaldo=${matches.length > 0 ? "si" : "no"} sospechosa tope=${cap}`);
+    const ignoredEmpty = listId !== "all" && peekedCount === 0 && counts != null && !countsAreEmpty(counts) && read.status === 200;
+    if (listId !== "all" && cap != null && (items.length + peekedCount > cap || ignoredEmpty)) {
+      suspicious = suspicious || items.length + peekedCount > cap;
+      const pageMatches = ignoredEmpty ? [] : vaultMediaMatching(peeked, listId);
+      const safeMatches = pageMatches.length > 0 && pageMatches.length <= cap ? pageMatches : [];
       const stored = await listMemberCount(input.sql, input.creatorId, listId);
       if (stored != null && stored > cap) await finishListMembers(input.sql, input.creatorId, listId, []);
-      if (matches.length > 0) {
-        const saved = await persistVaultRead(input.sql, input.creatorId, [{ list: matches, hasMore: false }], { listId, offset, listName });
+      if (safeMatches.length > 0) {
+        const saved = await persistVaultRead(input.sql, input.creatorId, [{ list: safeMatches, hasMore: false }], { listId, offset, listName });
         for (const item of saved) {
           if (seen.has(item.id)) continue;
           seen.add(item.id);
@@ -192,6 +193,14 @@ async function walkOne(
         }
         if (thumbItems.length === 0) thumbItems = saved;
       }
+      const mirrored = await mirroredFolderItems(input.sql, input.creatorId, listId, cap);
+      for (const item of mirrored) {
+        if (seen.has(item.id)) continue;
+        seen.add(item.id);
+        items.push(item);
+      }
+      const used = items.length > 0;
+      console.info(`[fanlink:vault] carpeta=${vaultFolderMark(listId)} pagina param=${param} offset=${offset} n=${peekedCount} status=${read.status ?? "sin"} enLista=${hits} respaldo=${used ? "si" : "no"}${suspicious ? ` sospechosa tope=${cap}` : ""}`);
       hasMore = false;
       nextOffset = offset;
       pages += 1;

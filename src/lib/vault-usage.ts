@@ -18,16 +18,17 @@ export function vaultSentPill(sent: boolean | null, sentCount: number | null): s
 }
 
 export function vaultUsageText(usage: VaultUsage): string {
-  const feed = usage.posted == null ? "Sin datos" : usage.posted ? "Publicado" : "No publicado";
-  const sent = usage.sent == null
-    ? "Sin datos"
-    : usage.sent
-      ? usage.sentCount == null ? "Enviado" : `Enviado ${usage.sentCount}`
-      : "No enviado";
-  const price = usage.priceLabel ?? "Sin datos";
-  const date = usage.dateLabel ?? "Sin datos";
-  const parts = [`Feed ${feed}`, `Envíos ${sent}`, `Precio ${price}`, `Fecha ${date}`];
-  if (usage.kind === "video") parts.push(`Duración ${usage.seconds == null ? "Sin datos" : clock(usage.seconds)}`);
+  const parts: string[] = [];
+  if (usage.posted != null) parts.push(`Feed ${usage.posted ? "Publicado" : "No publicado"}`);
+  if (usage.sent != null || (usage.sentCount != null && usage.sent !== false)) {
+    const sent = usage.sent === false
+      ? "No enviado"
+      : usage.sentCount == null ? "Enviado" : `Enviado ${usage.sentCount}`;
+    parts.push(`Envíos ${sent}`);
+  }
+  if (usage.priceLabel && usage.priceLabel !== "Sin datos") parts.push(`Precio ${usage.priceLabel}`);
+  if (usage.dateLabel && usage.dateLabel !== "Sin datos") parts.push(`Fecha ${usage.dateLabel}`);
+  if (usage.kind === "video" && usage.seconds != null) parts.push(`Duración ${clock(usage.seconds)}`);
   return parts.join(" · ");
 }
 

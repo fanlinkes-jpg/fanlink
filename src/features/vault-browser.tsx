@@ -279,21 +279,10 @@ export function VaultBrowser({
                   onClick={() => setPicked((current) => current.includes(item.id) ? current.filter((id) => id !== item.id) : [...current, item.id])}
                 >
                   <span data-vault-card style={VAULT_CARD_FRAME}>
-                    {hoverId === item.id && item.kind === "video" ? (
-                      <video
-                        muted
-                        playsInline
-                        autoPlay
-                        preload={item.hoverClip ? "none" : "metadata"}
-                        aria-label={item.title}
-                        style={VAULT_CARD_IMAGE}
-                        src={item.hoverClip
-                          ? vaultMediaSrc(creatorId, item.id, "clip", thumbPage)
-                          : vaultMediaSrc(creatorId, item.id, "full", { ...thumbPage, part: "head" })}
-                      />
-                    ) : (
-                      <VaultThumb creatorId={creatorId} itemId={item.id} title={item.title} listId={thumbPage.listId} offset={thumbPage.offset} />
-                    )}
+                    <VaultThumb creatorId={creatorId} itemId={item.id} title={item.title} listId={thumbPage.listId} offset={thumbPage.offset} />
+                    {hoverId === item.id && item.kind === "video" && item.hoverClip ? (
+                      <HoverClip src={vaultMediaSrc(creatorId, item.id, "clip", thumbPage)} title={item.title} />
+                    ) : null}
                     <span className={`absolute left-1.5 top-1.5 z-10 grid h-5 w-5 place-items-center rounded-full text-[11px] font-semibold ${selected ? "bg-[#00aff0] text-white" : "bg-white/80 text-transparent"}`}>{selected ? picked.indexOf(item.id) + 1 : ""}</span>
                     <span className="absolute right-1.5 top-1.5 z-10 flex max-w-[70%] flex-col items-end gap-1">
                       {item.posted ? <span className="rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white">Publicado</span> : null}
@@ -358,7 +347,7 @@ export function VaultBrowser({
             <button type="button" className="absolute inset-0" aria-label="Cerrar vista previa" onClick={() => setPreview(null)} />
             <div className="relative z-10 flex h-[80vh] w-[80vw] items-center justify-center">
               {preview.kind === "video" ? (
-                <video controls autoPlay playsInline className="h-full w-full bg-black object-contain" src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} />
+                <VaultPlayback src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} />
               ) : preview.kind === "audio" ? (
                 <audio controls className="w-full" src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} />
               ) : (
@@ -529,6 +518,40 @@ function usageOf(item: VaultCard): string {
     seconds: item.seconds,
     kind: item.kind,
   });
+}
+
+function HoverClip({ src, title }: { src: string; title: string }) {
+  const [ready, setReady] = useState(false);
+  const [failed, setFailed] = useState(false);
+  if (failed) return null;
+  return (
+    <video
+      muted
+      playsInline
+      autoPlay
+      preload="none"
+      aria-label={title}
+      style={{ ...VAULT_CARD_IMAGE, opacity: ready ? 1 : 0 }}
+      src={src}
+      onCanPlay={() => setReady(true)}
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
+function VaultPlayback({ src }: { src: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <p className="text-sm text-white">Vídeo no disponible</p>;
+  return (
+    <video
+      controls
+      autoPlay
+      playsInline
+      className="h-full w-full bg-black object-contain"
+      src={src}
+      onError={() => setFailed(true)}
+    />
+  );
 }
 
 function VaultStill({ creatorId, mediaId, className, title = "", listId, offset, imageStyle }: { creatorId: string; mediaId: string; className: string; title?: string; listId: string; offset: number; imageStyle?: typeof VAULT_CARD_IMAGE }) {

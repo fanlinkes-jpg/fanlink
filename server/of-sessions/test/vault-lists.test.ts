@@ -385,7 +385,7 @@ test("una carpeta sale con list_id mientras Todos sigue en la primera página", 
   }
 });
 
-test("un 400 de list_id reintenta una vez con list", async () => {
+test("la carpeta pide list y field=recent, sin list_id", async () => {
   clearSignRulesCache();
   const seen: string[] = [];
   const fetchImpl = (async (input: RequestInfo | URL) => {
@@ -407,7 +407,7 @@ test("un 400 de list_id reintenta una vez con list", async () => {
   }
 });
 
-test("list=all no lleva type ni field y una carpeta sale con list_id", async () => {
+test("list=all lleva field=recent y la carpeta usa list", async () => {
   clearSignRulesCache();
   const seen: string[] = [];
   const fetchImpl = (async (input: RequestInfo | URL) => {
@@ -861,6 +861,74 @@ test("una carpeta de más de 40 medios olvida los miembros viejos", async () => 
     assert.equal(members.some((row) => row.item_key === "viejo"), false);
     assert.equal(members.length, 41);
   } finally {
+    clearSignRulesCache();
+    clearVaultWalkCache();
+    await db.close();
+  }
+});
+
+test("una carpeta vacía con field=recent usa el espejo de Todos", async () => {
+  clearSignRulesCache();
+  clearVaultWalkCache();
+  const db = new PGlite();
+  const lines: string[] = [];
+  const previous = console.info;
+  console.info = (line?: unknown) => {
+    lines.push(String(line));
+  };
+  const fetchImpl = (async (input: RequestInfo | URL) => {
+    const href = String(input);
+    if (href.includes("dynamic-rules")) return Response.json(RULES);
+    const url = new URL(href);
+    if (url.pathname.endsWith("/vault/lists")) {
+      return Response.json({
+        list: [{ id: 2904, type: "custom", name: "Carpeta", photosCount: 0, videosCount: 2, gifsCount: 0, audiosCount: 0, hasMedia: true }],
+        hasMore: false,
+      });
+    }
+    const list = url.searchParams.get("list");
+    const offset = Number(url.searchParams.get("offset") ?? "0");
+    if (list === "2904") return Response.json({ list: [], hasMore: false });
+    if (list === "all" && offset === 0) {
+      return Response.json({
+        list: Array.from({ length: 40 }, (_, index) => ({
+          id: index + 1,
+          type: "photo",
+          listStates: [{ id: 2904, hasMedia: false, canAddMedia: true }],
+        })),
+        hasMore: true,
+      });
+    }
+    return Response.json({
+      list: [
+        { id: 41, type: "video", duration: 4, listStates: [{ id: 2904, hasMedia: true, canAddMedia: true }] },
+        { id: 42, type: "video", duration: 5, listStates: [{ id: 2904, hasMedia: true, canAddMedia: true }] },
+      ],
+      hasMore: false,
+    });
+  }) as typeof fetch;
+  try {
+    for (const file of ["0037_vault_mirror.sql", "0038_vault_fan_filter.sql", "0050_vault_list_counts.sql", "0054_vault_list_members.sql"]) {
+      await db.exec(await readFile(path.join(root, "migrations", file), "utf8"));
+    }
+    await walkVault({
+      creatorId: "3zk7kbr",
+      state: storedState(),
+      fetch: fetchImpl,
+      now: () => 1_700_000_000_000,
+      sql: asSql(db),
+      sleep: async () => undefined,
+    });
+    const opened = await queryVaultForActor(asSql(db), { userId: "dueña", role: "owner", perms: ["vault"] }, {
+      creatorId: "3zk7kbr",
+      remember: false,
+      query: { ...emptyVaultQuery(), folderId: "2904", scope: "carpeta" },
+    });
+    assert.deepEqual(opened.payload.items.map((item) => item.id).sort(), ["41", "42"]);
+    assert.equal(lines.some((line) => line.includes("respaldo=si") && line.includes("n=0") && line.includes("param=list")), true);
+    assert.equal(lines.some((line) => line.includes("2904")), false);
+  } finally {
+    console.info = previous;
     clearSignRulesCache();
     clearVaultWalkCache();
     await db.close();

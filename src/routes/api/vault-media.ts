@@ -10,7 +10,7 @@ import { fetchSignedVault } from "../../../server/of-sessions/sync/of-chat-api.t
 import { parseVaultBundle } from "../../../server/of-sessions/sync/vault-model.ts";
 import { loadFreshPreview, normalizeVaultOffset, reloadVaultPreview } from "../../../server/of-sessions/sync/vault-thumbs.ts";
 import { openProfileThumbs } from "../../../server/of-sessions/sync/vault-owner.ts";
-import { saveVaultPreview, storedVaultMediaUrls, storedVaultPage } from "../../../server/of-sessions/sync/vault-store.ts";
+import { playbackUrl, saveVaultPreview, storedVaultMediaUrls, storedVaultPage } from "../../../server/of-sessions/sync/vault-store.ts";
 
 export const Route = createFileRoute("/api/vault-media")({
   server: {
@@ -27,17 +27,17 @@ export const Route = createFileRoute("/api/vault-media")({
           const rawVariant = url.searchParams.get("variant");
           const variant = rawVariant === "full" || rawVariant === "clip" ? rawVariant : "preview";
           const page = await thumbPage(sql, creatorId, mediaId, url);
+          let expectVideo = false;
           return handleVaultMedia(request, {
             session: async () => ({ userId: access.userId, role: access.role, perms: access.perms, creatorIds }),
             findPreview: async (creator, id, wanted) => {
               const urls = await storedVaultMediaUrls(sql, creator, id);
-              if (wanted === "full") return urls.full ?? urls.preview ?? urls.thumb;
-              if (wanted === "clip") return urls.clip;
-              return urls.preview ?? urls.thumb ?? urls.full;
+              expectVideo = urls.kind === "video" && (wanted === "full" || wanted === "clip");
+              return playbackUrl(urls, wanted ?? "preview", urls.kind);
             },
             fetchBytes: async (target, range) => {
-              if (variant === "full" || variant === "clip" || range) {
-                const first = await readSessionMediaResult(creatorId, target, range);
+              if (expectVideo || range) {
+                const first = await readSessionMediaResult(creatorId, target, range, { expectVideo });
                 if (first.media) return first.media;
                 if (first.status !== 403 && first.status !== 410) return null;
                 const fresh = await reloadPreview(sql, creatorId, mediaId, page.listId, page.offset);

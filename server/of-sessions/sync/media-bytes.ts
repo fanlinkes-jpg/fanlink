@@ -23,8 +23,8 @@ export function clearVaultThumbs(): void {
   thumbRecovered.clear();
 }
 
-function thumbKey(creatorId: string, mediaId: string): string {
-  return `${creatorId}\n${mediaId}`;
+function thumbKey(creatorId: string, mediaId: string, variant = "preview"): string {
+  return `${creatorId}\n${variant}\n${mediaId}`;
 }
 
 function forgetThumb(key: string): void {
@@ -34,8 +34,8 @@ function forgetThumb(key: string): void {
   thumbCache.delete(key);
 }
 
-export function putVaultThumb(creatorId: string, mediaId: string, body: Uint8Array, contentType: string): void {
-  const key = thumbKey(creatorId, mediaId);
+export function putVaultThumb(creatorId: string, mediaId: string, body: Uint8Array, contentType: string, variant = "preview"): void {
+  const key = thumbKey(creatorId, mediaId, variant);
   forgetThumb(key);
   if (body.byteLength > VAULT_THUMB_CACHE_BYTES) return;
   thumbCache.set(key, { body, contentType, at: thumbNow() });
@@ -47,8 +47,8 @@ export function putVaultThumb(creatorId: string, mediaId: string, body: Uint8Arr
   }
 }
 
-export function getVaultThumb(creatorId: string, mediaId: string): { body: Uint8Array; contentType: string } | null {
-  const key = thumbKey(creatorId, mediaId);
+export function getVaultThumb(creatorId: string, mediaId: string, variant = "preview"): { body: Uint8Array; contentType: string } | null {
+  const key = thumbKey(creatorId, mediaId, variant);
   const hit = thumbCache.get(key);
   if (!hit) return null;
   if (thumbNow() - hit.at > THUMB_TTL_MS) {
@@ -134,6 +134,7 @@ export async function readSessionMediaResult(
   creatorId: string,
   target: string,
   range?: string | null,
+  options?: { expectVideo?: boolean },
 ): Promise<{ status: number; media: MediaBytes | null }> {
   if (!mediaHostAllowed(target)) return { status: 0, media: null };
   const header = mediaRangeHeader(range);
@@ -158,7 +159,7 @@ export async function readSessionMediaResult(
     const attempts = mediaHeaderAttempts(headers);
     for (let index = 0; index < attempts.length; index += 1) {
       const attempt = attempts[index] ?? headers;
-      const loaded = await loadMedia(target, attempt, Boolean(header));
+      const loaded = await loadMedia(target, attempt, options?.expectVideo === true);
       const media = asMedia(loaded);
       if (media) {
         if (index > 0) noteVaultThumbRecovered(creatorId, media.status);
@@ -174,7 +175,12 @@ export async function readSessionMediaResult(
   }
 }
 
-async function loadMedia(target: string, headers: Record<string, string>, ranged: boolean): Promise<LoadResult> {
+/** Un vídeo no se sirve si el CDN manda una imagen. */
+export function videoBytesAccepted(contentType: string): boolean {
+  return contentType.split(";")[0]?.trim().toLowerCase().startsWith("video/") === true;
+}
+
+async function loadMedia(target: string, headers: Record<string, string>, expectVideo = false): Promise<LoadResult> {
   let response: Response;
   try {
     response = await fetch(target, { headers, redirect: "manual" });
@@ -196,14 +202,23 @@ async function loadMedia(target: string, headers: Record<string, string>, ranged
     return { status: response.status };
   }
   const upstreamType = (response.headers.get("content-type") ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
-  const video = ranged || upstreamType.startsWith("video/") || isVideoTarget(target);
+  const video = expectVideo || upstreamType.startsWith("video/") || isVideoTarget(target);
+  if (expectVideo && !videoBytesAccepted(upstreamType)) {
+    await response.body?.cancel().catch(() => undefined);
+    console.info(`[fanlink:vault] reproductor error tipo=${upstreamType || "sin"}`);
+    return { status: response.status };
+  }
   if (video) {
     const media = mediaFromFetchResponse(response);
     if (!media) {
       await response.body?.cancel().catch(() => undefined);
       return { status: response.status };
     }
-    if (!media.contentType.startsWith("video/") && isVideoTarget(target)) media.contentType = "video/mp4";
+    if (expectVideo && !videoBytesAccepted(media.contentType)) {
+      await response.body?.cancel().catch(() => undefined);
+      console.info(`[fanlink:vault] reproductor error tipo=${media.contentType || "sin"}`);
+      return { status: response.status };
+    }
     console.info(vaultPlayerLog({
       status: media.status,
       range: headers.range ?? null,

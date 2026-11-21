@@ -217,6 +217,36 @@ async function rememberListMembers(sql: ReadSql, creatorId: string, listId: stri
   }
 }
 
+/** Medios ya guardados de esa carpeta. Si pasan del tope, el espejo está hinchado y no se usa. */
+export async function mirroredFolderItems(sql: ReadSql, creatorId: string, listId: string, cap: number): Promise<VaultFile[]> {
+  if (!listId || listId === "all" || !(await hasColumn(sql, "of_vault_list_item", "item_key"))) return [];
+  const rows = await sql.query<{ item_key: string; title: string | null; kind: string | null }>(
+    `select item.item_key, item.title, item.kind
+     from of_vault_list_item member
+     join of_vault_item item on item.creator_id = member.creator_id and item.item_key = member.item_key
+     where member.creator_id = $1 and member.list_key = $2
+     limit $3`,
+    [creatorId, listId, cap + 1],
+  );
+  if (rows.length > cap) return [];
+  return rows.map((row) => ({
+    id: row.item_key,
+    title: row.title ?? "Sin datos",
+    kind: vaultKindOf(row.kind),
+    seconds: null,
+    preview: null,
+    folder: null,
+    tags: [],
+    listId,
+    listName: null,
+    description: null,
+    uploadedAt: null,
+    priceCents: null,
+    salesCount: null,
+    sentCount: null,
+  }));
+}
+
 /** Medios guardados en la carpeta. Null si la tabla aún no existe. */
 export async function listMemberCount(sql: ReadSql, creatorId: string, listId: string): Promise<number | null> {
   if (!listId || listId === "all" || !(await hasColumn(sql, "of_vault_list_item", "item_key"))) return null;
@@ -272,12 +302,13 @@ export async function storedVaultMediaUrls(sql: ReadSql, creatorId: string, medi
   thumb: string | null;
   full: string | null;
   clip: string | null;
+  kind: string | null;
 }> {
   const thumb = await hasColumn(sql, "of_vault_item", "thumb_url");
   const full = await hasColumn(sql, "of_vault_item", "full_url");
   const clip = await hasColumn(sql, "of_vault_item", "clip_url");
-  const rows = await sql.query<{ preview: string | null; thumb_url?: string | null; full_url?: string | null; clip_url?: string | null }>(
-    `select preview${thumb ? ", thumb_url" : ""}${full ? ", full_url" : ""}${clip ? ", clip_url" : ""}
+  const rows = await sql.query<{ preview: string | null; kind: string | null; thumb_url?: string | null; full_url?: string | null; clip_url?: string | null }>(
+    `select preview, kind${thumb ? ", thumb_url" : ""}${full ? ", full_url" : ""}${clip ? ", clip_url" : ""}
      from of_vault_item where creator_id = $1 and item_key = $2`,
     [creatorId, mediaId],
   );
@@ -287,7 +318,26 @@ export async function storedVaultMediaUrls(sql: ReadSql, creatorId: string, medi
     thumb: row?.thumb_url ?? null,
     full: row?.full_url ?? null,
     clip: row?.clip_url ?? null,
+    kind: row?.kind ?? null,
   };
+}
+
+function videoUrlOnly(url: string | null): string | null {
+  if (!url) return null;
+  const path = url.split("?")[0]?.toLowerCase() ?? "";
+  if (path.endsWith(".mp4") || path.endsWith(".webm") || path.endsWith(".mov") || path.endsWith(".m4v")) return url;
+  return null;
+}
+
+/** URL que puede reproducir un vídeo. Una miniatura no cuenta. */
+export function playbackUrl(urls: { full: string | null; clip: string | null; preview: string | null; thumb: string | null }, variant: "full" | "clip" | "preview", kind: string | null): string | null {
+  if (kind === "video" && (variant === "full" || variant === "clip")) {
+    if (variant === "clip") return videoUrlOnly(urls.clip) ?? videoUrlOnly(urls.full);
+    return videoUrlOnly(urls.full) ?? videoUrlOnly(urls.clip);
+  }
+  if (variant === "clip") return videoUrlOnly(urls.clip);
+  if (variant === "full") return urls.full;
+  return urls.preview ?? urls.thumb ?? urls.full;
 }
 
 export async function storedVaultPage(sql: ReadSql, creatorId: string, mediaId: string): Promise<{ listId: string; offset: number } | null> {

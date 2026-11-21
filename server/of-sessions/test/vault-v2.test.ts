@@ -732,6 +732,24 @@ test("sendChatMessageView no abre con los flags apagados ni con NO VENDER", asyn
   }
 });
 
+test("el reproductor de un vídeo responde video/mp4 con 206", async () => {
+  const played = await handleVaultMedia(new Request("http://127.0.0.1/api/vault-media?creatorId=c-1&mediaId=v9&variant=full", {
+    headers: { range: "bytes=0-" },
+  }), {
+    session: async () => chatter("chatter-a"),
+    findPreview: async () => "https://cdn2.onlyfans.com/files/720.mp4",
+    fetchBytes: async () => ({
+      status: 206,
+      body: Uint8Array.from([0, 0, 0, 1]),
+      contentType: "video/mp4",
+      contentRange: "bytes 0-3/9",
+      contentLength: 4,
+    }),
+  });
+  assert.equal(played.status, 206);
+  assert.equal(played.headers.get("content-type"), "video/mp4");
+});
+
 function chatter(userId: string) {
   return { userId, role: "member" as const, perms: ["vault", "mensajes"] };
 }

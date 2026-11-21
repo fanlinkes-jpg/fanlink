@@ -345,7 +345,7 @@ function parseVaultItem(item: unknown, lists: readonly VaultList[]): VaultFile[]
     priceCents: priceToCents(row),
     salesCount: countOrNull(row.salesCount ?? row.purchases),
     sentCount: sentCountOf(row),
-    fullUrl: fullOf(row),
+    fullUrl: kind === "video" ? videoFileOf(row) : fullOf(row),
     paidWithId: textOf(row.paidMediaId ?? row.pairedMediaId ?? row.fullMediaId),
   }];
 }
@@ -413,6 +413,12 @@ function clipOf(row: Record<string, unknown>): string | null {
   return null;
 }
 
+function directMediaUrl(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  const row = nested(value);
+  return row ? textOf(row.url) : null;
+}
+
 function mediaUrl(value: unknown): string | null {
   if (typeof value === "string" && /^https?:\/\//.test(value)) return value;
   return firstFileUrl(value);
@@ -431,16 +437,48 @@ function isVideoUrl(url: string): boolean {
 export function mediaMemberIds(row: Record<string, unknown>): string[] {
   const raw = row.listStates ?? row.listsStates ?? row.list_states;
   if (!Array.isArray(raw)) return [];
+  const states = raw.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object" && !Array.isArray(entry));
+  const members = states.filter((state) => stateSaysMember(state));
+  if (states.length >= 2 && members.length === states.length) return [];
   const ids: string[] = [];
-  for (const entry of raw) {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
-    const state = entry as Record<string, unknown>;
-    if (!stateSaysMember(state)) continue;
+  for (const state of members) {
     const id = textOf(state.id ?? state.listId ?? state.list_id);
     if (!id || id === "all") continue;
     ids.push(id);
   }
   return [...new Set(ids)];
+}
+
+/**
+ * URL de reproducción de un vídeo. `files.full`, `source.source` o `videoSources`.
+ * Una jpg de thumb, preview o squarePreview no vale.
+ */
+export function videoFileOf(row: Record<string, unknown>): string | null {
+  const files = nested(row.files);
+  const full = nested(files?.full);
+  const source = nested(row.source) ?? nested(files?.source);
+  const sources = nested(row.videoSources);
+  const candidates: unknown[] = [
+    directMediaUrl(files?.full),
+    full?.sources,
+    directMediaUrl(source?.source ?? source),
+    directMediaUrl(row.source),
+    sources?.["720"],
+    sources?.["240"],
+  ];
+  if (sources) {
+    for (const key of Object.keys(sources).filter((item) => /^\d+$/.test(item) && item !== "720" && item !== "240").sort((left, right) => Number(right) - Number(left))) {
+      candidates.push(sources[key]);
+    }
+  }
+  for (const candidate of candidates) {
+    const urls = Array.isArray(candidate) ? candidate : [candidate];
+    for (const item of urls) {
+      const url = mediaUrl(item);
+      if (url && isVideoUrl(url)) return url;
+    }
+  }
+  return null;
 }
 
 /** Cuántos medios de la página dicen, por listStates, que están en esa carpeta. */

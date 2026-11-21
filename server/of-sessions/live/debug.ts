@@ -21,7 +21,7 @@ export function liveChallengeUrl(raw: string): boolean {
   return host === "challenges.cloudflare.com" || host.endsWith(".challenges.cloudflare.com") || path.includes("/cdn-cgi/");
 }
 
-const VAULT_SECRET_PARAM = /^(sign|cookie|sess|x-bc|x_bc|token|authorization|user-id|user_id|policy|signature)$/i;
+const VAULT_SECRET_PARAM = /sign|cookie|sess|token|auth|policy|x-?bc/i;
 const VAULT_ENUM_VALUE = /^(all|desc|asc|recent|photo|video|audio|gif|custom|posts|stories|messages|streams|media|main|true|false)$/i;
 const VAULT_PATH_WORD = /^(api2|v2|vault|media|lists|list|categories|processing|hidden)$/;
 
