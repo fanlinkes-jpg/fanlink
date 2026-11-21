@@ -154,9 +154,9 @@ function SalesPane({ messages, onCopy }: { messages: PpvSource[]; onCopy?: (body
   return (
     <div className="space-y-3">
       <Card title="PPV">
-        <Pair label="Buy rate" value={timeline.rate} />
-        <Pair label="Precio más alto" value={timeline.high} />
-        <Pair label="Precio más bajo" value={timeline.low} />
+        <Pair label="Buy rate" value={timeline.rows.length === 0 ? "0%" : timeline.rate} />
+        <Pair label="Precio más alto" value={timeline.rows.length === 0 ? "$0.00" : timeline.high} />
+        <Pair label="Precio más bajo" value={timeline.rows.length === 0 ? "$0.00" : timeline.low} />
       </Card>
       {timeline.rows.length === 0 ? <p className="text-sm text-[#6d7585]">Sin datos</p> : timeline.rows.map((row) => (
         <article key={row.messageKey} className="rounded-xl border border-[#e6e8ee] bg-white p-3">

@@ -21,11 +21,30 @@ test("la ficha del fan pinta las tres pestañas", async () => {
   try {
     await waitForServer(`http://127.0.0.1:${port}/mensajes`);
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    await page.route("**/*", async (route) => {
+      const request = route.request();
+      if (request.headers()["x-tsr-serverfn"] === "true" && serverExport(request.url()).includes("listCreatorChats")) {
+        await route.fulfill({
+          status: 200,
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ result: fanChat() }),
+        });
+        return;
+      }
+      await route.continue();
+    });
     await page.goto(`http://127.0.0.1:${port}/mensajes`, { waitUntil: "domcontentloaded" });
+    await page.getByText("Fan sin gasto").first().waitFor();
     await page.getByRole("button", { name: "Ficha del fan" }).click();
     const dialog = page.getByRole("dialog", { name: "Ficha del fan" });
     await dialog.waitFor();
-    for (const tab of FAN_CARD_TABS) await dialog.getByRole("button", { name: tab, exact: true }).click();
+    await dialog.getByText("Gasto total").waitFor();
+    await dialog.getByText("$0.00").first().waitFor();
+    await dialog.getByRole("button", { name: "Ventas", exact: true }).click();
+    await dialog.getByText("Precio más alto").waitFor();
+    await dialog.getByText("$0.00").first().waitFor();
+    await dialog.getByRole("button", { name: "Notas", exact: true }).click();
+    await dialog.getByRole("button", { name: "Insights", exact: true }).click();
     const shot = await saveShot(page);
     assert.ok(shot.endsWith("ficha-fan.png"));
   } finally {
@@ -33,6 +52,52 @@ test("la ficha del fan pinta las tres pestañas", async () => {
     server.kill("SIGTERM");
   }
 });
+
+function serverExport(url: string): string {
+  const raw = decodeURIComponent(url.split("/_serverFn/")[1]?.split("?")[0] ?? "");
+  if (!raw) return "";
+  try {
+    const parsed = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as { export?: string };
+    return parsed.export ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function fanChat() {
+  return {
+    runningCreatorIds: [],
+    threads: [{
+      creatorId: "3zk7kbr",
+      threadKey: "t1",
+      fanKey: "fan",
+      fanHandle: "@fan",
+      fanName: "Fan sin gasto",
+      lastMessageAt: "2026-01-02T00:00:00.000Z",
+      excerpt: "hola",
+      unread: 0,
+      lastFromFan: true,
+      spentCents: 0,
+      subscribesCents: 0,
+      tipsCents: 0,
+      postsCents: 0,
+      messagesCents: 0,
+      avatarUrl: null,
+      online: null,
+      subPriceCents: 0,
+      subExpiresAt: null,
+      renewAuto: false,
+      lists: [],
+    }],
+    messages: [],
+    meta: [],
+    pending: [],
+    notes: [],
+    profiles: [],
+    accounts: [],
+    sessionNotices: [],
+  };
+}
 
 async function saveShot(page: Page): Promise<string> {
   const name = "ficha-fan.png";

@@ -2170,7 +2170,7 @@ function pendingCaption(item: { scheduledAt: string | null; authorName: string |
 }
 
 function chatPhase(data: CreatorChatList | null, creatorId: string | null, running: boolean): ChatSyncInput {
-  if (!data) return { hasSession: true, loginInProgress: false, status: null, reason: null, running: true };
+  if (!data) return { hasSession: true, loginInProgress: false, status: null, reason: null, running: false };
   const accounts = data.accounts.filter((row) => creatorId == null || row.creatorId === creatorId);
   const metas = data.meta.filter((row) => creatorId == null || row.creatorId === creatorId);
   const account = accounts[0];
