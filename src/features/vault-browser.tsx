@@ -3,7 +3,7 @@ import { queryVaultMirror } from "@/lib/of-sessions";
 import { VAULT_THUMB_MISSING, vaultMediaSrc } from "@/lib/chat-media";
 import { VAULT_CARD_FRAME, VAULT_CARD_IMAGE } from "@/lib/vault-card-frame";
 import { vaultFolderLabel } from "@/lib/vault-folder-label";
-import { vaultUsageText } from "@/lib/vault-usage";
+import { vaultSentPill, vaultUsageText } from "@/lib/vault-usage";
 import { VAULT_FILTER_DEBOUNCE_MS } from "@/lib/vault-debounce";
 
 type VaultCard = {
@@ -20,6 +20,7 @@ type VaultCard = {
   sent?: boolean | null;
   priceLabel?: string | null;
   posted?: boolean | null;
+  hoverClip?: boolean;
   ventasLabel: string;
   bestSellerLabel: string | null;
   suggestedLabel: string;
@@ -239,6 +240,7 @@ export function VaultBrowser({
               {items.length === 0 ? <p className="col-span-4 text-sm text-[#8a96a3]">Sin datos</p> : null}
               {items.map((item) => {
                 const selected = picked.includes(item.id);
+                const sentLabel = vaultSentPill(item.sent ?? null, item.sentCount ?? null);
                 return (
                 <button
                   key={item.id}
@@ -258,10 +260,12 @@ export function VaultBrowser({
                       muted
                       playsInline
                       autoPlay
-                      preload="none"
+                      preload={item.hoverClip ? "none" : "metadata"}
                       aria-label={item.title}
                       style={VAULT_CARD_IMAGE}
-                      src={vaultMediaSrc(creatorId, item.id, "full", thumbPage)}
+                      src={item.hoverClip
+                        ? vaultMediaSrc(creatorId, item.id, "clip", thumbPage)
+                        : vaultMediaSrc(creatorId, item.id, "full", { ...thumbPage, part: "head" })}
                     />
                   ) : (
                     <VaultThumb creatorId={creatorId} itemId={item.id} title={item.title} listId={thumbPage.listId} offset={thumbPage.offset} />
@@ -272,6 +276,7 @@ export function VaultBrowser({
                     <span className={`rounded-full px-1.5 py-0.5 text-[10px] text-white ${item.priceLabel && item.priceLabel !== "Free" && item.priceLabel !== "Sin datos" ? "bg-[#ff5a7a] font-semibold" : "bg-black/70"}`}>{item.priceLabel ?? "Sin datos"}</span>
                   </span>
                   <span className="absolute inset-x-1.5 bottom-1.5 z-10 flex items-center gap-1">
+                    {sentLabel ? <span className="shrink-0 rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white">{sentLabel}</span> : null}
                     <span
                       role="button"
                       tabIndex={0}

@@ -35,8 +35,11 @@ test("el medio usa hasPosts, hasMessages y messagesCount, no las compras", () =>
       counters: { messagesCount: "3", buyersCount: 9, tipsSumm: "100" },
       files: {
         thumb: { url: "https://cdn2.onlyfans.com/files/t.jpg" },
+        preview: { url: "https://cdn2.onlyfans.com/files/p.jpg" },
+        squarePreview: { url: "https://cdn2.onlyfans.com/files/s.jpg" },
         full: { url: "https://cdn2.onlyfans.com/files/f.mp4" },
       },
+      videoSources: { "720": null, "240": "https://cdn2.onlyfans.com/files/light.mp4" },
     }, {
       id: 10,
       type: "photo",
@@ -50,11 +53,13 @@ test("el medio usa hasPosts, hasMessages y messagesCount, no las compras", () =>
   assert.equal(video?.tags.includes("Sent"), true);
   assert.equal(video?.thumbUrl, "https://cdn2.onlyfans.com/files/t.jpg");
   assert.equal(video?.fullUrl, "https://cdn2.onlyfans.com/files/f.mp4");
+  assert.equal(video?.clipUrl, "https://cdn2.onlyfans.com/files/light.mp4");
   const photo = bundle.items.find((item) => item.id === "10");
   assert.equal(photo?.tags.includes("Feed"), false);
   assert.equal(photo?.tags.includes("Feed:no"), false);
   assert.equal(photo?.sentCount, null);
   assert.equal(photo?.priceCents, null);
+  assert.equal(photo?.clipUrl ?? null, null);
   const stamped = stampVaultList({ ...photo!, folder: null, listName: null }, "ducha", "B/G LA DUCHA");
   assert.equal(stamped.folder, "B/G LA DUCHA");
   assert.equal(stamped.listName, "B/G LA DUCHA");

@@ -9,6 +9,13 @@ export type VaultUsage = {
   kind: string | null;
 };
 
+/** Pastilla visible. null solo si OnlyFans dijo que no se envió. */
+export function vaultSentPill(sent: boolean | null, sentCount: number | null): string | null {
+  if (sent === false) return null;
+  if (sentCount != null) return `Sent ${sentCount}`;
+  return sent === true ? "Sent · Sin datos" : "Sent Sin datos";
+}
+
 export function vaultUsageText(usage: VaultUsage): string {
   const feed = usage.posted == null ? "Sin datos" : usage.posted ? "Posted" : "No publicado";
   const sent = usage.sent == null

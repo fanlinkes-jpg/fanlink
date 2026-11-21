@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { vaultUsageText } from "./vault-usage.ts";
+import { vaultSentPill, vaultUsageText } from "./vault-usage.ts";
 
 test("el historial dice Sin datos en lo que OnlyFans no manda y no usa las compras", () => {
   assert.equal(
@@ -39,4 +39,8 @@ test("el historial dice Sin datos en lo que OnlyFans no manda y no usa las compr
     }),
     "Feed No publicado · Envíos No enviado · Precio Free · Fecha 2 ene 26",
   );
+  assert.equal(vaultSentPill(true, 3), "Sent 3");
+  assert.equal(vaultSentPill(true, null), "Sent · Sin datos");
+  assert.equal(vaultSentPill(null, null), "Sent Sin datos");
+  assert.equal(vaultSentPill(false, null), null);
 });

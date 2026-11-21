@@ -21,6 +21,8 @@ export type VaultFile = {
   fullUrl?: string | null;
   /** `files.thumb`, si viene aparte del preview. No sale en el JSON del chatter. */
   thumbUrl?: string | null;
+  /** Rendición corta de `videoSources`, o preview si es un vídeo. No sale en el JSON del chatter. */
+  clipUrl?: string | null;
   /** Id del vídeo de pago, si el tráiler lo dice. Sin esto no se empareja. */
   paidWithId?: string | null;
   /** Todas las listas del medio. `listId` es la principal. */
@@ -326,6 +328,7 @@ function parseVaultItem(item: unknown, lists: readonly VaultList[]): VaultFile[]
     seconds,
     preview: previewOf(row),
     thumbUrl: thumbOf(row),
+    clipUrl: clipOf(row),
     folder: membership.listName,
     tags: tagsOf(row, posted, sent),
     listId: membership.listId,
@@ -393,6 +396,34 @@ function previewOf(row: Record<string, unknown>): string | null {
 function thumbOf(row: Record<string, unknown>): string | null {
   const files = nested(row.files);
   return firstFileUrl(files?.thumb) ?? firstFileUrl(row.thumb);
+}
+
+/** Clip de verdad: la rendición más pequeña de `videoSources`, o preview/squarePreview si el archivo es vídeo. Una jpg no se reproduce. */
+function clipOf(row: Record<string, unknown>): string | null {
+  const sources = nested(row.videoSources);
+  if (sources) {
+    const keys = Object.keys(sources).filter((key) => /^\d+$/.test(key)).sort((left, right) => Number(left) - Number(right));
+    for (const key of keys) {
+      const url = mediaUrl(sources[key]);
+      if (url && isVideoUrl(url)) return url;
+    }
+  }
+  const files = nested(row.files);
+  for (const key of ["preview", "squarePreview"]) {
+    const url = firstFileUrl(files?.[key]) ?? firstFileUrl(row[key]);
+    if (url && isVideoUrl(url)) return url;
+  }
+  return null;
+}
+
+function mediaUrl(value: unknown): string | null {
+  if (typeof value === "string" && /^https?:\/\//.test(value)) return value;
+  return firstFileUrl(value);
+}
+
+function isVideoUrl(url: string): boolean {
+  const path = url.split("?")[0]?.toLowerCase() ?? "";
+  return path.endsWith(".mp4") || path.endsWith(".webm") || path.endsWith(".mov") || path.endsWith(".m4v");
 }
 
 const SYSTEM_LISTS = new Set(["posts", "stories", "messages", "streams", "media"]);

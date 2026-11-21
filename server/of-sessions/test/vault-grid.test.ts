@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import { createServer } from "node:net";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { chromium } from "playwright";
@@ -13,11 +14,9 @@ test("la cuadrícula de la bóveda no aplasta una tira a unos píxeles", async (
   const frame = Object.entries(VAULT_CARD_FRAME).map(([key, value]) => `${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}:${value}`).join(";");
   const image = Object.entries(VAULT_CARD_IMAGE).map(([key, value]) => `${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}:${value}`).join(";");
   const cards = Array.from({ length: 4 }, () => `
-    <button style="display:block;width:100%;padding:0;border:0;background:#fff">
-      <span data-vault-card style="position:relative;display:block;overflow:hidden;background:#f2f3f5;${frame}">
-        <img alt="" width="400" height="8" style="position:absolute;inset:0;${image}" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" />
-        <span style="position:absolute;top:6px;right:6px">Publicado</span>
-      </span>
+    <button data-vault-card style="padding:0;border:0;background:#f2f3f5;${frame}">
+      <img alt="" width="400" height="8" style="${image}" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" />
+      <span style="position:absolute;top:6px;right:6px">Posted</span>
     </button>`).join("");
   const browser = await chromium.launch();
   try {
@@ -100,8 +99,17 @@ test("el panel real del chat monta VaultBrowser con tarjetas cuadradas", async (
     const heights = await panel.locator("[data-vault-card]").evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect().height));
     assert.ok(heights.every((height) => height >= 80), `altos ${heights.join(",")}`);
     assert.equal(await panel.getByText("Sin miniatura").count(), 0);
-    await mkdir("/opt/cursor/artifacts", { recursive: true });
-    await panel.screenshot({ path: "/opt/cursor/artifacts/boveda-panel.png" });
+    await panel.getByText("Sent 2").waitFor();
+    const shotDir = process.env.CI ? "/opt/cursor/artifacts" : tmpdir();
+    const shotPath = path.join(shotDir, "boveda-panel.png");
+    try {
+      await mkdir(shotDir, { recursive: true });
+      await panel.screenshot({ path: shotPath });
+    } catch (error) {
+      const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+      if (code !== "EACCES" || !process.env.CI) throw error;
+      await panel.screenshot({ path: path.join(tmpdir(), "boveda-panel.png") });
+    }
   } finally {
     await browser.close().catch(() => undefined);
     server.kill("SIGTERM");

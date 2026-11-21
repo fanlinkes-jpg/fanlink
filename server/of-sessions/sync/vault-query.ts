@@ -37,6 +37,8 @@ export type VaultCard = {
   dateLabel: string | null;
   posted: boolean | null;
   sent: boolean | null;
+  /** Hay un clip corto guardado. La URL no sale. */
+  hoverClip: boolean;
   /** Free, el importe o «Sin datos». No es el campo priceCents. */
   priceLabel: string;
   listId: string | null;
@@ -217,6 +219,7 @@ export function presentCard(
     dateLabel: vaultDateLabel(item.uploadedAt),
     posted: item.tags.includes("Feed") ? true : item.tags.includes("Feed:no") ? false : null,
     sent: item.tags.includes("Sent") ? true : item.tags.includes("Sent:no") ? false : null,
+    hoverClip: Boolean(item.clipUrl),
     priceLabel: item.priceCents == null ? "Sin datos" : item.priceCents <= 0 ? "Free" : (vaultOfferLabel(item.priceCents) ?? "Sin datos"),
     listId: item.listId,
     listIds: item.listIds ?? [],
@@ -308,14 +311,16 @@ async function selectVaultItems(
     if (query.bought === "no") where.push(`not ${fanExists(true)}`);
   }
   const withListIds = await hasListIdColumn(sql);
+  const withClip = await hasItemColumn(sql, "clip_url");
   const text = `select item_key, title, kind, seconds, preview, folder, tags, list_key, list_name, description, uploaded_at, price_cents, sales_count, sent_count
             ${withListIds ? ", list_ids" : ""}
+            ${withClip ? ", clip_url" : ""}
     from of_vault_item where ${where.join(" and ")}`;
   const rows = await sql.query<{
     item_key: string; title: string | null; kind: string | null; seconds: number | null; preview: string | null;
     folder: string | null; tags: unknown; list_key: string | null; list_name: string | null;
     description: string | null; uploaded_at: Date | string | null; price_cents: number | null;
-    sales_count: number | null; sent_count: number | null; list_ids?: unknown;
+    sales_count: number | null; sent_count: number | null; list_ids?: unknown; clip_url?: string | null;
   }>(text, params);
   return rows.map((row) => ({
     id: row.item_key,
@@ -323,6 +328,7 @@ async function selectVaultItems(
     kind: vaultKindOf(row.kind),
     seconds: row.seconds,
     preview: row.preview,
+    clipUrl: row.clip_url ?? null,
     folder: row.folder ?? row.list_name,
     tags: tagsOf(row.tags),
     listId: row.list_key,
@@ -375,10 +381,14 @@ function escapeLike(value: string): string {
 }
 
 async function hasListIdColumn(sql: ReadSql): Promise<boolean> {
+  return hasItemColumn(sql, "list_ids");
+}
+
+async function hasItemColumn(sql: ReadSql, column: string): Promise<boolean> {
   const rows = await sql.query<{ n: number | string }>(
     `select count(*)::int as n from information_schema.columns
-     where table_schema = 'public' and table_name = 'of_vault_item' and column_name = 'list_ids'`,
-    [],
+     where table_schema = 'public' and table_name = 'of_vault_item' and column_name = $1`,
+    [column],
   );
   return Number(rows[0]?.n ?? 0) > 0;
 }

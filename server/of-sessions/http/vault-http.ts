@@ -43,12 +43,12 @@ export async function handleChatMedia(request: Request, deps: {
   if (!creatorId || !messageKey || !Number.isInteger(index) || index < 0) return new Response("Sin datos", { status: 404 });
   if (!creatorAllowed(actor, creatorId)) return new Response("Sin datos", { status: 403 });
   const row = await deps.findMedia(creatorId, threadKey, messageKey, index);
-  return streamMedia(row?.url ?? null, request, deps.fetchBytes);
+  return streamMedia(row?.url ?? null, request.headers.get("range"), deps.fetchBytes);
 }
 
 export async function handleVaultMedia(request: Request, deps: {
   session: () => Promise<SessionActor>;
-  findPreview: (creatorId: string, mediaId: string, variant?: "full" | "preview") => Promise<string | null>;
+  findPreview: (creatorId: string, mediaId: string, variant?: "full" | "preview" | "clip") => Promise<string | null>;
   fetchBytes: (url: string, range?: string | null) => Promise<MediaBytes | null>;
   log?: (line: string) => void;
 }): Promise<Response> {
@@ -58,7 +58,8 @@ export async function handleVaultMedia(request: Request, deps: {
   const url = new URL(request.url);
   const creatorId = url.searchParams.get("creatorId") ?? "";
   const mediaId = url.searchParams.get("mediaId") ?? "";
-  const variant = url.searchParams.get("variant") === "full" ? "full" : "preview";
+  const rawVariant = url.searchParams.get("variant");
+  const variant = rawVariant === "full" || rawVariant === "clip" ? rawVariant : "preview";
   deps.log?.(mediaLogLine(creatorId, mediaId));
   if (!creatorId || !mediaId) return new Response("Sin datos", { status: 404 });
   if (!creatorAllowed(actor, creatorId)) return new Response("Sin datos", { status: 403 });
@@ -67,7 +68,14 @@ export async function handleVaultMedia(request: Request, deps: {
     if (cached) return thumbResponse(cached);
   }
   const preview = await deps.findPreview(creatorId, mediaId, variant);
-  return streamMedia(preview, request, deps.fetchBytes);
+  const range = url.searchParams.get("part") === "head" ? headRange(request.headers.get("range")) : request.headers.get("range");
+  return streamMedia(preview, range, deps.fetchBytes);
+}
+
+/** Un Range abierto (`bytes=0-`) se queda en el primer megabyte. Así el hover no baja el archivo entero. */
+function headRange(header: string | null): string {
+  if (!header || /^bytes=0-$/i.test(header.trim())) return "bytes=0-1048575";
+  return header;
 }
 
 export async function handleVaultSend(request: Request, deps: {
@@ -136,11 +144,10 @@ function canReadMedia(actor: VaultActor): boolean {
 
 async function streamMedia(
   target: string | null,
-  request: Request,
+  range: string | null,
   fetchBytes: (url: string, range?: string | null) => Promise<MediaBytes | null>,
 ): Promise<Response> {
   if (!target || !mediaHostAllowed(target)) return new Response("Sin datos", { status: 404 });
-  const range = request.headers.get("range");
   const bytes = await fetchBytes(target, range);
   if (!bytes) return new Response("Sin datos", { status: 404 });
   const body = mediaBody(bytes);

@@ -31,6 +31,7 @@ export const Route = createFileRoute("/api/vault-media")({
             findPreview: async (creator, id, wanted) => {
               const urls = await storedVaultMediaUrls(sql, creator, id);
               if (wanted === "full") return urls.full ?? urls.preview ?? urls.thumb;
+              if (wanted === "clip") return urls.clip;
               return urls.preview ?? urls.thumb ?? urls.full;
             },
             fetchBytes: (target, range) => {

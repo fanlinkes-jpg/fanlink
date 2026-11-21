@@ -114,6 +114,15 @@ export async function saveVaultMirror(sql: ReadSql, creatorId: string, items: re
       );
     }
   }
+  if (await hasColumn(sql, "of_vault_item", "clip_url")) {
+    for (const item of items) {
+      if (!item.clipUrl) continue;
+      await sql.query(
+        "update of_vault_item set clip_url = $3 where creator_id = $1 and item_key = $2",
+        [creatorId, item.id, item.clipUrl],
+      );
+    }
+  }
   if (await hasColumn(sql, "of_vault_item", "paid_with_id")) {
     for (const item of items) {
       await sql.query(
@@ -169,17 +178,18 @@ export async function saveVaultPreview(
   if (page) await rememberThumbPage(sql, creatorId, [mediaId], page);
 }
 
-/** Lista y offset de `vault/media` con los que se leyó el medio. Null si la columna aún no está. */
-/** preview, luego thumb, luego el archivo. El cliente no recibe estas URLs. */
+/** preview, luego thumb, luego el archivo o el clip. El cliente no recibe estas URLs. */
 export async function storedVaultMediaUrls(sql: ReadSql, creatorId: string, mediaId: string): Promise<{
   preview: string | null;
   thumb: string | null;
   full: string | null;
+  clip: string | null;
 }> {
   const thumb = await hasColumn(sql, "of_vault_item", "thumb_url");
   const full = await hasColumn(sql, "of_vault_item", "full_url");
-  const rows = await sql.query<{ preview: string | null; thumb_url?: string | null; full_url?: string | null }>(
-    `select preview${thumb ? ", thumb_url" : ""}${full ? ", full_url" : ""}
+  const clip = await hasColumn(sql, "of_vault_item", "clip_url");
+  const rows = await sql.query<{ preview: string | null; thumb_url?: string | null; full_url?: string | null; clip_url?: string | null }>(
+    `select preview${thumb ? ", thumb_url" : ""}${full ? ", full_url" : ""}${clip ? ", clip_url" : ""}
      from of_vault_item where creator_id = $1 and item_key = $2`,
     [creatorId, mediaId],
   );
@@ -188,6 +198,7 @@ export async function storedVaultMediaUrls(sql: ReadSql, creatorId: string, medi
     preview: row?.preview ?? null,
     thumb: row?.thumb_url ?? null,
     full: row?.full_url ?? null,
+    clip: row?.clip_url ?? null,
   };
 }
 
