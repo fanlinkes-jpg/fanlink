@@ -1,7 +1,7 @@
 import { creatorIdsForChats } from "../../../src/lib/access-policy.ts";
 import { emptyVaultQuery, folderAndChildren, searchVaultLists, vaultQueryFromUnknown, type VaultQuery } from "./vault-filter.ts";
 import { itemSaleBlocked } from "./vault-block.ts";
-import { suggestVaultPrice, trailerPackages, type VaultFile, type VaultKind } from "./vault-model.ts";
+import { suggestVaultPrice, trailerPackages, vaultKindOf, type VaultFile, type VaultKind } from "./vault-model.ts";
 import type { ReadSql } from "./store.ts";
 import { fanVaultUses, loadVaultMirror, loadVaultQuery, piecePurchaseCents, saveVaultQuery } from "./vault-store.ts";
 
@@ -48,7 +48,7 @@ export type VaultMirrorResult = {
   chatterId: string;
   restored: boolean;
   notice: string | null;
-  lists: Array<{ id: string; name: string; parentId: string | null }>;
+  lists: Array<{ id: string; name: string; parentId: string | null; photos: number | null; videos: number | null; gifs: number | null; audios: number | null; hasMedia: boolean | null }>;
   items: VaultCard[];
   query: VaultQuery;
   error?: string;
@@ -133,11 +133,20 @@ export async function queryVaultForActor(sql: ReadSql, actor: VaultActor, body: 
     [pack.paidId, { withId: pack.trailerId, label: pack.label }] as const,
   ]));
   const cards = sorted.map((item) => presentCard(item, mirror.folders, sentIds, boughtIds, bestIds, uses, purchases.get(item.id) ?? [], packs.get(item.id) ?? null));
-  const lists = searchVaultLists(mirror.folders, listText).map((folder) => ({
-    id: folder.id,
-    name: folder.name,
-    parentId: folder.parentId,
-  }));
+  const byList = new Map(mirror.lists.map((folder) => [folder.id, folder]));
+  const lists = searchVaultLists(mirror.folders, listText).map((folder) => {
+    const source = byList.get(folder.id);
+    return {
+      id: folder.id,
+      name: folder.name,
+      parentId: folder.parentId,
+      photos: source?.photos ?? null,
+      videos: source?.videos ?? null,
+      gifs: source?.gifs ?? null,
+      audios: source?.audios ?? null,
+      hasMedia: source?.hasMedia ?? null,
+    };
+  });
   return {
     status: 200,
     payload: {
@@ -264,11 +273,15 @@ async function selectVaultItems(
   if (query.minBuyRate != null) {
     where.push(`sent_count is not null and sent_count > 0 and sales_count is not null and sales_count::float / sent_count >= ${add(query.minBuyRate)}`);
   }
+  const hasListIds = await hasListIdColumn(sql);
   if (query.scope === "carpeta" && query.folderId) {
     const ids = [...folderAndChildren(folders, query.folderId)];
     if (ids.length > 0) {
       const slot = add(ids);
-      where.push(`(list_key = any(${slot}::text[]) or folder = any(${slot}::text[]) or list_name = any(${slot}::text[]))`);
+      const members = hasListIds
+        ? ` or exists (select 1 from jsonb_array_elements_text(coalesce(list_ids, '[]'::jsonb)) elem where elem = any(${slot}::text[]))`
+        : "";
+      where.push(`(list_key = any(${slot}::text[]) or folder = any(${slot}::text[]) or list_name = any(${slot}::text[])${members})`);
     }
   }
   if (query.sent !== "cualquiera" || query.bought !== "cualquiera") {
@@ -296,7 +309,7 @@ async function selectVaultItems(
   return rows.map((row) => ({
     id: row.item_key,
     title: row.title ?? "Sin datos",
-    kind: row.kind === "foto" || row.kind === "video" || row.kind === "audio" ? row.kind : null,
+    kind: vaultKindOf(row.kind),
     seconds: row.seconds,
     preview: null,
     folder: row.folder,
@@ -347,6 +360,15 @@ function sqlFold(expr: string): string {
 
 function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, (char) => `\\${char}`);
+}
+
+async function hasListIdColumn(sql: ReadSql): Promise<boolean> {
+  const rows = await sql.query<{ n: number | string }>(
+    `select count(*)::int as n from information_schema.columns
+     where table_schema = 'public' and table_name = 'of_vault_item' and column_name = 'list_ids'`,
+    [],
+  );
+  return Number(rows[0]?.n ?? 0) > 0;
 }
 
 function tagsOf(value: unknown): string[] {

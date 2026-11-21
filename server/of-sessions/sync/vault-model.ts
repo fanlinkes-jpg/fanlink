@@ -1,6 +1,6 @@
 import { textSaleBlocked } from "./vault-block.ts";
 
-export type VaultKind = "foto" | "video" | "audio" | null;
+export type VaultKind = "foto" | "video" | "audio" | "gif" | null;
 
 export type VaultFile = {
   id: string;
@@ -21,9 +21,26 @@ export type VaultFile = {
   fullUrl?: string | null;
   /** Id del vídeo de pago, si el tráiler lo dice. Sin esto no se empareja. */
   paidWithId?: string | null;
+  /** Todas las listas del medio. `listId` es la principal. */
+  listIds?: string[];
 };
 
-export type VaultList = { id: string; name: string };
+export type VaultList = {
+  id: string;
+  name: string;
+  photos?: number | null;
+  videos?: number | null;
+  gifs?: number | null;
+  audios?: number | null;
+  hasMedia?: boolean | null;
+  /** Claves del JSON, solo para el log. No se guardan. */
+  sourceKeys?: string;
+};
+
+export function vaultKindOf(value: string | null | undefined): VaultKind {
+  if (value === "foto" || value === "video" || value === "audio" || value === "gif") return value;
+  return null;
+}
 
 export type FanVaultUse = {
   itemKey: string;
@@ -246,31 +263,32 @@ function parseVaultItem(item: unknown, lists: readonly VaultList[]): VaultFile[]
   if (!id) return [];
   const title = (textOf(row.title ?? row.name ?? row.fileName) ?? "Sin datos").slice(0, 120);
   const type = (textOf(row.type ?? row.kind) ?? "").toLowerCase();
+  const gif = type.includes("gif") || row.gif === true || row.isGif === true;
   const kind: VaultKind = type.includes("video")
     ? "video"
     : type.includes("audio")
       ? "audio"
-      : type.includes("photo") || type.includes("image") || type.includes("foto")
-        ? "foto"
-        : null;
+      : gif
+        ? "gif"
+        : type.includes("photo") || type.includes("image") || type.includes("foto")
+          ? "foto"
+          : null;
   const secondsValue = row.duration ?? row.durationSeconds;
   const seconds = typeof secondsValue === "number" && Number.isFinite(secondsValue) && secondsValue >= 0
     ? Math.round(secondsValue)
     : null;
-  const states = Array.isArray(row.listStates) ? row.listStates : [];
-  const firstList = states.find((entry) => entry && typeof entry === "object") as Record<string, unknown> | undefined;
-  const listId = textOf(firstList?.id);
-  const listName = textOf(firstList?.name) ?? lists.find((list) => list.id === listId)?.name ?? null;
+  const membership = listMembership(row, lists);
   return [{
     id,
     title,
     kind,
     seconds,
     preview: previewOf(row),
-    folder: listName,
+    folder: membership.listName,
     tags: tagsOf(row),
-    listId,
-    listName,
+    listId: membership.listId,
+    listName: membership.listName,
+    listIds: membership.listIds,
     description: textOf(row.description ?? row.caption ?? row.text),
     uploadedAt: textOf(row.uploadedAt ?? row.createdAt),
     priceCents: priceToCents(row),
@@ -300,14 +318,37 @@ function tagsOf(row: Record<string, unknown>): string[] {
 
 function previewOf(row: Record<string, unknown>): string | null {
   const files = nested(row.files);
-  return firstFileUrl(files?.thumb)
-    ?? firstFileUrl(files?.squarePreview)
+  return firstFileUrl(files?.squarePreview)
     ?? firstFileUrl(files?.preview)
-    ?? firstFileUrl(row.thumb)
+    ?? firstFileUrl(files?.thumb)
+    ?? firstFileUrl(row.squarePreview)
     ?? firstFileUrl(row.preview)
+    ?? firstFileUrl(row.thumb)
     ?? firstFileUrl(files?.full)
     ?? firstFileUrl(row.src)
     ?? firstFileUrl(row.previewUrl);
+}
+
+const SYSTEM_LISTS = new Set(["posts", "stories", "messages", "streams", "media"]);
+
+function listMembership(row: Record<string, unknown>, lists: readonly VaultList[]): {
+  listId: string | null;
+  listName: string | null;
+  listIds: string[];
+} {
+  const states = Array.isArray(row.listStates) ? row.listStates : [];
+  const parsed = states.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const list = entry as Record<string, unknown>;
+    const id = textOf(list.id);
+    if (!id) return [];
+    return [{ id, name: textOf(list.name), type: (textOf(list.type) ?? "").toLowerCase() }];
+  });
+  const custom = parsed.find((list) => !SYSTEM_LISTS.has(list.type));
+  const chosen = custom ?? parsed[0];
+  const listId = chosen?.id ?? null;
+  const listName = chosen?.name ?? lists.find((list) => list.id === listId)?.name ?? null;
+  return { listId, listName, listIds: [...new Set(parsed.map((list) => list.id))] };
 }
 
 function vaultLists(payload: unknown): VaultList[] {
@@ -321,8 +362,36 @@ function vaultLists(payload: unknown): VaultList[] {
     const id = textOf(list.id);
     const name = textOf(list.name ?? list.title);
     if (!id || !name) return [];
-    return [{ id, name }];
+    return [{ id, name, ...listCounts(list), sourceKeys: listSourceKeys(list) }];
   });
+}
+
+function listCounts(list: Record<string, unknown>): Pick<VaultList, "photos" | "videos" | "gifs" | "audios" | "hasMedia"> {
+  return {
+    photos: countOrNull(list.photosCount ?? list.photoCount),
+    videos: countOrNull(list.videosCount ?? list.videoCount),
+    gifs: countOrNull(list.gifsCount ?? list.gifCount),
+    audios: countOrNull(list.audiosCount ?? list.audioCount),
+    hasMedia: list.hasMedia === true ? true : list.hasMedia === false ? false : null,
+  };
+}
+
+function listSourceKeys(list: Record<string, unknown>): string {
+  const keys = Object.keys(list).filter((key) => /^[a-z][a-z0-9_]{0,40}$/i.test(key)).slice(0, 12);
+  return keys.length ? keys.join(",") : "ninguna";
+}
+
+/** El medio pedido con `list=<id>` pertenece a esa lista aunque el JSON no traiga listStates. */
+export function stampVaultList(item: VaultFile, listId: string, listName: string | null): VaultFile {
+  if (!listId || listId === "all") return item;
+  const listIds = [...new Set([...(item.listIds ?? []), listId])];
+  return {
+    ...item,
+    listId,
+    listName: listName ?? item.listName,
+    folder: listName ?? item.folder,
+    listIds,
+  };
 }
 
 function vaultList(payload: unknown): unknown[] {

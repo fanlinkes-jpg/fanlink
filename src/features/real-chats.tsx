@@ -252,7 +252,7 @@ export function RealChatsPage() {
   const seenThread = useRef<string | null>(null);
   const [libraryQuery, setLibraryQuery] = useState("");
   const [tagQuery, setTagQuery] = useState("");
-  const [ofVault, setOfVault] = useState<Array<{ id: string; title: string; kind: "foto" | "video" | "audio" | null }>>([]);
+  const [ofVault, setOfVault] = useState<Array<{ id: string; title: string; kind: "foto" | "video" | "audio" | "gif" | null }>>([]);
   const [vaultReload, setVaultReload] = useState(0);
   const [vaultReading, setVaultReading] = useState(false);
   const vaultPage = useRef({ listId: "all", offset: 0, busy: false });
@@ -775,7 +775,7 @@ export function RealChatsPage() {
   async function loadOfVault(listId = "all", offset = 0) {
     setPanel("vault");
     if (!selected) return;
-    if (vaultPage.current.busy) return;
+    if (offset < 0 || vaultPage.current.busy) return;
     vaultPage.current = { listId, offset, busy: true };
     if (offset === 0) setVaultReading(true);
     try {
@@ -783,7 +783,8 @@ export function RealChatsPage() {
       setOfVault(result.items);
       setVaultReload((value) => value + 1);
       setThumbPage({ listId, offset });
-      vaultPage.current = { listId, offset: offset + 40, busy: false };
+      const next = result.hasMore ? result.nextOffset : -1;
+      vaultPage.current = { listId, offset: next > offset ? next : -1, busy: false };
       if (offset === 0 && result.items.length === 0) setError(result.reason ?? "La bóveda de OnlyFans ha llegado vacía.");
     } catch (err) {
       vaultPage.current = { listId, offset, busy: false };
@@ -1746,7 +1747,7 @@ function ComposerPanelBody({
 }: {
   panel: Exclude<ComposerPanel, "guiones" | null>;
   vaultItems: VaultItem[];
-  ofVault: Array<{ id: string; title: string; kind: "foto" | "video" | "audio" | null }>;
+  ofVault: Array<{ id: string; title: string; kind: "foto" | "video" | "audio" | "gif" | null }>;
   vaultReload: number;
   creatorId: string;
   fanKey: string | null;

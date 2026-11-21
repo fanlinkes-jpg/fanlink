@@ -243,14 +243,24 @@ export type SignedVaultRead = {
   retryAfterMs: number;
 };
 
+export type VaultFetchOptions = {
+  /** false: no pide vault/lists. Por defecto se pide solo en offset 0. */
+  includeLists?: boolean;
+  /** false: no pide vault/media. */
+  includeMedia?: boolean;
+  /** Página de vault/lists. El límite sigue siendo 100. */
+  listOffset?: number;
+};
+
 /**
- * Las mismas dos rutas de siempre, una vez cada una. No relee miniaturas.
+ * Una página de `vault/lists` y/o `vault/media`. No relee miniaturas.
  * El estado HTTP sale en el resultado: un 401 no es una lista vacía.
+ * Quien quiera el resto de las páginas llama otra vez con el offset siguiente.
  */
 export async function fetchSignedVault(state: StorageStateFile, deps: {
   fetch: typeof fetch;
   now: () => number;
-}, listId = "all", offset = 0): Promise<SignedVaultRead> {
+}, listId = "all", offset = 0, options?: VaultFetchOptions): Promise<SignedVaultRead> {
   const empty: SignedVaultRead = {
     payloads: [],
     status: null,
@@ -264,9 +274,14 @@ export async function fetchSignedVault(state: StorageStateFile, deps: {
   const rules = await loadSignRules(deps.fetch, deps.now());
   const list = listId.trim().slice(0, 80) || "all";
   const skip = Number.isFinite(offset) && offset > 0 ? Math.min(2_000, Math.floor(offset)) : 0;
+  const listSkip = Number.isFinite(options?.listOffset) && (options?.listOffset ?? 0) > 0
+    ? Math.min(2_000, Math.floor(options?.listOffset ?? 0))
+    : 0;
+  const wantLists = options?.includeLists ?? skip === 0;
+  const wantMedia = options?.includeMedia !== false;
   const paths = [
-    ...(skip === 0 ? ["/api2/v2/vault/lists?view=main&offset=0&limit=100"] : []),
-    `/api2/v2/vault/media?limit=40&offset=${skip}&field=recent&sort=desc&list=${encodeURIComponent(list)}`,
+    ...(wantLists ? [`/api2/v2/vault/lists?view=main&offset=${listSkip}&limit=100`] : []),
+    ...(wantMedia ? [`/api2/v2/vault/media?limit=40&offset=${skip}&field=recent&sort=desc&list=${encodeURIComponent(list)}`] : []),
   ];
   const payloads: unknown[] = [];
   let status: number | null = null;

@@ -1,6 +1,6 @@
 import { BROWSER_FINGERPRINT } from "../sessions/browser-factory.ts";
 import { mediaHostAllowed, nextMediaUrl } from "./history.ts";
-import { getVaultThumb, putVaultThumb, type MediaBytes } from "./media-bytes.ts";
+import { getVaultThumb, mediaHeaderAttempts, noteVaultThumb, putVaultThumb, type MediaBytes } from "./media-bytes.ts";
 import { sessionForApi } from "./of-chat-api.ts";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
 
@@ -90,8 +90,7 @@ export function signedUrlExpired(raw: string, nowMs: number): boolean {
 }
 
 export function logThumbStatus(status: number): void {
-  if (status <= 0) return;
-  console.info(`[fanlink:vault] miniatura status=${status}`);
+  noteVaultThumb(status);
 }
 
 /**
@@ -317,6 +316,20 @@ async function fetchThumb(
   headers: Record<string, string>,
 ): Promise<{ status: number; body: Uint8Array | null; contentType: string }> {
   if (!mediaHostAllowed(target)) return { status: 0, body: null, contentType: "" };
+  let last = { status: 0, body: null as Uint8Array | null, contentType: "" };
+  for (const attempt of mediaHeaderAttempts(headers)) {
+    last = await fetchThumbOnce(fetchImpl, target, attempt);
+    if (last.body) return last;
+    if (last.status !== 403 && last.status !== 410) return last;
+  }
+  return last;
+}
+
+async function fetchThumbOnce(
+  fetchImpl: typeof fetch,
+  target: string,
+  headers: Record<string, string>,
+): Promise<{ status: number; body: Uint8Array | null; contentType: string }> {
   let response: Response;
   try {
     response = await fetchImpl(target, { headers, redirect: "manual", signal: AbortSignal.timeout(8_000) });

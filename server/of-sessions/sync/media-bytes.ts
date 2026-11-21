@@ -19,6 +19,8 @@ export function setVaultThumbClock(clock: () => number): void {
 export function clearVaultThumbs(): void {
   thumbCache.clear();
   thumbBytes = 0;
+  thumbNotes.clear();
+  thumbRecovered.clear();
 }
 
 function thumbKey(creatorId: string, mediaId: string): string {
@@ -116,6 +118,17 @@ export async function readSessionMediaBytes(
   return result.media;
 }
 
+/**
+ * La URL firmada del CDN suele responder 403 si va la cookie de OnlyFans.
+ * Primero se pide sin cookie. Si sigue en 403 o 410, se reintenta con la sesión.
+ */
+export function mediaHeaderAttempts(headers: Record<string, string>): Array<Record<string, string>> {
+  if (!headers.cookie) return [headers];
+  const bare = { ...headers };
+  delete bare.cookie;
+  return [bare, headers];
+}
+
 /** Igual que `readSessionMediaBytes`, pero conserva el status cuando el CDN rechaza la URL. */
 export async function readSessionMediaResult(
   creatorId: string,
@@ -140,16 +153,20 @@ export async function readSessionMediaResult(
     };
     if (cookie) headers.cookie = cookie;
     if (header) headers.range = header;
-    const first = await loadMedia(target, headers, Boolean(header));
-    const media = asMedia(first);
-    if (media) return { status: media.status, media };
-    if (!cookie) return { status: first.status, media: null };
-    delete headers.cookie;
-    const second = await loadMedia(target, headers, Boolean(header));
-    const again = asMedia(second);
-    if (again) return { status: again.status, media: again };
-    const status = first.status === 403 || first.status === 410 ? first.status : second.status || first.status;
-    return { status, media: null };
+    let lastStatus = 0;
+    const attempts = mediaHeaderAttempts(headers);
+    for (let index = 0; index < attempts.length; index += 1) {
+      const loaded = await loadMedia(target, attempts[index] ?? headers, Boolean(header));
+      const media = asMedia(loaded);
+      if (media) {
+        if (index > 0) noteRecovered(creatorId, lastStatus);
+        return { status: media.status, media };
+      }
+      lastStatus = loaded.status;
+      if (lastStatus !== 403 && lastStatus !== 410) break;
+    }
+    if (lastStatus === 403 || lastStatus === 410) noteVaultThumb(lastStatus);
+    return { status: lastStatus, media: null };
   } catch {
     return { status: 0, media: null };
   }
@@ -173,7 +190,6 @@ async function loadMedia(target: string, headers: Record<string, string>, ranged
     }
   }
   if (!response.ok && response.status !== 206) {
-    noteThumb(response.status);
     await response.body?.cancel().catch(() => undefined);
     return { status: response.status };
   }
@@ -192,10 +208,18 @@ async function loadMedia(target: string, headers: Record<string, string>, ranged
   return { status: response.status, body: raw, contentType: type, contentLength: raw.byteLength };
 }
 
-let thumbsNoted = 0;
+const thumbNotes = new Set<string>();
+const thumbRecovered = new Set<string>();
 
-function noteThumb(status: number): void {
-  if (thumbsNoted >= 3) return;
-  thumbsNoted += 1;
+export function noteVaultThumb(status: number): void {
+  const key = String(status);
+  if (thumbNotes.has(key)) return;
+  thumbNotes.add(key);
   console.info(`[fanlink:vault] miniatura status=${status}`);
+}
+
+function noteRecovered(creatorId: string, status: number): void {
+  if (thumbRecovered.has(creatorId)) return;
+  thumbRecovered.add(creatorId);
+  console.info(`[fanlink:vault] miniatura status=${status} reintento=sesion`);
 }

@@ -33,7 +33,7 @@ export const Route = createFileRoute("/api/vault-media")({
                 "select preview, full_url from of_vault_item where creator_id = $1 and item_key = $2",
                 [creator, id],
               );
-              if (wanted === "full") return rows[0]?.full_url ?? null;
+              if (wanted === "full") return rows[0]?.full_url ?? rows[0]?.preview ?? null;
               return rows[0]?.preview ?? null;
             },
             fetchBytes: (target, range) => {

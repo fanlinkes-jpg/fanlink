@@ -42,7 +42,7 @@ export type FanVaultMarks = {
 };
 
 const COUPLES: readonly CoupleTag[] = ["B/G", "G/G", "SOLA", "INDIVIDUAL", "PELICULA"];
-const KINDS: readonly Exclude<VaultKind, null>[] = ["video", "foto", "audio"];
+const KINDS: readonly Exclude<VaultKind, null>[] = ["video", "foto", "audio", "gif"];
 const SORTS: readonly VaultSort[] = ["fecha", "duracion", "ventas", "precio"];
 
 export function emptyVaultQuery(): VaultQuery {
@@ -143,6 +143,7 @@ export function searchVaultMedia(
 function itemInFolders(item: VaultFile, ids: ReadonlySet<string>, folders: readonly VaultFolder[]): boolean {
   const names = new Set(folders.filter((folder) => ids.has(folder.id)).map((folder) => fold(folder.name)));
   if (item.listId && ids.has(item.listId)) return true;
+  if (item.listIds?.some((id) => ids.has(id))) return true;
   const own = [item.folder, item.listName].filter((value): value is string => Boolean(value));
   return own.some((name) => ids.has(name) || names.has(fold(name)));
 }
