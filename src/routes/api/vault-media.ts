@@ -10,7 +10,7 @@ import { fetchSignedVault } from "../../../server/of-sessions/sync/of-chat-api.t
 import { parseVaultBundle } from "../../../server/of-sessions/sync/vault-model.ts";
 import { loadFreshPreview, normalizeVaultOffset, reloadVaultPreview } from "../../../server/of-sessions/sync/vault-thumbs.ts";
 import { openProfileThumbs } from "../../../server/of-sessions/sync/vault-owner.ts";
-import { saveVaultPreview, storedVaultPage } from "../../../server/of-sessions/sync/vault-store.ts";
+import { saveVaultPreview, storedVaultMediaUrls, storedVaultPage } from "../../../server/of-sessions/sync/vault-store.ts";
 
 export const Route = createFileRoute("/api/vault-media")({
   server: {
@@ -29,12 +29,10 @@ export const Route = createFileRoute("/api/vault-media")({
           return handleVaultMedia(request, {
             session: async () => ({ userId: access.userId, role: access.role, perms: access.perms, creatorIds }),
             findPreview: async (creator, id, wanted) => {
-              const rows = await sql.query<{ preview: string | null; full_url: string | null }>(
-                "select preview, full_url from of_vault_item where creator_id = $1 and item_key = $2",
-                [creator, id],
-              );
-              if (wanted === "full") return rows[0]?.full_url ?? null;
-              return rows[0]?.preview ?? null;
+              const urls = await storedVaultMediaUrls(sql, creator, id);
+              if (wanted === "full") return urls.full ?? urls.preview ?? urls.thumb;
+              if (wanted === "clip") return urls.clip;
+              return urls.preview ?? urls.thumb ?? urls.full;
             },
             fetchBytes: (target, range) => {
               if (variant === "full" || range) return readSessionMediaBytes(creatorId, target, range);
@@ -94,7 +92,12 @@ async function reloadPreview(
       const sessions = await getOfSessionManager();
       const account = (await sessions.listAccounts()).find((item) => item.creatorId === creatorId && item.status === "active" && item.hasStorageState);
       if (!account) return [];
-      const read = await fetchSignedVault(await sessions.readStorageState(account.id), { fetch, now: () => Date.now() }, list, skip);
+      const read = await fetchSignedVault(await sessions.readStorageState(account.id), {
+        fetch,
+        now: () => Date.now(),
+        accountId: account.id,
+        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      }, list, skip, { includeLists: false });
       if (read.sessionRejected || read.signatureRejected || read.retryAfterMs > 0) return [];
       return read.payloads.flatMap((payload) => parseVaultBundle(payload).items);
     },

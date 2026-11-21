@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { BrowserContext } from "playwright";
 import { mkdir, mkdtemp, readlink, rm, symlink } from "node:fs/promises";
-import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { isLiveChallengeText, isLiveLoginText, LIVE_CHALLENGE_NOTICE } from "../live/challenge.ts";
@@ -169,7 +168,9 @@ test("el perfil guarda el nombre cf_clearance y no hace falta su valor", async (
   try {
     const folder = path.join(dir, "Default", "Network");
     await mkdir(folder, { recursive: true });
-    const db = new DatabaseSync(path.join(folder, "Cookies"));
+    const sqlite = await import("node:sqlite").catch(() => null) as { DatabaseSync?: new (file: string) => { exec(sql: string): void; prepare(sql: string): { run(...args: string[]): void }; close(): void } } | null;
+    if (!sqlite?.DatabaseSync) return;
+    const db = new sqlite.DatabaseSync(path.join(folder, "Cookies"));
     db.exec("CREATE TABLE cookies (name TEXT, value TEXT)");
     db.prepare("INSERT INTO cookies (name, value) VALUES (?, ?)").run("cf_clearance", "no-se-lee");
     db.close();

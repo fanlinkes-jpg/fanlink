@@ -1,7 +1,7 @@
 import { creatorIdsForChats } from "../../../src/lib/access-policy.ts";
 import { emptyVaultQuery, folderAndChildren, searchVaultLists, vaultQueryFromUnknown, type VaultQuery } from "./vault-filter.ts";
 import { itemSaleBlocked } from "./vault-block.ts";
-import { suggestVaultPrice, trailerPackages, type VaultFile, type VaultKind } from "./vault-model.ts";
+import { suggestVaultPrice, trailerPackages, vaultKindOf, type VaultFile, type VaultKind } from "./vault-model.ts";
 import type { ReadSql } from "./store.ts";
 import { fanVaultUses, loadVaultMirror, loadVaultQuery, piecePurchaseCents, saveVaultQuery } from "./vault-store.ts";
 
@@ -35,7 +35,14 @@ export type VaultCard = {
   offerLabel: string | null;
   buyLabel: string | null;
   dateLabel: string | null;
-  posted: boolean;
+  posted: boolean | null;
+  sent: boolean | null;
+  /** Hay un clip corto guardado. La URL no sale. */
+  hoverClip: boolean;
+  /** Free, el importe o «Sin datos». No es el campo priceCents. */
+  priceLabel: string;
+  listId: string | null;
+  listIds: string[];
   packageLabel: "Tráiler gratis + vídeo de pago" | "Sin datos";
   packageWithId: string | null;
   sentToFan: boolean | null;
@@ -48,7 +55,7 @@ export type VaultMirrorResult = {
   chatterId: string;
   restored: boolean;
   notice: string | null;
-  lists: Array<{ id: string; name: string; parentId: string | null }>;
+  lists: Array<{ id: string; name: string; parentId: string | null; photos: number | null; videos: number | null; gifs: number | null; audios: number | null; hasMedia: boolean | null }>;
   items: VaultCard[];
   query: VaultQuery;
   error?: string;
@@ -133,11 +140,20 @@ export async function queryVaultForActor(sql: ReadSql, actor: VaultActor, body: 
     [pack.paidId, { withId: pack.trailerId, label: pack.label }] as const,
   ]));
   const cards = sorted.map((item) => presentCard(item, mirror.folders, sentIds, boughtIds, bestIds, uses, purchases.get(item.id) ?? [], packs.get(item.id) ?? null));
-  const lists = searchVaultLists(mirror.folders, listText).map((folder) => ({
-    id: folder.id,
-    name: folder.name,
-    parentId: folder.parentId,
-  }));
+  const byList = new Map(mirror.lists.map((folder) => [folder.id, folder]));
+  const lists = searchVaultLists(mirror.folders, listText).map((folder) => {
+    const source = byList.get(folder.id);
+    return {
+      id: folder.id,
+      name: folder.name,
+      parentId: folder.parentId,
+      photos: source?.photos ?? null,
+      videos: source?.videos ?? null,
+      gifs: source?.gifs ?? null,
+      audios: source?.audios ?? null,
+      hasMedia: source?.hasMedia ?? null,
+    };
+  });
   return {
     status: 200,
     payload: {
@@ -201,7 +217,12 @@ export function presentCard(
     offerLabel: vaultOfferLabel(item.priceCents),
     buyLabel: vaultBuyLabel(item.sentCount, salesCount),
     dateLabel: vaultDateLabel(item.uploadedAt),
-    posted: item.tags.includes("Feed"),
+    posted: item.tags.includes("Feed") ? true : item.tags.includes("Feed:no") ? false : null,
+    sent: item.tags.includes("Sent") ? true : item.tags.includes("Sent:no") ? false : null,
+    hoverClip: Boolean(item.clipUrl),
+    priceLabel: item.priceCents == null ? "Sin datos" : item.priceCents <= 0 ? "Free" : (vaultOfferLabel(item.priceCents) ?? "Sin datos"),
+    listId: item.listId,
+    listIds: item.listIds ?? [],
     packageLabel: pack?.label ?? "Sin datos",
     packageWithId: pack?.withId ?? null,
     sentToFan: sentIds.has(item.id) ? true : uses.length === 0 && sentIds.size === 0 ? null : false,
@@ -264,11 +285,16 @@ async function selectVaultItems(
   if (query.minBuyRate != null) {
     where.push(`sent_count is not null and sent_count > 0 and sales_count is not null and sales_count::float / sent_count >= ${add(query.minBuyRate)}`);
   }
+  const hasListIds = await hasListIdColumn(sql);
   if (query.scope === "carpeta" && query.folderId) {
     const ids = [...folderAndChildren(folders, query.folderId)];
+    if (!ids.includes(query.folderId)) ids.push(query.folderId);
     if (ids.length > 0) {
       const slot = add(ids);
-      where.push(`(list_key = any(${slot}::text[]) or folder = any(${slot}::text[]) or list_name = any(${slot}::text[]))`);
+      const members = hasListIds
+        ? ` or exists (select 1 from jsonb_array_elements_text(coalesce(list_ids, '[]'::jsonb)) elem where elem = any(${slot}::text[]))`
+        : "";
+      where.push(`(list_key = any(${slot}::text[])${members})`);
     }
   }
   if (query.sent !== "cualquiera" || query.bought !== "cualquiera") {
@@ -285,24 +311,30 @@ async function selectVaultItems(
     if (query.bought === "si") where.push(fanExists(true));
     if (query.bought === "no") where.push(`not ${fanExists(true)}`);
   }
+  const withListIds = await hasListIdColumn(sql);
+  const withClip = await hasItemColumn(sql, "clip_url");
   const text = `select item_key, title, kind, seconds, preview, folder, tags, list_key, list_name, description, uploaded_at, price_cents, sales_count, sent_count
+            ${withListIds ? ", list_ids" : ""}
+            ${withClip ? ", clip_url" : ""}
     from of_vault_item where ${where.join(" and ")}`;
   const rows = await sql.query<{
     item_key: string; title: string | null; kind: string | null; seconds: number | null; preview: string | null;
     folder: string | null; tags: unknown; list_key: string | null; list_name: string | null;
     description: string | null; uploaded_at: Date | string | null; price_cents: number | null;
-    sales_count: number | null; sent_count: number | null;
+    sales_count: number | null; sent_count: number | null; list_ids?: unknown; clip_url?: string | null;
   }>(text, params);
   return rows.map((row) => ({
     id: row.item_key,
     title: row.title ?? "Sin datos",
-    kind: row.kind === "foto" || row.kind === "video" || row.kind === "audio" ? row.kind : null,
+    kind: vaultKindOf(row.kind),
     seconds: row.seconds,
-    preview: null,
-    folder: row.folder,
+    preview: row.preview,
+    clipUrl: row.clip_url ?? null,
+    folder: row.folder ?? row.list_name,
     tags: tagsOf(row.tags),
     listId: row.list_key,
     listName: row.list_name,
+    listIds: idList(row.list_ids),
     description: row.description,
     uploadedAt: row.uploaded_at == null ? null : row.uploaded_at instanceof Date ? row.uploaded_at.toISOString() : String(row.uploaded_at),
     priceCents: row.price_cents,
@@ -347,6 +379,31 @@ function sqlFold(expr: string): string {
 
 function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, (char) => `\\${char}`);
+}
+
+async function hasListIdColumn(sql: ReadSql): Promise<boolean> {
+  return hasItemColumn(sql, "list_ids");
+}
+
+async function hasItemColumn(sql: ReadSql, column: string): Promise<boolean> {
+  const rows = await sql.query<{ n: number | string }>(
+    `select count(*)::int as n from information_schema.columns
+     where table_schema = 'public' and table_name = 'of_vault_item' and column_name = $1`,
+    [column],
+  );
+  return Number(rows[0]?.n ?? 0) > 0;
+}
+
+function idList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+  if (typeof value === "string") {
+    try {
+      return idList(JSON.parse(value) as unknown);
+    } catch {
+      return [];
+    }
+  }
+  return [];
 }
 
 function tagsOf(value: unknown): string[] {

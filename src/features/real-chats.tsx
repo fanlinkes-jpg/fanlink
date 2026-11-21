@@ -252,7 +252,7 @@ export function RealChatsPage() {
   const seenThread = useRef<string | null>(null);
   const [libraryQuery, setLibraryQuery] = useState("");
   const [tagQuery, setTagQuery] = useState("");
-  const [ofVault, setOfVault] = useState<Array<{ id: string; title: string; kind: "foto" | "video" | "audio" | null }>>([]);
+  const [ofVault, setOfVault] = useState<Array<{ id: string; title: string; kind: "foto" | "video" | "audio" | "gif" | null }>>([]);
   const [vaultReload, setVaultReload] = useState(0);
   const [vaultReading, setVaultReading] = useState(false);
   const vaultPage = useRef({ listId: "all", offset: 0, busy: false });
@@ -775,7 +775,7 @@ export function RealChatsPage() {
   async function loadOfVault(listId = "all", offset = 0) {
     setPanel("vault");
     if (!selected) return;
-    if (vaultPage.current.busy) return;
+    if (offset < 0 || vaultPage.current.busy) return;
     vaultPage.current = { listId, offset, busy: true };
     if (offset === 0) setVaultReading(true);
     try {
@@ -783,7 +783,8 @@ export function RealChatsPage() {
       setOfVault(result.items);
       setVaultReload((value) => value + 1);
       setThumbPage({ listId, offset });
-      vaultPage.current = { listId, offset: offset + 40, busy: false };
+      const step = result.nextOffset > offset ? result.nextOffset : offset + 24;
+      vaultPage.current = { listId, offset: result.hasMore ? step : -1, busy: false };
       if (offset === 0 && result.items.length === 0) setError(result.reason ?? "La bóveda de OnlyFans ha llegado vacía.");
     } catch (err) {
       vaultPage.current = { listId, offset, busy: false };
@@ -1329,8 +1330,38 @@ export function RealChatsPage() {
                   />
                 </div>
               ) : null}
-              {panel === "vault" || panel === "etiqueta" ? (
-                <div className={`absolute inset-x-2 bottom-full z-20 mb-1 flex flex-col overflow-hidden rounded-2xl border border-[#e6e8ee] bg-white shadow-xl ${panel === "vault" ? "h-[min(52vh,560px)]" : "max-h-[min(60vh,32rem)]"}`}>
+              {panel === "vault" ? (
+                <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-[3vmin]">
+                  <div className="flex h-[94vh] w-[94vw] min-h-0 flex-col overflow-hidden rounded-2xl border border-[#e6e8ee] bg-white shadow-xl">
+                    <ComposerPanelBody
+                      panel={panel}
+                      vaultItems={vaultItems}
+                      tagCreators={tagCreators}
+                      tagQuery={tagQuery}
+                      onTagQuery={setTagQuery}
+                      fanTranslation={fanTranslation}
+                      textSize={textSize}
+                      ofVault={ofVault}
+                      vaultReload={vaultReload}
+                      creatorId={selected?.creatorId ?? creatorId}
+                      fanKey={selected?.fanKey ?? null}
+                      onReadVault={() => void loadOfVault()}
+                      onVault={attachVault}
+                      onTag={(handle) => { const name = handle.replace(/^@/, "").trim(); setTagHandle(name || null); insertAtCursor(mentionToken(handle)); setPanel(null); }}
+                      onFormat={formatCommand}
+                      onSize={setTextSize}
+                      onFanTranslation={() => setFanTranslation((value) => !value)}
+                      onEmoji={insertAtCursor}
+                      onClose={() => setPanel(null)}
+                      reading={vaultReading}
+                      thumbPage={thumbPage}
+                      onVaultMore={() => void loadOfVault(vaultPage.current.listId, vaultPage.current.offset)}
+                      onOpenFolder={(listId) => void loadOfVault(listId ?? "all", 0)}
+                    />
+                  </div>
+                </div>
+              ) : panel === "etiqueta" ? (
+                <div className="absolute inset-x-2 bottom-full z-20 mb-1 flex max-h-[min(60vh,32rem)] flex-col overflow-hidden rounded-2xl border border-[#e6e8ee] bg-white shadow-xl">
                   <ComposerPanelBody
                     panel={panel}
                     vaultItems={vaultItems}
@@ -1484,7 +1515,7 @@ export function RealChatsPage() {
                   event.target.value = "";
                 }}
               />
-              <div role="toolbar" aria-label="Herramientas del mensaje" className="mt-2 flex items-center gap-1">
+              <div role="toolbar" aria-label="Herramientas del mensaje" className="relative z-50 mt-2 flex items-center gap-1">
                 <ToolButton label="Add media" title="Add media · Añadir archivo" onClick={() => fileBox.current?.click()}><ImagePlus className="h-6 w-6" /></ToolButton>
                 <ToolButton label="GIF" title="GIF" active={panel === "gif"} onClick={() => toggle("gif")}><span className="text-[13px] font-bold leading-none">GIF</span></ToolButton>
                 <ToolButton label="Add from media vault" title="Add from media vault · Añadir del vault" active={panel === "vault"} onClick={() => { if (panel === "vault") setPanel(null); else void loadOfVault(); }}><FolderOpen className="h-6 w-6" /></ToolButton>
@@ -1746,7 +1777,7 @@ function ComposerPanelBody({
 }: {
   panel: Exclude<ComposerPanel, "guiones" | null>;
   vaultItems: VaultItem[];
-  ofVault: Array<{ id: string; title: string; kind: "foto" | "video" | "audio" | null }>;
+  ofVault: Array<{ id: string; title: string; kind: "foto" | "video" | "audio" | "gif" | null }>;
   vaultReload: number;
   creatorId: string;
   fanKey: string | null;
@@ -1771,7 +1802,7 @@ function ComposerPanelBody({
   switch (panel) {
     case "vault": {
       return (
-        <div role="region" aria-label="Panel Add from media vault" className="flex h-full min-h-0 flex-col">
+        <div role="region" aria-label="Panel Add from media vault" className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {reading ? <p className="px-4 py-2 text-sm text-[#8a96a3]">Leyendo la bóveda de OnlyFans…</p> : null}
           {creatorId && creatorId !== "all" ? (
             <VaultBrowser layout="of" creatorId={creatorId} fanKey={fanKey} reloadToken={vaultReload} thumbPage={thumbPage} onAttach={onVault} onClose={onClose} onMore={onVaultMore} onOpenFolder={onOpenFolder} />
@@ -1790,7 +1821,7 @@ function ComposerPanelBody({
       const needle = tagQuery.trim().toLowerCase();
       const visible = tagCreators.filter((creator) => !needle || creator.name.toLowerCase().includes(needle) || creator.handle.toLowerCase().includes(needle));
       return (
-        <div role="region" aria-label="Panel Tag other creator" className="flex min-h-[28rem] flex-col">
+        <div role="region" aria-label="Panel Tag other creator" className="flex max-h-[min(60vh,32rem)] min-h-0 flex-col">
           <div className="flex items-center gap-2 border-b border-[#eceff3] px-4 py-3">
             <p className="text-sm font-semibold tracking-wide">ETIQUETA A OTROS CREADORES</p>
             <input aria-label="Buscar creadora" value={tagQuery} placeholder="Buscar" onChange={(event) => onTagQuery(event.target.value)} className="ml-auto h-8 w-28 rounded-full border border-[#e6e8ee] px-3 text-xs" />
@@ -1803,7 +1834,7 @@ function ComposerPanelBody({
             <p>Agrega un formulario de publicación o etiqueta a otra persona cuando publiques contenido en el que aparezca.</p>
             <p className="mt-2 text-xs text-[#8a96a3]">El uso de contenido de terceros sin permiso legal constituye una violación de nuestra política de uso aceptable.</p>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="min-h-24 flex-1 overflow-y-auto">
             {/^[A-Za-z0-9._]{2,40}$/.test(tagQuery.replace(/^@/, "").trim()) ? (
               <button type="button" className="block w-full px-4 py-3 text-left text-sm hover:bg-[#f4f7fb]" onClick={() => onTag(tagQuery.replace(/^@/, "").trim())}>
                 Etiquetar @{tagQuery.replace(/^@/, "").trim()} en OnlyFans

@@ -40,7 +40,7 @@ import { historyPerMinute, listPageDone, nextHistoryThread, oldestCursor, pageFi
 import { captureChatListPage, captureOlderMessages } from "../../server/of-sessions/sync/history-scroll.ts";
 import { openWorkPage } from "../../server/of-sessions/sessions/work-page.ts";
 import { type VaultFile } from "../../server/of-sessions/sync/vault-listen.ts";
-import { readChatVaultView as readVaultPage, type VaultReadDeps } from "../../server/of-sessions/sync/vault-read.ts";
+import { readChatVaultView as readVaultPage, type VaultPageResult, type VaultReadDeps } from "../../server/of-sessions/sync/vault-read.ts";
 import { fetchSignedOnlineFans } from "../../server/of-sessions/sync/online-fans.ts";
 import { sessionForApi } from "../../server/of-sessions/sync/of-chat-api.ts";
 import { withAccountApi } from "../../server/of-sessions/sync/api-list-pace.ts";
@@ -1048,7 +1048,7 @@ export async function readChatVaultView(
   userId: string,
   input: { creatorId: string; threadKey: string; listId?: string; offset?: number },
   deps?: Partial<VaultReadDeps>,
-): Promise<{ items: VaultFile[]; reason: string | null }> {
+): Promise<VaultPageResult> {
   const access = deps?.access ?? await accessFor(userId);
   if (access.role !== "owner" && !access.perms.includes("mensajes")) {
     throw new WorkspaceAccessError("No tienes permiso para escribir.");

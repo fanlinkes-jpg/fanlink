@@ -1,6 +1,6 @@
 import { textSaleBlocked } from "./vault-block.ts";
 
-export type VaultKind = "foto" | "video" | "audio" | null;
+export type VaultKind = "foto" | "video" | "audio" | "gif" | null;
 
 export type VaultFile = {
   id: string;
@@ -19,11 +19,36 @@ export type VaultFile = {
   sentCount: number | null;
   /** URL del archivo, no de la miniatura. No sale en el JSON del chatter. */
   fullUrl?: string | null;
+  /** `files.thumb`, si viene aparte del preview. No sale en el JSON del chatter. */
+  thumbUrl?: string | null;
+  /** Rendición corta de `videoSources`, o preview si es un vídeo. No sale en el JSON del chatter. */
+  clipUrl?: string | null;
   /** Id del vídeo de pago, si el tráiler lo dice. Sin esto no se empareja. */
   paidWithId?: string | null;
+  /** Todas las listas del medio. `listId` es la principal. */
+  listIds?: string[];
 };
 
-export type VaultList = { id: string; name: string };
+export type VaultList = {
+  id: string;
+  name: string;
+  photos?: number | null;
+  videos?: number | null;
+  gifs?: number | null;
+  audios?: number | null;
+  hasMedia?: boolean | null;
+  /** `count` suelto, si no hay desglose. */
+  count?: number | null;
+  /** `custom` o el tipo de sistema. No se guarda. */
+  type?: string;
+  /** Claves del JSON, solo para el log. No se guardan. */
+  sourceKeys?: string;
+};
+
+export function vaultKindOf(value: string | null | undefined): VaultKind {
+  if (value === "foto" || value === "video" || value === "audio" || value === "gif") return value;
+  return null;
+}
 
 export type FanVaultUse = {
   itemKey: string;
@@ -67,16 +92,56 @@ export function suggestVaultPrice(input: {
 
 export function parseVaultBundle(payload: unknown): { items: VaultFile[]; lists: VaultList[] } {
   const lists = vaultLists(payload);
+  collectFolders(payload, lists);
+  const all = vaultAllList(payload);
+  if (all && !lists.some((list) => list.id === all.id)) lists.push(all);
   const raw = vaultList(payload);
-  for (const entry of raw) {
-    if (!isFolderRow(entry)) continue;
-    const row = entry as Record<string, unknown>;
-    const id = textOf(row.id);
-    const name = textOf(row.name ?? row.title);
-    if (id && name && !lists.some((list) => list.id === id)) lists.push({ id, name });
-  }
   const items = raw.filter((entry) => !isFolderRow(entry)).flatMap((item) => parseVaultItem(item, lists));
   return { items, lists };
+}
+
+/** `list` de carpetas y `list` de medios comparten la clave. El de carpetas no pagina el otro. */
+export function vaultPayloadKind(payload: unknown): "lists" | "media" | "other" {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return "other";
+  const row = payload as Record<string, unknown>;
+  const list = firstNamedArray(row, ["list", "lists", "folders"]);
+  if (!list) return "other";
+  if (list.length === 0) {
+    const folders = Array.isArray(row.lists) || Array.isArray(row.folders) || "all" in row || "canCreateVaultLists" in row;
+    return folders ? "lists" : "media";
+  }
+  const folders = list.filter((item) => isFolderRow(item)).length;
+  if (folders === list.length) return "lists";
+  return "media";
+}
+
+/** Nombres de claves, nunca valores. Incluye un nivel (`counters.messagesCount`). */
+export function vaultKeyNames(value: unknown): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "ninguna";
+  const row = value as Record<string, unknown>;
+  const own = Object.keys(row).filter(keyName);
+  const keys = [...own];
+  for (const key of own) {
+    const child = row[key];
+    if (!child || typeof child !== "object" || Array.isArray(child)) continue;
+    for (const inner of Object.keys(child).filter(keyName).slice(0, 8)) keys.push(`${key}.${inner}`);
+  }
+  const shown = [...new Set(keys)].slice(0, 24);
+  return shown.length ? shown.join(",") : "ninguna";
+}
+
+function keyName(key: string): boolean {
+  return /^[a-z][a-z0-9_]{0,40}$/i.test(key);
+}
+
+/** Conteos de "Todos los medios". OF los manda en `all`, aparte del array `list`. */
+export function vaultAllList(payload: unknown): VaultList | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const all = (payload as Record<string, unknown>).all;
+  if (!all || typeof all !== "object" || Array.isArray(all)) return null;
+  const counts = listCounts(all as Record<string, unknown>);
+  if (counts.photos == null && counts.videos == null && counts.gifs == null && counts.audios == null) return null;
+  return { id: "all", name: "Todos", ...counts, sourceKeys: vaultKeyNames(all) };
 }
 
 function isFolderRow(item: unknown): boolean {
@@ -246,45 +311,67 @@ function parseVaultItem(item: unknown, lists: readonly VaultList[]): VaultFile[]
   if (!id) return [];
   const title = (textOf(row.title ?? row.name ?? row.fileName) ?? "Sin datos").slice(0, 120);
   const type = (textOf(row.type ?? row.kind) ?? "").toLowerCase();
+  const gif = type.includes("gif") || row.gif === true || row.isGif === true;
   const kind: VaultKind = type.includes("video")
     ? "video"
     : type.includes("audio")
       ? "audio"
-      : type.includes("photo") || type.includes("image") || type.includes("foto")
-        ? "foto"
-        : null;
-  const secondsValue = row.duration ?? row.durationSeconds;
-  const seconds = typeof secondsValue === "number" && Number.isFinite(secondsValue) && secondsValue >= 0
-    ? Math.round(secondsValue)
-    : null;
-  const states = Array.isArray(row.listStates) ? row.listStates : [];
-  const firstList = states.find((entry) => entry && typeof entry === "object") as Record<string, unknown> | undefined;
-  const listId = textOf(firstList?.id);
-  const listName = textOf(firstList?.name) ?? lists.find((list) => list.id === listId)?.name ?? null;
+      : gif
+        ? "gif"
+        : type.includes("photo") || type.includes("image") || type.includes("foto")
+          ? "foto"
+          : null;
+  const seconds = countOrNull(row.duration ?? row.durationSeconds);
+  const membership = listMembership(row, lists);
+  const posted = boolFlag(row, ["hasPosts", "isPosted", "posted"]);
+  const sent = boolFlag(row, ["hasMessages", "isSent"]);
   return [{
     id,
     title,
     kind,
     seconds,
     preview: previewOf(row),
-    folder: listName,
-    tags: tagsOf(row),
-    listId,
-    listName,
+    thumbUrl: thumbOf(row),
+    clipUrl: clipOf(row),
+    folder: membership.listName,
+    tags: tagsOf(row, posted, sent),
+    listId: membership.listId,
+    listName: membership.listName,
+    listIds: membership.listIds,
     description: textOf(row.description ?? row.caption ?? row.text),
     uploadedAt: textOf(row.uploadedAt ?? row.createdAt),
     priceCents: priceToCents(row),
     salesCount: countOrNull(row.salesCount ?? row.purchases),
-    sentCount: countOrNull(row.sentCount ?? row.sent),
+    sentCount: sentCountOf(row),
     fullUrl: fullOf(row),
     paidWithId: textOf(row.paidMediaId ?? row.pairedMediaId ?? row.fullMediaId),
   }];
 }
 
-function tagsOf(row: Record<string, unknown>): string[] {
+function boolFlag(row: Record<string, unknown>, keys: readonly string[]): boolean | null {
+  for (const key of keys) {
+    if (!(key in row) || typeof row[key] !== "boolean") continue;
+    return row[key] === true;
+  }
+  return null;
+}
+
+/** Número de envíos. `buyersCount` y `tipsSumm` son compras, no envíos. */
+function sentCountOf(row: Record<string, unknown>): number | null {
+  const counters = nested(row.counters);
+  for (const key of ["messagesCount", "sentCount", "sendsCount", "messageCount"]) {
+    if (counters && key in counters) return countOrNull(counters[key]);
+    if (key in row) return countOrNull(row[key]);
+  }
+  return null;
+}
+
+function tagsOf(row: Record<string, unknown>, posted: boolean | null, sent: boolean | null): string[] {
   const tags: string[] = [];
-  if (row.hasPosts === true || row.isPosted === true || row.posted === true) tags.push("Feed");
-  if (row.isSent === true || row.sent === true) tags.push("Sent");
+  if (posted === true) tags.push("Feed");
+  if (posted === false) tags.push("Feed:no");
+  if (sent === true) tags.push("Sent");
+  if (sent === false) tags.push("Sent:no");
   if (row.trailer === true || row.isPreview === true || (textOf(row.type) ?? "").toLowerCase().includes("trailer")) tags.push("Tráiler");
   const states = Array.isArray(row.listStates) ? row.listStates : [];
   for (const entry of states) {
@@ -292,22 +379,127 @@ function tagsOf(row: Record<string, unknown>): string[] {
     const list = entry as Record<string, unknown>;
     const name = textOf(list.name);
     const type = (textOf(list.type) ?? "").toLowerCase();
-    if (type === "posts" || name === "Posts") tags.push("Feed");
-    else if (name) tags.push(name);
+    if (name && type !== "posts" && name !== "Posts") tags.push(name);
   }
   return [...new Set(tags)];
 }
 
 function previewOf(row: Record<string, unknown>): string | null {
   const files = nested(row.files);
-  return firstFileUrl(files?.thumb)
-    ?? firstFileUrl(files?.squarePreview)
+  return firstFileUrl(files?.squarePreview)
     ?? firstFileUrl(files?.preview)
-    ?? firstFileUrl(row.thumb)
+    ?? firstFileUrl(row.squarePreview)
     ?? firstFileUrl(row.preview)
+    ?? thumbOf(row)
     ?? firstFileUrl(files?.full)
     ?? firstFileUrl(row.src)
     ?? firstFileUrl(row.previewUrl);
+}
+
+function thumbOf(row: Record<string, unknown>): string | null {
+  const files = nested(row.files);
+  return firstFileUrl(files?.thumb) ?? firstFileUrl(row.thumb);
+}
+
+/** Clip de verdad: la rendición más pequeña de `videoSources`, o preview/squarePreview si el archivo es vídeo. Una jpg no se reproduce. */
+function clipOf(row: Record<string, unknown>): string | null {
+  const sources = nested(row.videoSources);
+  if (sources) {
+    const keys = Object.keys(sources).filter((key) => /^\d+$/.test(key)).sort((left, right) => Number(left) - Number(right));
+    for (const key of keys) {
+      const url = mediaUrl(sources[key]);
+      if (url && isVideoUrl(url)) return url;
+    }
+  }
+  const files = nested(row.files);
+  for (const key of ["preview", "squarePreview"]) {
+    const url = firstFileUrl(files?.[key]) ?? firstFileUrl(row[key]);
+    if (url && isVideoUrl(url)) return url;
+  }
+  return null;
+}
+
+function mediaUrl(value: unknown): string | null {
+  if (typeof value === "string" && /^https?:\/\//.test(value)) return value;
+  return firstFileUrl(value);
+}
+
+function isVideoUrl(url: string): boolean {
+  const path = url.split("?")[0]?.toLowerCase() ?? "";
+  return path.endsWith(".mp4") || path.endsWith(".webm") || path.endsWith(".mov") || path.endsWith(".m4v");
+}
+
+const SYSTEM_LISTS = new Set(["posts", "stories", "messages", "streams", "media"]);
+
+function listMembership(row: Record<string, unknown>, lists: readonly VaultList[]): {
+  listId: string | null;
+  listName: string | null;
+  listIds: string[];
+} {
+  const states = Array.isArray(row.listStates) ? row.listStates : [];
+  const parsed = states.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const list = entry as Record<string, unknown>;
+    const id = textOf(list.id);
+    if (!id) return [];
+    return [{ id, name: textOf(list.name), type: (textOf(list.type) ?? "").toLowerCase() }];
+  });
+  const custom = parsed.find((list) => !SYSTEM_LISTS.has(list.type));
+  const chosen = custom ?? parsed[0];
+  const listId = chosen?.id ?? null;
+  const listName = chosen?.name ?? lists.find((list) => list.id === listId)?.name ?? null;
+  return { listId, listName, listIds: [...new Set(parsed.map((list) => list.id))] };
+}
+
+function collectFolders(payload: unknown, lists: VaultList[]): void {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
+  for (const value of Object.values(payload as Record<string, unknown>)) {
+    if (!Array.isArray(value)) continue;
+    for (const entry of value) {
+      const folder = folderFrom(entry);
+      if (folder) mergeFolder(lists, folder);
+    }
+  }
+}
+
+function mergeFolder(lists: VaultList[], folder: VaultList): void {
+  const index = lists.findIndex((list) => list.id === folder.id);
+  if (index < 0) {
+    lists.push(folder);
+    return;
+  }
+  const prev = lists[index]!;
+  lists[index] = {
+    ...folder,
+    ...prev,
+    name: prev.name || folder.name,
+    photos: prev.photos ?? folder.photos,
+    videos: prev.videos ?? folder.videos,
+    gifs: prev.gifs ?? folder.gifs,
+    audios: prev.audios ?? folder.audios,
+    hasMedia: prev.hasMedia ?? folder.hasMedia,
+    count: prev.count ?? folder.count,
+    type: prev.type ?? folder.type,
+    sourceKeys: [prev.sourceKeys, folder.sourceKeys].filter(Boolean).join(","),
+  };
+}
+
+function folderFrom(entry: unknown): VaultList | null {
+  if (!isFolderRow(entry)) return null;
+  const row = entry as Record<string, unknown>;
+  const id = textOf(row.id);
+  const name = textOf(row.name ?? row.title);
+  if (!id || !name) return null;
+  const counts = listCounts(row);
+  if (counts.hasMedia == null && counts.count != null) counts.hasMedia = counts.count > 0;
+  return { id, name, type: (textOf(row.type) ?? "").toLowerCase() || undefined, ...counts, sourceKeys: vaultKeyNames(row) };
+}
+
+function firstNamedArray(row: Record<string, unknown>, keys: readonly string[]): unknown[] | null {
+  for (const key of keys) {
+    if (Array.isArray(row[key])) return row[key] as unknown[];
+  }
+  return null;
 }
 
 function vaultLists(payload: unknown): VaultList[] {
@@ -316,13 +508,64 @@ function vaultLists(payload: unknown): VaultList[] {
   const raw = row.lists ?? row.folders;
   if (!Array.isArray(raw)) return [];
   return raw.flatMap((item) => {
-    if (!item || typeof item !== "object") return [];
-    const list = item as Record<string, unknown>;
-    const id = textOf(list.id);
-    const name = textOf(list.name ?? list.title);
-    if (!id || !name) return [];
-    return [{ id, name }];
+    const folder = folderFrom(item);
+    return folder ? [folder] : [];
   });
+}
+
+function listCounts(list: Record<string, unknown>): Pick<VaultList, "photos" | "videos" | "gifs" | "audios" | "hasMedia" | "count"> {
+  const bags = countBags(list);
+  return {
+    photos: pickCount(bags, ["photosCount", "photoCount", "photos_count", "photo_count", "photos", "photo"]),
+    videos: pickCount(bags, ["videosCount", "videoCount", "videos_count", "video_count", "videos", "video"]),
+    gifs: pickCount(bags, ["gifsCount", "gifCount", "gifs_count", "gif_count", "gifs", "gif"]),
+    audios: pickCount(bags, ["audiosCount", "audioCount", "audios_count", "audio_count", "audios", "audio"]),
+    hasMedia: pickBool(bags, ["hasMedia", "has_media"]),
+    count: pickCount(bags, ["count", "mediasCount", "mediaCount", "medias_count"]),
+  };
+}
+
+function countBags(list: Record<string, unknown>): Record<string, unknown>[] {
+  const bags = [list];
+  for (const value of Object.values(list)) {
+    const child = nested(value);
+    if (child) bags.push(child);
+  }
+  return bags;
+}
+
+function pickCount(bags: readonly Record<string, unknown>[], keys: readonly string[]): number | null {
+  for (const bag of bags) {
+    for (const key of keys) {
+      if (!(key in bag)) continue;
+      return countOrNull(bag[key]);
+    }
+  }
+  return null;
+}
+
+function pickBool(bags: readonly Record<string, unknown>[], keys: readonly string[]): boolean | null {
+  for (const bag of bags) {
+    for (const key of keys) {
+      if (bag[key] === true) return true;
+      if (bag[key] === false) return false;
+    }
+  }
+  return null;
+}
+
+
+/** El medio pedido con `list=<id>` pertenece a esa lista aunque el JSON no traiga listStates. */
+export function stampVaultList(item: VaultFile, listId: string, listName: string | null): VaultFile {
+  if (!listId || listId === "all") return item;
+  const listIds = [...new Set([...(item.listIds ?? []), listId])];
+  return {
+    ...item,
+    listId,
+    listName: listName ?? item.listName,
+    folder: listName ?? item.folder,
+    listIds,
+  };
 }
 
 function vaultList(payload: unknown): unknown[] {
@@ -376,8 +619,13 @@ function firstFileUrl(value: unknown, depth = 0): string | null {
 }
 
 function countOrNull(value: unknown): number | null {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
-  return Math.round(value);
+  const numeric = typeof value === "number"
+    ? value
+    : typeof value === "string" && value.trim()
+      ? Number(value.trim())
+      : Number.NaN;
+  if (!Number.isFinite(numeric) || numeric < 0) return null;
+  return Math.round(numeric);
 }
 
 function textOf(value: unknown): string | null {

@@ -22,6 +22,8 @@ function httpsAvatar(value: unknown): string | null {
     const url = new URL(clean);
     if (url.username || url.password || url.search || url.hash) return null;
     if (url.protocol !== "https:") return null;
+    const host = url.hostname.toLowerCase();
+    if (host !== "onlyfans.com" && !host.endsWith(".onlyfans.com")) return null;
     return url.toString();
   } catch {
     return null;

@@ -1,24 +1,32 @@
 import { useEffect, useState } from "react";
 import { queryVaultMirror } from "@/lib/of-sessions";
 import { VAULT_THUMB_MISSING, vaultMediaSrc } from "@/lib/chat-media";
+import { VAULT_CARD_FRAME, VAULT_CARD_IMAGE } from "@/lib/vault-card-frame";
+import { vaultFolderLabel } from "@/lib/vault-folder-label";
+import { vaultSentPill, vaultUsageText } from "@/lib/vault-usage";
 import { VAULT_FILTER_DEBOUNCE_MS } from "@/lib/vault-debounce";
 
 type VaultCard = {
   id: string;
   title: string;
-  kind: "foto" | "video" | "audio" | null;
+  kind: "foto" | "video" | "audio" | "gif" | null;
   seconds: number | null;
   folder: string | null;
+  listId?: string | null;
+  listIds?: string[];
   tags: string[];
   salesCount: number | null;
   sentCount?: number | null;
+  sent?: boolean | null;
+  priceLabel?: string | null;
+  posted?: boolean | null;
+  hoverClip?: boolean;
   ventasLabel: string;
   bestSellerLabel: string | null;
   suggestedLabel: string;
   offerLabel?: string | null;
   buyLabel?: string | null;
   dateLabel?: string | null;
-  posted?: boolean;
   packageLabel: string;
   packageWithId: string | null;
   sentToFan: boolean | null;
@@ -27,7 +35,16 @@ type VaultCard = {
   history: Array<{ sentAt: string | null; priceLabel: string; purchasedLabel: string; authorLabel: string }>;
 };
 
-type VaultList = { id: string; name: string; parentId: string | null };
+type VaultList = {
+  id: string;
+  name: string;
+  parentId: string | null;
+  photos?: number | null;
+  videos?: number | null;
+  gifs?: number | null;
+  audios?: number | null;
+  hasMedia?: boolean | null;
+};
 
 type VaultPayload = {
   chatterId?: string;
@@ -89,6 +106,8 @@ export function VaultBrowser({
   const [notice, setNotice] = useState<string | null>("Sin datos");
   const [picked, setPicked] = useState<string[]>([]);
   const [ready, setReady] = useState(false);
+  const [preview, setPreview] = useState<VaultCard | null>(null);
+  const [hoverId, setHoverId] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -133,6 +152,7 @@ export function VaultBrowser({
         if (!alive) return;
         const view = payload as VaultPayload;
         setItems(view.items ?? []);
+        setLibrary((current) => current.length > 0 ? current : (view.items ?? []));
         setLists(view.lists ?? []);
         setNotice(view.notice ?? (view.items && view.items.length > 0 ? null : "Sin datos"));
       }).catch(() => {
@@ -152,8 +172,8 @@ export function VaultBrowser({
   const folderName = lists.find((folder) => folder.id === query.folderId)?.name ?? "Todos los medios";
   if (layout === "of") {
     return (
-      <div className="flex h-full min-h-0 flex-col bg-white text-[#1c2333]">
-        <div className="flex min-h-0 flex-1">
+      <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-white text-[#1c2333]">
+        <div className="flex min-h-0 flex-1 overflow-hidden">
           <aside className="flex w-72 shrink-0 flex-col border-r border-[#eceff3]">
             <div className="flex items-center gap-2 border-b border-[#eceff3] px-4 py-3">
               <p className="text-sm font-semibold tracking-wide">BÓVEDA</p>
@@ -167,25 +187,27 @@ export function VaultBrowser({
                 creatorId={creatorId}
                 listId={thumbPage.listId}
                 offset={thumbPage.offset}
-                items={library}
+                counts={lists.find((folder) => folder.id === "all")}
+                items={library.length > 0 ? library : items}
                 onClick={() => { onOpenFolder?.(null); setQuery({ ...query, folderId: null, scope: "todas" }); }}
               />
-              {lists.map((folder) => (
+              {lists.filter((folder) => folder.id !== "all").map((folder) => (
                 <VaultFolder
                   key={folder.id}
                   name={folder.name}
                   creatorId={creatorId}
                   listId={thumbPage.listId}
                   offset={thumbPage.offset}
+                  counts={folder}
                   active={query.folderId === folder.id}
-                  items={library.filter((item) => item.folder === folder.name || item.folder === folder.id)}
+                  items={folderItems(library.length > 0 ? library : items, folder)}
                   onClick={() => { onOpenFolder?.(folder.id); setQuery({ ...query, folderId: folder.id, scope: "carpeta" }); }}
                 />
               ))}
               {lists.length === 0 ? <p className="px-4 py-3 text-xs text-[#8a96a3]">Sin datos</p> : null}
             </div>
           </aside>
-          <section className="flex min-w-0 flex-1 flex-col">
+          <section className="flex min-h-0 min-w-0 flex-1 flex-col">
             <div className="border-b border-[#eceff3] px-4 py-3">
               <p className="text-sm font-semibold uppercase tracking-wide">{folderName}</p>
             </div>
@@ -209,7 +231,7 @@ export function VaultBrowser({
               ))}
             </div>
             <div
-              className="grid min-h-0 flex-1 grid-cols-4 content-start gap-3 overflow-y-auto px-4 pb-4"
+              className="grid min-h-0 flex-1 content-start gap-3 overflow-y-auto px-4 pb-4 [grid-template-columns:repeat(auto-fill,minmax(104px,1fr))]"
               onScroll={(event) => {
                 const el = event.currentTarget;
                 if (el.scrollTop + el.clientHeight >= el.scrollHeight - 160) onMore?.();
@@ -218,35 +240,58 @@ export function VaultBrowser({
               {items.length === 0 ? <p className="col-span-4 text-sm text-[#8a96a3]">Sin datos</p> : null}
               {items.map((item) => {
                 const selected = picked.includes(item.id);
+                const sentLabel = vaultSentPill(item.sent ?? null, item.sentCount ?? null);
                 return (
                 <button
                   key={item.id}
                   type="button"
                   aria-pressed={selected}
                   disabled={item.blocked || !onAttach}
-                  className={`overflow-hidden rounded-xl bg-white text-left shadow-sm disabled:opacity-50 ${selected ? "ring-2 ring-[#00aff0]" : ""}`}
+                  title={usageOf(item)}
+                  className={`flex w-full flex-col bg-white text-left shadow-sm disabled:opacity-50 ${selected ? "ring-2 ring-[#00aff0]" : ""}`}
+                  onMouseEnter={() => { if (item.kind === "video") setHoverId(item.id); }}
+                  onMouseLeave={() => setHoverId((current) => current === item.id ? null : current)}
                   onClick={() => setPicked((current) => current.includes(item.id) ? current.filter((id) => id !== item.id) : [...current, item.id])}
                 >
-                  <span className="relative block aspect-[3/4] bg-[#f2f3f5]">
-                    <VaultThumb creatorId={creatorId} itemId={item.id} title={item.title} listId={thumbPage.listId} offset={thumbPage.offset} />
-                    <span className={`absolute left-1.5 top-1.5 grid h-5 w-5 place-items-center rounded-full text-[11px] font-semibold ${selected ? "bg-[#00aff0] text-white" : "bg-white/80 text-transparent"}`}>{selected ? picked.indexOf(item.id) + 1 : ""}</span>
-                    {item.offerLabel ? (
-                      <span className="absolute right-1.5 top-1.5 rounded-full bg-[#ff5a7a] px-1.5 py-0.5 text-[10px] font-semibold text-white">{item.offerLabel}</span>
-                    ) : item.posted ? (
-                      <span className="absolute right-1.5 top-1.5 rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white">Publicado</span>
-                    ) : null}
-                    {item.dateLabel ? <span className="absolute bottom-1.5 left-1.5 rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white">{item.dateLabel}</span> : null}
-                    {item.kind === "video" && item.seconds != null ? (
-                      <span className="absolute bottom-1.5 right-1.5 rounded bg-black/70 px-1 py-0.5 text-[10px] text-white">{formatSeconds(item.seconds)}</span>
-                    ) : null}
+                  <span data-vault-card style={VAULT_CARD_FRAME}>
+                    {hoverId === item.id && item.kind === "video" ? (
+                      <video
+                        muted
+                        playsInline
+                        autoPlay
+                        preload={item.hoverClip ? "none" : "metadata"}
+                        aria-label={item.title}
+                        style={VAULT_CARD_IMAGE}
+                        src={item.hoverClip
+                          ? vaultMediaSrc(creatorId, item.id, "clip", thumbPage)
+                          : vaultMediaSrc(creatorId, item.id, "full", { ...thumbPage, part: "head" })}
+                      />
+                    ) : (
+                      <VaultThumb creatorId={creatorId} itemId={item.id} title={item.title} listId={thumbPage.listId} offset={thumbPage.offset} />
+                    )}
+                    <span className={`absolute left-1.5 top-1.5 z-10 grid h-5 w-5 place-items-center rounded-full text-[11px] font-semibold ${selected ? "bg-[#00aff0] text-white" : "bg-white/80 text-transparent"}`}>{selected ? picked.indexOf(item.id) + 1 : ""}</span>
                   </span>
-                  {item.sentCount != null || item.buyLabel || item.salesCount != null ? (
-                    <span className="flex items-center gap-2 px-1.5 py-1 text-[10px] text-[#5c6570]">
-                      {item.sentCount != null ? <span>{item.sentCount} envíos</span> : null}
-                      {item.buyLabel ? <span>{item.buyLabel}</span> : null}
-                      {item.salesCount != null ? <span>{item.salesCount} ventas</span> : null}
-                    </span>
-                  ) : null}
+                  <span className="flex flex-wrap items-center gap-1 px-1 py-1">
+                    {item.posted ? <span className="rounded-full bg-[#1c2333] px-1.5 py-0.5 text-[10px] text-white">Publicado</span> : null}
+                    {item.priceLabel && item.priceLabel !== "Sin datos" ? (
+                      <span className={`rounded-full px-1.5 py-0.5 text-[10px] text-white ${item.priceLabel !== "Free" ? "bg-[#ff5a7a] font-semibold" : "bg-[#1c2333]"}`}>{item.priceLabel}</span>
+                    ) : null}
+                    {sentLabel ? <span className="rounded-full bg-[#1c2333] px-1.5 py-0.5 text-[10px] text-white">{sentLabel}</span> : null}
+                    {item.dateLabel && item.dateLabel !== "Sin datos" ? (
+                      <span className="rounded-full bg-[#1c2333] px-1.5 py-0.5 text-[10px] text-white">{item.dateLabel}</span>
+                    ) : null}
+                    {item.kind === "video" && item.seconds != null ? (
+                      <span className="rounded bg-[#1c2333] px-1 py-0.5 text-[10px] text-white">{formatSeconds(item.seconds)}</span>
+                    ) : null}
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Ver ${item.title}`}
+                      className="rounded-full bg-[#1c2333] px-1.5 py-0.5 text-[10px] text-white"
+                      onClick={(event) => { event.stopPropagation(); setPreview(item); }}
+                      onKeyDown={(event) => { if (event.key === "Enter") { event.stopPropagation(); setPreview(item); } }}
+                    >Ver</span>
+                  </span>
                 </button>
                 );
               })}
@@ -278,6 +323,20 @@ export function VaultBrowser({
             {picked.length === 0 ? "Añadir" : `Añadir ${picked.length}`}
           </button>
         </div>
+        {preview ? (
+          <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-6" role="dialog" aria-label="Vista previa">
+            <button type="button" className="absolute inset-0" aria-label="Cerrar vista previa" onClick={() => setPreview(null)} />
+            <div className="relative z-10 max-h-[80vh] max-w-3xl">
+              {preview.kind === "video" ? (
+                <video controls autoPlay className="max-h-[80vh] max-w-full bg-black" src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} />
+              ) : preview.kind === "audio" ? (
+                <audio controls src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} />
+              ) : (
+                <img alt={preview.title} className="max-h-[80vh] max-w-full object-contain" src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} />
+              )}
+            </div>
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -389,10 +448,26 @@ export function VaultBrowser({
 }
 
 function VaultThumb({ creatorId, itemId, title, listId, offset }: { creatorId: string; itemId: string; title: string; listId: string; offset: number }) {
-  return <VaultStill creatorId={creatorId} mediaId={itemId} title={title} className="absolute inset-0 h-full w-full object-cover" listId={listId} offset={offset} />;
+  return <VaultStill creatorId={creatorId} mediaId={itemId} title={title} className="absolute inset-0" imageStyle={VAULT_CARD_IMAGE} listId={listId} offset={offset} />;
 }
 
-function VaultStill({ creatorId, mediaId, className, title = "", listId, offset }: { creatorId: string; mediaId: string; className: string; title?: string; listId: string; offset: number }) {
+function folderItems(items: readonly VaultCard[], folder: { id: string; name: string }): VaultCard[] {
+  return items.filter((item) => item.listId === folder.id || item.listIds?.includes(folder.id));
+}
+
+function usageOf(item: VaultCard): string {
+  return vaultUsageText({
+    posted: item.posted ?? null,
+    sent: item.sent ?? null,
+    sentCount: item.sentCount ?? null,
+    priceLabel: item.priceLabel ?? null,
+    dateLabel: item.dateLabel ?? null,
+    seconds: item.seconds,
+    kind: item.kind,
+  });
+}
+
+function VaultStill({ creatorId, mediaId, className, title = "", listId, offset, imageStyle }: { creatorId: string; mediaId: string; className: string; title?: string; listId: string; offset: number; imageStyle?: typeof VAULT_CARD_IMAGE }) {
   const [missing, setMissing] = useState(false);
   if (missing) {
     return <span className={`grid place-items-center bg-[#f2f3f5] px-2 text-center text-[11px] text-[#5c6570] ${className}`}>{VAULT_THUMB_MISSING}</span>;
@@ -402,6 +477,7 @@ function VaultStill({ creatorId, mediaId, className, title = "", listId, offset 
       src={vaultMediaSrc(creatorId, mediaId, "preview", { list: listId, offset })}
       alt={title}
       className={className}
+      style={imageStyle}
       onError={() => setMissing(true)}
     />
   );
@@ -414,6 +490,7 @@ function VaultFolder({
   creatorId,
   listId,
   offset,
+  counts,
   onClick,
 }: {
   name: string;
@@ -422,18 +499,32 @@ function VaultFolder({
   creatorId: string;
   listId: string;
   offset: number;
+  counts?: { photos?: number | null; videos?: number | null; gifs?: number | null; audios?: number | null; hasMedia?: boolean | null };
   onClick: () => void;
 }) {
-  const photos = items.filter((item) => item.kind === "foto").length;
-  const videos = items.filter((item) => item.kind === "video").length;
-  const thumb = items.find((item) => item.kind !== "audio");
+  const label = vaultFolderLabel({
+    photos: counts?.photos ?? null,
+    videos: counts?.videos ?? null,
+    gifs: counts?.gifs ?? null,
+    audios: counts?.audios ?? null,
+    hasMedia: counts?.hasMedia ?? null,
+  }, {
+    photos: items.filter((item) => item.kind === "foto").length,
+    videos: items.filter((item) => item.kind === "video").length,
+    gifs: items.filter((item) => item.kind === "gif").length,
+  });
+  const covers = items.filter((item) => item.kind !== "audio").slice(0, 4);
   return (
     <button type="button" onClick={onClick} className={`flex w-full items-center gap-3 px-4 py-3 text-left ${active ? "bg-[#f4f7fb]" : "hover:bg-[#fafbfc]"}`}>
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-semibold">{name}</span>
-        <span className="text-xs text-[#8a96a3]">{items.length === 0 ? "vacío" : `${photos} fotos · ${videos} vídeos`}</span>
+        <span className="block truncate text-xs text-[#8a96a3]">{label}</span>
       </span>
-      {thumb ? <VaultStill creatorId={creatorId} mediaId={thumb.id} className="h-12 w-16 rounded object-cover" listId={listId} offset={offset} /> : null}
+      <span className="flex shrink-0 gap-1">
+        {covers.map((item) => (
+          <VaultStill key={item.id} creatorId={creatorId} mediaId={item.id} className="h-12 w-12 rounded object-cover object-center" listId={listId} offset={offset} />
+        ))}
+      </span>
     </button>
   );
 }

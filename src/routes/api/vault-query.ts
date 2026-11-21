@@ -8,6 +8,7 @@ import { accountCreatorIds } from "../../../server/of-sessions/http/vault-accoun
 import { fetchSignedVault } from "../../../server/of-sessions/sync/of-chat-api.ts";
 import { persistVaultRead } from "../../../server/of-sessions/sync/vault-store.ts";
 import { rememberVaultThumbs } from "../../../server/of-sessions/sync/vault-thumbs.ts";
+import { walkVault } from "../../../server/of-sessions/sync/vault-walk.ts";
 import { openProfileThumbs } from "../../../server/of-sessions/sync/vault-owner.ts";
 
 export const Route = createFileRoute("/api/vault-query")({
@@ -48,11 +49,20 @@ async function refreshVault(sql: Awaited<ReturnType<typeof getSql>>, raw: string
     const account = (await sessions.listAccounts()).find((item) => item.creatorId === creatorId && item.status === "active" && item.hasStorageState);
     if (!account) return;
     const state = await sessions.readStorageState(account.id);
-    const read = await fetchSignedVault(state, { fetch, now: () => Date.now() });
-    console.info(`[fanlink:vault] creator=${creatorId} status=${read.status ?? "sin"}`);
-    if (read.sessionRejected || read.signatureRejected || read.retryAfterMs > 0) return;
-    const saved = await persistVaultRead(sql, creatorId, read.payloads, { listId: "all", offset: 0 });
-    console.info(`[fanlink:vault] api medios=${saved.length} fotos=${saved.filter((item) => item.preview).length}`);
+    const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+    const walked = await walkVault({
+      creatorId,
+      accountId: account.id,
+      state,
+      fetch,
+      now: () => Date.now(),
+      sql,
+      sleep,
+    });
+    console.info(`[fanlink:vault] creator=${creatorId} status=${walked.status ?? "sin"}`);
+    if (walked.sessionRejected || walked.signatureRejected || walked.retryAfterMs > 0) return;
+    const saved = walked.thumbItems.length > 0 ? walked.thumbItems : walked.items;
+    console.info(`[fanlink:vault] api medios=${walked.items.length} fotos=${walked.items.filter((item) => item.preview).length}`);
     if (saved.length === 0) return;
     await rememberVaultThumbs({
       creatorId,
@@ -61,7 +71,7 @@ async function refreshVault(sql: Awaited<ReturnType<typeof getSql>>, raw: string
       fetch,
       now: Date.now(),
       refreshPage: async () => {
-        const again = await fetchSignedVault(state, { fetch, now: () => Date.now() });
+        const again = await fetchSignedVault(state, { fetch, now: () => Date.now(), accountId: account.id, sleep }, "all", 0, { includeLists: false });
         if (again.sessionRejected || again.signatureRejected || again.retryAfterMs > 0) return saved;
         const next = await persistVaultRead(sql, creatorId, again.payloads, { listId: "all", offset: 0 });
         return next.length > 0 ? next : saved;

@@ -14,6 +14,7 @@ import { presentCard } from "../sync/vault-query.ts";
 import type { ReadSql } from "../sync/store.ts";
 import type { SessionManager } from "../sessions/session-manager.ts";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
+import { clearVaultWalkCache } from "../sync/vault-walk.ts";
 import { readChatVaultView } from "../sync/vault-read.ts";
 import { VAULT_THUMB_MISSING, vaultMediaSrc } from "../../../src/lib/chat-media.ts";
 import { createSessionRuntime } from "../runtime.ts";
@@ -35,6 +36,7 @@ const RULES = {
 describe("miniaturas de la bóveda", { concurrency: 1 }, () => {
   test("tras leer la bóveda, /api/vault-media devuelve la imagen y el cliente no ve el CDN", async () => {
     clearVaultThumbs();
+    clearVaultWalkCache();
     const db = new PGlite();
     const cdn: string[] = [];
     let mediaCalls = 0;
@@ -48,7 +50,7 @@ describe("miniaturas de la bóveda", { concurrency: 1 }, () => {
           return Array.from({ length: 45 }, (_, index) => mediaRow(index, thumbUrl(index, future)));
         },
         onCdn: (href, init) => {
-          assert.equal(sessionHeaders(init), true);
+          assert.equal(thumbHeaders(init), true);
           if (href.includes("cloudfront")) return new Response("no", { status: 403 });
           return new Response(jpeg, { status: 200, headers: { "content-type": "image/jpeg" } });
         },
@@ -95,11 +97,13 @@ describe("miniaturas de la bóveda", { concurrency: 1 }, () => {
     } finally {
       await db.close();
       clearVaultThumbs();
+    clearVaultWalkCache();
     }
   });
 
   test("un 403 del CDN refresca vault/media una vez y usa la URL nueva", async () => {
     clearVaultThumbs();
+    clearVaultWalkCache();
     const db = new PGlite();
     const cdn: string[] = [];
     const lines: string[] = [];
@@ -120,7 +124,7 @@ describe("miniaturas de la bóveda", { concurrency: 1 }, () => {
           return [mediaRow(0, url)];
         },
         onCdn: (href, init) => {
-          assert.equal(sessionHeaders(init), true);
+          assert.equal(thumbHeaders(init), true);
           if (href === fresh) return new Response(jpeg, { status: 200, headers: { "content-type": "image/jpeg" } });
           return new Response("caducada", { status: 403 });
         },
@@ -133,7 +137,7 @@ describe("miniaturas de la bóveda", { concurrency: 1 }, () => {
       });
       assert.equal(view.items[0]?.id, "m0");
       assert.equal(mediaCalls, 2);
-      assert.deepEqual(cdn, [stale, fresh]);
+      assert.deepEqual(cdn, [stale, stale, fresh]);
       assert.equal(lines.some((line) => line.includes("miniatura status=403")), true);
       assert.equal(lines.some((line) => line.includes("onlyfans.com/")), false);
       const response = await handleVaultMedia(new Request("http://127.0.0.1/api/vault-media?creatorId=c-thumb&mediaId=m0"), {
@@ -147,11 +151,13 @@ describe("miniaturas de la bóveda", { concurrency: 1 }, () => {
       console.info = original;
       await db.close();
       clearVaultThumbs();
+    clearVaultWalkCache();
     }
   });
 
   test("el segundo 403 no dispara otro vault/media", async () => {
     clearVaultThumbs();
+    clearVaultWalkCache();
     const seen: string[] = [];
     let reloads = 0;
     const stale = thumbUrl(7, Math.floor(Date.now() / 1000) + 3_600);
@@ -174,10 +180,12 @@ describe("miniaturas de la bóveda", { concurrency: 1 }, () => {
     assert.deepEqual(seen, [stale, next]);
     assert.equal(getVaultThumb("c-retry", "m7"), null);
     clearVaultThumbs();
+    clearVaultWalkCache();
   });
 
   test("una URL ya caducada no se pide: se sustituye antes", async () => {
     clearVaultThumbs();
+    clearVaultWalkCache();
     const cdn: string[] = [];
     const stale = "https://cdn2.onlyfans.com/files/vieja/thumb.jpg?Expires=1600000000";
     const fresh = thumbUrl(3, Math.floor(Date.now() / 1000) + 86_400);
@@ -219,20 +227,24 @@ describe("miniaturas de la bóveda", { concurrency: 1 }, () => {
     assert.deepEqual(cdn, [fresh]);
     assert.equal(getVaultThumb("c-exp", "vieja")?.contentType, "image/jpeg");
     clearVaultThumbs();
+    clearVaultWalkCache();
   });
 
   test("la caché aguanta dos páginas y olvida lo que pasa del tope o del TTL", () => {
     clearVaultThumbs();
+    clearVaultWalkCache();
     for (let index = 0; index < 80; index += 1) putVaultThumb("c-cache", `p${index}`, jpeg, "image/jpeg");
     assert.ok(getVaultThumb("c-cache", "p0"));
     assert.ok(getVaultThumb("c-cache", "p79"));
     clearVaultThumbs();
+    clearVaultWalkCache();
     for (let index = 0; index < VAULT_THUMB_CACHE_MAX + 1; index += 1) {
       putVaultThumb("c-cache", `n${index}`, jpeg, "image/jpeg");
     }
     assert.equal(getVaultThumb("c-cache", "n0"), null);
     assert.ok(getVaultThumb("c-cache", `n${VAULT_THUMB_CACHE_MAX}`));
     clearVaultThumbs();
+    clearVaultWalkCache();
     let now = 5_000_000_000;
     setVaultThumbClock(() => now);
     try {
@@ -242,11 +254,13 @@ describe("miniaturas de la bóveda", { concurrency: 1 }, () => {
     } finally {
       setVaultThumbClock(() => Date.now());
       clearVaultThumbs();
+    clearVaultWalkCache();
     }
   });
 
   test("un 403 de la página 2 relee ese offset", async () => {
     clearVaultThumbs();
+    clearVaultWalkCache();
     const seen: string[] = [];
     const future = Math.floor(Date.now() / 1000) + 86_400;
     const stale = thumbUrl(8, future);
@@ -277,7 +291,7 @@ describe("miniaturas de la bóveda", { concurrency: 1 }, () => {
       }),
     });
     assert.equal(media?.contentType, "image/jpeg");
-    assert.equal(seen.some((href) => href.includes("offset=40") && href.includes("list=sets")), true);
+    assert.equal(seen.some((href) => href.includes("offset=40") && href.includes("list_id=sets")), true);
     assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("offset=0")), false);
     const db = new PGlite();
     try {
@@ -289,6 +303,7 @@ describe("miniaturas de la bóveda", { concurrency: 1 }, () => {
     } finally {
       await db.close();
       clearVaultThumbs();
+    clearVaultWalkCache();
     }
   });
 
@@ -329,6 +344,7 @@ describe("miniaturas de la bóveda", { concurrency: 1 }, () => {
 
   test("si la relectura sigue en 403 se pide el perfil una vez y se suelta", async () => {
     clearVaultThumbs();
+    clearVaultWalkCache();
     let opened = 0;
     let released = 0;
     const future = Math.floor(Date.now() / 1000) + 86_400;
@@ -356,10 +372,12 @@ describe("miniaturas de la bóveda", { concurrency: 1 }, () => {
     assert.equal(released, 1);
     assert.equal(media?.contentType, "image/jpeg");
     clearVaultThumbs();
+    clearVaultWalkCache();
   });
 
   test("la caché no pasa del tope de bytes", () => {
     clearVaultThumbs();
+    clearVaultWalkCache();
     putVaultThumb("c-bytes", "grande", new Uint8Array(VAULT_THUMB_CACHE_BYTES), "image/jpeg");
     putVaultThumb("c-bytes", "pequeña", jpeg, "image/jpeg");
     assert.equal(getVaultThumb("c-bytes", "grande"), null);
@@ -368,6 +386,7 @@ describe("miniaturas de la bóveda", { concurrency: 1 }, () => {
     assert.equal(getVaultThumb("c-bytes", "demasiado"), null);
     assert.ok(getVaultThumb("c-bytes", "pequeña"));
     clearVaultThumbs();
+    clearVaultWalkCache();
   });
 
   test("varias miniaturas comparten un solo refresco", async () => {
@@ -384,6 +403,7 @@ describe("miniaturas de la bóveda", { concurrency: 1 }, () => {
 
   test("abrir la bóveda y pedir 40 miniaturas no abre un segundo Chromium", async () => {
     clearVaultThumbs();
+    clearVaultWalkCache();
     const dataDir = await tempDataDir();
     const fixture = await startFixture();
     const events: string[] = [];
@@ -414,6 +434,7 @@ describe("miniaturas de la bóveda", { concurrency: 1 }, () => {
       assert.equal(getVaultThumb("c-browser", "m39")?.contentType, "image/jpeg");
 
       clearVaultThumbs();
+    clearVaultWalkCache();
       let borrows = 0;
       await readChatVaultView({ creatorId: "c-browser", threadKey: "t" }, {
         fetch: pageFetch(40, (index) => thumbUrl(index, future), () => new Response("no", { status: 403 })),
@@ -433,6 +454,7 @@ describe("miniaturas de la bóveda", { concurrency: 1 }, () => {
       assert.equal(launches(), afterLogin + 1);
 
       clearVaultThumbs();
+    clearVaultWalkCache();
       let release: () => void = () => undefined;
       const stopped = new Promise<void>((resolve) => {
         release = resolve;
@@ -472,6 +494,7 @@ describe("miniaturas de la bóveda", { concurrency: 1 }, () => {
       await removeDir(dataDir);
       await db.close();
       clearVaultThumbs();
+    clearVaultWalkCache();
     }
   });
 });
@@ -503,6 +526,11 @@ function mockFetch(input: {
     }
     return new Response("no", { status: 404 });
   };
+}
+
+function thumbHeaders(init?: RequestInit): boolean {
+  const headers = new Headers(init?.headers);
+  return headers.get("referer") === "https://onlyfans.com/" && (headers.get("user-agent") ?? "").includes("Chrome");
 }
 
 function sessionHeaders(init?: RequestInit): boolean {

@@ -16,7 +16,17 @@ export async function tempDataDir(): Promise<string> {
 }
 
 export async function removeDir(dir: string): Promise<void> {
-  await rm(dir, { recursive: true, force: true });
+  let last: unknown;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await rm(dir, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      last = error;
+      await new Promise((resolve) => setTimeout(resolve, 40 * (attempt + 1)));
+    }
+  }
+  throw last;
 }
 
 export function testConfig(

@@ -114,7 +114,7 @@ Un chatter ve las notificaciones de las cuentas que tiene asignadas, y en el ser
 
 Marcar como leída es de cada persona, no de la cuenta: si un chatter la marca, la dueña sigue viéndola nueva. El listado va de 50 en 50, y el recorte por rol se hace en la consulta, antes del límite. Lo que tiene fecha y pasa de 90 días se borra en la siguiente escucha. Un aviso sin fecha cuenta esos 90 días desde la primera vez que se vio. Si el filtro de fechas deja fuera avisos sin fecha, salen aparte con el aviso «Sin fecha».
 
-La clave de un aviso sin id es la fecha, el tipo, el fan y el hilo. No lleva el texto: si OnlyFans lo retoca, no sale un duplicado. Dos avisos distintos con la misma fecha, tipo, fan e hilo se quedan en uno. Sin id y sin fecha no hay clave. Si la clave pasa de 120 caracteres, el resto es un SHA-256 recortado. Esa huella sale de `createHash('sha256')` de Node `>=22.3`; la campana no la calcula. `0036_notification_key_text.sql` reescribe las claves antiguas que sí llevaban el hash y borra el duplicado. Un aviso de agencia o desconocido no pasa después a un tipo que vea el chatter.
+La clave de un aviso sin id es la fecha, el tipo, el fan y el hilo. No lleva el texto: si OnlyFans lo retoca, no sale un duplicado. Dos avisos distintos con la misma fecha, tipo, fan e hilo se quedan en uno. Sin id y sin fecha no hay clave. Si la clave pasa de 120 caracteres, el resto es un SHA-256 recortado. Esa huella sale de `createHash('sha256')` de Node `>=22.13`; la campana no la calcula. `0036_notification_key_text.sql` reescribe las claves antiguas que sí llevaban el hash y borra el duplicado. Un aviso de agencia o desconocido no pasa después a un tipo que vea el chatter.
 
 ### Escucha
 

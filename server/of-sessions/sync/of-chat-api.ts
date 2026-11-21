@@ -3,7 +3,7 @@ import { domainMatches, isCookieUnexpired, type StorageCookie, type StorageState
 import { backoffDelayMs } from "./backoff.ts";
 import { mergeMessages, mergeThreads, parseChatList, parseChatMessages, parsePreviewMessages, type ChatMessage, type ChatThread } from "./chats.ts";
 import { collectFanSpend } from "./fan-spend.ts";
-import { awaitAccountGap, REQUEST_GAP_MS } from "./api-list-pace.ts";
+import { awaitAccountGap, REQUEST_GAP_MS, withAccountApi } from "./api-list-pace.ts";
 import { noteMissingUnread } from "./unread-chats.ts";
 import { usersMeKeepsSession, usersMeVerdict } from "../identity.ts";
 import { loadSignRules, signedUserId, signOnlyfans, type SignRules } from "./of-sign.ts";
@@ -243,14 +243,48 @@ export type SignedVaultRead = {
   retryAfterMs: number;
 };
 
+export type VaultFetchOptions = {
+  /** false: no pide vault/lists. Por defecto se pide solo en offset 0. */
+  includeLists?: boolean;
+  /** false: no pide vault/media. */
+  includeMedia?: boolean;
+  /** Página de vault/lists. El límite es el de la web: 50. */
+  listOffset?: number;
+}
+
+/** La web pide las carpetas de 50 en 50 (`view=main`) y sigue con offset mientras `hasMore`. */
+export const VAULT_LIST_LIMIT = 50;
+/** La web pide los medios de 24 en 24: type=all, field=recent, sort=desc, list_id solo con carpeta. */
+export const VAULT_MEDIA_LIMIT = 24;
+
+export function vaultListsPath(offset: number): string {
+  return `/api2/v2/vault/lists?view=main&offset=${offset}&limit=${VAULT_LIST_LIMIT}`;
+}
+
+export function vaultMediaPath(listId: string, offset: number): string {
+  const params = new URLSearchParams({
+    limit: String(VAULT_MEDIA_LIMIT),
+    offset: String(offset),
+    type: "all",
+    field: "recent",
+    sort: "desc",
+  });
+  if (listId !== "all") params.set("list_id", listId);
+  return `/api2/v2/vault/media?${params.toString()}`;
+};
+
 /**
- * Las mismas dos rutas de siempre, una vez cada una. No relee miniaturas.
+ * Una página de `vault/lists` y/o `vault/media`. No relee miniaturas.
  * El estado HTTP sale en el resultado: un 401 no es una lista vacía.
+ * Quien quiera el resto de las páginas llama otra vez con el offset siguiente.
  */
 export async function fetchSignedVault(state: StorageStateFile, deps: {
   fetch: typeof fetch;
   now: () => number;
-}, listId = "all", offset = 0): Promise<SignedVaultRead> {
+  /** Misma cola que el chat: una petición firmada a la vez y 300 ms entre ellas. */
+  accountId?: string;
+  sleep?: (ms: number) => Promise<void>;
+}, listId = "all", offset = 0, options?: VaultFetchOptions): Promise<SignedVaultRead> {
   const empty: SignedVaultRead = {
     payloads: [],
     status: null,
@@ -264,14 +298,19 @@ export async function fetchSignedVault(state: StorageStateFile, deps: {
   const rules = await loadSignRules(deps.fetch, deps.now());
   const list = listId.trim().slice(0, 80) || "all";
   const skip = Number.isFinite(offset) && offset > 0 ? Math.min(2_000, Math.floor(offset)) : 0;
+  const listSkip = Number.isFinite(options?.listOffset) && (options?.listOffset ?? 0) > 0
+    ? Math.min(2_000, Math.floor(options?.listOffset ?? 0))
+    : 0;
+  const wantLists = options?.includeLists ?? skip === 0;
+  const wantMedia = options?.includeMedia !== false;
   const paths = [
-    ...(skip === 0 ? ["/api2/v2/vault/lists?view=main&offset=0&limit=100"] : []),
-    `/api2/v2/vault/media?limit=40&offset=${skip}&field=recent&sort=desc&list=${encodeURIComponent(list)}`,
+    ...(wantLists ? [vaultListsPath(listSkip)] : []),
+    ...(wantMedia ? [vaultMediaPath(list, skip)] : []),
   ];
   const payloads: unknown[] = [];
   let status: number | null = null;
   for (const path of paths) {
-    const read = await getJson(deps.fetch, path, signedHeaders(rules, path, auth, deps.now()), deps.now());
+    const read = await readVaultPath(deps, () => getJson(deps.fetch, path, signedHeaders(rules, path, auth, deps.now()), deps.now()));
     status = read.status;
     if (read.sessionRejected) {
       return { payloads, status: 401, reason: SESSION_EXPIRED_LABEL, sessionRejected: true, signatureRejected: false, retryAfterMs: 0 };
@@ -286,6 +325,19 @@ export async function fetchSignedVault(state: StorageStateFile, deps: {
     else return { ...empty, status: read.status, reason: read.reason };
   }
   return { ...empty, payloads, status, reason: payloads.length === 0 ? "No se ha podido leer la bóveda." : null };
+}
+
+async function readVaultPath(deps: {
+  accountId?: string;
+  now: () => number;
+  sleep?: (ms: number) => Promise<void>;
+}, load: () => Promise<JsonPage>): Promise<JsonPage> {
+  if (!deps.accountId) return load();
+  const accountId = deps.accountId;
+  return withAccountApi(accountId, async () => {
+    if (deps.sleep) await awaitAccountGap(accountId, deps.now, deps.sleep, REQUEST_GAP_MS);
+    return load();
+  });
 }
 
 /** users/me firmado. Un 200 de invitado no es una sesión válida. No escribe el estado. */
