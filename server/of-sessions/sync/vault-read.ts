@@ -64,6 +64,7 @@ export async function readChatVaultView(
     fetch: deps.fetch,
     now,
     sql: deps.sql,
+    accountId: account.id,
     sleep: deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
   });
   console.info(`[fanlink:vault] creator=${input.creatorId} status=${walked.status ?? "sin"}`);
@@ -105,7 +106,7 @@ async function rememberPageThumbs(
     fetch: deps.fetch,
     now: deps.now(),
     refreshPage: async () => {
-      const again = await fetchSignedVault(state, { fetch: deps.fetch, now: deps.now }, list, offset);
+      const again = await fetchSignedVault(state, { fetch: deps.fetch, now: deps.now, accountId, sleep: deps.sleep }, list, offset);
       if (again.sessionRejected || again.signatureRejected || again.retryAfterMs > 0) return saved;
       const next = await persistVaultRead(deps.sql, creatorId, again.payloads, { listId: list, offset });
       return next.length > 0 ? next : saved;

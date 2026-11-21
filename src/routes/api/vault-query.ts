@@ -49,13 +49,15 @@ async function refreshVault(sql: Awaited<ReturnType<typeof getSql>>, raw: string
     const account = (await sessions.listAccounts()).find((item) => item.creatorId === creatorId && item.status === "active" && item.hasStorageState);
     if (!account) return;
     const state = await sessions.readStorageState(account.id);
+    const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
     const walked = await walkVault({
       creatorId,
+      accountId: account.id,
       state,
       fetch,
       now: () => Date.now(),
       sql,
-      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      sleep,
     });
     console.info(`[fanlink:vault] creator=${creatorId} status=${walked.status ?? "sin"}`);
     if (walked.sessionRejected || walked.signatureRejected || walked.retryAfterMs > 0) return;
@@ -69,7 +71,7 @@ async function refreshVault(sql: Awaited<ReturnType<typeof getSql>>, raw: string
       fetch,
       now: Date.now(),
       refreshPage: async () => {
-        const again = await fetchSignedVault(state, { fetch, now: () => Date.now() });
+        const again = await fetchSignedVault(state, { fetch, now: () => Date.now(), accountId: account.id, sleep }, "all", 0, { includeLists: false });
         if (again.sessionRejected || again.signatureRejected || again.retryAfterMs > 0) return saved;
         const next = await persistVaultRead(sql, creatorId, again.payloads, { listId: "all", offset: 0 });
         return next.length > 0 ? next : saved;

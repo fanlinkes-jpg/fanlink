@@ -3,7 +3,7 @@ import { domainMatches, isCookieUnexpired, type StorageCookie, type StorageState
 import { backoffDelayMs } from "./backoff.ts";
 import { mergeMessages, mergeThreads, parseChatList, parseChatMessages, parsePreviewMessages, type ChatMessage, type ChatThread } from "./chats.ts";
 import { collectFanSpend } from "./fan-spend.ts";
-import { awaitAccountGap, REQUEST_GAP_MS } from "./api-list-pace.ts";
+import { awaitAccountGap, REQUEST_GAP_MS, withAccountApi } from "./api-list-pace.ts";
 import { noteMissingUnread } from "./unread-chats.ts";
 import { usersMeKeepsSession, usersMeVerdict } from "../identity.ts";
 import { loadSignRules, signedUserId, signOnlyfans, type SignRules } from "./of-sign.ts";
@@ -281,6 +281,9 @@ export function vaultMediaPath(listId: string, offset: number): string {
 export async function fetchSignedVault(state: StorageStateFile, deps: {
   fetch: typeof fetch;
   now: () => number;
+  /** Misma cola que el chat: una petición firmada a la vez y 300 ms entre ellas. */
+  accountId?: string;
+  sleep?: (ms: number) => Promise<void>;
 }, listId = "all", offset = 0, options?: VaultFetchOptions): Promise<SignedVaultRead> {
   const empty: SignedVaultRead = {
     payloads: [],
@@ -307,7 +310,7 @@ export async function fetchSignedVault(state: StorageStateFile, deps: {
   const payloads: unknown[] = [];
   let status: number | null = null;
   for (const path of paths) {
-    const read = await getJson(deps.fetch, path, signedHeaders(rules, path, auth, deps.now()), deps.now());
+    const read = await readVaultPath(deps, () => getJson(deps.fetch, path, signedHeaders(rules, path, auth, deps.now()), deps.now()));
     status = read.status;
     if (read.sessionRejected) {
       return { payloads, status: 401, reason: SESSION_EXPIRED_LABEL, sessionRejected: true, signatureRejected: false, retryAfterMs: 0 };
@@ -322,6 +325,19 @@ export async function fetchSignedVault(state: StorageStateFile, deps: {
     else return { ...empty, status: read.status, reason: read.reason };
   }
   return { ...empty, payloads, status, reason: payloads.length === 0 ? "No se ha podido leer la bóveda." : null };
+}
+
+async function readVaultPath(deps: {
+  accountId?: string;
+  now: () => number;
+  sleep?: (ms: number) => Promise<void>;
+}, load: () => Promise<JsonPage>): Promise<JsonPage> {
+  if (!deps.accountId) return load();
+  const accountId = deps.accountId;
+  return withAccountApi(accountId, async () => {
+    if (deps.sleep) await awaitAccountGap(accountId, deps.now, deps.sleep, REQUEST_GAP_MS);
+    return load();
+  });
 }
 
 /** users/me firmado. Un 200 de invitado no es una sesión válida. No escribe el estado. */

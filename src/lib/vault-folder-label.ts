@@ -10,10 +10,10 @@ export type VaultFolderCounts = {
 /** El texto de la carpeta. «vacío» solo si OnlyFans dice que no hay medios. */
 export function vaultFolderLabel(counts: VaultFolderCounts, loaded: { photos: number; videos: number; gifs: number }): string {
   const known = counts.photos != null || counts.videos != null || counts.gifs != null || counts.audios != null;
-  const photos = counts.photos ?? loaded.photos;
-  const videos = counts.videos ?? loaded.videos;
-  const gifs = counts.gifs ?? loaded.gifs;
-  const audios = counts.audios ?? 0;
+  const photos = shownCount(counts.photos, loaded.photos);
+  const videos = shownCount(counts.videos, loaded.videos);
+  const gifs = shownCount(counts.gifs, loaded.gifs);
+  const audios = shownCount(counts.audios, 0);
   const total = photos + videos + gifs + audios;
   if (total > 0) {
     const parts = [`${photos} fotos`, `${videos} vídeos`];
@@ -24,4 +24,10 @@ export function vaultFolderLabel(counts: VaultFolderCounts, loaded: { photos: nu
   if (counts.hasMedia === false) return "vacío";
   if (known && counts.hasMedia !== true) return "vacío";
   return "Sin datos";
+}
+
+/** Un 0 de OnlyFans no esconde medios que el paseo ya guardó. */
+function shownCount(reported: number | null, loaded: number): number {
+  if (reported == null || (reported === 0 && loaded > 0)) return loaded;
+  return reported;
 }

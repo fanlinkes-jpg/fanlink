@@ -15,6 +15,13 @@ test("una lista con contadores no sale vacía aunque aún no se hayan pintado su
   );
 });
 
+test("un photosCount 0 no tapa los medios ya cargados", () => {
+  assert.equal(
+    vaultFolderLabel({ photos: 0, videos: 0, gifs: 0, audios: 0, hasMedia: true }, { photos: 6, videos: 1, gifs: 0 }),
+    "6 fotos · 1 vídeos",
+  );
+});
+
 test("vacío solo cuando OnlyFans dice que la lista no tiene medios", () => {
   assert.equal(
     vaultFolderLabel({ photos: 0, videos: 0, gifs: 0, audios: 0, hasMedia: false }, none),

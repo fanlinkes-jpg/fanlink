@@ -4,6 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { PGlite } from "@electric-sql/pglite";
+import { clearAccountChatPace } from "../sync/api-list-pace.ts";
+import { fetchSignedVault } from "../sync/of-chat-api.ts";
 import { clearSignRulesCache } from "../sync/of-sign.ts";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
 import type { ReadSql } from "../sync/store.ts";
@@ -172,6 +174,83 @@ test("las carpetas en list no cortan los medios y la página siguiente trae las 
     clearSignRulesCache();
     clearVaultWalkCache();
     await db.close();
+  }
+});
+
+test("sin hasMore sigue mientras la página de medios viene llena", async () => {
+  clearSignRulesCache();
+  clearVaultWalkCache();
+  const db = new PGlite();
+  const seen: string[] = [];
+  try {
+    for (const file of ["0037_vault_mirror.sql", "0038_vault_fan_filter.sql", "0040_vault_full_tags.sql", "0042_vault_paid_with.sql", "0044_vault_thumb_page.sql", "0050_vault_list_counts.sql"]) {
+      await db.exec(await readFile(path.join(root, "migrations", file), "utf8"));
+    }
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const href = String(input);
+      seen.push(href);
+      if (href.includes("dynamic-rules")) return Response.json(RULES);
+      if (href.includes("/vault/lists")) {
+        return Response.json({
+          list: [{ id: 30436421, type: "stories", name: "Historias", photosCount: 0, videosCount: 0, gifsCount: 0, audiosCount: 0, hasMedia: false }],
+          hasMore: false,
+        });
+      }
+      const offset = Number(new URL(href).searchParams.get("offset") ?? "0");
+      const size = offset === 0 ? 24 : 3;
+      return Response.json({ list: Array.from({ length: size }, (_, index) => ({ id: offset + index + 1, type: "photo" })) });
+    }) as typeof fetch;
+    const walked = await walkVault({
+      creatorId: "3zk7kbr",
+      state: storedState(),
+      fetch: fetchImpl,
+      now: () => 1_700_000_000_000,
+      sql: asSql(db),
+      sleep: async () => undefined,
+    });
+    assert.equal(walked.items.length, 27);
+    assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("offset=24")), true);
+  } finally {
+    clearSignRulesCache();
+    clearVaultWalkCache();
+    await db.close();
+  }
+});
+
+test("dos lecturas de la misma cuenta esperan el hueco y no salen a la vez", async () => {
+  clearSignRulesCache();
+  clearAccountChatPace();
+  let active = 0;
+  let max = 0;
+  const waits: number[] = [];
+  const fetchImpl = (async (input: RequestInfo | URL) => {
+    const href = String(input);
+    if (href.includes("dynamic-rules")) return Response.json(RULES);
+    active += 1;
+    max = Math.max(max, active);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    active -= 1;
+    return Response.json({ list: [{ id: 1, type: "photo" }], hasMore: false });
+  }) as typeof fetch;
+  const deps = {
+    fetch: fetchImpl,
+    now: () => Date.now(),
+    accountId: "acc-boveda",
+    sleep: async (ms: number) => {
+      waits.push(ms);
+    },
+  };
+  try {
+    await Promise.all([
+      fetchSignedVault(storedState(), deps, "all", 0, { includeLists: false, includeMedia: true }),
+      fetchSignedVault(storedState(), deps, "all", 24, { includeLists: false, includeMedia: true }),
+    ]);
+    assert.equal(max, 1);
+    assert.equal(waits.length > 0, true);
+    assert.equal(waits.every((ms) => ms > 0 && ms <= 300), true);
+  } finally {
+    clearSignRulesCache();
+    clearAccountChatPace();
   }
 });
 

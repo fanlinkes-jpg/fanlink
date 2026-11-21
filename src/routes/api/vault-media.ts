@@ -94,7 +94,12 @@ async function reloadPreview(
       const sessions = await getOfSessionManager();
       const account = (await sessions.listAccounts()).find((item) => item.creatorId === creatorId && item.status === "active" && item.hasStorageState);
       if (!account) return [];
-      const read = await fetchSignedVault(await sessions.readStorageState(account.id), { fetch, now: () => Date.now() }, list, skip);
+      const read = await fetchSignedVault(await sessions.readStorageState(account.id), {
+        fetch,
+        now: () => Date.now(),
+        accountId: account.id,
+        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      }, list, skip, { includeLists: false });
       if (read.sessionRejected || read.signatureRejected || read.retryAfterMs > 0) return [];
       return read.payloads.flatMap((payload) => parseVaultBundle(payload).items);
     },

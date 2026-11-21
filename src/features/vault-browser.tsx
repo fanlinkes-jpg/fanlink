@@ -242,24 +242,26 @@ export function VaultBrowser({
                 >
                   <span data-vault-card className="relative block overflow-hidden bg-[#f2f3f5]" style={VAULT_CARD_FRAME}>
                     <VaultThumb creatorId={creatorId} itemId={item.id} title={item.title} listId={thumbPage.listId} offset={thumbPage.offset} />
-                    <span
-                      role="button"
-                      tabIndex={0}
-                      aria-label={`Ver ${item.title}`}
-                      className="absolute bottom-1.5 left-1.5 rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white"
-                      onClick={(event) => { event.stopPropagation(); setPreview(item); }}
-                      onKeyDown={(event) => { if (event.key === "Enter") { event.stopPropagation(); setPreview(item); } }}
-                    >Ver</span>
                     <span className={`absolute left-1.5 top-1.5 grid h-5 w-5 place-items-center rounded-full text-[11px] font-semibold ${selected ? "bg-[#00aff0] text-white" : "bg-white/80 text-transparent"}`}>{selected ? picked.indexOf(item.id) + 1 : ""}</span>
                     {item.offerLabel ? (
                       <span className="absolute right-1.5 top-1.5 rounded-full bg-[#ff5a7a] px-1.5 py-0.5 text-[10px] font-semibold text-white">{item.offerLabel}</span>
                     ) : item.posted ? (
                       <span className="absolute right-1.5 top-1.5 rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white">Publicado</span>
                     ) : null}
-                    {item.dateLabel ? <span className="absolute bottom-1.5 left-1.5 rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white">{item.dateLabel}</span> : null}
-                    {item.kind === "video" && item.seconds != null ? (
-                      <span className="absolute bottom-1.5 right-1.5 rounded bg-black/70 px-1 py-0.5 text-[10px] text-white">{formatSeconds(item.seconds)}</span>
-                    ) : null}
+                    <span className="absolute inset-x-1.5 bottom-1.5 flex items-center gap-1">
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Ver ${item.title}`}
+                        className="shrink-0 rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white"
+                        onClick={(event) => { event.stopPropagation(); setPreview(item); }}
+                        onKeyDown={(event) => { if (event.key === "Enter") { event.stopPropagation(); setPreview(item); } }}
+                      >Ver</span>
+                      {item.dateLabel ? <span className="min-w-0 truncate rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white">{item.dateLabel}</span> : null}
+                      {item.kind === "video" && item.seconds != null ? (
+                        <span className="ml-auto shrink-0 rounded bg-black/70 px-1 py-0.5 text-[10px] text-white">{formatSeconds(item.seconds)}</span>
+                      ) : null}
+                    </span>
                   </span>
                   {item.sentCount != null || item.buyLabel || item.salesCount != null ? (
                     <span className="flex items-center gap-2 px-1.5 py-1 text-[10px] text-[#5c6570]">

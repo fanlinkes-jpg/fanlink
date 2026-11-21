@@ -1,5 +1,5 @@
 import type { StorageStateFile } from "../sessions/storage-state.ts";
-import { fetchSignedVault } from "./of-chat-api.ts";
+import { fetchSignedVault, VAULT_MEDIA_LIMIT } from "./of-chat-api.ts";
 import type { ReadSql } from "./store.ts";
 import { parseVaultBundle, vaultAllList, vaultKeyNames, vaultPayloadKind, type VaultFile, type VaultList } from "./vault-model.ts";
 import { persistVaultRead } from "./vault-store.ts";
@@ -39,6 +39,8 @@ type WalkInput = {
   now: () => number;
   sql: ReadSql;
   sleep?: (ms: number) => Promise<void>;
+  /** Cola de la cuenta. Sin esto la bóveda no espera al chat. */
+  accountId?: string;
 };
 
 const cache = new Map<string, CacheMark>();
@@ -138,7 +140,7 @@ async function walkOne(
       break;
     }
     budget.left -= 1;
-    const read = await fetchSignedVault(input.state, { fetch: input.fetch, now: input.now }, listId, offset, {
+    const read = await fetchSignedVault(input.state, vaultDeps(input), listId, offset, {
       includeLists: includeLists && pages === 0,
       includeMedia: true,
     });
@@ -167,11 +169,13 @@ async function walkOne(
     }
     const body = mediaBody(read.payloads);
     const count = mediaCount(body);
-    hasMore = explicitHasMore(body);
+    const flagged = explicitHasMore(body);
+    const pageFull = !hasMoreField(body) && count === VAULT_MEDIA_LIMIT;
+    hasMore = flagged || pageFull;
     pages += 1;
-    console.info(`[fanlink:vault] pagina lista=${safe(listId)} offset=${offset} medios=${count} hasMore=${hasMore ? "si" : "no"}`);
-    if (!hasMore && !hasMoreField(body) && count > 0) {
-      console.info(`[fanlink:vault] sin hasMore lista=${safe(listId)} offset=${offset} medios=${count}`);
+    console.info(`[fanlink:vault] pagina lista=${safe(listId)} offset=${offset} medios=${count} hasMore=${hasMoreLabel(body)}`);
+    if (pageFull) {
+      console.info(`[fanlink:vault] sin hasMore lista=${safe(listId)} offset=${offset} medios=${count} sigue=pagina-llena`);
     }
     if (!hasMore) {
       nextOffset = offset;
@@ -223,7 +227,7 @@ async function walkListPages(input: WalkInput, payloads: readonly unknown[], bud
     if (next <= offset) break;
     offset = next;
     budget.left -= 1;
-    const read = await fetchSignedVault(input.state, { fetch: input.fetch, now: input.now }, "all", 0, {
+    const read = await fetchSignedVault(input.state, vaultDeps(input), "all", 0, {
       includeLists: true,
       includeMedia: false,
       listOffset: offset,
@@ -237,6 +241,10 @@ async function walkListPages(input: WalkInput, payloads: readonly unknown[], bud
     if (input.sleep) await input.sleep(VAULT_PAGE_GAP_MS);
   }
   return extra;
+}
+
+function vaultDeps(input: WalkInput): { fetch: typeof fetch; now: () => number; accountId?: string; sleep?: (ms: number) => Promise<void> } {
+  return { fetch: input.fetch, now: input.now, accountId: input.accountId, sleep: input.sleep };
 }
 
 function publicWalk(walk: PageWalk): VaultWalk {
