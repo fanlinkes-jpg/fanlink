@@ -1300,7 +1300,7 @@ function countNumber(value: unknown, depth = 0): number | null {
   if (typeof value === "string" && /^\d+$/.test(value.trim())) return Number(value);
   if (depth >= 1 || !value || typeof value !== "object" || Array.isArray(value)) return null;
   const row = value as Record<string, unknown>;
-  return countNumber(row.unread ?? row.count ?? row.total, depth + 1);
+  return countNumber(row.unread, depth + 1);
 }
 
 function fillGaps(previous: ParsedNotification, incoming: ParsedNotification): ParsedNotification {

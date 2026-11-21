@@ -2181,7 +2181,9 @@ function chatPhase(data: CreatorChatList | null, creatorId: string | null, runni
     return { hasSession: true, loginInProgress: false, status: "ok", reason: null, running };
   }
   return {
-    hasSession: creatorId == null ? accounts.length > 0 && hasSession : Boolean(account?.hasStorageState),
+    hasSession: accounts.length === 1 || creatorId != null
+      ? Boolean(account?.hasStorageState && account?.status === "active")
+      : hasSession,
     loginInProgress,
     status: meta?.status ?? null,
     reason: meta?.reason ?? null,

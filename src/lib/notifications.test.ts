@@ -254,6 +254,7 @@ test("filtra por pestaña, texto y fechas, y cuenta no leídas", () => {
   assert.equal(counts?.tags, null);
   assert.equal(parseNotificationCounts({ counters: { all: 6, tip: 2 } })?.all, 6);
   assert.equal(parseNotificationCounts({ all: { unread: 7 } })?.all, 7);
+  assert.equal(parseNotificationCounts({ all: { count: 9, total: 3 } }), null);
   assert.equal(counts?.onlyfans, 2);
   assert.equal(parseNotificationCounts({ all: 1 })?.purchases, null);
   assert.equal(notificationBellCount({ markOnOnlyfans: true, counts, fanlinkTotal: null, role: "owner" }).count, 4);
