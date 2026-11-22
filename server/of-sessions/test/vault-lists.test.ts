@@ -2178,6 +2178,125 @@ test("el fondo sigue después de la sexta carpeta y no repite las ya leídas", a
   }
 });
 
+test("un 429 de fondo reanuda la carpeta cortada en el mismo offset", async () => {
+  clearSignRulesCache();
+  clearVaultWalkCache();
+  const db = new PGlite();
+  const seen: string[] = [];
+  let cutPage = 0;
+  try {
+    await migrateVault(db);
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const href = String(input);
+      seen.push(href);
+      if (href.includes("dynamic-rules")) return Response.json(RULES);
+      if (isVaultListsIndex(href)) {
+        return Response.json({
+          list: [
+            { id: 88220, type: "custom", name: "Antes", photosCount: 1, videosCount: 0, hasMedia: true },
+            { id: 88221, type: "custom", name: "Cortada", photosCount: 80, videosCount: 0, hasMedia: true },
+            { id: 88222, type: "custom", name: "Despues", photosCount: 1, videosCount: 0, hasMedia: true },
+          ],
+          hasMore: false,
+        });
+      }
+      const url = new URL(href);
+      if (url.pathname.endsWith("/vault/media") && url.searchParams.get("list") === "all") {
+        return Response.json({ list: [{ id: 1, type: "photo" }], hasMore: false });
+      }
+      if (url.pathname.endsWith("/vault/lists/88220/media")) return Response.json({ medias: [{ id: 20, type: "photo" }], hasMore: false });
+      if (url.pathname.endsWith("/vault/lists/88222/media")) return Response.json({ medias: [{ id: 22, type: "photo" }], hasMore: false });
+      if (url.pathname.endsWith("/vault/lists/88221/media")) {
+        const offset = Number(url.searchParams.get("offset") ?? "0");
+        if (offset === 0) {
+          return Response.json({ medias: Array.from({ length: 40 }, (_, index) => ({ id: index + 1, type: "photo" })), hasMore: true });
+        }
+        cutPage += 1;
+        if (cutPage <= 4) return new Response("no", { status: 429, headers: { "retry-after": "1" } });
+        return Response.json({ medias: [{ id: 41, type: "photo" }], hasMore: false });
+      }
+      return Response.json({ list: [], hasMore: false });
+    }) as typeof fetch;
+    const base = {
+      creatorId: "3zk7kbr",
+      state: storedState(),
+      fetch: fetchImpl,
+      now: () => 1_700_000_000_000,
+      sql: asSql(db),
+      sleep: async () => undefined,
+      background: true,
+    };
+    const walked = await walkVault(base);
+    await walked.membersSettled;
+    assert.equal(seen.some((href) => href.includes("/vault/lists/88220/media")), true);
+    assert.equal(seen.some((href) => href.includes("/vault/lists/88221/media") && href.includes("offset=40")), true);
+    assert.equal(seen.some((href) => href.includes("/vault/lists/88222/media")), false);
+    const mark = seen.length;
+    const again = await walkVault(base);
+    await again.membersSettled;
+    const folders = seen.slice(mark).filter((href) => /\/vault\/lists\/\d+\/media/.test(href));
+    assert.equal(folders[0]?.includes("/vault/lists/88221/media"), true);
+    assert.equal(folders[0]?.includes("offset=40"), true);
+    const later = folders.findIndex((href) => href.includes("/vault/lists/88222/media"));
+    assert.equal(later === -1 || later > 0, true);
+  } finally {
+    clearSignRulesCache();
+    clearVaultWalkCache();
+    await db.close();
+  }
+});
+
+test("si cambia el listado el cursor vuelve al principio", async () => {
+  clearSignRulesCache();
+  clearVaultWalkCache();
+  const db = new PGlite();
+  const seen: string[] = [];
+  let ids = [88420, 88421, 88422];
+  try {
+    await migrateVault(db);
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const href = String(input);
+      seen.push(href);
+      if (href.includes("dynamic-rules")) return Response.json(RULES);
+      if (isVaultListsIndex(href)) {
+        return Response.json({
+          list: ids.map((id) => ({ id, type: "custom", name: "Lista", photosCount: 1, videosCount: 0, hasMedia: true })),
+          hasMore: false,
+        });
+      }
+      const url = new URL(href);
+      if (url.pathname.endsWith("/vault/media") && url.searchParams.get("list") === "all") {
+        return Response.json({ list: [{ id: 1, type: "photo" }], hasMore: false });
+      }
+      const folder = Number(url.pathname.match(/\/vault\/lists\/(\d+)\/media$/)?.[1] ?? "0");
+      if (folder) return Response.json({ medias: [{ id: folder, type: "photo" }], hasMore: false });
+      return Response.json({ list: [], hasMore: false });
+    }) as typeof fetch;
+    const base = {
+      creatorId: "3zk7kbr",
+      state: storedState(),
+      fetch: fetchImpl,
+      now: () => 1_700_000_000_000,
+      sql: asSql(db),
+      sleep: async () => undefined,
+      background: true,
+    };
+    const walked = await walkVault(base);
+    await walked.membersSettled;
+    ids = [88430, 88422, 88431];
+    const mark = seen.length;
+    const again = await walkVault(base);
+    await again.membersSettled;
+    const folders = seen.slice(mark).filter((href) => /\/vault\/lists\/\d+\/media/.test(href));
+    assert.equal(folders[0]?.includes("/vault/lists/88430/media"), true);
+    assert.equal(folders.some((href) => href.includes("/vault/lists/88431/media")), true);
+  } finally {
+    clearSignRulesCache();
+    clearVaultWalkCache();
+    await db.close();
+  }
+});
+
 test("abrir una carpeta a mano reutiliza el recorrido de fondo", async () => {
   clearSignRulesCache();
   clearVaultWalkCache();

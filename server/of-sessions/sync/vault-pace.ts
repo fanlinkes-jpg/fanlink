@@ -12,7 +12,14 @@ export const VAULT_FOLDER_BATCH = 6;
 const listDownUntil = new Map<string, number>();
 const folderFlights = new Map<string, Promise<unknown>>();
 const readMarks = new Map<string, "ok" | "fallo" | "parcial">();
-const folderCursor = new Map<string, string>();
+type FolderCursor = {
+  id: string;
+  /** null: la carpeta ya se leyó y la siguiente vuelta empieza en la de después. Un número: hay que retomarla en ese offset. */
+  resumeOffset: number | null;
+  listKey: string;
+};
+
+const folderCursor = new Map<string, FolderCursor>();
 
 export function noteListMediaDown(accountKey: string, now: number): void {
   listDownUntil.set(accountKey, now + LIST_MEDIA_DOWN_MS);
@@ -48,12 +55,23 @@ export function shareFolderRead<T>(creatorId: string, listId: string, run: () =>
   return next;
 }
 
-export function folderCursorOf(creatorId: string): string | null {
-  return folderCursor.get(creatorId) ?? null;
+export function folderCursorState(creatorId: string): FolderCursor | null {
+  const saved = folderCursor.get(creatorId);
+  return saved ? { ...saved } : null;
 }
 
-export function rememberFolderCursor(creatorId: string, listId: string): void {
-  folderCursor.set(creatorId, listId);
+export function forgetFolderCursor(creatorId: string): void {
+  folderCursor.delete(creatorId);
+}
+
+/** La carpeta se leyó entera. La vuelta siguiente sigue por la de después. */
+export function rememberFolderCursor(creatorId: string, listId: string, listKey: string): void {
+  folderCursor.set(creatorId, { id: listId, resumeOffset: null, listKey });
+}
+
+/** Un 429 dejó la carpeta a medias. La vuelta siguiente empieza aquí, en el mismo offset. */
+export function rememberFolderCut(creatorId: string, listId: string, offset: number, listKey: string): void {
+  folderCursor.set(creatorId, { id: listId, resumeOffset: offset, listKey });
 }
 
 export function pauseVaultRate(accountId: string, retryAfterMs: number, now: number): number {

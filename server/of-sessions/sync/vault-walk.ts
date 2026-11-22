@@ -3,7 +3,7 @@ import { VAULT_FOLDER_READ_ERROR } from "../../../src/lib/vault-folder-label.ts"
 import { fetchSignedVault, vaultPageReason, VAULT_MEDIA_LIMIT, type SignedVaultRead } from "./of-chat-api.ts";
 import type { ReadSql } from "./store.ts";
 import { folderMediaCap, mediaStateHits, mergeVaultList, parseVaultBundle, vaultAllList, vaultFolderMark, vaultKeyNames, vaultMediaMatching, vaultPayloadKind, type VaultFile, type VaultList } from "./vault-model.ts";
-import { clearVaultPace, folderCursorOf, listMediaDown, noteListMediaDown, pauseVaultRate, recordFolderRead, rememberFolderCursor, shareFolderRead, VAULT_FOLDER_BATCH, VAULT_FOLDER_GAP_MS } from "./vault-pace.ts";
+import { clearVaultPace, folderCursorState, forgetFolderCursor, listMediaDown, noteListMediaDown, pauseVaultRate, recordFolderRead, rememberFolderCursor, rememberFolderCut, shareFolderRead, VAULT_FOLDER_BATCH, VAULT_FOLDER_GAP_MS } from "./vault-pace.ts";
 import { finishListMembers, listMemberCount, mirroredFolderItems, persistVaultRead, storedFolderCounts } from "./vault-store.ts";
 
 /** Pausa entre páginas. Más lenta que el chat: la bóveda pesa. */
@@ -125,19 +125,41 @@ async function runWalk(input: WalkInput, listId: string, offset: number, singleP
 
 type PageWalk = VaultWalk & { payloads: unknown[]; needsFullMembers: boolean };
 
-function rotateFolders(creatorId: string, folders: readonly VaultList[]): VaultList[] {
-  const last = folderCursorOf(creatorId);
-  if (!last) return [...folders];
-  const at = folders.findIndex((folder) => folder.id === last);
-  if (at < 0) return [...folders];
-  return [...folders.slice(at + 1), ...folders.slice(0, at + 1)];
+function listKeyOf(folders: readonly VaultList[]): string {
+  return folders.map((folder) => folder.id).join("\n");
+}
+
+function rotateFolders(creatorId: string, folders: readonly VaultList[], listKey: string): { ordered: VaultList[]; resumeId: string | null; resumeOffset: number } {
+  const saved = folderCursorState(creatorId);
+  if (!saved || saved.listKey !== listKey) {
+    if (saved) forgetFolderCursor(creatorId);
+    return { ordered: [...folders], resumeId: null, resumeOffset: 0 };
+  }
+  const at = folders.findIndex((folder) => folder.id === saved.id);
+  if (at < 0) {
+    forgetFolderCursor(creatorId);
+    return { ordered: [...folders], resumeId: null, resumeOffset: 0 };
+  }
+  if (saved.resumeOffset != null) {
+    return {
+      ordered: [...folders.slice(at), ...folders.slice(0, at)],
+      resumeId: saved.id,
+      resumeOffset: saved.resumeOffset,
+    };
+  }
+  return {
+    ordered: [...folders.slice(at + 1), ...folders.slice(0, at + 1)],
+    resumeId: null,
+    resumeOffset: 0,
+  };
 }
 
 async function walkFolders(input: WalkInput, folders: readonly VaultList[], budget: { left: number }, main: PageWalk): Promise<void> {
   const pace = input.accountId || input.creatorId;
-  const ordered = input.background ? rotateFolders(input.creatorId, folders) : [...folders];
+  const listKey = listKeyOf(folders);
+  const turned = input.background ? rotateFolders(input.creatorId, folders, listKey) : { ordered: [...folders], resumeId: null, resumeOffset: 0 };
   let readThisBatch = 0;
-  for (const folder of ordered) {
+  for (const folder of turned.ordered) {
     const counted = (folder.photos ?? 0) + (folder.videos ?? 0) + (folder.gifs ?? 0) + (folder.audios ?? 0) > 0;
     if (budget.left <= 0 && !counted) {
       console.info(`[fanlink:vault] corte presupuesto listas=${folders.length}`);
@@ -147,7 +169,7 @@ async function walkFolders(input: WalkInput, folders: readonly VaultList[], budg
     const cachedFolder = fresh(input.creatorId, folder.id, input.now());
     if (cachedFolder && cachedFolder.items.length > 0) {
       console.info(`[fanlink:vault] cache lista=${vaultFolderMark(folder.id)} medios=guardada`);
-      if (input.background) rememberFolderCursor(input.creatorId, folder.id);
+      if (input.background) rememberFolderCursor(input.creatorId, folder.id, listKey);
       continue;
     }
     logList(folder);
@@ -157,17 +179,19 @@ async function walkFolders(input: WalkInput, folders: readonly VaultList[], budg
       console.info(`[fanlink:vault] tanda siguiente lista=${vaultFolderMark(folder.id)}`);
       if (input.sleep) await input.sleep(VAULT_FOLDER_GAP_MS);
     }
-    const child = await walkOne(input, folder.id, 0, false, budget, true, folder.name);
+    const start = folder.id === turned.resumeId ? turned.resumeOffset : 0;
+    const child = await walkOne(input, folder.id, start, false, budget, true, folder.name);
     readThisBatch += 1;
-    if (input.background) rememberFolderCursor(input.creatorId, folder.id);
+    if (child.retryAfterMs > 0) {
+      main.hasMore = true;
+      if (input.background) rememberFolderCut(input.creatorId, folder.id, child.nextOffset, listKey);
+      console.info(`[fanlink:vault] corte ritmo lista=${vaultFolderMark(folder.id)} offset=${child.nextOffset}`);
+      break;
+    }
+    if (input.background) rememberFolderCursor(input.creatorId, folder.id, listKey);
     if (child.hasMore) main.hasMore = true;
     if (child.sessionRejected || child.signatureRejected) {
       main.hasMore = true;
-      break;
-    }
-    if (child.retryAfterMs > 0) {
-      main.hasMore = true;
-      console.info(`[fanlink:vault] corte ritmo lista=${vaultFolderMark(folder.id)} offset=${child.nextOffset}`);
       break;
     }
     if (listMediaDown(pace, input.now()) && input.background) {
