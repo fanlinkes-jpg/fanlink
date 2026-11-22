@@ -7,21 +7,37 @@ import { BROWSER_FINGERPRINT } from "../sessions/browser-factory.ts";
 export const VIDEO_FETCH_TIMEOUT_MS = 20_000;
 
 /**
- * Cada petición de vídeo baja como mucho 2 MiB.
- * Un `bytes=N-` sale como `bytes=N-(N+2MiB-1)`, no como el resto del archivo.
+ * Cada petición de un mp4 progresivo baja como mucho 2 MiB.
+ * Vale para `bytes=N-` y para un rango cerrado: `bytes=0-(total-1)` no baja el archivo.
  */
 export const VIDEO_OPEN_BYTES = 2 * 1024 * 1024;
 
-/** Un `bytes=N-` abierto se queda en 2 MiB. Un rango con fin (DASH) se sirve entero. */
+/** Un fragmento DASH/HLS cerrado puede pasar entero hasta aquí. Por encima se recorta. */
+export const SEGMENT_RANGE_BYTES = 16 * 1024 * 1024;
+
+/** Mp4 progresivo. Abierto o cerrado, la ventana es de 2 MiB desde el inicio pedido. */
 export function boundedVideoRange(range: string | null | undefined): string {
+  return boundedRange(range, VIDEO_OPEN_BYTES, VIDEO_OPEN_BYTES);
+}
+
+/**
+ * Proxy HLS/DASH. Un cerrado de hasta 16 MiB pasa tal cual (init, sidx, fragmento).
+ * Uno mayor se recorta. Un `bytes=N-` abierto sigue en 2 MiB.
+ */
+export function boundedSegmentRange(range: string | null | undefined): string {
+  return boundedRange(range, VIDEO_OPEN_BYTES, SEGMENT_RANGE_BYTES);
+}
+
+function boundedRange(range: string | null | undefined, openCap: number, closedCap: number): string {
   const header = mediaRangeHeader(range ?? null);
-  const cap = VIDEO_OPEN_BYTES;
-  if (!header) return `bytes=0-${cap - 1}`;
+  if (!header) return `bytes=0-${openCap - 1}`;
   const match = /^bytes=(\d+)-(\d*)$/.exec(header);
-  if (!match) return `bytes=0-${cap - 1}`;
+  if (!match) return `bytes=0-${openCap - 1}`;
   const start = Number(match[1]);
-  if (match[2] === "") return `bytes=${start}-${start + cap - 1}`;
-  return header;
+  if (match[2] === "") return `bytes=${start}-${start + openCap - 1}`;
+  const end = Number(match[2]);
+  const capEnd = start + closedCap - 1;
+  return `bytes=${start}-${end <= capEnd ? end : capEnd}`;
 }
 
 /** Dos páginas de la bóveda (40 + 40) y un margen, para no perder la anterior al pasar de página. */

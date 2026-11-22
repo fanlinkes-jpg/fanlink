@@ -610,7 +610,15 @@ function VaultPlayback({ src }: { src: string }) {
         const player = dashjs.MediaPlayer().create();
         hls = player;
         const license = widevineServer(text);
-        if (license) player.setProtectionData({ "com.widevine.alpha": { serverURL: license } });
+        if (license) {
+          player.setProtectionData({
+            "com.widevine.alpha": {
+              serverURL: license,
+              videoRobustness: "SW_SECURE_CRYPTO",
+              audioRobustness: "SW_SECURE_CRYPTO",
+            },
+          });
+        }
         player.updateSettings({ streaming: { buffer: { bufferTimeAtTopQuality: 12, bufferTimeAtTopQualityLongForm: 12 } } });
         let reset = false;
         player.on("error", (event: { error?: { code?: number | string; message?: string } }) => {
@@ -723,7 +731,8 @@ function widevineServer(text: string): string {
   for (const node of doc.getElementsByTagName("*")) {
     if (!(node.getAttribute("schemeIdUri") ?? "").includes("edef8ba9")) continue;
     for (const child of node.getElementsByTagName("*")) {
-      if ((child.localName || "").toLowerCase() !== "laurl") continue;
+      const name = (child.localName || child.tagName || "").toLowerCase();
+      if (name !== "laurl" && !name.endsWith(":laurl")) continue;
       const value = child.textContent?.trim() ?? "";
       if (value.includes("variant=licencia")) return value;
     }
@@ -742,8 +751,6 @@ function hookFairPlay(video: HTMLVideoElement, licenseUrl: string): () => void {
         videoCapabilities: [{ contentType: "application/vnd.apple.mpegurl" }],
       }]);
       const keys = await access.createMediaKeys();
-      const certificate = await fetch(licenseUrl, { headers: { accept: "application/octet-stream" } }).then((response) => response.ok ? response.arrayBuffer() : null).catch(() => null);
-      if (certificate) await keys.setServerCertificate(certificate);
       await video.setMediaKeys(keys);
       const session = keys.createSession();
       session.addEventListener("message", (message) => {
