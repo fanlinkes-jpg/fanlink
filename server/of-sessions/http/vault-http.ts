@@ -16,6 +16,14 @@ export function mediaLogLine(creatorId: string, messageKey: string): string | nu
   return `[fanlink:media] creator=${vaultFolderMark(creatorId)} message=${vaultFolderMark(messageKey)}`;
 }
 
+const playNotes = new Map<string, number>();
+const PLAY_NOTE_MS = 4_000;
+
+/** Un solo `ver` por medio aunque el reproductor repita la petición. */
+export function clearPlayNotes(): void {
+  playNotes.clear();
+}
+
 /** Cada «Ver» o el hover deja una línea antes de leer la sesión. Sin URL ni id.
  * «Ver» registra `ver variant=full`. El hover registra `ver variant=clip`.
  */
@@ -24,7 +32,28 @@ export function noteVaultPlayRequest(request: Request): void {
   const variant = url.searchParams.get("variant");
   if (variant !== "full" && variant !== "clip") return;
   const mediaId = url.searchParams.get("mediaId") ?? "";
+  const key = `${variant}\n${mediaId}`;
+  const now = Date.now();
+  const last = playNotes.get(key) ?? 0;
+  if (now - last < PLAY_NOTE_MS) return;
+  playNotes.set(key, now);
   console.info(`[fanlink:vault] ver variant=${variant} medio=${vaultFolderMark(mediaId)}`);
+}
+
+/** El cliente cerró la petición. No es un 500. */
+export function isClientAbort(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const record = error as { name?: unknown; code?: unknown; message?: unknown; cause?: unknown };
+  const name = typeof record.name === "string" ? record.name : "";
+  const code = typeof record.code === "string" ? record.code : "";
+  const message = typeof record.message === "string" ? record.message : "";
+  if (name === "AbortError" || code === "ECONNRESET" || code === "ABORT_ERR" || message === "aborted") return true;
+  return isClientAbort(record.cause);
+}
+
+export function abortResponse(error: unknown): Response | null {
+  if (!isClientAbort(error)) return null;
+  return new Response(null, { status: 499 });
 }
 
 export async function handleVaultQuery(request: Request, deps: {

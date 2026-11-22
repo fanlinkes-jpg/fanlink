@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import Hls from "hls.js";
 import { queryVaultMirror } from "@/lib/of-sessions";
 import { VAULT_THUMB_MISSING, vaultMediaSrc } from "@/lib/chat-media";
 import { VAULT_CARD_FRAME, VAULT_CARD_IMAGE } from "@/lib/vault-card-frame";
@@ -564,14 +563,14 @@ function VaultPlayback({ src }: { src: string }) {
   useEffect(() => {
     const video = node.current;
     let cancelled = false;
-    let hls: Hls | null = null;
+    let hls: { destroy: () => void } | null = null;
     setState("carga");
     setNote("");
     setOpenVault(false);
     setReady(false);
     if (!src || !video) return;
     const controller = new AbortController();
-    const handle = setTimeout(() => controller.abort(), 8_000);
+    let blobUrl: string | null = null;
     void fetch(src, {
       signal: controller.signal,
       headers: { Range: "bytes=0-1" },
@@ -586,27 +585,31 @@ function VaultPlayback({ src }: { src: string }) {
         setState("error");
         return;
       }
-      await response.body?.cancel().catch(() => undefined);
-      if (cancelled) return;
-      clearTimeout(handle);
       if (type.includes("mpegurl")) {
+        const text = await response.text();
+        if (cancelled) return;
         if (video.canPlayType("application/vnd.apple.mpegurl")) {
           video.src = src;
           setReady(true);
           return;
         }
+        // hls.js solo entra si el navegador no reproduce HLS nativo.
+        const { default: Hls } = await import("hls.js");
+        if (cancelled) return;
         if (!Hls.isSupported()) {
           setNote("No se ha podido cargar el vídeo");
           setState("error");
           return;
         }
-        hls = new Hls({ maxBufferLength: 10, maxMaxBufferLength: 20 });
-        hls.loadSource(src);
-        hls.attachMedia(video);
-        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        blobUrl = URL.createObjectURL(new Blob([text], { type: "application/vnd.apple.mpegurl" }));
+        const player = new Hls({ emeEnabled: true, maxBufferLength: 10, maxMaxBufferLength: 20 });
+        hls = player;
+        player.loadSource(blobUrl);
+        player.attachMedia(video);
+        player.on(Hls.Events.MANIFEST_PARSED, () => {
           if (!cancelled) setReady(true);
         });
-        hls.on(Hls.Events.ERROR, (_event, data) => {
+        player.on(Hls.Events.ERROR, (_event, data) => {
           if (!data.fatal || cancelled) return;
           setNote("No se ha podido cargar el vídeo");
           setOpenVault(false);
@@ -614,6 +617,8 @@ function VaultPlayback({ src }: { src: string }) {
         });
         return;
       }
+      await response.body?.cancel().catch(() => undefined);
+      if (cancelled) return;
       if (response.status !== 200 && response.status !== 206) {
         setNote("No se ha podido cargar el vídeo");
         setState("error");
@@ -621,17 +626,16 @@ function VaultPlayback({ src }: { src: string }) {
       }
       video.src = src;
       setReady(true);
-    }).catch(() => {
-      if (!cancelled) {
-        setNote("No se ha podido cargar el vídeo");
-        setState("error");
-      }
+    }).catch((error: unknown) => {
+      if (cancelled || (error instanceof DOMException && error.name === "AbortError")) return;
+      setNote("No se ha podido cargar el vídeo");
+      setState("error");
     });
     return () => {
       cancelled = true;
-      clearTimeout(handle);
       controller.abort();
       hls?.destroy();
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
       video.pause();
       video.removeAttribute("src");
       video.load();

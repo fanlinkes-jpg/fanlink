@@ -471,13 +471,23 @@ export function choosePlayableVideo(row: Record<string, unknown>): { name: strin
   return null;
 }
 
+function drmHostAllowed(value: string): boolean {
+  if (mediaHostAllowed(value)) return true;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname.toLowerCase().endsWith(".cloudfront.net");
+  } catch {
+    return false;
+  }
+}
+
 /** El manifiesto HLS/DASH, si el detalle no trae mp4. No incluye la firma. */
 export function drmManifestUrl(row: Record<string, unknown>): string | null {
   const manifest = nested(nested(nested(row.files)?.drm)?.manifest);
   if (!manifest) return null;
   for (const key of ["hls", "dash"] as const) {
     const value = textOf(manifest[key]);
-    if (value && mediaHostAllowed(value)) return value;
+    if (value && drmHostAllowed(value)) return value;
   }
   return null;
 }

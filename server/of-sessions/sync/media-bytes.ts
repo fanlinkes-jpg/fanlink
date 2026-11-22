@@ -7,22 +7,22 @@ import { BROWSER_FINGERPRINT } from "../sessions/browser-factory.ts";
 export const VIDEO_FETCH_TIMEOUT_MS = 20_000;
 
 /**
- * Primer trozo de «Ver». 2 MiB son unos 5–10 s de un vídeo normal
- * y se quedan por debajo de 20 s en uno pesado. No es el archivo entero.
+ * Cada petición de vídeo baja como mucho 2 MiB.
+ * Un `bytes=N-` sale como `bytes=N-(N+2MiB-1)`, no como el resto del archivo.
  */
 export const VIDEO_OPEN_BYTES = 2 * 1024 * 1024;
 
-/** Al abrir, el rango lleva fin. Un salto (`bytes=N-`, N>0) se deja igual. */
+/** Acota cualquier Range a una ventana de 2 MiB a partir de su inicio. */
 export function boundedVideoRange(range: string | null | undefined): string {
   const header = mediaRangeHeader(range ?? null);
-  const cap = VIDEO_OPEN_BYTES - 1;
-  if (!header) return `bytes=0-${cap}`;
+  const cap = VIDEO_OPEN_BYTES;
+  if (!header) return `bytes=0-${cap - 1}`;
   const match = /^bytes=(\d+)-(\d*)$/.exec(header);
-  if (!match) return `bytes=0-${cap}`;
+  if (!match) return `bytes=0-${cap - 1}`;
   const start = Number(match[1]);
-  if (start > 0) return header;
   const end = match[2] === "" ? null : Number(match[2]);
-  if (end == null || end > cap) return `bytes=0-${cap}`;
+  const maxEnd = start + cap - 1;
+  if (end == null || end > maxEnd) return `bytes=${start}-${maxEnd}`;
   return header;
 }
 

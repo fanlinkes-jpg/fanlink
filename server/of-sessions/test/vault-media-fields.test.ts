@@ -4,11 +4,11 @@ import path from "node:path";
 import test from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { browserVideoType, choosePlayableVideo, drmManifestUrl, parseVaultBundle, resolveDetailPlayback, stampVaultList, vaultDetailRow, videoContainer, videoDetailHold, videoDrmLine, videoFlagLine, videoFormatHold, videoHoldPayload, videoHoldText, videoShapeLine } from "../sync/vault-model.ts";
-import { hlsMediaResponse, hlsSegmentType, playVaultHlsDetail, readBoundedPlaylist } from "../sync/vault-hls.ts";
+import { forwardDrmLicense, hlsMediaResponse, hlsSegmentType, playVaultHlsDetail, readBoundedPlaylist } from "../sync/vault-hls.ts";
 import { fetchSignedMediaDetail, vaultMediaDetailPath } from "../sync/of-chat-api.ts";
 import { clearSignRulesCache } from "../sync/of-sign.ts";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
-import { handleVaultMedia, headRange, noteVaultPlayRequest } from "../http/vault-http.ts";
+import { abortResponse, clearPlayNotes, handleVaultMedia, headRange, noteVaultPlayRequest } from "../http/vault-http.ts";
 import { loadFreshPreview } from "../sync/vault-thumbs.ts";
 import { playbackUrl, reuseOrRefreshVideo, VIDEO_DETAIL_PAUSE_MS } from "../sync/vault-store.ts";
 import type { ReadSql } from "../sync/store.ts";
@@ -224,8 +224,16 @@ test("cada Ver deja una línea y la descarga de un vídeo se aborta a los 20 s",
   const lines: string[] = [];
   const previousInfo = console.info;
   console.info = ((line?: unknown) => { lines.push(String(line ?? "")); }) as typeof console.info;
+  clearPlayNotes();
   noteVaultPlayRequest(new Request("http://127.0.0.1/api/vault-media?creatorId=3zk7kbr&mediaId=v9&variant=full"));
-  assert.equal(lines.some((line) => line.startsWith("[fanlink:vault] ver variant=full medio=") && !line.includes("v9") && !line.includes("http")), true);
+  noteVaultPlayRequest(new Request("http://127.0.0.1/api/vault-media?creatorId=3zk7kbr&mediaId=v9&variant=full"));
+  const vers = lines.filter((line) => line.startsWith("[fanlink:vault] ver variant=full medio="));
+  assert.equal(vers.length, 1);
+  assert.equal(vers[0]?.includes("v9"), false);
+  assert.equal(vers[0]?.includes("http"), false);
+  const aborted = abortResponse({ name: "AbortError", message: "aborted", cause: { code: "ECONNRESET" } });
+  assert.equal(aborted?.status, 499);
+  assert.equal(abortResponse(new Error("otra cosa")), null);
   assert.equal(VIDEO_FETCH_TIMEOUT_MS, 20_000);
   const original = AbortSignal.timeout;
   let armed = 0;
@@ -502,16 +510,19 @@ test("dos Ver a la vez piden el detalle una sola vez", async () => {
 test("Ver abre con un rango acotado, el salto pide bytes=N- con 206 y cancelar corta el CDN", async () => {
   const previous = globalThis.fetch;
   const ranges: string[] = [];
-  const cap = VIDEO_OPEN_BYTES - 1;
+    const cap = VIDEO_OPEN_BYTES - 1;
+    const seekEnd = 57_000_000 + VIDEO_OPEN_BYTES - 1;
   const slice = Uint8Array.from([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70]);
   const respond = (range: string) => {
-    const start = Number(/^bytes=(\d+)-/.exec(range)?.[1] ?? 0);
+    const match = /^bytes=(\d+)-(\d+)$/.exec(range);
+    const start = Number(match?.[1] ?? 0);
+    const end = Number(match?.[2] ?? start);
     return new Response(slice, {
       status: 206,
       headers: {
         "content-type": "video/mp4",
-        "content-range": `bytes ${start}-${start + slice.byteLength - 1}/114000000`,
-        "content-length": String(slice.byteLength),
+        "content-range": `bytes ${start}-${end}/114000000`,
+        "content-length": String(end - start + 1),
         "accept-ranges": "bytes",
       },
     });
@@ -524,7 +535,7 @@ test("Ver abre con un rango acotado, el salto pide bytes=N- con 206 y cancelar c
     }) as typeof fetch;
     assert.equal(boundedVideoRange(null), `bytes=0-${cap}`);
     assert.equal(boundedVideoRange("bytes=0-"), `bytes=0-${cap}`);
-    assert.notEqual(boundedVideoRange("bytes=0-"), "bytes=0-");
+    assert.equal(boundedVideoRange("bytes=57000000-"), `bytes=57000000-${seekEnd}`);
     const opened = await fetchVaultMedia("https://cdn2.onlyfans.com/files/big.mp4", { accept: "video/*" }, true);
     assert.equal(ranges[0], `bytes=0-${cap}`);
     assert.equal(opened.status, 206);
@@ -539,10 +550,10 @@ test("Ver abre con un rango acotado, el salto pide bytes=N- con 206 y cancelar c
         return "contentType" in served ? served : null;
       },
     });
-    assert.equal(ranges.at(-1), "bytes=57000000-");
-    assert.ok(Number(/^bytes=(\d+)-/.exec(ranges.at(-1) ?? "")?.[1] ?? 0) > 0);
+    assert.equal(ranges.at(-1), `bytes=57000000-${seekEnd}`);
     assert.equal(played.status, 206);
-    assert.match(played.headers.get("content-range") ?? "", /^bytes 57000000-/);
+    assert.equal(played.headers.get("content-range"), `bytes 57000000-${seekEnd}/114000000`);
+    assert.equal(played.headers.get("content-length"), String(VIDEO_OPEN_BYTES));
   } finally {
     globalThis.fetch = previous;
   }
@@ -615,18 +626,26 @@ test("un detalle con convertedToVideo=no se reproduce por HLS y no abre OnlyFans
   assert.equal(hlsSegmentType("https://cdn2.onlyfans.com/a.m4s", "video/mp4"), "video/iso.segment");
   assert.equal(hlsSegmentType("https://cdn2.onlyfans.com/a.mpd", "application/vnd.apple.mpegurl"), "application/dash+xml");
   const master = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000\n720/index.m3u8\n";
-  const media = "#EXTM3U\n#EXT-X-VERSION:7\n#EXTINF:6.0,\nseg-0.m4s\n#EXTINF:6.0,\nseg-1.m4s\n#EXT-X-ENDLIST\n";
+  const media = "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"https://onlyfans.com/drm/license\",KEYFORMAT=\"urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed\",KEYFORMATVERSIONS=\"1\"\n#EXTINF:6.0,\nseg-0.m4s\n#EXTINF:6.0,\nseg-1.m4s\n#EXT-X-ENDLIST\n";
   const ftyp = Uint8Array.from([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d, 1]);
   const ftypB = Uint8Array.from([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d, 2]);
   let pauses = 0;
   const cookies: string[] = [];
+  let licenseBody = "";
+  let licenseCookie = "";
   const fetchImpl = (async (input: unknown, init?: RequestInit) => {
     const href = String(input);
-    cookies.push(new Headers(init?.headers).get("cookie") ?? "");
+    const cookie = new Headers(init?.headers).get("cookie") ?? "";
+    cookies.push(cookie);
+    if (init?.method === "POST") {
+      licenseCookie = cookie;
+      licenseBody = await new Response(init.body).text();
+      return new Response("license-ok", { status: 200, headers: { "content-type": "application/octet-stream" } });
+    }
     if (href.includes("/hls/files/a.m3u8")) return new Response(master, { status: 200, headers: { "content-type": "application/vnd.apple.mpegurl" } });
     if (href.endsWith("/index.m3u8")) return new Response(media, { status: 200, headers: { "content-type": "application/vnd.apple.mpegurl" } });
-    if (href.endsWith("seg-0.m4s")) return new Response(ftyp, { status: 200, headers: { "content-type": "video/mp4" } });
-    if (href.endsWith("seg-1.m4s")) return new Response(ftypB, { status: 200, headers: { "content-type": "video/mp4" } });
+    if (href.endsWith("seg-0.m4s")) return new Response(ftyp, { status: 200, headers: { "content-type": "video/mp4", "content-length": String(ftyp.byteLength) } });
+    if (href.endsWith("seg-1.m4s")) return new Response(ftypB, { status: 206, headers: { "content-type": "video/mp4", "content-range": "bytes 0-12/13", "content-length": String(ftypB.byteLength) } });
     if (href.includes(".mpd")) return new Response("<MPD></MPD>", { status: 200, headers: { "content-type": "application/dash+xml" } });
     return new Response("no", { status: 404 });
   }) as typeof fetch;
@@ -638,7 +657,7 @@ test("un detalle con convertedToVideo=no se reproduce por HLS y no abre OnlyFans
   try {
     const played = await playVaultHlsDetail(detail, fetchImpl, async () => {
       pauses += 1;
-    });
+    }, { creatorId: "u1fpdnp", mediaId: "24", sessionCookie: "sess=ok" });
     assert.ok(played);
     assert.equal(pauses, 1);
     assert.equal(played.manifest.includes("cdn"), false);
@@ -651,9 +670,44 @@ test("un detalle con convertedToVideo=no se reproduce por HLS y no abre OnlyFans
     assert.equal(played.contentType, "video/iso.segment");
     assert.equal(hasFtyp(played.segment), true);
     const secondUrl = new URL(segmentLines[1] ?? "", "https://fanlink.local");
-    const second = await hlsMediaResponse(secondUrl.searchParams.get("k") ?? "", secondUrl.searchParams.get("u") ?? "", null, fetchImpl);
-    assert.equal(second.status, 200);
+    const second = await hlsMediaResponse({
+      creatorId: secondUrl.searchParams.get("creatorId") ?? "",
+      mediaId: secondUrl.searchParams.get("mediaId") ?? "",
+      ticket: secondUrl.searchParams.get("k") ?? "",
+      segment: secondUrl.searchParams.get("s") ?? "",
+      range: null,
+    }, fetchImpl);
+    assert.equal(second.status, 206);
     assert.equal(second.headers.get("content-type"), "video/iso.segment");
+    assert.equal(second.headers.get("content-range"), "bytes 0-12/13");
+    assert.equal(second.headers.get("content-length"), String(ftypB.byteLength));
+    const keyLine = played.mediaPlaylist.split(/\n/).find((item) => item.includes("EXT-X-KEY")) ?? "";
+    const licenseUri = /URI="([^"]+)"/.exec(keyLine)?.[1] ?? "";
+    assert.equal(licenseUri.includes("onlyfans.com"), false);
+    assert.equal(licenseUri.includes("sek"), false);
+    assert.match(licenseUri, /variant=licencia/);
+    const licenseUrl = new URL(licenseUri, "https://fanlink.local");
+    const license = await forwardDrmLicense({
+      creatorId: licenseUrl.searchParams.get("creatorId") ?? "",
+      mediaId: licenseUrl.searchParams.get("mediaId") ?? "",
+      ticket: licenseUrl.searchParams.get("k") ?? "",
+      segment: licenseUrl.searchParams.get("s") ?? "",
+      body: new TextEncoder().encode("widevine-challenge"),
+      contentType: "application/octet-stream",
+    }, fetchImpl);
+    assert.equal(license.status, 200);
+    assert.equal(await license.text(), "license-ok");
+    assert.equal(licenseBody, "widevine-challenge");
+    assert.equal(licenseCookie.includes("sess=ok"), true);
+    assert.equal(licenseCookie.includes("CloudFront-Policy"), false);
+    const denied = await hlsMediaResponse({
+      creatorId: "otra",
+      mediaId: secondUrl.searchParams.get("mediaId") ?? "",
+      ticket: secondUrl.searchParams.get("k") ?? "",
+      segment: secondUrl.searchParams.get("s") ?? "",
+      range: null,
+    }, fetchImpl);
+    assert.equal(denied.status, 404);
     const secondBytes = new Uint8Array(await second.arrayBuffer());
     assert.equal(secondBytes.at(-1), 2);
     assert.notEqual(played.segment.at(-1), secondBytes.at(-1));
@@ -671,11 +725,14 @@ test("un detalle con convertedToVideo=no se reproduce por HLS y no abre OnlyFans
     const joined = logs.join("\n");
     assert.match(joined, /reproductor hls tipo=manifest firma=si/);
     assert.match(joined, /reproductor hls tipo=segmento firma=si/);
+    assert.match(joined, /reproductor hls tipo=licencia firma=si/);
     assert.equal(joined.includes("sek"), false);
     assert.equal(joined.includes("sigvalue"), false);
     assert.equal(joined.includes("keypair"), false);
-    assert.ok(cookies.length > 0);
-    assert.ok(cookies.every((cookie) => cookie.includes("CloudFront-Policy=") && !cookie.includes("sess")));
+    const cdnCookies = cookies.filter((cookie) => cookie.includes("CloudFront-Policy"));
+    assert.ok(cdnCookies.length > 0);
+    assert.ok(cdnCookies.every((cookie) => !cookie.includes("sess")));
+    assert.equal(drmManifestUrl({ files: { drm: { manifest: { hls: "https://d111.cloudfront.net/a.m3u8" } } } })?.includes("cloudfront.net"), true);
   } finally {
     console.info = previousInfo;
   }
