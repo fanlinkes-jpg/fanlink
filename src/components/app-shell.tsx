@@ -1,6 +1,7 @@
 import { ClientOnly, Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { listCreatorChats } from "@/lib/of-sessions";
 import { unreadTotalFor } from "../../server/of-sessions/sync/unread-chats.ts";
+import { creatorWithPending, readInboxCreator, resolveInboxCreator, unreadByCreator, writeInboxCreator } from "@/lib/inbox-scope";
 import { useEffect, useState, type ReactNode } from "react";
 import {
   Home,
@@ -103,7 +104,6 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
   const creators = useCrm((s) => s.creators);
   const creatorId = useCrm((s) => s.creatorId);
   const setCreator = useCrm((s) => s.setCreator);
-  const fans = useCrm((s) => s.fans);
   const query = useCrm((s) => s.query);
   const setQuery = useCrm((s) => s.setQuery);
   const translate = useCrm((s) => s.translate);
@@ -119,7 +119,16 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
     chatSendSession.bindUser(user?.id ?? null, { pending: isPending });
   }, [user?.id, isPending]);
 
-  const unreadChats = useUnreadChats(creatorId);
+  const chatList = useChatList();
+  const unreadChats = unreadTotalFor(chatList.status, chatList.threads, "all");
+  const creatorBadges = chatList.status === "ready" ? unreadByCreator(chatList.threads) : {};
+  const creatorIds = creators.map((creator) => creator.id);
+  const rememberedCreator = typeof window === "undefined" ? null : readInboxCreator(window.localStorage);
+  const resolvedCreator = resolveInboxCreator({ requested: creatorId, creators, remembered: rememberedCreator });
+  useEffect(() => {
+    if (!path.startsWith("/mensajes") || !resolvedCreator || resolvedCreator === creatorId) return;
+    setCreator(resolvedCreator);
+  }, [path, resolvedCreator, creatorId, setCreator]);
   const { sessions } = useCreatorSessions();
   const avatars = Object.fromEntries(sessions.map((session) => [session.creatorId, session.avatarUrl]));
   const navRole = navRoleFromAccess(teamAccess);
@@ -141,7 +150,6 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
           creators={creators}
           creatorId={creatorId}
           setCreator={setCreator}
-          fans={fans}
           query={query}
           setQuery={setQuery}
           translate={translate}
@@ -151,6 +159,9 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
           blocks={blocks}
           currentOk={currentOk}
           unreadChats={unreadChats}
+          creatorBadges={creatorBadges}
+          pendingCreatorId={creatorWithPending(creatorIds, chatList.threads)}
+          resolvedCreator={resolvedCreator}
           avatars={avatars}
         >
           {children}
@@ -166,7 +177,7 @@ function unreadLabel(total: number | null, name: string): string {
   return name;
 }
 
-function useUnreadChats(creatorId: string): number | null {
+function useChatList(): { status: "loading" | "error" | "ready"; threads: Array<{ creatorId: string; unread: number | null }> } {
   const [state, setState] = useState<{ status: "loading" | "error" | "ready"; threads: Array<{ creatorId: string; unread: number | null }> }>({
     status: "loading",
     threads: [],
@@ -187,7 +198,7 @@ function useUnreadChats(creatorId: string): number | null {
       window.clearInterval(timer);
     };
   }, []);
-  return unreadTotalFor(state.status, state.threads, creatorId);
+  return state;
 }
 
 function ShellFrame({
@@ -200,7 +211,6 @@ function ShellFrame({
   creators,
   creatorId,
   setCreator,
-  fans,
   query,
   setQuery,
   translate,
@@ -210,6 +220,9 @@ function ShellFrame({
   blocks,
   currentOk,
   unreadChats,
+  creatorBadges,
+  pendingCreatorId,
+  resolvedCreator,
   avatars,
 }: {
   children: ReactNode;
@@ -221,7 +234,6 @@ function ShellFrame({
   creators: Array<{ id: string; name: string; hue: number }>;
   creatorId: string;
   setCreator: (id: string) => void;
-  fans: Array<{ creatorId: string; unread: number }>;
   query: string;
   setQuery: (value: string) => void;
   translate: boolean;
@@ -231,6 +243,9 @@ function ShellFrame({
   blocks: NavLink[];
   currentOk: boolean;
   unreadChats: number | null;
+  creatorBadges: Record<string, number>;
+  pendingCreatorId: string | null;
+  resolvedCreator: string | null;
   avatars: Record<string, string | null>;
 }) {
 
@@ -296,18 +311,32 @@ function ShellFrame({
           <button className="rounded-md p-2 md:hidden" onClick={() => setMobile(true)} aria-label="Abrir menú">
             <Menu className="h-4 w-4" />
           </button>
-          <Link to="/mensajes" aria-label={unreadLabel(unreadChats, "Mensajes")} title={unreadChats == null ? "Sin datos" : undefined} className={cn("flex shrink-0 items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium", path.startsWith("/mensajes") ? "bg-[#3b6cff] text-white" : "bg-white text-[#1d2433]")}>
+          <Link
+            to="/mensajes"
+            aria-label={unreadLabel(unreadChats, "Mensajes")}
+            title={unreadChats == null ? "Sin datos" : undefined}
+            onClick={() => {
+              const target = pendingCreatorId ?? resolvedCreator;
+              if (!target) return;
+              writeInboxCreator(window.localStorage, target);
+              setCreator(target);
+            }}
+            className={cn("flex shrink-0 items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium", path.startsWith("/mensajes") ? "bg-[#3b6cff] text-white" : "bg-white text-[#1d2433]")}
+          >
             Mensajes
             {unreadChats == null ? <span className="text-[10px] font-semibold opacity-80">Sin datos</span> : unreadChats > 0 ? <span className="rounded-full bg-danger px-1 text-[10px] font-semibold text-white">{unreadChats}</span> : null}
           </Link>
           <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto">
             {creators.map((c) => {
-              const unread = fans.filter((f) => f.creatorId === c.id && f.unread > 0).length;
+              const unread = creatorBadges[c.id] ?? 0;
               const active = creatorId === c.id;
               return (
                 <button
                   key={c.id}
-                  onClick={() => setCreator(c.id)}
+                  onClick={() => {
+                    writeInboxCreator(window.localStorage, c.id);
+                    setCreator(c.id);
+                  }}
                   className={cn(
                     "flex shrink-0 items-center gap-2 rounded-lg px-2 py-1 text-xs",
                     active ? "bg-white text-[#1d2433]" : "bg-white/10",
@@ -315,13 +344,10 @@ function ShellFrame({
                 >
                   <CreatorMark name={c.name} hue={c.hue} avatarUrl={avatars[c.id]} />
                   <span className="max-w-24 truncate">{c.name}</span>
-                  {unread > 0 && <span className="rounded-full bg-danger px-1 text-[10px] text-white">{unread}</span>}
+                  {unread > 0 ? <span className="rounded-full bg-danger px-1 text-[10px] text-white" aria-label={`${unread} chats sin leer`}>{unread}</span> : null}
                 </button>
               );
             })}
-            <button onClick={() => setCreator("all")} className={cn("shrink-0 rounded-lg px-2 py-1 text-xs", creatorId === "all" ? "bg-white text-[#1d2433]" : "bg-white/10")}>
-              Todas
-            </button>
           </div>
           <span className="hidden max-w-40 truncate rounded-lg bg-white/10 px-2 py-1 text-xs md:inline" title={teamAccess.devMode ? "Modo local de un solo operador" : teamAccess.displayName}>
             {teamAccess.displayName}

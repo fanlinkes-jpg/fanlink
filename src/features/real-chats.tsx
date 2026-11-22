@@ -12,6 +12,7 @@ import { NOTIFICATION_TABS, TAB_LABEL, isOwnerOnlyKind, tabOf, type Notification
 import { NotificationFanCard } from "@/features/notification-card";
 import { useCrm, type VaultItem } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
+import { readInboxCreator, resolveInboxCreator, rowsForCreator, writeInboxCreator } from "@/lib/inbox-scope";
 import { mergeVaultPage, vaultFolderOnAccountChange, vaultLoadAllowed, vaultReadApplies } from "@/lib/vault-load";
 import { VAULT_FOLDER_READ_ERROR } from "@/lib/vault-folder-label";
 import { clearOpenThread, peekOpenThread } from "@/lib/open-thread";
@@ -191,6 +192,16 @@ export function RealChatsPage() {
   const creators = useCrm((s) => s.creators);
   const creatorId = useCrm((s) => s.creatorId);
   const setCreator = useCrm((s) => s.setCreator);
+  const inboxCreator = resolveInboxCreator({
+    requested: creatorId,
+    creators,
+    remembered: typeof window === "undefined" ? null : readInboxCreator(window.localStorage),
+  });
+  useEffect(() => {
+    if (!inboxCreator || inboxCreator === creatorId) return;
+    writeInboxCreator(window.localStorage, inboxCreator);
+    setCreator(inboxCreator);
+  }, [inboxCreator, creatorId, setCreator]);
   const crmFans = useCrm((s) => s.fans);
   const scripts = useCrm((s) => s.scripts);
   const vault = useCrm((s) => s.vault);
@@ -308,7 +319,7 @@ export function RealChatsPage() {
   }, []);
 
   async function loadNotes() {
-    const ids = (creatorId === "all" ? creators : creators.filter((creator) => creator.id === creatorId)).map((creator) => creator.id);
+    const ids = inboxCreator ? [inboxCreator] : [];
     if (ids.length === 0) {
       setNotes([]);
       setNoteCounts(null);
@@ -333,7 +344,7 @@ export function RealChatsPage() {
     void loadNotes();
     const timer = setInterval(() => { void loadNotes(); }, 20_000);
     return () => clearInterval(timer);
-  }, [creatorId, creators.length]);
+  }, [inboxCreator, creators.length]);
 
   useEffect(() => {
     const pending = peekOpenThread();
@@ -371,7 +382,7 @@ export function RealChatsPage() {
 
   function openNote(item: NoteRow) {
     markNotes([item]);
-    const pool = data?.threads ?? [];
+    const pool = threads;
     const thread = pool.find((row) => row.creatorId === item.creatorId && (
       (item.threadKey != null && row.threadKey === item.threadKey)
       || (item.fanKey != null && (row.fanKey === item.fanKey || row.threadKey === item.fanKey || row.fanHandle?.replace(/^@/, "") === item.fanKey))
@@ -382,7 +393,7 @@ export function RealChatsPage() {
   }
 
   async function loadOnlineFans() {
-    const creator = creatorId === "all" ? "all" : creatorId;
+    const creator = inboxCreator;
     if (!creator) {
       setOnlineFans([]);
       setOnlineCount(null);
@@ -436,37 +447,30 @@ export function RealChatsPage() {
   }
 
   async function sendAllOnline(payload: OnlineBroadcastPayload) {
-    const creator = creatorId === "all" ? selected?.creatorId ?? null : creatorId;
+    const creator = inboxCreator;
     if (!creator) return { posted: 0, results: [], stopped: false, retryAfter: null, reason: "Elige una cuenta", cap: onlineCap };
     return broadcastOnlineFans({ data: { creatorId: creator, ...payload } });
   }
 
   async function cancelAllOnline(batchId: string) {
-    const creator = creatorId === "all" ? selected?.creatorId ?? null : creatorId;
+    const creator = inboxCreator;
     if (!creator) return;
     await cancelOnlineBroadcast({ data: { creatorId: creator, batchId } });
   }
 
   function openOnlineFan(fanKey: string) {
-    const creator = creatorId === "all" ? selected?.creatorId ?? null : creatorId;
-    const thread = threads.find((row) => (creator == null || row.creatorId === creator) && (row.fanKey === fanKey || row.threadKey === fanKey));
+    const creator = inboxCreator;
+    const thread = threads.find((row) => creator != null && row.creatorId === creator && (row.fanKey === fanKey || row.threadKey === fanKey));
     if (thread) chooseThread(thread);
     setOnlineOpen(false);
   }
 
-  const threads = (data?.threads ?? []).filter(
-    (thread) => creatorId === "all" || thread.creatorId === creatorId,
-  );
-  const accountMessages = (data?.messages ?? []).filter(
-    (message) => creatorId === "all" || message.creatorId === creatorId,
-  );
-  const scopeIds = creatorId === "all" ? creators.map((creator) => creator.id) : [creatorId];
-  const sessionRows = data?.accounts ?? [];
+  const threads = rowsForCreator(data?.threads ?? [], inboxCreator);
+  const accountMessages = rowsForCreator(data?.messages ?? [], inboxCreator);
+  const scopeIds = inboxCreator ? [inboxCreator] : [];
+  const sessionRows = rowsForCreator(data?.accounts ?? [], inboxCreator);
   const viewBlocked = everyAccountBlocked(sessionRows, scopeIds);
-  const sessionNotices = (data?.sessionNotices ?? []).filter((notice) => {
-    if (creatorId === "all") return true;
-    return notice.startsWith(`${creatorId}:`);
-  });
+  const sessionNotices = (data?.sessionNotices ?? []).filter((notice) => inboxCreator != null && notice.startsWith(`${inboxCreator}:`));
   const countedThreads = threads.filter((thread) => !sessionRows.some((row) => row.creatorId === thread.creatorId && accountFigure(row, 0) === SESSION_EXPIRED_LABEL));
   const pills = inboxPillCounts({
     status: viewBlocked ? "error" : error ? "error" : data ? "ready" : "loading",
@@ -504,7 +508,7 @@ export function RealChatsPage() {
   const spendAsked = useRef("");
   const spendTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [spendTick, setSpendTick] = useState(0);
-  const spendCreator = creatorId === "all" ? selected?.creatorId ?? null : creatorId;
+  const spendCreator = inboxCreator;
   const spendCardIds = visible.flatMap((thread) => {
     if (!spendCreator || thread.creatorId !== spendCreator || !thread.fanKey) return [];
     const card = chatFanCardFor(fanCards.fans, thread.creatorId, thread.fanKey)?.spentCents ?? null;
@@ -617,14 +621,12 @@ export function RealChatsPage() {
     if (!stickToBottom.current) return;
     node.scrollTop = node.scrollHeight;
   }, [threadTail, openThread]);
-  const creatorName = creatorId === "all"
-    ? "Todas las cuentas"
-    : creators.find((creator) => creator.id === creatorId)?.name ?? "Cuenta";
+  const creatorName = creators.find((creator) => creator.id === inboxCreator)?.name ?? "Cuenta";
   const slash = slashQuery(draft);
   const scriptHits = matchScripts(scripts, slash != null ? slash : libraryQuery);
   const showScripts = panel === "guiones" || slash != null;
   const realSend = selected != null && sendCreators.includes(selected.creatorId);
-  const vaultItems = vault.filter((item) => item.creatorId === selected?.creatorId);
+  const vaultItems = rowsForCreator(vault, selected?.creatorId ?? inboxCreator);
   const tagCreators = creators.filter((creator) => creator.id !== selected?.creatorId && creator.handle.trim() !== "");
 
   function toggle(next: ComposerPanel) {
@@ -1106,9 +1108,8 @@ export function RealChatsPage() {
             ) : null}
           </div>
           <div className="flex items-center gap-2">
-            <select value={creatorId} onChange={(event) => setCreator(event.target.value)} className="h-8 min-w-0 flex-1 rounded-lg border border-[#e6e8ee] px-2 text-xs" aria-label="Bandeja">
-              <option value="all">Todas las bandejas</option>
-              {creators.map((creator) => <option key={creator.id} value={creator.id}>{creator.name}</option>)}
+            <select value={inboxCreator ?? ""} onChange={(event) => { writeInboxCreator(window.localStorage, event.target.value); setCreator(event.target.value); }} className="h-8 min-w-0 flex-1 rounded-lg border border-[#e6e8ee] px-2 text-xs" aria-label="Bandeja">
+              {creators.filter((creator) => creator.id !== "all").map((creator) => <option key={creator.id} value={creator.id}>{creator.name}</option>)}
             </select>
             <span className="shrink-0 text-[10px] text-[#6d7585]">Más recientes</span>
             {(() => {
@@ -1139,7 +1140,7 @@ export function RealChatsPage() {
         <div className="min-h-0 flex-1 overflow-y-auto" onScroll={(event) => {
           const node = event.currentTarget;
           if (node.scrollHeight - node.scrollTop - node.clientHeight > 48 || listLock.current) return;
-          const creator = creatorId === "all" ? selected?.creatorId : creatorId;
+          const creator = inboxCreator;
           if (!creator) return;
           listLock.current = true;
           void loadMoreChats({ data: { creatorId: creator } }).then(() => refresh()).catch(() => undefined).finally(() => {
@@ -1174,7 +1175,6 @@ export function RealChatsPage() {
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-1">
                       <span className={`truncate text-sm ${unread.bold ? "font-bold text-[#1d2433]" : "font-medium"}`}>{fanTitle(thread)}</span>
-                      {creatorId === "all" ? <span className="shrink-0 rounded bg-[#f3f4f6] px-1 text-[10px] text-[#6d7585]">{creators.find((creator) => creator.id === thread.creatorId)?.name ?? "Cuenta"}</span> : null}
                       {unread.badge != null && !marks.muted.includes(threadMark(thread.creatorId, thread.threadKey)) ? <span className="shrink-0 rounded-full bg-[#3b6cff] px-1.5 text-[10px] font-semibold text-white" aria-label={`${unread.badge} sin leer`}>{unread.badge}</span> : null}
                       {thread.online === false ? <span className="rounded bg-[#f3f4f6] px-1 text-[10px] text-[#6d7585]">OFF</span> : null}
                     </span>
@@ -1199,7 +1199,6 @@ export function RealChatsPage() {
                 <button type="button" className="truncate text-left font-medium" onClick={() => { setFanMenu((open) => !open); setRenaming(false); }} aria-expanded={fanMenu} aria-label="Opciones del fan">
                   {selected ? fanTitle(selected) : "Sin sincronizar"}
                 </button>
-                {selected && creatorId === "all" ? <p className="truncate text-xs text-[#6d7585]">{creators.find((creator) => creator.id === selected.creatorId)?.name ?? "Cuenta"}</p> : null}
                 {fanMenu && selected ? (
                   <>
                     <button type="button" aria-label="Cerrar opciones del fan" className="fixed inset-0 z-20 cursor-default" onClick={() => { setFanMenu(false); setRenaming(false); }} />
