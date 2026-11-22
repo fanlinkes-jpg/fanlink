@@ -97,6 +97,9 @@ async function loadPanel(): Promise<typeof OnlineFansPanelComponent> {
   }).outputText.replace(
     /from\s+["']@\/lib\/online-fan-row["']/,
     `from ${JSON.stringify(rowUrl)}`,
+  ).replace(
+    /import\s+\{\s*SfwMedia\s*\}\s+from\s+["']@\/components\/sfw-media["'];?/,
+    "function SfwMedia(props) { return props.children; }",
   );
   const cache = path.join(root, "node_modules/.cache");
   mkdirSync(cache, { recursive: true });
