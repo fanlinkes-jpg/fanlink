@@ -8,12 +8,14 @@ export function ChatMediaPlayer({
   messageKey,
   index,
   kind,
+  compact = false,
 }: {
   creatorId: string;
   threadKey: string;
   messageKey: string;
   index: number;
   kind: "foto" | "video" | "audio" | null;
+  compact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -21,15 +23,15 @@ export function ChatMediaPlayer({
   const full = chatMediaSrc({ creatorId, threadKey, messageKey, index, variant: "full" });
   const thumb = kind === "foto" ? full : preview;
   if (kind === "audio") {
-    return <audio controls preload="metadata" src={full} className="mb-1 w-full max-w-xs" />;
+    return <audio controls preload="metadata" src={full} className={compact ? "h-full w-full" : "mb-1 w-full max-w-xs"} />;
   }
   const label = kind === "foto" ? "Ver foto" : "Reproducir";
   return (
-    <div className="mb-1">
+    <div className={compact ? "h-full" : "mb-1"}>
       <button
         type="button"
         aria-label={label}
-        className="relative block h-40 w-full max-w-xs overflow-hidden rounded-lg bg-[#dfe3ea]"
+        className={`relative block w-full overflow-hidden rounded-lg bg-[#dfe3ea] ${compact ? "h-full" : "h-40 max-w-xs"}`}
         onClick={() => setOpen(true)}
       >
         {failed ? <span className="grid h-full place-items-center px-2 text-xs text-[#6d7585]">{label}</span> : (

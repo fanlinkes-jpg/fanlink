@@ -950,6 +950,55 @@ export async function listOpenHistory(sql: ReadSql, creatorId: string): Promise<
   }));
 }
 
+/** Todo lo guardado de un hilo, no solo las 60 últimas. Sirve al volver a abrirlo. */
+export async function listThreadHistory(sql: ReadSql, creatorId: string, threadKey: string): Promise<{ done: boolean; messages: Awaited<ReturnType<typeof listChats>>["messages"] }> {
+  const flag = await sql.query<{ history_done: boolean | string | null }>(
+    "select history_done from of_chat_thread where creator_id = $1 and thread_key = $2",
+    [creatorId, threadKey],
+  );
+  const done = flag[0]?.history_done === true || flag[0]?.history_done === "t" || flag[0]?.history_done === "true";
+  const rows = await sql.query<MessageRow>(
+    `select m.creator_id, m.message_key, m.thread_key, m.fan_key, m.from_fan, m.body, m.sent_at, m.price_cents, m.purchased, m.synced_at,
+            m.author_id, p.display_name as author_name, m.seen, m.automatic, m.media_count, m.media_seconds, m.media_preview,
+            m.media_json, m.liked, m.reply_body, m.event_kind, m.event_cents
+     from of_chat_message m
+     left join staff_profile p on p.user_id = m.author_id
+     where m.creator_id = $1 and m.thread_key = $2
+     order by m.sent_at asc
+     limit 2000`,
+    [creatorId, threadKey],
+  );
+  return { done, messages: rows.map(storedMessage) };
+}
+
+function storedMessage(row: MessageRow): Awaited<ReturnType<typeof listChats>>["messages"][number] {
+  return {
+    creatorId: row.creator_id,
+    messageKey: row.message_key,
+    threadKey: row.thread_key,
+    fanKey: row.fan_key,
+    fromFan: row.from_fan === true || row.from_fan === "t" || row.from_fan === "true",
+    body: row.body,
+    sentAt: iso(row.sent_at) ?? "",
+    priceCents: row.price_cents == null ? null : Number(row.price_cents),
+    purchased: row.purchased == null ? null : row.purchased === true || row.purchased === "t" || row.purchased === "true",
+    fromUserId: null,
+    authorId: row.author_id,
+    authorName: row.author_name,
+    seen: flagOrNull(row.seen),
+    automatic: flagOrNull(row.automatic),
+    mediaCount: row.media_count == null ? null : Number(row.media_count),
+    mediaSeconds: row.media_seconds == null ? null : Number(row.media_seconds),
+    mediaPreview: row.media_preview,
+    media: decodeMedia(row.media_json),
+    liked: flagOrNull(row.liked),
+    replyBody: row.reply_body,
+    eventKind: row.event_kind === "compra" || row.event_kind === "propina" ? row.event_kind : null,
+    eventCents: row.event_cents == null ? null : Number(row.event_cents),
+    syncedAt: iso(row.synced_at) ?? "",
+  };
+}
+
 export async function markHistory(sql: ReadSql, creatorId: string, threadKey: string, cursor: string | null, done: boolean): Promise<void> {
   await sql.query(
     `update of_chat_thread set history_cursor = coalesce($3, history_cursor), history_done = $4

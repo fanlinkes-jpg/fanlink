@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AtSign, Bell, ChevronLeft, ChevronRight, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, RefreshCw, ScrollText, Send, Type } from "lucide-react";
-import { broadcastOnlineFans, cancelOnlineBroadcast, chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, markChatOpened, readChatVault, readVisibleFanSpend, recordChatOutbound, resolveOnlineOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
+import { broadcastOnlineFans, cancelOnlineBroadcast, chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, markChatOpened, readChatVault, readThreadHistory, readVisibleFanSpend, recordChatOutbound, resolveOnlineOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
 import { OnlineFansPanel, type OnlineBroadcastPayload } from "@/features/online-fans-panel";
 import type { OnlineFanRow } from "@/lib/online-fan-row";
 import { unreadChatRow } from "../../server/of-sessions/sync/unread-chats.ts";
@@ -23,7 +23,7 @@ import { useChatFanCards } from "@/lib/use-chat-fan-cards";
 import { chatFanCardFor, fanCardTransactions } from "@/lib/chat-fan-cards";
 import { FanInsights } from "@/features/fan-insights";
 import { MessagePriceDialog } from "@/features/message-price-dialog";
-import { FULL_EMOJIS, QUICK_EMOJIS, TEXT_COLORS, authorLabel, matchScripts, mentionToken, paymentLabel, slashQuery, wrapSelection } from "@/lib/composer-tools";
+import { FULL_EMOJIS, QUICK_EMOJIS, TEXT_COLORS, authorLabel, matchScripts, mentionToken, slashQuery, wrapSelection } from "@/lib/composer-tools";
 import { pendingForThread } from "@/lib/pending-thread";
 import { chatSendSession } from "@/lib/chat-send-session";
 import { useCurrentUser } from "@/lib/auth/use-current-user";
@@ -41,6 +41,9 @@ import { rowSpendCents } from "@/lib/row-spend";
 import { FanSpendLabel } from "@/lib/fan-spend-label";
 import { useInboxSelection } from "@/lib/inbox-selection";
 import { ChatMediaPlayer } from "@/features/chat-media-player";
+import { MediaStrip } from "@/features/media-strip";
+import { bubbleBlocks, bubblePriceLabel } from "@/lib/chat-bubble";
+import { mergeHistoryMessages, scrollAfterPrepend } from "@/lib/chat-history";
 import { VAULT_THUMB_MISSING, vaultMediaSrc } from "@/lib/chat-media";
 import { VaultBrowser } from "@/features/vault-browser";
 
@@ -172,6 +175,8 @@ function ThreadMessage({ message }: { message: {
   media: Array<{ kind: "foto" | "video" | "audio" | null; locked?: boolean | null }> | null;
   priceCents: number | null;
   purchased: boolean | null;
+  sentAt?: string;
+  seen?: boolean | null;
 } }) {
   const slides = message.media ?? [];
   const hasMedia = (message.mediaCount ?? 0) > 0 || slides.length > 0;
@@ -185,15 +190,24 @@ function ThreadMessage({ message }: { message: {
   const lockedCount = slides.length === 0
     ? (hasMedia && messageLocked ? 1 : 0)
     : slides.filter((slide) => slideLocked(slide)).length;
+  const layout = bubbleBlocks({
+    mediaCount: openSlides.length,
+    priceCents: message.priceCents,
+    body: message.body,
+  });
   const who = message.fromFan ? "" : message.authorName ? authorLabel(message.authorName, false) : authorLabel(null, message.automatic);
-  const pay = paymentLabel(message);
+  const pay = bubblePriceLabel(message);
+  const when = message.sentAt ? madridClock(message.sentAt) : "";
+  const seen = message.seen === true ? "Leído" : "";
+  const players = openSlides.map((slide) => (
+    <ChatMediaPlayer key={`${message.messageKey}-${slide.index}`} creatorId={message.creatorId} threadKey={message.threadKey} messageKey={message.messageKey} index={slide.index} kind={slide.kind} compact={layout.layout === "carousel"} />
+  ));
   return (
-    <li className={message.fromFan ? "" : "text-right"}>
-      {(openSlides.length > 0 || message.body) ? (
+    <li className={message.fromFan ? "" : "text-right"} data-layout={layout.layout} data-automatic={message.automatic ? "1" : "0"}>
+      {(openSlides.length > 0 || message.body || pay) ? (
       <div className={`inline-block max-w-[70%] rounded-2xl px-3 py-2 text-left text-sm ${message.fromFan ? "bg-[#f4f6fb]" : "bg-[#e7f0ff]"}`}>
-        {openSlides.map((slide) => (
-          <ChatMediaPlayer key={`${message.messageKey}-${slide.index}`} creatorId={message.creatorId} threadKey={message.threadKey} messageKey={message.messageKey} index={slide.index} kind={slide.kind} />
-        ))}
+        {layout.layout === "carousel" ? <MediaStrip>{players}</MediaStrip> : players}
+        {pay ? <p className="text-[11px] font-medium text-[#1d2433]">{pay}</p> : null}
         {message.body ? <p>{message.body}</p> : null}
       </div>
       ) : null}
@@ -202,7 +216,7 @@ function ThreadMessage({ message }: { message: {
           {Array.from({ length: lockedCount }, (_, index) => <Lock key={index} className="h-3.5 w-3.5" aria-hidden />)}
         </p>
       ) : null}
-      {who || pay ? <p className="mt-1 text-[10px] text-[#6d7585]">{[who, pay].filter(Boolean).join(" · ")}</p> : null}
+      {who || when || seen ? <p className="mt-1 text-[10px] text-[#6d7585]">{[who, when, seen].filter(Boolean).join(" · ")}</p> : null}
     </li>
   );
 }
@@ -319,6 +333,9 @@ export function RealChatsPage() {
   const fileBox = useRef<HTMLInputElement>(null);
   const savedRange = useRef<Range | null>(null);
   const olderLock = useRef(false);
+  const holdScroll = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
+  const [olderBusy, setOlderBusy] = useState(false);
+  const [threadHistory, setThreadHistory] = useState<Record<string, { done: boolean; messages: NonNullable<CreatorChatList["messages"]> }>>({});
   const listLock = useRef(false);
   const pendingRef = useRef(pendingOut);
   const threadBox = useRef<HTMLOListElement>(null);
@@ -627,9 +644,13 @@ export function RealChatsPage() {
   useEffect(() => () => {
     if (spendTimer.current) clearTimeout(spendTimer.current);
   }, []);
-  const messages = (data?.messages ?? [])
-    .filter((message) => message.creatorId === selected?.creatorId && message.threadKey === selected?.threadKey)
-    .sort((left, right) => left.sentAt.localeCompare(right.sentAt));
+  const historyKey = selected ? `${selected.creatorId}:${selected.threadKey}` : "";
+  const storedHistory = historyKey ? threadHistory[historyKey] : undefined;
+  const messages = mergeHistoryMessages(
+    (data?.messages ?? []).filter((message) => message.creatorId === selected?.creatorId && message.threadKey === selected?.threadKey),
+    storedHistory?.messages ?? [],
+  );
+  const historyDone = storedHistory?.done === true;
   const meta = data?.meta.find((item) => item.creatorId === selected?.creatorId);
   const running = selected ? data?.runningCreatorIds.includes(selected.creatorId) : false;
   const canForce = teamAccess?.role === "owner" && selected != null;
@@ -687,16 +708,34 @@ export function RealChatsPage() {
   }, []);
   const openThread = selected ? `${selected.creatorId}:${selected.threadKey}` : null;
   const threadTail = `${messages.at(-1)?.messageKey ?? ""}:${jobList.map((job) => `${job.clientId}:${job.state}`).join(",")}:${pendingOut.length}`;
+  useEffect(() => {
+    if (!selected) return;
+    const key = `${selected.creatorId}:${selected.threadKey}`;
+    let stop = false;
+    void readThreadHistory({ data: { creatorId: selected.creatorId, threadKey: selected.threadKey } }).then((page) => {
+      if (stop) return;
+      setThreadHistory((current) => ({ ...current, [key]: { done: page.done, messages: page.messages as NonNullable<CreatorChatList["messages"]> } }));
+    }).catch(() => undefined);
+    return () => {
+      stop = true;
+    };
+  }, [selected?.creatorId, selected?.threadKey]);
   useLayoutEffect(() => {
     const node = threadBox.current;
     if (!node) return;
+    if (holdScroll.current) {
+      node.scrollTop = scrollAfterPrepend(holdScroll.current, node.scrollHeight);
+      holdScroll.current = null;
+      stickToBottom.current = false;
+      return;
+    }
     if (seenThread.current !== openThread) {
       seenThread.current = openThread;
       stickToBottom.current = true;
     }
     if (!stickToBottom.current) return;
     node.scrollTop = node.scrollHeight;
-  }, [threadTail, openThread]);
+  }, [threadTail, openThread, messages.length]);
   const creatorName = creators.find((creator) => creator.id === inboxCreator)?.name ?? "Cuenta";
   const slash = slashQuery(draft);
   const scriptHits = matchScripts(scripts, slash != null ? slash : libraryQuery);
@@ -1374,12 +1413,37 @@ export function RealChatsPage() {
             <ol ref={threadBox} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4" onScroll={(event) => {
               const node = event.currentTarget;
               stickToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80;
-              if (node.scrollTop > 24 || !selected || olderLock.current) return;
+              if (node.scrollTop > 24 || !selected || olderLock.current || historyDone) return;
               olderLock.current = true;
-              void loadOlderMessages({ data: { creatorId: selected.creatorId, threadKey: selected.threadKey } }).then(() => refresh()).catch(() => undefined).finally(() => {
+              holdScroll.current = { scrollHeight: node.scrollHeight, scrollTop: node.scrollTop };
+              setOlderBusy(true);
+              const creatorId = selected.creatorId;
+              const threadKey = selected.threadKey;
+              const key = `${creatorId}:${threadKey}`;
+              const pull = async () => {
+                const page = await loadOlderMessages({ data: { creatorId, threadKey } });
+                if (page.retryAfterMs > 0) {
+                  await new Promise((resolve) => setTimeout(resolve, page.retryAfterMs));
+                  return loadOlderMessages({ data: { creatorId, threadKey } });
+                }
+                return page;
+              };
+              void pull().then(async (page) => {
+                const stored = await readThreadHistory({ data: { creatorId, threadKey } }).catch(() => null);
+                setThreadHistory((current) => ({
+                  ...current,
+                  [key]: { done: stored?.done ?? !page.hasMore, messages: (stored?.messages ?? current[key]?.messages ?? []) as NonNullable<CreatorChatList["messages"]> },
+                }));
+                void refresh();
+              }).catch(() => {
+                holdScroll.current = null;
+              }).finally(() => {
                 olderLock.current = false;
+                setOlderBusy(false);
               });
             }}>
+              {olderBusy ? <li className="text-center text-xs text-[#6d7585]">Cargando mensajes anteriores…</li> : null}
+              {historyDone ? <li className="text-center text-xs text-[#6d7585]">Inicio de la conversación</li> : null}
               {!selected || (messages.length === 0 && pendingForThread(pendingOut, selected).length === 0 && jobList.every((job) => job.creatorId !== selected.creatorId || job.threadKey !== selected.threadKey)) ? <li className="text-sm text-[#6d7585]">{selected ? "Sin datos" : "Sin sincronizar"}</li> : null}
               {messages.map((message) => (
                 <ThreadMessage key={message.messageKey} message={message} />

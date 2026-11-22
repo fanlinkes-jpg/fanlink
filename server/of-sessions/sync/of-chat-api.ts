@@ -2,6 +2,7 @@ import { BROWSER_FINGERPRINT } from "../sessions/browser-factory.ts";
 import { domainMatches, isCookieUnexpired, type StorageCookie, type StorageStateFile } from "../sessions/storage-state.ts";
 import { backoffDelayMs } from "./backoff.ts";
 import { mergeMessages, mergeThreads, parseChatList, parseChatMessages, parsePreviewMessages, type ChatMessage, type ChatThread } from "./chats.ts";
+import { olderChatMessagesPath } from "./history.ts";
 import { collectFanSpend } from "./fan-spend.ts";
 import { awaitAccountGap, REQUEST_GAP_MS, withAccountApi } from "./api-list-pace.ts";
 import { accountPause } from "./backoff.ts";
@@ -720,8 +721,35 @@ function openThreadKeys(options: SignedChatOptions): string[] {
 }
 
 function messagesPath(threadKey: string, cursor: string | null): string {
-  const cursorQuery = cursor ? `&id=${encodeURIComponent(cursor)}` : "";
-  return `/api2/v2/chats/${encodeURIComponent(threadKey)}/messages?limit=${MESSAGE_PAGE}&order=desc&skip_users=all${cursorQuery}`;
+  return olderChatMessagesPath(threadKey, cursor, MESSAGE_PAGE);
+}
+
+/** Una página más antigua, GET firmado. Un 429 no marca leído y deja la espera. */
+export async function fetchOlderChatPage(
+  state: StorageStateFile,
+  deps: SignedChatDeps,
+  input: { threadKey: string; fanKey: string | null; accountUserId: string; oldestMessageId: string | null },
+): Promise<{ messages: ChatMessage[]; hasMore: boolean; cursor: string | null; retryAfterMs: number; status: number | null; reason: string | null }> {
+  const auth = sessionForApi(state, deps.now());
+  if ("reason" in auth) {
+    return { messages: [], hasMore: true, cursor: input.oldestMessageId, retryAfterMs: 0, status: null, reason: auth.reason };
+  }
+  const rules = deps.rules ?? await loadSignRules(deps.fetch, deps.now());
+  const path = messagesPath(input.threadKey, input.oldestMessageId);
+  if (deps.accountId && deps.sleep) await awaitAccountGap(deps.accountId, deps.now, deps.sleep, deps.minGapMs ?? REQUEST_GAP_MS);
+  const page = await getJson(deps.fetch, path, signedHeaders(rules, path, auth, deps.now()), deps.now());
+  if (!page.ok) {
+    return { messages: [], hasMore: true, cursor: input.oldestMessageId, retryAfterMs: page.retryAfterMs, status: page.status, reason: page.reason };
+  }
+  const messages = parseChatMessages(page.body, input.threadKey, input.fanKey, input.accountUserId);
+  return {
+    messages,
+    hasMore: messageHasMore(page.body),
+    cursor: messageCursor(page.body),
+    retryAfterMs: 0,
+    status: page.status,
+    reason: null,
+  };
 }
 
 function listHasMore(body: unknown, count: number): boolean {

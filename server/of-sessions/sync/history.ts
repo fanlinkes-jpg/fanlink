@@ -6,6 +6,24 @@ export type HistoryThread = {
   done: boolean;
 };
 
+/** GET de una página más antigua. `id` es el mensaje más viejo ya guardado. */
+export function olderChatMessagesPath(threadKey: string, oldestMessageId: string | null, limit = 10): string {
+  const id = oldestMessageId ? `&id=${encodeURIComponent(oldestMessageId)}` : "";
+  return `/api2/v2/chats/${encodeURIComponent(threadKey)}/messages?limit=${limit}&order=desc&skip_users=all${id}`;
+}
+
+/** hasMore en false, o una página que no baja del cursor, cierra el histórico. */
+export function historyAdvance(input: {
+  previousCursor: string | null;
+  incoming: Array<{ messageKey: string; sentAt: string }>;
+  hasMore: boolean;
+}): { done: boolean; cursor: string | null } {
+  const cursor = oldestCursor(input.incoming) ?? input.previousCursor;
+  if (input.incoming.length === 0 || !input.hasMore) return { done: true, cursor };
+  if (pageFinished(input.previousCursor, input.incoming)) return { done: true, cursor: input.previousCursor };
+  return { done: false, cursor };
+}
+
 /** El cursor es el mensaje más antiguo ya guardado. Sin mensajes no hay cursor. */
 export function oldestCursor(messages: Array<{ messageKey: string; sentAt: string }>): string | null {
   const ordered = [...messages].sort((left, right) => left.sentAt.localeCompare(right.sentAt));
