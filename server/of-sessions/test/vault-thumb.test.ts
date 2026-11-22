@@ -269,7 +269,7 @@ describe("miniaturas de la bóveda", { concurrency: 1 }, () => {
       const href = String(target);
       seen.push(href);
       if (href.includes("dynamic-rules")) return Response.json(RULES);
-      if (href.includes("/vault/media")) return Response.json({ list: [mediaRow(9, fresh)] });
+      if (href.includes("/vault/media") || /\/vault\/lists\/[^/]+\/media/.test(href)) return Response.json({ list: [mediaRow(9, fresh)] });
       return new Response("no", { status: 404 });
     };
     const media = await loadFreshPreview({
@@ -518,8 +518,8 @@ function mockFetch(input: {
   return async (target, init) => {
     const href = String(target);
     if (href.includes("dynamic-rules")) return Response.json(RULES);
-    if (href.includes("/vault/lists")) return Response.json({ lists: [] });
-    if (href.includes("/vault/media")) return Response.json({ list: input.onMedia() });
+    if (new URL(href).pathname.endsWith("/vault/lists")) return Response.json({ lists: [] });
+    if (href.includes("/vault/media") || /\/vault\/lists\/[^/]+\/media/.test(href)) return Response.json({ list: input.onMedia() });
     if (href.includes("onlyfans.com/") || href.includes("cloudfront")) {
       input.cdn.push(href);
       return input.onCdn(href, init);

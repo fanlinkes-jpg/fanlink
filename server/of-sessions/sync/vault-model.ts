@@ -108,7 +108,7 @@ export function parseVaultBundle(payload: unknown): { items: VaultFile[]; lists:
 export function vaultPayloadKind(payload: unknown): "lists" | "media" | "other" {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return "other";
   const row = payload as Record<string, unknown>;
-  const list = firstNamedArray(row, ["list", "lists", "folders"]);
+  const list = firstNamedArray(row, ["list", "lists", "folders", "medias", "media"]);
   if (!list) return "other";
   if (list.length === 0) {
     const folders = Array.isArray(row.lists) || Array.isArray(row.folders) || "all" in row || "canCreateVaultLists" in row;
@@ -964,14 +964,14 @@ function vaultList(payload: unknown): unknown[] {
   if (Array.isArray(payload)) return payload;
   if (!payload || typeof payload !== "object") return [];
   const row = payload as Record<string, unknown>;
-  for (const key of ["list", "items", "media", "files"]) {
+  for (const key of ["list", "items", "medias", "media", "files"]) {
     if (Array.isArray(row[key])) return row[key] as unknown[];
   }
   const data = row.data;
   if (data && typeof data === "object") {
     if (Array.isArray(data)) return data;
     const nested = data as Record<string, unknown>;
-    for (const key of ["list", "items", "media", "files"]) {
+    for (const key of ["list", "items", "medias", "media", "files"]) {
       if (Array.isArray(nested[key])) return nested[key] as unknown[];
     }
   }

@@ -287,16 +287,14 @@ export function VaultBrowser({
                       <HoverClip src={vaultMediaSrc(creatorId, item.id, "clip", { ...thumbPage, part: "head" })} title={item.title} />
                     ) : null}
                     <span className={`absolute left-1.5 top-1.5 z-10 grid h-5 w-5 place-items-center rounded-full text-[11px] font-semibold ${selected ? "bg-[#00aff0] text-white" : "bg-white/80 text-transparent"}`}>{selected ? picked.indexOf(item.id) + 1 : ""}</span>
-                    <span className="absolute right-1.5 top-1.5 z-10 flex max-w-[70%] flex-col items-end gap-1">
-                      {item.posted ? <span className="rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white">Publicado</span> : null}
-                      {sentLabel ? <span className="rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white">{sentLabel}</span> : null}
-                      {!item.posted && !sentLabel && priceChip(item.priceLabel) ? (
-                        <span className={`rounded-full px-1.5 py-0.5 text-[10px] text-white ${priceChip(item.priceLabel) === "PPV" ? "bg-[#ff5a7a] font-semibold" : "bg-black/70"}`}>{priceChip(item.priceLabel)}</span>
-                      ) : null}
-                    </span>
                   </span>
                   </button>
                   <span className="line-clamp-2 flex flex-wrap items-center gap-1 px-1 py-1">
+                    {item.posted ? <span className="rounded-full bg-[#1c2333] px-1.5 py-0.5 text-[10px] text-white">Publicado</span> : null}
+                    {sentLabel ? <span className="rounded-full bg-[#1c2333] px-1.5 py-0.5 text-[10px] text-white">{sentLabel}</span> : null}
+                    {!item.posted && !sentLabel && priceChip(item.priceLabel) ? (
+                      <span className={`rounded-full px-1.5 py-0.5 text-[10px] text-white ${priceChip(item.priceLabel) === "PPV" ? "bg-[#ff5a7a] font-semibold" : "bg-[#1c2333]"}`}>{priceChip(item.priceLabel)}</span>
+                    ) : null}
                     {item.dateLabel && item.dateLabel !== "Sin datos" ? (
                       <span className="rounded-full bg-[#1c2333] px-1.5 py-0.5 text-[10px] text-white">{item.dateLabel}</span>
                     ) : null}
@@ -347,11 +345,11 @@ export function VaultBrowser({
         {preview ? (
           <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-6" role="dialog" aria-label="Vista previa">
             <button type="button" className="absolute inset-0" aria-label="Cerrar vista previa" onClick={() => setPreview(null)} />
-            <div className="relative z-10 flex h-[80vh] w-[80vw] items-center justify-center">
+            <div data-preview-stage className="relative z-10 h-[80vh] w-[80vw]">
               {preview.kind === "video" ? (
                 <VaultPlayback src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} />
               ) : preview.kind === "audio" ? (
-                <audio controls className="w-full" src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} />
+                <audio controls className="h-full w-full" src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} />
               ) : (
                 <img alt={preview.title} className="h-full w-full object-contain" src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} />
               )}
@@ -468,11 +466,11 @@ export function VaultBrowser({
         {preview ? (
           <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-6" role="dialog" aria-label="Vista previa">
             <button type="button" className="absolute inset-0" aria-label="Cerrar vista previa" onClick={() => setPreview(null)} />
-            <div className="relative z-10 flex h-[80vh] w-[80vw] items-center justify-center">
+            <div data-preview-stage className="relative z-10 h-[80vh] w-[80vw]">
               {preview.kind === "video" ? (
                 <VaultPlayback src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} />
               ) : preview.kind === "audio" ? (
-                <audio controls className="w-full" src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} />
+                <audio controls className="h-full w-full" src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} />
               ) : (
                 <img alt={preview.title} className="h-full w-full object-contain" src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} />
               )}
@@ -704,8 +702,8 @@ function VaultPlayback({ src }: { src: string }) {
     );
   }
   return (
-    <>
-      {ready ? null : <p className="text-sm text-white">Cargando…</p>}
+    <div className="relative h-full w-full">
+      {ready ? null : <p className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-sm text-white">Cargando…</p>}
       <video
         ref={node}
         data-playback={src}
@@ -713,7 +711,7 @@ function VaultPlayback({ src }: { src: string }) {
         autoPlay
         playsInline
         preload="metadata"
-        className={ready ? "h-full w-full bg-black object-contain" : "hidden"}
+        className="h-full w-full bg-black object-contain"
         onCanPlay={() => setState("ok")}
         onError={() => {
           reportPlaybackError(src, { tipo: "video", detalle: "media", fatal: true, codigo: node.current?.error?.code ?? null });
@@ -722,7 +720,7 @@ function VaultPlayback({ src }: { src: string }) {
           setState("error");
         }}
       />
-    </>
+    </div>
   );
 }
 

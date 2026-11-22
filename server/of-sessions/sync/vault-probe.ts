@@ -11,7 +11,7 @@ import { decryptBytes } from "../crypto.ts";
 import { parseStorageState } from "../sessions/storage-state.ts";
 import { AccountStore } from "../store/account-store.ts";
 import type { Account } from "../types.ts";
-import { sessionForApi, signedHeaders, vaultListsPath, vaultMediaPath } from "./of-chat-api.ts";
+import { sessionForApi, signedHeaders, vaultListMediaPath, vaultListsPath, vaultMediaPath } from "./of-chat-api.ts";
 import { loadSignRules } from "./of-sign.ts";
 import { mediaStateHits, vaultFolderMark } from "./vault-model.ts";
 
@@ -23,6 +23,10 @@ const ENUMS = new Set([
 
 export function readProbeFolders(argv: readonly string[]): boolean {
   return argv.includes("--folders");
+}
+
+export function readProbeSubfolders(argv: readonly string[]): boolean {
+  return argv.includes("--subfolders");
 }
 
 export function readProbeAccount(argv: readonly string[]): string {
@@ -172,7 +176,7 @@ function probeVariantStats(body: unknown, folderId: string): { n: number; hasMor
 function probeItems(body: unknown): unknown[] {
   if (!body || typeof body !== "object") return [];
   const raw = body as Record<string, unknown>;
-  for (const key of ["list", "items", "media"]) {
+  for (const key of ["list", "items", "medias", "media"]) {
     if (Array.isArray(raw[key])) return raw[key] as unknown[];
   }
   return [];
@@ -445,16 +449,76 @@ function findAccount(accounts: Account[], token: string): Account | undefined {
     ?? accounts.find((item) => item.id === needle);
 }
 
+/** Solo lectura. Una pausa entre páginas. El log lleva el hash de la carpeta, páginas y medios. */
+export async function executeSubfolderCheck(input: {
+  account: string;
+  env: NodeJS.ProcessEnv;
+  fetch: typeof fetch;
+  now: () => number;
+  stdout: (line: string) => void;
+  pause?: (ms: number) => Promise<void>;
+}): Promise<void> {
+  const pause = input.pause ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const config = loadConfig(input.env);
+  if (!config.sessionKey) throw new Error("Falta FANLINK_SESSION_KEY.");
+  const state = await loadProbeState(config.dataDir, input.account, config.sessionKey);
+  const auth = sessionForApi(state, input.now());
+  if ("reason" in auth) throw new Error(auth.reason);
+  const rules = await loadSignRules(input.fetch, input.now());
+  const reads: Array<{ name: string; path: string; status: number | null; body: unknown }> = [];
+  const bodies = await readListPages(input, rules, auth, reads);
+  const folders = bodies.flatMap(listRows).filter(isCheckedFolder);
+  input.stdout(`[fanlink:vault] subcarpetas=${folders.length}`);
+  for (const folder of folders) {
+    const id = String(folder.id);
+    await pause(800);
+    let offset = 0;
+    let pages = 0;
+    let total = 0;
+    let status: number | null = null;
+    for (let page = 0; page < 40; page += 1) {
+      const route = vaultListMediaPath(id, offset);
+      const read = await probeGet(input.fetch, route, signedHeaders(rules, route, auth, input.now()));
+      status = read.status;
+      const count = probeItems(read.body).length;
+      pages += 1;
+      total += count;
+      const more = probeHasMore(read.body) || count >= 40;
+      if (!more || count === 0 || read.status !== 200) break;
+      offset += count;
+      await pause(800);
+    }
+    input.stdout(`[fanlink:vault] subcarpeta=${vaultFolderMark(id)} paginas=${pages} medios=${total} status=${status ?? "sin"}`);
+  }
+}
+
+function isCheckedFolder(row: Record<string, unknown>): boolean {
+  const id = row.id;
+  if (typeof id !== "number" && typeof id !== "string") return false;
+  const type = text(row.type);
+  return type === "custom" || row.parentId != null || row.parent_id != null || row.parentListId != null;
+}
+
 const isMain = process.argv[1] != null && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) {
-  executeVaultProbe({
-    account: readProbeAccount(process.argv),
-    folders: readProbeFolders(process.argv),
-    env: process.env,
-    fetch: globalThis.fetch,
-    now: () => Date.now(),
-    stdout: (line) => console.log(line),
-  }).catch((error: unknown) => {
+  const account = readProbeAccount(process.argv);
+  const run = readProbeSubfolders(process.argv)
+    ? executeSubfolderCheck({
+      account,
+      env: process.env,
+      fetch: globalThis.fetch,
+      now: () => Date.now(),
+      stdout: (line) => console.log(line),
+    })
+    : executeVaultProbe({
+      account,
+      folders: readProbeFolders(process.argv),
+      env: process.env,
+      fetch: globalThis.fetch,
+      now: () => Date.now(),
+      stdout: (line) => console.log(line),
+    });
+  run.catch((error: unknown) => {
     const message = error instanceof Error ? error.message : "No se pudo sondear la bóveda.";
     console.error(message.replace(/https?:\/\/\S+/gi, ""));
     process.exitCode = 1;

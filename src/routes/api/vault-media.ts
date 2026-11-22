@@ -3,17 +3,18 @@ import { authConfigured, DEV_USER_ID, requireUserId, UnauthorizedError } from "@
 import { getSql } from "@/lib/db";
 import { getOfSessionManager } from "@/lib/of-sessions-runtime.server";
 import { ensureStaff } from "@/lib/workspace-store";
-import { abortResponse, handleVaultMedia, isClientAbort, noteVaultPlayRequest, playbackDebugLine } from "../../../server/of-sessions/http/vault-http.ts";
+import { abortResponse, handleVaultMedia, noteVaultPlayRequest, playbackDebugLine } from "../../../server/of-sessions/http/vault-http.ts";
 import { creatorAllowed } from "../../../server/of-sessions/sync/vault-query.ts";
 import { readSessionMediaResult, videoBytesAccepted, videoFollowUp } from "../../../server/of-sessions/sync/media-bytes.ts";
 import { accountCreatorIds } from "../../../server/of-sessions/http/vault-accounts.ts";
-import { fetchSignedMediaDetail, fetchSignedVault, sessionForApi, signedHeaders } from "../../../server/of-sessions/sync/of-chat-api.ts";
-import { choosePlayableVideo, drmPlaybackChoice, parseVaultBundle, resolveDetailPlayback, vaultDetailRow, vaultFolderMark, videoContainer, videoFlagLine, videoFormatHold, videoHoldPayload } from "../../../server/of-sessions/sync/vault-model.ts";
-import { describePlaylist, drmLicenseEnabled, forwardDrmLicense, hlsMediaResponse, LICENSE_BODY_MAX, licenseMethodStatus, openDrmManifest, paceLicense, protectedVideoHold, readBoundedPlaylist } from "../../../server/of-sessions/sync/vault-hls.ts";
+import { fetchSignedVault, sessionForApi, signedHeaders } from "../../../server/of-sessions/sync/of-chat-api.ts";
+import { parseVaultBundle, videoContainer, videoFormatHold } from "../../../server/of-sessions/sync/vault-model.ts";
+import { drmLicenseEnabled, forwardDrmLicense, hlsMediaResponse, LICENSE_BODY_MAX, licenseMethodStatus, paceLicense, protectedVideoHold } from "../../../server/of-sessions/sync/vault-hls.ts";
+import { loadMediaDetail } from "../../../server/of-sessions/sync/vault-detail.ts";
 import { loadSignRules } from "../../../server/of-sessions/sync/of-sign.ts";
 import { loadFreshPreview, normalizeVaultOffset, reloadVaultPreview, signedUrlExpired } from "../../../server/of-sessions/sync/vault-thumbs.ts";
 import { openProfileThumbs } from "../../../server/of-sessions/sync/vault-owner.ts";
-import { playbackUrl, reuseOrRefreshVideo, saveVaultPreview, storedVaultMediaUrls, storedVaultPage, VIDEO_DETAIL_PAUSE_MS } from "../../../server/of-sessions/sync/vault-store.ts";
+import { playbackUrl, reuseOrRefreshVideo, saveVaultPreview, storedVaultMediaUrls, storedVaultPage } from "../../../server/of-sessions/sync/vault-store.ts";
 
 export const Route = createFileRoute("/api/vault-media")({
   server: {
@@ -115,7 +116,14 @@ async function vaultMediaGet(request: Request): Promise<Response> {
               now: Date.now(),
               force: pause,
               pause: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-              loadDetail: () => loadMediaDetail(creatorId, mediaId, new URL(request.url).origin),
+              loadDetail: async () => {
+                const sessions = await getOfSessionManager();
+                return loadMediaDetail(creatorId, mediaId, new URL(request.url).origin, {
+                  listAccounts: () => sessions.listAccounts(),
+                  readStorageState: (id) => sessions.readStorageState(id),
+                  fetchImpl: fetch,
+                });
+              },
             });
             if (again.hls) {
               hlsManifest = again.hls;
@@ -226,60 +234,8 @@ function rememberHold(creatorId: string, mediaId: string, text: string): void {
   videoHolds.set(`${creatorId}\n${mediaId}`, { at: Date.now(), text });
 }
 
-async function loadMediaDetail(creatorId: string, mediaId: string, origin: string): Promise<{ url: string | null; hold: string; hls: string | null }> {
-  const sessions = await getOfSessionManager();
-  const account = (await sessions.listAccounts()).find((item) => item.creatorId === creatorId && item.status === "active" && item.hasStorageState);
-  if (!account) return { url: null, hold: "Vídeo no disponible", hls: null };
-  const state = await sessions.readStorageState(account.id);
-  const auth = sessionForApi(state, Date.now());
-  const read = await fetchSignedMediaDetail(state, {
-    fetch,
-    now: () => Date.now(),
-    accountId: account.id,
-    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-  }, mediaId);
-  const row = vaultDetailRow(read.body);
-  const flags = row ? videoFlagLine(row) : "convertedToVideo=ausente canView=ausente hasError=ausente isReady=ausente";
-  const choice = row && !choosePlayableVideo(row) ? drmPlaybackChoice(row) : null;
-  if (row && choice && !drmLicenseEnabled()) {
-    console.info(`[fanlink:vault] video medio=${vaultFolderMark(mediaId)} detalle=protegido lista=${choice.kind} status=${read.status ?? "sin"} ${flags}`.slice(0, 360));
-    return { url: null, hold: protectedVideoHold(), hls: null };
-  }
-  if (row && choice) {
-    const scope = { creatorId, mediaId, sessionCookie: "cookie" in auth ? auth.cookie : "", origin };
-    console.info(`[fanlink:vault] video medio=${vaultFolderMark(mediaId)} detalle=pidiendo lista=${choice.kind} status=${read.status ?? "sin"} ${flags}`.slice(0, 360));
-    let text: string | null = null;
-    try {
-      text = await openDrmManifest(row, fetch, () => new Promise((resolve) => setTimeout(resolve, VIDEO_DETAIL_PAUSE_MS)), scope);
-    } catch (error) {
-      if (isClientAbort(error)) {
-        console.info(`[fanlink:vault] video medio=${vaultFolderMark(mediaId)} detalle=abort lista=${choice.kind} status=${read.status ?? "sin"}`.slice(0, 360));
-        return { url: null, hold: "", hls: null };
-      }
-      throw error;
-    }
-    const shape = text ? describePlaylist(text) : "";
-    console.info(`[fanlink:vault] video medio=${vaultFolderMark(mediaId)} detalle=${text ? choice.kind : "sin-url"} ${shape} tipo=lista status=${read.status ?? "sin"} ${flags}`.slice(0, 360));
-    if (text) return { url: null, hold: "", hls: text };
-    return { url: null, hold: JSON.stringify(videoHoldPayload(read.status, row)), hls: null };
-  }
-  const playback = row
-    ? await resolveDetailPlayback(row, readPlaylist, () => new Promise((resolve) => setTimeout(resolve, VIDEO_DETAIL_PAUSE_MS)))
-    : { url: null, via: "sin-url" as const };
-  const tipo = videoContainer({ url: playback.url });
-  console.info(`[fanlink:vault] video medio=${vaultFolderMark(mediaId)} detalle=${playback.via} tipo=${tipo} status=${read.status ?? "sin"} ${flags}`.slice(0, 360));
-  const format = videoFormatHold(tipo);
-  if (format) return { url: null, hold: aviHold(), hls: null };
-  if (playback.url && !signedUrlExpired(playback.url, Date.now())) return { url: playback.url, hold: "", hls: null };
-  return { url: null, hold: JSON.stringify(videoHoldPayload(read.status, row)), hls: null };
-}
-
 function aviHold(): string {
   return JSON.stringify(videoFormatHold("avi") ?? { texto: "Este vídeo es AVI y el navegador no puede reproducirlo.", abrir: true });
-}
-
-async function readPlaylist(url: string): Promise<string | null> {
-  return readBoundedPlaylist(url, fetch);
 }
 
 async function thumbPage(

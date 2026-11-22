@@ -40,12 +40,6 @@ export async function paceLicense(creatorId: string, pause: (ms: number) => Prom
   if (licenseQueue.get(creatorId) === done) licenseQueue.delete(creatorId);
 }
 
-/** Bóveda: /drm/?type=widevine. Con texto o mensaje, /drm/post|message/{id}. */
-export type DrmLicenseContext =
-  | { kind: "media" }
-  | { kind: "post"; id: string }
-  | { kind: "message"; id: string };
-
 type Ticket = {
   at: number;
   creatorId: string;
@@ -53,7 +47,6 @@ type Ticket = {
   origin: string;
   cdnCookie: string;
   sessionCookie: string;
-  drm: DrmLicenseContext;
   urls: Map<string, string>;
   bases: Map<string, string>;
 };
@@ -65,27 +58,14 @@ export type HlsScope = {
   mediaId: string;
   sessionCookie: string;
   origin: string;
-  drm?: DrmLicenseContext;
 };
 
 const DASHIF_NS = "https://dashif.org/guidelines/dash";
 
-/** La web manda el challenge a su API, no a Pallycon. UltimaScraperAPI y OF-DRM. */
-export function widevineLicenseUrl(mediaId: string, context: DrmLicenseContext = { kind: "media" }): string | null {
+/** La web manda el challenge a /users/media/{id}/drm/?type=widevine. El id sale del ticket, no de la query. */
+export function widevineLicenseUrl(mediaId: string): string | null {
   if (!contextId(mediaId)) return null;
-  const root = `https://onlyfans.com/api2/v2/users/media/${mediaId}/drm`;
-  switch (context.kind) {
-    case "media":
-      return `${root}/?type=widevine`;
-    case "post":
-      return contextId(context.id) ? `${root}/post/${context.id}?type=widevine` : null;
-    case "message":
-      return contextId(context.id) ? `${root}/message/${context.id}?type=widevine` : null;
-    default: {
-      const neverContext: never = context;
-      return neverContext;
-    }
-  }
+  return `https://onlyfans.com/api2/v2/users/media/${mediaId}/drm/?type=widevine`;
 }
 
 type HlsBody = {
@@ -127,7 +107,6 @@ function rememberTicket(scope: HlsScope, cdnCookie: string): string {
     origin: scope.origin.replace(/\/$/, ""),
     cdnCookie,
     sessionCookie: scope.sessionCookie,
-    drm: scope.drm ?? { kind: "media" },
     urls: new Map(),
     bases: new Map(),
   });
@@ -407,7 +386,7 @@ export async function playVaultHlsDetail(row: Record<string, unknown>, fetchImpl
 async function serveHlsTarget(ticketId: string, absolute: string, fetchImpl: typeof fetch, range: string | null, signal?: AbortSignal): Promise<HlsBody | null> {
   const ticket = tickets.get(ticketId);
   if (!ticket || !hlsHostAllowed(absolute)) return null;
-  const outboundRange = range ? boundedSegmentRange(range) : null;
+  const outboundRange = playlistTarget(absolute) && !range ? null : boundedSegmentRange(range);
   let response: Response;
   try {
     const fetched = await fetchFollowing(absolute, {
@@ -545,6 +524,11 @@ async function fetchFollowing(absolute: string, init: { method: string; headers:
     signal,
   });
   return { response, url: current };
+}
+
+function playlistTarget(absolute: string): boolean {
+  const path = absolute.split("?")[0]?.toLowerCase() ?? "";
+  return path.endsWith(".m3u8") || path.endsWith(".mpd");
 }
 
 function hlsHostAllowed(raw: string): boolean {
@@ -698,7 +682,7 @@ function attachWidevineLicense(doc: ReturnType<DOMParser["parseFromString"]>, ti
   if (!widevine) return;
   if (elementChildren(widevine).some((node) => localTag(node) === "laurl" && (node.textContent || "").includes("variant=licencia"))) return;
   const ticket = tickets.get(ticketId);
-  const ofUrl = ticket ? widevineLicenseUrl(ticket.mediaId, ticket.drm) : null;
+  const ofUrl = ticket ? widevineLicenseUrl(ticket.mediaId) : null;
   const chosen = ofUrl ?? pallyconLicense(doc, ticketId);
   if (!chosen) {
     failed.value = true;

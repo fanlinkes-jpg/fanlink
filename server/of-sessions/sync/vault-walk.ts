@@ -462,8 +462,11 @@ function listsBody(payloads: readonly unknown[]): unknown {
 
 function mediaCount(body: unknown): number {
   if (!body || typeof body !== "object") return 0;
-  const list = (body as Record<string, unknown>).list;
-  return Array.isArray(list) ? list.length : 0;
+  const raw = body as Record<string, unknown>;
+  for (const key of ["list", "medias", "media", "items"]) {
+    if (Array.isArray(raw[key])) return raw[key].length;
+  }
+  return 0;
 }
 
 function listCount(body: unknown): number {

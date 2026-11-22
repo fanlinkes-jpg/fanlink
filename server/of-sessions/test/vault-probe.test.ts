@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { vaultMediaPath, vaultPageLog } from "../sync/of-chat-api.ts";
+import { vaultListMediaPath, vaultMediaPath, vaultPageLog } from "../sync/of-chat-api.ts";
 import { assertProbeFileSafe, folderProbePaths, folderProbeVerdict, pickSmallVideoFolder, probeExpectedCount, probePageContinues, readProbeFolders, sanitizeVaultShape, vaultListLines } from "../sync/vault-probe.ts";
 import { VAULT_LISTS_FIXTURE } from "./fixtures/vault-of-shape.ts";
 import { mediaAcceptHeader, vaultPlayerLog } from "../sync/media-bytes.ts";
@@ -19,6 +19,14 @@ test("la página de medios usa list y limit 40, sin type ni field", () => {
   assert.match(vaultMediaPath("88001", 40), /list=88001/);
   assert.match(vaultMediaPath("88001", 40), /field=recent/);
   assert.equal(vaultMediaPath("88001", 40).includes("list_id="), false);
+  const folder = vaultListMediaPath("88002", 40);
+  assert.match(folder, /^\/api2\/v2\/vault\/lists\/88002\/media\?/);
+  assert.match(folder, /list=88002/);
+  assert.match(folder, /limit=40/);
+  assert.match(folder, /offset=40/);
+  assert.match(folder, /field=recent/);
+  assert.match(folder, /sort=desc/);
+  assert.equal(folder.includes("name="), false);
   const line = vaultPageLog({ route: all, status: 200, count: 40, hasMore: "si", offset: 0, listId: "all" });
   assert.match(line, /ruta=\/api2\/v2\/vault\/media status=200 n=40 hasMore=si offset=0 list=todos/);
   const mark = vaultFolderMark("28619188");

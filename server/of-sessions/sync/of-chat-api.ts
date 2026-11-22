@@ -281,6 +281,19 @@ export function vaultMediaPath(listId: string, offset: number): string {
   return `/api2/v2/vault/media?${params.toString()}`;
 }
 
+/** Medios de una carpeta o subcarpeta. La web abre `lists/{id}/media`, no `vault/media?list=`. */
+export function vaultListMediaPath(listId: string, offset: number): string {
+  const id = listId.trim();
+  const params = new URLSearchParams({
+    limit: String(VAULT_MEDIA_LIMIT),
+    offset: String(offset),
+    list: id,
+    field: "recent",
+    sort: "desc",
+  });
+  return `/api2/v2/vault/lists/${encodeURIComponent(id)}/media?${params.toString()}`;
+}
+
 /** Un medio de la bóveda. La web lo pide al abrir un vídeo cuyo listado no trae URL. */
 export function vaultMediaDetailPath(mediaId: string): string {
   const id = mediaId.trim();
@@ -346,7 +359,7 @@ export async function fetchSignedVault(state: StorageStateFile, deps: {
   }
   let queryParam: "list" | "list_id" | null = null;
   if (wantMedia) {
-    const primary = vaultMediaPath(list, skip);
+    const primary = list === "all" ? vaultMediaPath(list, skip) : vaultListMediaPath(list, skip);
     queryParam = "list";
     const read = await readVaultPath(deps, () => getJson(deps.fetch, primary, signedHeaders(rules, primary, auth, deps.now()), deps.now()));
     const mediaCount = mediaCountOf(read.body);

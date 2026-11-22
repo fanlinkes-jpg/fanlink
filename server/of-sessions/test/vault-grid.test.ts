@@ -43,6 +43,10 @@ test("el panel real del chat monta VaultBrowser con tarjetas cuadradas", async (
   const server = startDev(port);
   const browser = await chromium.launch();
   const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+  let releaseVideo: () => void = () => undefined;
+  const holdVideo = new Promise<void>((resolve) => {
+    releaseVideo = resolve;
+  });
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     let vaultReads = 0;
@@ -54,6 +58,7 @@ test("el panel real del chat monta VaultBrowser con tarjetas cuadradas", async (
       const url = request.url();
       if (url.includes("/api/vault-media")) {
         playback.push(url);
+        if (url.includes("variant=full")) await holdVideo;
         await route.fulfill({ status: 200, contentType: "image/png", body: png });
         return;
       }
@@ -143,6 +148,15 @@ test("el panel real del chat monta VaultBrowser con tarjetas cuadradas", async (
     assert.ok(panelBox.height >= 900 * 0.9, `alto modal ${panelBox.height}`);
     await panel.getByText("Publicado").first().waitFor();
     await panel.getByText("Enviado 2").waitFor();
+    const cardBox = await panel.locator("[data-vault-card]").first().boundingBox();
+    const postedBox = await panel.getByText("Publicado", { exact: true }).first().boundingBox();
+    const sentBox = await panel.getByText("Enviado 2").boundingBox();
+    const ppvCard = await panel.locator("[data-vault-card]").nth(1).boundingBox();
+    const ppvBox = await panel.getByText("PPV", { exact: true }).boundingBox();
+    assert.ok(cardBox && postedBox && sentBox && ppvCard && ppvBox);
+    assert.ok(postedBox.y >= cardBox.y + cardBox.height - 1, `Publicado solapa la imagen ${postedBox.y}/${cardBox.y + cardBox.height}`);
+    assert.ok(sentBox.y >= cardBox.y + cardBox.height - 1, `Enviado solapa la imagen ${sentBox.y}`);
+    assert.ok(ppvBox.y >= ppvCard.y + ppvCard.height - 1, `PPV solapa la imagen ${ppvBox.y}`);
     assert.equal(await panel.getByText("Sin datos", { exact: true }).count(), 0);
     assert.equal(await panel.getByText("Sin miniatura").count(), 0);
     const until = Date.now() + 5_000;
@@ -177,7 +191,15 @@ test("el panel real del chat monta VaultBrowser con tarjetas cuadradas", async (
       playback.some((item) => item.includes("/api/vault-media") && item.includes("variant=full") && item.includes("mediaId=m2")),
       `ver no pidió el vídeo: ${playback.join(" | ")}`,
     );
+    const stage = page.locator("[data-preview-stage]");
+    await stage.locator("video").waitFor();
+    const stageBox = await stage.boundingBox();
+    const videoBox = await stage.locator("video").boundingBox();
+    assert.ok(stageBox && videoBox, "el visor no tiene caja");
+    assert.ok(videoBox.width * videoBox.height >= stageBox.width * stageBox.height * 0.8, `el vídeo ocupa ${videoBox.width}x${videoBox.height} de ${stageBox.width}x${stageBox.height}`);
+    releaseVideo();
   } finally {
+    releaseVideo();
     await browser.close().catch(() => undefined);
     server.kill("SIGTERM");
   }
