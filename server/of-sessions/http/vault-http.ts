@@ -5,13 +5,84 @@ import { loadSaleContext } from "../sync/vault-store.ts";
 import type { ReadSql } from "../sync/store.ts";
 import { creatorAllowed, queryVaultForActor, type VaultActor } from "../sync/vault-query.ts";
 import type { MassEnv } from "../../../src/lib/mass/gates.ts";
+import { liveViewDebug } from "../live/debug.ts";
+import { vaultFolderMark } from "../sync/vault-model.ts";
 import { getVaultThumb, type MediaBytes } from "../sync/media-bytes.ts";
 
 export type SessionActor = VaultActor | null;
 
-export function mediaLogLine(creatorId: string, messageKey: string): string {
-  const clean = (value: string) => value.replace(/https?:\/\/\S+/gi, "").replace(/\s+/g, " ").trim().slice(0, 80);
-  return `[fanlink:media] creator=${clean(creatorId)} message=${clean(messageKey)}`;
+export function mediaLogLine(creatorId: string, messageKey: string): string | null {
+  if (!liveViewDebug()) return null;
+  return `[fanlink:media] creator=${vaultFolderMark(creatorId)} message=${vaultFolderMark(messageKey)}`;
+}
+
+/** Un solo `[fanlink:media]` por medio aunque «Ver» repita la petición. */
+export function takeMediaLog(creatorId: string, mediaId: string): string | null {
+  const line = mediaLogLine(creatorId, mediaId);
+  if (!line) return null;
+  const key = `media\n${creatorId}\n${mediaId}`;
+  const now = Date.now();
+  if (now - (playNotes.get(key) ?? 0) < PLAY_NOTE_MS) return null;
+  playNotes.set(key, now);
+  return line;
+}
+
+export function playbackDebugLine(body: unknown): string | null {
+  if (!body || typeof body !== "object") return null;
+  const record = body as Record<string, unknown>;
+  const tipo = safePlaybackToken(record.tipo);
+  const detalle = safePlaybackToken(record.detalle);
+  if (!tipo && !detalle) return null;
+  const fatal = record.fatal === true || record.fatal === "si" ? "si" : "no";
+  const codigo = typeof record.codigo === "number" && Number.isInteger(record.codigo) ? String(record.codigo) : "no";
+  const medio = typeof record.mediaId === "string" ? vaultFolderMark(record.mediaId) : "no";
+  return `[fanlink:vault] reproductor error medio=${medio} tipo=${tipo || "no"} detalle=${detalle || "no"} fatal=${fatal} codigo=${codigo}`;
+}
+
+function safePlaybackToken(value: unknown): string {
+  if (typeof value !== "string") return "";
+  if (/https?:|onlyfans|cloudfront|cookie|policy|signature/i.test(value)) return "oculto";
+  return value.replace(/[^A-Za-z0-9._:-]/g, "").slice(0, 60);
+}
+
+const playNotes = new Map<string, number>();
+const PLAY_NOTE_MS = 4_000;
+
+/** Un solo `ver` por medio aunque el reproductor repita la petición. */
+export function clearPlayNotes(): void {
+  playNotes.clear();
+}
+
+/** Cada «Ver» o el hover deja una línea antes de leer la sesión. Sin URL ni id.
+ * «Ver» registra `ver variant=full`. El hover registra `ver variant=clip`.
+ */
+export function noteVaultPlayRequest(request: Request): void {
+  const url = new URL(request.url);
+  const variant = url.searchParams.get("variant");
+  if (variant !== "full" && variant !== "clip") return;
+  const mediaId = url.searchParams.get("mediaId") ?? "";
+  const key = `${variant}\n${mediaId}`;
+  const now = Date.now();
+  const last = playNotes.get(key) ?? 0;
+  if (now - last < PLAY_NOTE_MS) return;
+  playNotes.set(key, now);
+  console.info(`[fanlink:vault] ver variant=${variant} medio=${vaultFolderMark(mediaId)}`);
+}
+
+/** El cliente cerró la petición. No es un 500. */
+export function isClientAbort(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const record = error as { name?: unknown; code?: unknown; message?: unknown; cause?: unknown };
+  const name = typeof record.name === "string" ? record.name : "";
+  const code = typeof record.code === "string" ? record.code : "";
+  const message = typeof record.message === "string" ? record.message : "";
+  if (name === "AbortError" || code === "ECONNRESET" || code === "ABORT_ERR" || message === "aborted") return true;
+  return isClientAbort(record.cause);
+}
+
+export function abortResponse(error: unknown, signal?: AbortSignal): Response | null {
+  if (!signal?.aborted || !isClientAbort(error)) return null;
+  return new Response(null, { status: 499 });
 }
 
 export async function handleVaultQuery(request: Request, deps: {
@@ -39,18 +110,21 @@ export async function handleChatMedia(request: Request, deps: {
   const threadKey = url.searchParams.get("threadKey") ?? "";
   const messageKey = url.searchParams.get("messageKey") ?? "";
   const index = Number(url.searchParams.get("index") ?? "0");
-  deps.log?.(mediaLogLine(creatorId, messageKey));
+  const mediaLine = mediaLogLine(creatorId, messageKey);
+  if (mediaLine) deps.log?.(mediaLine);
   if (!creatorId || !messageKey || !Number.isInteger(index) || index < 0) return new Response("Sin datos", { status: 404 });
   if (!creatorAllowed(actor, creatorId)) return new Response("Sin datos", { status: 403 });
   const row = await deps.findMedia(creatorId, threadKey, messageKey, index);
-  return streamMedia(row?.url ?? null, request, deps.fetchBytes);
+  return streamMedia(row?.url ?? null, request.headers.get("range"), deps.fetchBytes);
 }
 
 export async function handleVaultMedia(request: Request, deps: {
   session: () => Promise<SessionActor>;
-  findPreview: (creatorId: string, mediaId: string, variant?: "full" | "preview") => Promise<string | null>;
-  fetchBytes: (url: string, range?: string | null) => Promise<MediaBytes | null>;
+  findPreview: (creatorId: string, mediaId: string, variant?: "full" | "preview" | "clip") => Promise<string | null>;
+  fetchBytes: (url: string, range?: string | null, signal?: AbortSignal) => Promise<MediaBytes | null>;
   log?: (line: string) => void;
+  /** Texto para el visor cuando un vídeo sigue sin URL después del detalle. */
+  videoHold?: () => string | null;
 }): Promise<Response> {
   const actor = await deps.session();
   if (!actor) return new Response("Unauthorized", { status: 401 });
@@ -58,8 +132,10 @@ export async function handleVaultMedia(request: Request, deps: {
   const url = new URL(request.url);
   const creatorId = url.searchParams.get("creatorId") ?? "";
   const mediaId = url.searchParams.get("mediaId") ?? "";
-  const variant = url.searchParams.get("variant") === "full" ? "full" : "preview";
-  deps.log?.(mediaLogLine(creatorId, mediaId));
+  const rawVariant = url.searchParams.get("variant");
+  const variant = rawVariant === "full" || rawVariant === "clip" ? rawVariant : "preview";
+  const mediaLine = takeMediaLog(creatorId, mediaId);
+  if (mediaLine) deps.log?.(mediaLine);
   if (!creatorId || !mediaId) return new Response("Sin datos", { status: 404 });
   if (!creatorAllowed(actor, creatorId)) return new Response("Sin datos", { status: 403 });
   if (variant === "preview" && !request.headers.get("range")) {
@@ -67,7 +143,17 @@ export async function handleVaultMedia(request: Request, deps: {
     if (cached) return thumbResponse(cached);
   }
   const preview = await deps.findPreview(creatorId, mediaId, variant);
-  return streamMedia(preview, request, deps.fetchBytes);
+  if (!preview && (variant === "full" || variant === "clip")) {
+    const held = holdResponse(deps.videoHold?.()?.trim() || null);
+    if (held.status !== 404) return held;
+  }
+  const range = url.searchParams.get("part") === "head" ? headRange(request.headers.get("range")) : request.headers.get("range");
+  return streamMedia(preview, range, deps.fetchBytes, deps.videoHold, request.signal);
+}
+
+/** Con `part=head` cualquier Range se queda en el primer megabyte. El hover no baja el archivo entero. */
+export function headRange(_header: string | null): string {
+  return "bytes=0-1048575";
 }
 
 export async function handleVaultSend(request: Request, deps: {
@@ -136,25 +222,52 @@ function canReadMedia(actor: VaultActor): boolean {
 
 async function streamMedia(
   target: string | null,
-  request: Request,
-  fetchBytes: (url: string, range?: string | null) => Promise<MediaBytes | null>,
+  range: string | null,
+  fetchBytes: (url: string, range?: string | null, signal?: AbortSignal) => Promise<MediaBytes | null>,
+  videoHold?: () => string | null,
+  signal?: AbortSignal,
 ): Promise<Response> {
-  if (!target || !mediaHostAllowed(target)) return new Response("Sin datos", { status: 404 });
-  const range = request.headers.get("range");
-  const bytes = await fetchBytes(target, range);
-  if (!bytes) return new Response("Sin datos", { status: 404 });
+  const hold = () => videoHold?.()?.trim() || null;
+  if (!target || !mediaHostAllowed(target)) return holdResponse(hold());
+  const bytes = await fetchBytes(target, range, signal);
+  if (!bytes) return holdResponse(hold());
   const body = mediaBody(bytes);
   if (!body) return new Response("Sin datos", { status: 404 });
   const length = bytes.contentLength ?? bytes.body?.byteLength ?? null;
   const headers = new Headers({
     "content-type": bytes.contentType || "application/octet-stream",
-    "cache-control": !range && bytes.status === 200 ? "private, max-age=300" : "private, no-store",
+    "cache-control": !range && bytes.status === 200 && !bytes.contentType.includes("mpegurl") && !bytes.contentType.includes("dash") ? "private, max-age=300" : "private, no-store",
     "x-content-type-options": "nosniff",
     "accept-ranges": "bytes",
   });
   if (length != null) headers.set("content-length", String(length));
   if (bytes.contentRange) headers.set("content-range", bytes.contentRange);
   return new Response(body, { status: bytes.status, headers });
+}
+
+function holdResponse(hold: string | null): Response {
+  if (!hold) return new Response("Sin datos", { status: 404 });
+  const payload = holdPayload(hold);
+  if (payload) {
+    return new Response(JSON.stringify(payload), {
+      status: 409,
+      headers: { "content-type": "application/json; charset=utf-8", "cache-control": "private, no-store" },
+    });
+  }
+  return new Response(hold, {
+    status: 409,
+    headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "private, no-store" },
+  });
+}
+
+function holdPayload(hold: string): { texto: string; abrir: boolean } | null {
+  try {
+    const parsed = JSON.parse(hold) as { texto?: unknown; abrir?: unknown };
+    if (typeof parsed.texto !== "string") return null;
+    return { texto: parsed.texto, abrir: parsed.abrir === true };
+  } catch {
+    return null;
+  }
 }
 
 function thumbResponse(cached: { body: Uint8Array; contentType: string }): Response {

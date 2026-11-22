@@ -709,7 +709,7 @@ function readFanSpend(
   const online = onlineFlag(record.isOnline) ?? onlineFlag(record.online);
   const subPriceCents = money(source.price ?? source.subscribePrice ?? source.regularPrice);
   const subExpiresAt = iso(source.expiredAt ?? source.expireDate);
-  const renewRaw = source.autoRenew ?? source.renewedAuto ?? record.autoRenew;
+  const renewRaw = source.autoRenew ?? source.renewedAuto ?? source.isAutoRenew ?? source.subscribedOnAutoprolong ?? source.subscribedByAutoprolong ?? source.autoprolong ?? record.autoRenew ?? record.subscribedOnAutoprolong ?? record.subscribedByAutoprolong;
   const renewAuto = renewRaw === true || renewRaw === false ? renewRaw : null;
   const card = { spentCents, subscribesCents, tipsCents, postsCents, messagesCents, avatarUrl, online, subPriceCents, subExpiresAt, renewAuto };
   const parts = [subscribesCents, tipsCents, postsCents, messagesCents].filter((value) => value != null);

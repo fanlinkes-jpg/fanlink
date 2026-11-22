@@ -22,8 +22,9 @@ function formatRatio(value: number | null): string {
 
 export function CampaignDrafts() {
   const creators = useCrm((s) => s.creators);
+  const sharedId = useCrm((s) => s.creatorId);
+  const creatorId = sharedId && sharedId !== "all" ? sharedId : creators.find((creator) => creator.id !== "all")?.id ?? "";
   const vault = useCrm((s) => s.vault);
-  const [creatorId, setCreatorId] = useState(creators[0]?.id ?? "");
   const [name, setName] = useState("");
   const [segment, setSegment] = useState<(typeof SEGMENTS)[number]["id"]>("active");
   const [body, setBody] = useState("Hola {nombre}");
@@ -83,11 +84,6 @@ export function CampaignDrafts() {
             .catch((error: unknown) => toast.error(error instanceof Error ? error.message : "No se ha podido guardar"));
         }}
       >
-        <Select value={creatorId} onChange={(event) => setCreatorId(event.target.value)} aria-label="Creadora">
-          {creators.map((creator) => (
-            <option key={creator.id} value={creator.id}>{creator.name}</option>
-          ))}
-        </Select>
         <Select value={segment} onChange={(event) => setSegment(event.target.value as typeof segment)} aria-label="Segmento">
           {SEGMENTS.map((item) => (
             <option key={item.id} value={item.id}>{item.label}</option>
@@ -128,7 +124,7 @@ export function CampaignDrafts() {
         </div>
       )}
       <ul className="mt-4 space-y-2 text-sm">
-        {drafts.map((draft) => (
+        {drafts.filter((draft) => draft.creatorId === creatorId).map((draft) => (
           <li key={draft.id} className="rounded-md border border-line px-3 py-2">
             <p className="font-medium">{draft.name} · {draft.recipientCount} destinatarios · {draft.status === "scheduled" ? "programada" : "borrador"}</p>
             <p className="text-muted">

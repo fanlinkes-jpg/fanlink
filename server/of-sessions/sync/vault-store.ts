@@ -1,6 +1,7 @@
 import type { ReadSql } from "./store.ts";
+import { signedUrlExpired } from "./vault-thumbs.ts";
 import { emptyVaultQuery, vaultQueryFromUnknown, type VaultQuery } from "./vault-filter.ts";
-import { historyFromMedia, historyFromSends, mergeFanUses, parseVaultBundle, type FanVaultUse, type VaultFile, type VaultList } from "./vault-model.ts";
+import { folderMediaCap, historyFromMedia, historyFromSends, isCandidateVideoUrl, mergeFanUses, mergeVaultList, parseVaultBundle, stampVaultList, vaultKindOf, type FanVaultUse, type VaultFile, type VaultList } from "./vault-model.ts";
 import type { SaleFolder } from "./vault-block.ts";
 import { itemSaleBlocked } from "./vault-block.ts";
 import { planVaultPieces, type VaultSendPiece } from "../send/vault-piece.ts";
@@ -62,12 +63,71 @@ export async function saveVaultMirror(sql: ReadSql, creatorId: string, items: re
      on conflict (creator_id) do update set synced_at = excluded.synced_at`,
     [creatorId, syncedAt],
   );
+  if (await hasColumn(sql, "of_vault_list", "photos_count")) {
+    const hasMediaColumn = await hasColumn(sql, "of_vault_list", "has_media");
+    for (const list of lists) {
+      if (list.photos == null && list.videos == null && list.gifs == null && list.audios == null && list.hasMedia == null) continue;
+      if (hasMediaColumn) {
+        await sql.query(
+          `update of_vault_list
+           set photos_count = $3, videos_count = $4, gifs_count = $5, audios_count = $6, has_media = $7
+           where creator_id = $1 and list_key = $2`,
+          [creatorId, list.id, list.photos ?? null, list.videos ?? null, list.gifs ?? null, list.audios ?? null, list.hasMedia],
+        );
+      } else {
+        await sql.query(
+          `update of_vault_list
+           set photos_count = $3, videos_count = $4, gifs_count = $5, audios_count = $6
+           where creator_id = $1 and list_key = $2`,
+          [creatorId, list.id, list.photos ?? null, list.videos ?? null, list.gifs ?? null, list.audios ?? null],
+        );
+      }
+    }
+  }
+  if (await hasColumn(sql, "of_vault_item", "list_ids")) {
+    for (const item of items) {
+      if (item.listIds == null && !item.listId) continue;
+      const ids = [...new Set([...(item.listIds ?? []), ...(item.listId ? [item.listId] : [])])];
+      await sql.query(
+        "update of_vault_item set list_ids = $3::jsonb where creator_id = $1 and item_key = $2",
+        [creatorId, item.id, JSON.stringify(ids)],
+      );
+    }
+  }
+  if (await hasColumn(sql, "of_vault_list", "cover_ids")) {
+    for (const list of lists) {
+      if (!list.id || list.id === "all") continue;
+      const covers = list.covers ?? [];
+      await sql.query(
+        "update of_vault_list set cover_ids = $3::jsonb where creator_id = $1 and list_key = $2",
+        [creatorId, list.id, JSON.stringify(covers.map((cover) => ({ id: cover.id, kind: cover.kind })))],
+      );
+    }
+  }
   if (await hasColumn(sql, "of_vault_item", "full_url")) {
     for (const item of items) {
       if (!item.fullUrl) continue;
       await sql.query(
         "update of_vault_item set full_url = $3 where creator_id = $1 and item_key = $2",
         [creatorId, item.id, item.fullUrl],
+      );
+    }
+  }
+  if (await hasColumn(sql, "of_vault_item", "thumb_url")) {
+    for (const item of items) {
+      if (!item.thumbUrl) continue;
+      await sql.query(
+        "update of_vault_item set thumb_url = $3 where creator_id = $1 and item_key = $2",
+        [creatorId, item.id, item.thumbUrl],
+      );
+    }
+  }
+  if (await hasColumn(sql, "of_vault_item", "clip_url")) {
+    for (const item of items) {
+      if (!item.clipUrl) continue;
+      await sql.query(
+        "update of_vault_item set clip_url = $3 where creator_id = $1 and item_key = $2",
+        [creatorId, item.id, item.clipUrl],
       );
     }
   }
@@ -86,20 +146,149 @@ export async function persistVaultRead(
   sql: ReadSql,
   creatorId: string,
   payloads: readonly unknown[],
-  page?: { listId?: string; offset?: number },
+  page?: { listId?: string; offset?: number; listName?: string | null },
 ): Promise<VaultFile[]> {
   const items = new Map<string, VaultFile>();
   const lists = new Map<string, VaultList>();
   for (const payload of payloads) {
     const bundle = parseVaultBundle(payload);
-    for (const list of bundle.lists) lists.set(list.id, list);
+    for (const list of bundle.lists) {
+      const prev = lists.get(list.id);
+      lists.set(list.id, prev ? mergeVaultList(prev, list) : list);
+    }
     for (const item of bundle.items) items.set(item.id, item);
   }
-  const saved = [...items.values()];
+  const requested = page?.listId?.trim() || "";
+  const knownName = page?.listName ?? lists.get(requested)?.name ?? null;
+  const saved = [...items.values()].map((item) => stampVaultList(item, requested, knownName));
   if (saved.length === 0 && lists.size === 0) return [];
   await saveVaultMirror(sql, creatorId, saved, [...lists.values()]);
   if (saved.length > 0 && page) await rememberThumbPage(sql, creatorId, saved.map((item) => item.id), page);
+  if (requested && requested !== "all" && saved.length > 0) {
+    await rememberListMembers(sql, creatorId, requested, saved.map((item) => item.id));
+  }
+  await rememberStateMembers(sql, creatorId, saved);
   return saved;
+}
+
+/** Conteos guardados de una carpeta. Sirven para no aceptar la bóveda entera como si fuera la carpeta. */
+export async function storedFolderCounts(sql: ReadSql, creatorId: string, listId: string): Promise<{ photos: number | null; videos: number | null; gifs: number | null; audios: number | null } | null> {
+  if (!(await hasColumn(sql, "of_vault_list", "photos_count"))) return null;
+  const rows = await sql.query<{ photos_count: number | null; videos_count: number | null; gifs_count: number | null; audios_count: number | null }>(
+    "select photos_count, videos_count, gifs_count, audios_count from of_vault_list where creator_id = $1 and list_key = $2",
+    [creatorId, listId],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  const counts = {
+    photos: numberOrNull(row.photos_count),
+    videos: numberOrNull(row.videos_count),
+    gifs: numberOrNull(row.gifs_count),
+    audios: numberOrNull(row.audios_count),
+  };
+  return folderMediaCap(counts) == null ? null : counts;
+}
+
+function numberOrNull(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) return Number(value);
+  return null;
+}
+
+/** `hasMedia` de listStates, no el catálogo entero. */
+async function rememberStateMembers(sql: ReadSql, creatorId: string, items: readonly VaultFile[]): Promise<void> {
+  for (const item of items) {
+    for (const listId of item.listIds ?? []) {
+      if (!listId || listId === "all") continue;
+      await rememberListMembers(sql, creatorId, listId, [item.id]);
+    }
+  }
+}
+
+/** Los medios que devolvió `list_id` pertenecen a esa carpeta. No copia el catálogo de listStates. */
+async function rememberListMembers(sql: ReadSql, creatorId: string, listId: string, itemIds: readonly string[]): Promise<void> {
+  if (!(await hasColumn(sql, "of_vault_list_item", "item_key"))) return;
+  for (const itemId of itemIds) {
+    await sql.query(
+      `insert into of_vault_list_item (creator_id, list_key, item_key)
+       values ($1, $2, $3)
+       on conflict (creator_id, list_key, item_key) do nothing`,
+      [creatorId, listId, itemId],
+    );
+  }
+}
+
+/** Medios ya guardados de esa carpeta. Si pasan del tope, el espejo está hinchado y no se usa. */
+export async function mirroredFolderItems(sql: ReadSql, creatorId: string, listId: string, cap: number): Promise<VaultFile[]> {
+  if (!listId || listId === "all" || !(await hasColumn(sql, "of_vault_list_item", "item_key"))) return [];
+  const rows = await sql.query<{ item_key: string; title: string | null; kind: string | null; seconds: number | null; preview: string | null }>(
+    `select item.item_key, item.title, item.kind, item.seconds, item.preview
+     from of_vault_list_item member
+     join of_vault_item item on item.creator_id = member.creator_id and item.item_key = member.item_key
+     where member.creator_id = $1 and member.list_key = $2
+     limit $3`,
+    [creatorId, listId, cap + 1],
+  );
+  if (rows.length > cap) return [];
+  return rows.map((row) => ({
+    id: row.item_key,
+    title: row.title ?? "Sin datos",
+    kind: vaultKindOf(row.kind),
+    seconds: row.seconds,
+    preview: row.preview,
+    folder: null,
+    tags: [],
+    listId,
+    listName: null,
+    description: null,
+    uploadedAt: null,
+    priceCents: null,
+    salesCount: null,
+    sentCount: null,
+  }));
+}
+
+/** Medios guardados en la carpeta. Null si la tabla aún no existe. */
+export async function listMemberCount(sql: ReadSql, creatorId: string, listId: string): Promise<number | null> {
+  if (!listId || listId === "all" || !(await hasColumn(sql, "of_vault_list_item", "item_key"))) return null;
+  const rows = await sql.query<{ n: number | string }>(
+    "select count(*)::int as n from of_vault_list_item where creator_id = $1 and list_key = $2",
+    [creatorId, listId],
+  );
+  return Number(rows[0]?.n ?? 0);
+}
+
+/** Al cerrar un recorrido completo, quita de la carpeta los medios que ya no han salido. */
+export async function finishListMembers(sql: ReadSql, creatorId: string, listId: string, itemIds: readonly string[]): Promise<void> {
+  if (!listId || listId === "all" || !(await hasColumn(sql, "of_vault_list_item", "item_key"))) return;
+  await rememberListMembers(sql, creatorId, listId, itemIds);
+  if (itemIds.length === 0) {
+    await sql.query(
+      "delete from of_vault_list_item where creator_id = $1 and list_key = $2",
+      [creatorId, listId],
+    );
+    return;
+  }
+  await sql.query(
+    "delete from of_vault_list_item where creator_id = $1 and list_key = $2 and not (item_key = any($3::text[]))",
+    [creatorId, listId, itemIds],
+  );
+}
+
+export async function saveVaultFull(sql: ReadSql, creatorId: string, mediaId: string, fullUrl: string): Promise<void> {
+  if (!(await hasColumn(sql, "of_vault_item", "full_url"))) return;
+  await sql.query(
+    "update of_vault_item set full_url = $3 where creator_id = $1 and item_key = $2",
+    [creatorId, mediaId, fullUrl],
+  );
+}
+
+export async function saveVaultClip(sql: ReadSql, creatorId: string, mediaId: string, clipUrl: string): Promise<void> {
+  if (!(await hasColumn(sql, "of_vault_item", "clip_url"))) return;
+  await sql.query(
+    "update of_vault_item set clip_url = $3 where creator_id = $1 and item_key = $2",
+    [creatorId, mediaId, clipUrl],
+  );
 }
 
 export async function saveVaultPreview(
@@ -116,7 +305,93 @@ export async function saveVaultPreview(
   if (page) await rememberThumbPage(sql, creatorId, [mediaId], page);
 }
 
-/** Lista y offset de `vault/media` con los que se leyó el medio. Null si la columna aún no está. */
+/** preview, luego thumb, luego el archivo o el clip. El cliente no recibe estas URLs. */
+export async function storedVaultMediaUrls(sql: ReadSql, creatorId: string, mediaId: string): Promise<{
+  preview: string | null;
+  thumb: string | null;
+  full: string | null;
+  clip: string | null;
+  kind: string | null;
+}> {
+  const thumb = await hasColumn(sql, "of_vault_item", "thumb_url");
+  const full = await hasColumn(sql, "of_vault_item", "full_url");
+  const clip = await hasColumn(sql, "of_vault_item", "clip_url");
+  const rows = await sql.query<{ preview: string | null; kind: string | null; thumb_url?: string | null; full_url?: string | null; clip_url?: string | null }>(
+    `select preview, kind${thumb ? ", thumb_url" : ""}${full ? ", full_url" : ""}${clip ? ", clip_url" : ""}
+     from of_vault_item where creator_id = $1 and item_key = $2`,
+    [creatorId, mediaId],
+  );
+  const row = rows[0];
+  return {
+    preview: row?.preview ?? null,
+    thumb: row?.thumb_url ?? null,
+    full: row?.full_url ?? null,
+    clip: row?.clip_url ?? null,
+    kind: row?.kind ?? null,
+  };
+}
+
+function videoUrlOnly(url: string | null): string | null {
+  if (!url || !isCandidateVideoUrl(url)) return null;
+  return url;
+}
+
+/** Pausa antes de volver a pedir un detalle cuya URL ya falló o caducó. */
+export const VIDEO_DETAIL_PAUSE_MS = 800;
+
+const videoRefresh = new Map<string, Promise<{ url: string | null; hold: string | null; hls: string | null }>>();
+
+/**
+ * Reutiliza full_url o clip_url solo si la firma sigue viva.
+ * Si caducó, o si se fuerza tras un 403/410, pide el detalle una sola vez.
+ * Dos «Ver» a la vez comparten esa petición.
+ */
+export async function reuseOrRefreshVideo(input: {
+  sql: ReadSql;
+  creatorId: string;
+  mediaId: string;
+  variant: "full" | "clip";
+  now: number;
+  force: boolean;
+  pause: (ms: number) => Promise<void>;
+  loadDetail: () => Promise<{ url: string | null; hold: string; hls?: string | null }>;
+}): Promise<{ url: string | null; hold: string | null; hls: string | null }> {
+  const urls = await storedVaultMediaUrls(input.sql, input.creatorId, input.mediaId);
+  const picked = playbackUrl(urls, input.variant, urls.kind);
+  const live = picked && !signedUrlExpired(picked, input.now) ? picked : null;
+  if (live && !input.force) return { url: live, hold: null, hls: null };
+  const key = `${input.creatorId}\n${input.mediaId}`;
+  const pending = videoRefresh.get(key);
+  if (pending) return pending;
+  const promise = (async () => {
+    if (picked || input.force) await input.pause(VIDEO_DETAIL_PAUSE_MS);
+    const detail = await input.loadDetail();
+    if (detail.url) {
+      await saveVaultFull(input.sql, input.creatorId, input.mediaId, detail.url);
+      await saveVaultClip(input.sql, input.creatorId, input.mediaId, detail.url);
+      return { url: detail.url, hold: null, hls: null };
+    }
+    return { url: null, hold: detail.hold, hls: detail.hls ?? null };
+  })();
+  videoRefresh.set(key, promise);
+  try {
+    return await promise;
+  } finally {
+    if (videoRefresh.get(key) === promise) videoRefresh.delete(key);
+  }
+}
+
+/** URL que puede reproducir un vídeo. Una miniatura no cuenta. */
+export function playbackUrl(urls: { full: string | null; clip: string | null; preview: string | null; thumb: string | null }, variant: "full" | "clip" | "preview", kind: string | null): string | null {
+  if (kind === "video" && (variant === "full" || variant === "clip")) {
+    if (variant === "clip") return videoUrlOnly(urls.clip) ?? videoUrlOnly(urls.full);
+    return videoUrlOnly(urls.full) ?? videoUrlOnly(urls.clip);
+  }
+  if (variant === "clip") return videoUrlOnly(urls.clip);
+  if (variant === "full") return urls.full;
+  return urls.preview ?? urls.thumb ?? urls.full;
+}
+
 export async function storedVaultPage(sql: ReadSql, creatorId: string, mediaId: string): Promise<{ listId: string; offset: number } | null> {
   if (!(await hasColumn(sql, "of_vault_item", "thumb_offset"))) return null;
   const rows = await sql.query<{ thumb_list: string | null; thumb_offset: number | null }>(
@@ -146,19 +421,37 @@ function pageOffset(offset: number): number {
 }
 
 export async function loadVaultMirror(sql: ReadSql, creatorId: string): Promise<{ items: VaultFile[]; lists: VaultList[]; folders: SaleFolder[]; syncedAt: string | null }> {
-  const lists = await sql.query<{ list_key: string; name: string; parent_key?: string | null }>(
-    "select list_key, name, parent_key from of_vault_list where creator_id = $1 order by name",
+  const withCounts = await hasColumn(sql, "of_vault_list", "photos_count");
+  const withHasMedia = await hasColumn(sql, "of_vault_list", "has_media");
+  const withCovers = await hasColumn(sql, "of_vault_list", "cover_ids");
+  const lists = await sql.query<{
+    list_key: string;
+    name: string;
+    parent_key?: string | null;
+    photos_count?: number | null;
+    videos_count?: number | null;
+    gifs_count?: number | null;
+    audios_count?: number | null;
+    has_media?: boolean | null;
+    cover_ids?: unknown;
+  }>(
+    `select list_key, name, parent_key
+            ${withCounts ? ", photos_count, videos_count, gifs_count, audios_count" : ""}
+            ${withHasMedia ? ", has_media" : ""}
+            ${withCovers ? ", cover_ids" : ""}
+     from of_vault_list where creator_id = $1 order by name`,
     [creatorId],
   );
   const items = await sql.query<{
     item_key: string; title: string | null; kind: string | null; seconds: number | null; preview: string | null;
     folder: string | null; tags: unknown; list_key: string | null; list_name: string | null;
     description: string | null; uploaded_at: Date | string | null; price_cents: number | null;
-    sales_count: number | null; sent_count: number | null; paid_with_id?: string | null;
+    sales_count: number | null; sent_count: number | null; paid_with_id?: string | null; list_ids?: unknown;
   }>(
     `select item_key, title, kind, seconds, preview, folder, tags, list_key, list_name,
             description, uploaded_at, price_cents, sales_count, sent_count
             ${await hasColumn(sql, "of_vault_item", "paid_with_id") ? ", paid_with_id" : ""}
+            ${await hasColumn(sql, "of_vault_item", "list_ids") ? ", list_ids" : ""}
      from of_vault_item where creator_id = $1 and item_key is not null order by title`,
     [creatorId],
   );
@@ -167,12 +460,22 @@ export async function loadVaultMirror(sql: ReadSql, creatorId: string): Promise<
     [creatorId],
   );
   return {
-    lists: lists.map((row) => ({ id: row.list_key, name: row.name })),
+    lists: lists.map((row) => ({
+      id: row.list_key,
+      name: row.name,
+      photos: row.photos_count ?? null,
+      videos: row.videos_count ?? null,
+      gifs: row.gifs_count ?? null,
+      audios: row.audios_count ?? null,
+      hasMedia: row.has_media === true ? true : row.has_media === false ? false : null,
+      covers: coverList(row.cover_ids),
+    })),
     folders: lists.map((row) => ({ id: row.list_key, name: row.name, parentId: row.parent_key ?? null })),
     items: items.map((row) => ({
       id: row.item_key,
       title: row.title ?? "Sin datos",
-      kind: row.kind === "foto" || row.kind === "video" || row.kind === "audio" ? row.kind : null,
+      kind: vaultKindOf(row.kind),
+      listIds: idList(row.list_ids),
       seconds: row.seconds,
       preview: row.preview,
       folder: row.folder,
@@ -381,6 +684,38 @@ function rowValues(creatorId: string, item: VaultFile, tags: string, syncedAt: s
     creatorId, item.id, item.title, item.kind, item.seconds, item.preview, item.folder, tags,
     item.listId, item.listName, item.description, item.uploadedAt, item.priceCents, item.salesCount, item.sentCount, syncedAt,
   ];
+}
+
+function coverList(value: unknown): Array<{ id: string; kind: ReturnType<typeof vaultKindOf> }> {
+  const rows = Array.isArray(value) ? value : typeof value === "string" ? parsedRows(value) : [];
+  return rows.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const row = entry as Record<string, unknown>;
+    const id = typeof row.id === "string" || typeof row.id === "number" ? String(row.id).trim() : "";
+    if (!id) return [];
+    return [{ id, kind: vaultKindOf(typeof row.kind === "string" ? row.kind : null) }];
+  });
+}
+
+function parsedRows(value: string): unknown[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function idList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+  if (typeof value === "string") {
+    try {
+      return idList(JSON.parse(value) as unknown);
+    } catch {
+      return [];
+    }
+  }
+  return [];
 }
 
 function tagsOf(value: unknown): string[] {

@@ -1,23 +1,30 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { AtSign, Bell, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, RefreshCw, ScrollText, Send, Type } from "lucide-react";
-import { broadcastOnlineFans, cancelOnlineBroadcast, chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, markChatOpened, readChatVault, readVisibleFanSpend, recordChatOutbound, resolveOnlineOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
+import { AtSign, Bell, ChevronLeft, ChevronRight, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, RefreshCw, ScrollText, Send, Type } from "lucide-react";
+import { broadcastOnlineFans, cancelOnlineBroadcast, chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, markChatOpened, readChatVault, readThreadHistory, readVisibleFanSpend, recordChatOutbound, resolveOnlineOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
 import { OnlineFansPanel, type OnlineBroadcastPayload } from "@/features/online-fans-panel";
 import type { OnlineFanRow } from "@/lib/online-fan-row";
-import { unreadChatRow, unreadTotalFor } from "../../server/of-sessions/sync/unread-chats.ts";
+import { unreadChatRow } from "../../server/of-sessions/sync/unread-chats.ts";
 import { inboxPillCounts, matchesInboxPill, tipThreads, type InboxPill } from "../../server/of-sessions/sync/chat-pills.ts";
 import { accountFigure, everyAccountBlocked, SESSION_EXPIRED_LABEL } from "../../server/of-sessions/sync/session-link.ts";
-import { listCreatorNotifications, markCreatorNotificationsRead, type NotificationListItem } from "@/lib/of-notifications";
-import { NOTIFICATION_TABS, TAB_LABEL, isOwnerOnlyKind, tabOf, type NotificationCounts, type NotificationKind, type NotificationTab } from "@/lib/notifications";
+import { ensureNoticeTab, listCreatorNotifications, markCreatorNotificationsRead, type NotificationListItem } from "@/lib/of-notifications";
+import { NOTIFICATION_TABS, TAB_LABEL, isOwnerOnlyKind, notesForCreator, noticeFace, notificationReplyLine, noticesForOfTab, ofTabListNote, tabOf, type NotificationCounts, type NotificationTab } from "@/lib/notifications";
 import { NotificationFanCard } from "@/features/notification-card";
 import { useCrm, type VaultItem } from "@/lib/crm";
+import { chatSyncLabel, headerSyncLabel, type ChatSyncInput } from "@/lib/chat-sync-label";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
+import { inboxCreators, inboxThreadList, readInboxCreator, resolveInboxCreator, rowsForCreator, writeInboxCreator } from "@/lib/inbox-scope";
+import { useCreatorNoticeBadges } from "@/lib/use-creator-notice-badges";
+import { COMPOSER_LANGUAGES, setComposerLanguage, useComposerLanguage } from "@/lib/ui-prefs";
+import { SfwMedia } from "@/components/sfw-media";
+import { acceptedVaultPieces, chatVaultCreator, chatVaultOnThreadChange, mergeVaultPage, vaultFolderOnAccountChange, vaultLoadAllowed, vaultReadApplies } from "@/lib/vault-load";
+import { VAULT_FOLDER_READ_ERROR } from "@/lib/vault-folder-label";
 import { clearOpenThread, peekOpenThread } from "@/lib/open-thread";
 import { useChatFanCards } from "@/lib/use-chat-fan-cards";
 import { chatFanCardFor, fanCardTransactions } from "@/lib/chat-fan-cards";
 import { FanInsights } from "@/features/fan-insights";
 import { MessagePriceDialog } from "@/features/message-price-dialog";
-import { FULL_EMOJIS, QUICK_EMOJIS, TEXT_COLORS, authorLabel, matchScripts, mentionToken, paymentLabel, slashQuery, wrapSelection } from "@/lib/composer-tools";
+import { FULL_EMOJIS, QUICK_EMOJIS, TEXT_COLORS, authorLabel, matchScripts, mentionToken, slashQuery, wrapSelection } from "@/lib/composer-tools";
 import { pendingForThread } from "@/lib/pending-thread";
 import { chatSendSession } from "@/lib/chat-send-session";
 import { useCurrentUser } from "@/lib/auth/use-current-user";
@@ -35,6 +42,9 @@ import { rowSpendCents } from "@/lib/row-spend";
 import { FanSpendLabel } from "@/lib/fan-spend-label";
 import { useInboxSelection } from "@/lib/inbox-selection";
 import { ChatMediaPlayer } from "@/features/chat-media-player";
+import { MediaStrip } from "@/features/media-strip";
+import { bubbleBlocks, bubblePriceLabel } from "@/lib/chat-bubble";
+import { mergeHistoryMessages, scrollAnchor, scrollDeltaForAnchor, type ScrollAnchor } from "@/lib/chat-history";
 import { VAULT_THUMB_MISSING, vaultMediaSrc } from "@/lib/chat-media";
 import { VaultBrowser } from "@/features/vault-browser";
 
@@ -56,16 +66,70 @@ function madridClock(value: string): string {
 
 type NoteRow = NotificationListItem & { creatorId: string };
 
-function noteMatches(kind: string, filter: NotificationTab): boolean {
-  if (isOwnerOnlyKind(kind as NotificationKind)) return false;
-  if (filter === "all") return true;
-  return tabOf(kind as NotificationKind) === filter;
+function panelNotes(rows: NoteRow[] | null, creatorId: string | null, tab: NotificationTab): NoteRow[] {
+  return noticesForOfTab(notesForCreator(rows ?? [], creatorId).filter((item) => !isOwnerOnlyKind(item.kind)), tab);
 }
 
 function noteBadge(counts: NotificationCounts | null, tab: NotificationTab): string {
-  if (!counts) return "";
-  const value = counts[tab];
-  return value == null ? " · Sin datos" : ` ${value}`;
+  const value = counts?.[tab];
+  return value == null || value <= 0 ? "" : ` ${value}`;
+}
+
+function NoteTabRow({
+  filter,
+  counts,
+  onSelect,
+}: {
+  filter: NotificationTab;
+  counts: NotificationCounts | null;
+  onSelect: (id: NotificationTab) => void;
+}) {
+  const scroller = useRef<HTMLDivElement>(null);
+  const [edges, setEdges] = useState({ left: false, right: false });
+  const measure = () => {
+    const node = scroller.current;
+    if (!node) return;
+    setEdges({
+      left: node.scrollLeft > 4,
+      right: node.scrollLeft + node.clientWidth < node.scrollWidth - 4,
+    });
+  };
+  useLayoutEffect(() => {
+    measure();
+  }, [counts]);
+  const nudge = (direction: -1 | 1) => {
+    scroller.current?.scrollBy({ left: direction * 180, behavior: "smooth" });
+  };
+  return (
+    <div className="relative">
+      {edges.left ? (
+        <>
+          <div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-10 bg-gradient-to-r from-white to-transparent" />
+          <button type="button" aria-label="Pestañas anteriores" className="absolute top-0 left-0 z-20 grid h-8 w-8 place-items-center text-[#3c4456]" onClick={() => nudge(-1)}>
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+        </>
+      ) : null}
+      <div ref={scroller} onScroll={measure} className="flex gap-2 overflow-x-auto px-10 pb-3 [scrollbar-width:none]">
+        {NOTIFICATION_TABS.map((id) => {
+          const on = filter === id;
+          return (
+            <button key={id} type="button" onClick={() => onSelect(id)} className={`shrink-0 rounded-full px-3 py-1.5 text-sm whitespace-nowrap ${on ? "bg-[#e7f3ff] text-[#1890d4]" : "bg-[#f2f3f5] text-[#3c4456]"}`}>
+              {TAB_LABEL[id]}{noteBadge(counts, id)}
+            </button>
+          );
+        })}
+      </div>
+      {edges.right ? (
+        <>
+          <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-10 bg-gradient-to-l from-white to-transparent" />
+          <button type="button" aria-label="Pestañas siguientes" className="absolute top-0 right-0 z-20 grid h-8 w-8 place-items-center text-[#3c4456]" onClick={() => nudge(1)}>
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </>
+      ) : null}
+    </div>
+  );
 }
 
 function FanLink({ item, href, copied, onCopy }: { item: string; href: string | null; copied: boolean; onCopy: (href: string) => void }) {
@@ -112,6 +176,8 @@ function ThreadMessage({ message }: { message: {
   media: Array<{ kind: "foto" | "video" | "audio" | null; locked?: boolean | null }> | null;
   priceCents: number | null;
   purchased: boolean | null;
+  sentAt?: string;
+  seen?: boolean | null;
 } }) {
   const slides = message.media ?? [];
   const hasMedia = (message.mediaCount ?? 0) > 0 || slides.length > 0;
@@ -125,15 +191,24 @@ function ThreadMessage({ message }: { message: {
   const lockedCount = slides.length === 0
     ? (hasMedia && messageLocked ? 1 : 0)
     : slides.filter((slide) => slideLocked(slide)).length;
+  const layout = bubbleBlocks({
+    mediaCount: openSlides.length,
+    priceCents: message.priceCents,
+    body: message.body,
+  });
   const who = message.fromFan ? "" : message.authorName ? authorLabel(message.authorName, false) : authorLabel(null, message.automatic);
-  const pay = paymentLabel(message);
+  const pay = bubblePriceLabel(message);
+  const when = message.sentAt ? madridClock(message.sentAt) : "";
+  const seen = message.seen === true ? "Leído" : "";
+  const players = openSlides.map((slide) => (
+    <ChatMediaPlayer key={`${message.messageKey}-${slide.index}`} creatorId={message.creatorId} threadKey={message.threadKey} messageKey={message.messageKey} index={slide.index} kind={slide.kind} compact={layout.layout === "carousel"} />
+  ));
   return (
-    <li className={message.fromFan ? "" : "text-right"}>
-      {(openSlides.length > 0 || message.body) ? (
+    <li data-message-id={message.messageKey} className={message.fromFan ? "" : "text-right"} data-layout={layout.layout} data-automatic={message.automatic ? "1" : "0"}>
+      {(openSlides.length > 0 || message.body || pay) ? (
       <div className={`inline-block max-w-[70%] rounded-2xl px-3 py-2 text-left text-sm ${message.fromFan ? "bg-[#f4f6fb]" : "bg-[#e7f0ff]"}`}>
-        {openSlides.map((slide) => (
-          <ChatMediaPlayer key={`${message.messageKey}-${slide.index}`} creatorId={message.creatorId} threadKey={message.threadKey} messageKey={message.messageKey} index={slide.index} kind={slide.kind} />
-        ))}
+        {layout.layout === "carousel" ? <MediaStrip>{players}</MediaStrip> : players}
+        {pay ? <p className="text-[11px] font-medium text-[#1d2433]">{pay}</p> : null}
         {message.body ? <p>{message.body}</p> : null}
       </div>
       ) : null}
@@ -142,7 +217,7 @@ function ThreadMessage({ message }: { message: {
           {Array.from({ length: lockedCount }, (_, index) => <Lock key={index} className="h-3.5 w-3.5" aria-hidden />)}
         </p>
       ) : null}
-      {who || pay ? <p className="mt-1 text-[10px] text-[#6d7585]">{[who, pay].filter(Boolean).join(" · ")}</p> : null}
+      {who || when || seen ? <p className="mt-1 text-[10px] text-[#6d7585]">{[who, when, seen].filter(Boolean).join(" · ")}</p> : null}
     </li>
   );
 }
@@ -196,6 +271,20 @@ export function RealChatsPage() {
   const teamAccess = useCrm((s) => s.teamAccess);
   const user = useCurrentUser();
   const [data, setData] = useState<CreatorChatList | null>(null);
+  const rememberedInbox = typeof window === "undefined" ? null : readInboxCreator(window.localStorage);
+  const inboxScope = inboxCreators(creators, data?.accounts ?? []);
+  const inboxCreator = resolveInboxCreator({
+    requested: creatorId,
+    creators: inboxScope,
+    remembered: rememberedInbox,
+  });
+  const noticeBadges = useCreatorNoticeBadges(creators.map((creator) => creator.id));
+  const noticeCount = inboxCreator ? noticeBadges[inboxCreator] ?? 0 : 0;
+  useEffect(() => {
+    if (!inboxCreator || inboxCreator === creatorId) return;
+    writeInboxCreator(window.localStorage, inboxCreator);
+    setCreator(inboxCreator);
+  }, [inboxCreator, creatorId, setCreator]);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [filter, setFilter] = useState<InboxPill>("todos");
@@ -245,6 +334,26 @@ export function RealChatsPage() {
   const fileBox = useRef<HTMLInputElement>(null);
   const savedRange = useRef<Range | null>(null);
   const olderLock = useRef(false);
+  const scrollMark = useRef<ScrollAnchor | null>(null);
+  function pinThreadScroll(node: HTMLElement) {
+    const rows = [...node.querySelectorAll<HTMLElement>("[data-message-id]")].flatMap((el) => {
+      const id = el.dataset.messageId;
+      if (!id) return [];
+      const rect = el.getBoundingClientRect();
+      return [{ id, top: rect.top, height: rect.height }];
+    });
+    scrollMark.current = scrollAnchor(rows, node.getBoundingClientRect().top);
+  }
+  function restoreThreadScroll(node: HTMLElement) {
+    const mark = scrollMark.current;
+    if (!mark) return;
+    const el = node.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(mark.id)}"]`);
+    if (!el) return;
+    const delta = scrollDeltaForAnchor(mark, el.getBoundingClientRect().top, node.getBoundingClientRect().top);
+    if (Math.abs(delta) > 0.5) node.scrollTop += delta;
+  }
+  const [olderBusy, setOlderBusy] = useState(false);
+  const [threadHistory, setThreadHistory] = useState<Record<string, { done: boolean; messages: NonNullable<CreatorChatList["messages"]> }>>({});
   const listLock = useRef(false);
   const pendingRef = useRef(pendingOut);
   const threadBox = useRef<HTMLOListElement>(null);
@@ -252,11 +361,21 @@ export function RealChatsPage() {
   const seenThread = useRef<string | null>(null);
   const [libraryQuery, setLibraryQuery] = useState("");
   const [tagQuery, setTagQuery] = useState("");
-  const [ofVault, setOfVault] = useState<Array<{ id: string; title: string; kind: "foto" | "video" | "audio" | null }>>([]);
+  const [ofVault, setOfVault] = useState<Array<{ id: string; title: string; kind: "foto" | "video" | "audio" | "gif" | null }>>([]);
   const [vaultReload, setVaultReload] = useState(0);
   const [vaultReading, setVaultReading] = useState(false);
   const vaultPage = useRef({ listId: "all", offset: 0, busy: false });
+  const vaultGen = useRef(0);
+  const vaultPending = useRef<{ listId: string; offset: number } | null>(null);
+  function takeVaultPending() {
+    const pending = vaultPending.current;
+    vaultPending.current = null;
+    return pending;
+  }
   const [thumbPage, setThumbPage] = useState({ listId: "all", offset: 0 });
+  const vaultMemory = useRef<Record<string, string>>({});
+  const vaultCreator = useRef<string | null>(null);
+  const vaultThread = useRef<string | null>(null);
   const offerPriceId = useRef<string | null>(null);
 
   async function refresh() {
@@ -297,7 +416,7 @@ export function RealChatsPage() {
   }, []);
 
   async function loadNotes() {
-    const ids = (creatorId === "all" ? creators : creators.filter((creator) => creator.id === creatorId)).map((creator) => creator.id);
+    const ids = inboxCreator ? [inboxCreator] : [];
     if (ids.length === 0) {
       setNotes([]);
       setNoteCounts(null);
@@ -322,7 +441,7 @@ export function RealChatsPage() {
     void loadNotes();
     const timer = setInterval(() => { void loadNotes(); }, 20_000);
     return () => clearInterval(timer);
-  }, [creatorId, creators.length]);
+  }, [inboxCreator, creators.length]);
 
   useEffect(() => {
     const pending = peekOpenThread();
@@ -360,7 +479,7 @@ export function RealChatsPage() {
 
   function openNote(item: NoteRow) {
     markNotes([item]);
-    const pool = data?.threads ?? [];
+    const pool = threads;
     const thread = pool.find((row) => row.creatorId === item.creatorId && (
       (item.threadKey != null && row.threadKey === item.threadKey)
       || (item.fanKey != null && (row.fanKey === item.fanKey || row.threadKey === item.fanKey || row.fanHandle?.replace(/^@/, "") === item.fanKey))
@@ -371,7 +490,7 @@ export function RealChatsPage() {
   }
 
   async function loadOnlineFans() {
-    const creator = creatorId === "all" ? "all" : creatorId;
+    const creator = inboxCreator;
     if (!creator) {
       setOnlineFans([]);
       setOnlineCount(null);
@@ -425,37 +544,34 @@ export function RealChatsPage() {
   }
 
   async function sendAllOnline(payload: OnlineBroadcastPayload) {
-    const creator = creatorId === "all" ? selected?.creatorId ?? null : creatorId;
+    const creator = inboxCreator;
     if (!creator) return { posted: 0, results: [], stopped: false, retryAfter: null, reason: "Elige una cuenta", cap: onlineCap };
     return broadcastOnlineFans({ data: { creatorId: creator, ...payload } });
   }
 
   async function cancelAllOnline(batchId: string) {
-    const creator = creatorId === "all" ? selected?.creatorId ?? null : creatorId;
+    const creator = inboxCreator;
     if (!creator) return;
     await cancelOnlineBroadcast({ data: { creatorId: creator, batchId } });
   }
 
   function openOnlineFan(fanKey: string) {
-    const creator = creatorId === "all" ? selected?.creatorId ?? null : creatorId;
-    const thread = threads.find((row) => (creator == null || row.creatorId === creator) && (row.fanKey === fanKey || row.threadKey === fanKey));
+    const creator = inboxCreator;
+    const thread = threads.find((row) => creator != null && row.creatorId === creator && (row.fanKey === fanKey || row.threadKey === fanKey));
     if (thread) chooseThread(thread);
     setOnlineOpen(false);
   }
 
-  const threads = (data?.threads ?? []).filter(
-    (thread) => creatorId === "all" || thread.creatorId === creatorId,
-  );
-  const accountMessages = (data?.messages ?? []).filter(
-    (message) => creatorId === "all" || message.creatorId === creatorId,
-  );
-  const scopeIds = creatorId === "all" ? creators.map((creator) => creator.id) : [creatorId];
-  const sessionRows = data?.accounts ?? [];
+  const threads = inboxThreadList(data?.threads ?? [], {
+    requested: creatorId,
+    creators: inboxScope,
+    remembered: rememberedInbox,
+  }).threads;
+  const accountMessages = rowsForCreator(data?.messages ?? [], inboxCreator);
+  const scopeIds = inboxCreator ? [inboxCreator] : [];
+  const sessionRows = rowsForCreator(data?.accounts ?? [], inboxCreator);
   const viewBlocked = everyAccountBlocked(sessionRows, scopeIds);
-  const sessionNotices = (data?.sessionNotices ?? []).filter((notice) => {
-    if (creatorId === "all") return true;
-    return notice.startsWith(`${creatorId}:`);
-  });
+  const sessionNotices = (data?.sessionNotices ?? []).filter((notice) => inboxCreator != null && notice.startsWith(`${inboxCreator}:`));
   const countedThreads = threads.filter((thread) => !sessionRows.some((row) => row.creatorId === thread.creatorId && accountFigure(row, 0) === SESSION_EXPIRED_LABEL));
   const pills = inboxPillCounts({
     status: viewBlocked ? "error" : error ? "error" : data ? "ready" : "loading",
@@ -475,12 +591,35 @@ export function RealChatsPage() {
     },
   });
   const selected = inbox.selected;
+  const threadVaultId = selected ? `${selected.creatorId}:${selected.threadKey}` : null;
+  if (threadVaultId !== vaultThread.current) {
+    const nextCreator = chatVaultCreator(selected, inboxCreator);
+    const moved = vaultFolderOnAccountChange(vaultMemory.current, vaultCreator.current, nextCreator, thumbPage.listId);
+    const restarted = chatVaultOnThreadChange({
+      previousThreadId: vaultThread.current,
+      nextThreadId: threadVaultId,
+      generation: vaultGen.current,
+    });
+    vaultMemory.current = moved.memory;
+    vaultCreator.current = nextCreator;
+    vaultThread.current = threadVaultId;
+    vaultGen.current = restarted.generation;
+    vaultPending.current = null;
+    vaultPage.current = { listId: moved.listId, offset: 0, busy: false };
+    setOfVault([]);
+    if (thumbPage.listId !== moved.listId || thumbPage.offset !== 0) {
+      setThumbPage({ listId: moved.listId, offset: 0 });
+    }
+  }
   const visible = inbox.visible;
-  const fanCards = useChatFanCards(visible);
+  const fanCards = useChatFanCards([
+    ...threads,
+    ...(notes ?? []).flatMap((item) => item.creatorId === inboxCreator && item.fanKey ? [{ creatorId: item.creatorId, fanKey: item.fanKey }] : []),
+  ]);
   const spendAsked = useRef("");
   const spendTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [spendTick, setSpendTick] = useState(0);
-  const spendCreator = creatorId === "all" ? selected?.creatorId ?? null : creatorId;
+  const spendCreator = inboxCreator;
   const spendCardIds = visible.flatMap((thread) => {
     if (!spendCreator || thread.creatorId !== spendCreator || !thread.fanKey) return [];
     const card = chatFanCardFor(fanCards.fans, thread.creatorId, thread.fanKey)?.spentCents ?? null;
@@ -523,11 +662,16 @@ export function RealChatsPage() {
   useEffect(() => () => {
     if (spendTimer.current) clearTimeout(spendTimer.current);
   }, []);
-  const messages = (data?.messages ?? [])
-    .filter((message) => message.creatorId === selected?.creatorId && message.threadKey === selected?.threadKey)
-    .sort((left, right) => left.sentAt.localeCompare(right.sentAt));
+  const historyKey = selected ? `${selected.creatorId}:${selected.threadKey}` : "";
+  const storedHistory = historyKey ? threadHistory[historyKey] : undefined;
+  const messages = mergeHistoryMessages(
+    (data?.messages ?? []).filter((message) => message.creatorId === selected?.creatorId && message.threadKey === selected?.threadKey),
+    storedHistory?.messages ?? [],
+  );
+  const historyDone = storedHistory?.done === true;
   const meta = data?.meta.find((item) => item.creatorId === selected?.creatorId);
   const running = selected ? data?.runningCreatorIds.includes(selected.creatorId) : false;
+  const syncPhase = chatPhase(data, creatorId === "all" ? selected?.creatorId ?? null : creatorId, Boolean(running));
   const canForce = teamAccess?.role === "owner" && selected != null;
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -583,24 +727,49 @@ export function RealChatsPage() {
   }, []);
   const openThread = selected ? `${selected.creatorId}:${selected.threadKey}` : null;
   const threadTail = `${messages.at(-1)?.messageKey ?? ""}:${jobList.map((job) => `${job.clientId}:${job.state}`).join(",")}:${pendingOut.length}`;
+  useEffect(() => {
+    if (!selected) return;
+    const key = `${selected.creatorId}:${selected.threadKey}`;
+    let stop = false;
+    void readThreadHistory({ data: { creatorId: selected.creatorId, threadKey: selected.threadKey } }).then((page) => {
+      if (stop) return;
+      setThreadHistory((current) => ({ ...current, [key]: { done: page.done, messages: page.messages as NonNullable<CreatorChatList["messages"]> } }));
+    }).catch(() => undefined);
+    return () => {
+      stop = true;
+    };
+  }, [selected?.creatorId, selected?.threadKey]);
   useLayoutEffect(() => {
     const node = threadBox.current;
     if (!node) return;
+    if (scrollMark.current) {
+      restoreThreadScroll(node);
+      stickToBottom.current = false;
+      return;
+    }
     if (seenThread.current !== openThread) {
       seenThread.current = openThread;
       stickToBottom.current = true;
     }
     if (!stickToBottom.current) return;
     node.scrollTop = node.scrollHeight;
-  }, [threadTail, openThread]);
-  const creatorName = creatorId === "all"
-    ? "Todas las cuentas"
-    : creators.find((creator) => creator.id === creatorId)?.name ?? "Cuenta";
+  }, [threadTail, openThread, messages.length]);
+  useEffect(() => {
+    const node = threadBox.current;
+    if (!node || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (scrollMark.current) restoreThreadScroll(node);
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [openThread]);
+  const creatorName = creators.find((creator) => creator.id === inboxCreator)?.name ?? "Cuenta";
   const slash = slashQuery(draft);
   const scriptHits = matchScripts(scripts, slash != null ? slash : libraryQuery);
   const showScripts = panel === "guiones" || slash != null;
   const realSend = selected != null && sendCreators.includes(selected.creatorId);
-  const vaultItems = vault.filter((item) => item.creatorId === selected?.creatorId);
+  const threadCreator = chatVaultCreator(selected, inboxCreator);
+  const vaultItems = rowsForCreator(vault, threadCreator);
   const tagCreators = creators.filter((creator) => creator.id !== selected?.creatorId && creator.handle.trim() !== "");
 
   function toggle(next: ComposerPanel) {
@@ -775,22 +944,44 @@ export function RealChatsPage() {
   async function loadOfVault(listId = "all", offset = 0) {
     setPanel("vault");
     if (!selected) return;
-    if (vaultPage.current.busy) return;
+    if (!vaultLoadAllowed(vaultPage.current, { listId, offset })) {
+      vaultPending.current = { listId, offset };
+      return;
+    }
+    vaultPending.current = null;
+    const generation = vaultGen.current + 1;
+    vaultGen.current = generation;
+    const requestCreatorId = selected.creatorId;
+    if (offset === 0 && listId !== vaultPage.current.listId) setOfVault([]);
     vaultPage.current = { listId, offset, busy: true };
-    if (offset === 0) setVaultReading(true);
+    setVaultReading(true);
+    const stillCurrent = () => vaultReadApplies({
+      generation,
+      currentGeneration: vaultGen.current,
+      requestCreatorId,
+      activeCreatorId: vaultCreator.current,
+    });
     try {
-      const result = await readChatVault({ data: { creatorId: selected.creatorId, threadKey: selected.threadKey, listId, offset } });
-      setOfVault(result.items);
+      const result = await readChatVault({ data: { creatorId: requestCreatorId, threadKey: selected.threadKey, listId, offset } });
+      if (!stillCurrent()) return;
+      setOfVault((current) => offset === 0 ? result.items : mergeVaultPage(current, result.items));
       setVaultReload((value) => value + 1);
       setThumbPage({ listId, offset });
-      vaultPage.current = { listId, offset: offset + 40, busy: false };
-      if (offset === 0 && result.items.length === 0) setError(result.reason ?? "La bóveda de OnlyFans ha llegado vacía.");
+      const step = result.nextOffset > offset ? result.nextOffset : offset + 40;
+      vaultPage.current = { listId, offset: result.hasMore ? step : -1, busy: false };
+      if (offset === 0 && result.items.length === 0 && listId === "all") setError(result.reason ?? "La bóveda de OnlyFans ha llegado vacía.");
+      if (offset === 0 && result.items.length === 0 && listId !== "all" && result.reason === VAULT_FOLDER_READ_ERROR) setError(result.reason);
     } catch (err) {
+      if (!stillCurrent()) return;
       vaultPage.current = { listId, offset, busy: false };
       if (offset === 0) setOfVault([]);
       setError(sessionErrorText(err));
     } finally {
-      setVaultReading(false);
+      if (stillCurrent()) {
+        setVaultReading(false);
+        const pending = takeVaultPending();
+        if (pending) void loadOfVault(pending.listId, pending.offset);
+      }
     }
   }
 
@@ -868,9 +1059,14 @@ export function RealChatsPage() {
     setPanel(null);
   }
 
-  function attachVault(item: { id: string; title: string; withId?: string | null; withTitle?: string | null; seconds?: number | null; offerLabel?: string | null; dateLabel?: string | null }) {
-    const pieces = [{ id: item.id, title: item.title, seconds: item.seconds ?? null, offerLabel: item.offerLabel ?? null, dateLabel: item.dateLabel ?? null }];
-    if (item.withId && item.withId !== item.id) pieces.push({ id: item.withId, title: item.withTitle || "Vídeo de pago", seconds: null, offerLabel: null, dateLabel: null });
+  function attachVault(item: { id: string; title: string; creatorId?: string | null; withId?: string | null; withTitle?: string | null; withCreatorId?: string | null; seconds?: number | null; offerLabel?: string | null; dateLabel?: string | null }) {
+    const pieces = acceptedVaultPieces(threadCreator, [
+      { id: item.id, title: item.title, creatorId: item.creatorId ?? null, seconds: item.seconds ?? null, offerLabel: item.offerLabel ?? null, dateLabel: item.dateLabel ?? null },
+      ...(item.withId && item.withId !== item.id
+        ? [{ id: item.withId, title: item.withTitle || "Vídeo de pago", creatorId: item.withCreatorId ?? item.creatorId ?? null, seconds: null, offerLabel: null, dateLabel: null }]
+        : []),
+    ]);
+    if (pieces.length === 0) return;
     const free = !(draftPrice != null && draftPrice > 0);
     setAttachments((current) => {
       const next = [...current];
@@ -1003,10 +1199,11 @@ export function RealChatsPage() {
               ref={notesButton}
               type="button"
               className="relative inline-flex items-center gap-1.5 rounded-lg bg-[#1f9d55] px-3 py-1.5 text-xs font-medium text-white"
-              onClick={() => { placeNotes(); setNotesOpen((open) => !open); void loadNotes(); }}
+              onClick={() => { placeNotes(); setNotesOpen((open) => !open); if (inboxCreator) void ensureNoticeTab({ data: { creatorId: inboxCreator, tab: noteFilter } }).catch(() => undefined); void loadNotes(); }}
             >
               <Bell className="h-3.5 w-3.5" />
               Notificaciones
+              {noticeCount > 0 ? <span className="min-w-5 rounded-full bg-white px-1 text-center text-[10px] font-semibold tabular-nums text-[#1f9d55]" aria-label={`${noticeCount} notificaciones`}>{noticeCount}</span> : null}
             </button>
             {notesOpen ? createPortal(
               <>
@@ -1016,38 +1213,42 @@ export function RealChatsPage() {
                     <h2 className="text-base font-semibold">Notificaciones</h2>
                     <button type="button" aria-label="Actualizar notificaciones" className="grid h-8 w-8 place-items-center rounded-full text-[#6d7585] hover:bg-[#f4f7ff]" onClick={() => void loadNotes()}><RefreshCw className="h-4 w-4" /></button>
                   </div>
-                  <div className="flex flex-wrap gap-2 px-4 pb-3">
-                    {NOTIFICATION_TABS.map((id) => {
-                      const on = noteFilter === id;
-                      const label = TAB_LABEL[id];
-                      return (
-                        <button key={id} type="button" onClick={() => { setNoteFilter(id); if (id !== "all") markNotes((notes ?? []).filter((item) => noteMatches(item.kind, id))); }} className={`rounded-full px-3 py-1.5 text-sm ${on ? "bg-[#e7f3ff] text-[#1890d4]" : "bg-[#f2f3f5] text-[#3c4456]"}`}>
-                          {label}{noteBadge(noteCounts, id)}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <ul className="min-h-0 flex-1 overflow-y-auto">
-                    {noteNotice ? <li className="px-4 py-6 text-sm text-[#8a5a12]">{noteNotice}</li> : null}
-                    {notes == null && !noteNotice ? <li className="px-4 py-6 text-sm text-[#6d7585]">Sin datos</li> : null}
-                    {notes != null && !noteNotice && notes.filter((item) => noteMatches(item.kind, noteFilter)).length === 0 ? <li className="px-4 py-6 text-sm text-[#6d7585]">Sin notificaciones</li> : null}
-                    {(notes ?? []).filter((item) => noteMatches(item.kind, noteFilter)).map((item) => {
-                      const thread = (data?.threads ?? []).find((row) => row.creatorId === item.creatorId && (
+                  <NoteTabRow filter={noteFilter} counts={noteCounts} onSelect={(id) => { setNoteFilter(id); if (inboxCreator) void ensureNoticeTab({ data: { creatorId: inboxCreator, tab: id } }).then(() => loadNotes()).catch(() => undefined); if (id !== "all") markNotes(panelNotes(notes, inboxCreator, id)); }} />
+                  {ofTabListNote({ tab: noteFilter, unread: noteCounts?.[noteFilter] ?? null, listed: panelNotes(notes, inboxCreator, noteFilter).length }) ? (
+                    <p className="px-4 pb-2 text-[11px] text-[#6d7585]">{ofTabListNote({ tab: noteFilter, unread: noteCounts?.[noteFilter] ?? null, listed: panelNotes(notes, inboxCreator, noteFilter).length })}</p>
+                  ) : null}
+                  <ul className="min-h-0 flex-1 divide-y divide-[#eceff3] overflow-y-auto px-4">
+                    {noteNotice ? <li className="py-6 text-sm text-[#8a5a12]">{noteNotice}</li> : null}
+                    {notes == null && !noteNotice ? <li className="py-6 text-sm text-[#6d7585]">Sin datos</li> : null}
+                    {notes != null && !noteNotice && panelNotes(notes, inboxCreator, noteFilter).length === 0 ? <li className="py-6 text-sm text-[#6d7585]">Sin notificaciones</li> : null}
+                    {panelNotes(notes, inboxCreator, noteFilter).map((item) => {
+                      const thread = notesForCreator(data?.threads ?? [], inboxCreator).find((row) => row.creatorId === item.creatorId && (
                         (item.threadKey != null && row.threadKey === item.threadKey)
                         || (item.fanKey != null && (row.fanKey === item.fanKey || row.threadKey === item.fanKey || row.fanHandle?.replace(/^@/, "") === item.fanKey))
                       ));
                       const handle = item.fanHandle ?? thread?.fanHandle?.replace(/^@/, "") ?? null;
-                      const lists = item.lists ?? thread?.lists?.filter(Boolean) ?? null;
-                      const renew = item.renewAuto ?? thread?.renewAuto ?? null;
-                      const avatar = item.avatarUrl ?? thread?.avatarUrl ?? null;
+                      const card = chatFanCardFor(fanCards.fans, item.creatorId, item.fanKey);
+                      const face = noticeFace({
+                        avatarUrl: item.avatarUrl,
+                        renewAuto: item.renewAuto ?? null,
+                        threadAvatar: thread?.avatarUrl ?? null,
+                        threadRenew: thread?.renewAuto ?? null,
+                        cardRenew: card?.renewAuto ?? null,
+                      });
+                      const reply = notificationReplyLine({
+                        creatorId: item.creatorId,
+                        fanKey: item.fanKey,
+                        occurredAt: item.occurredAt,
+                        messages: accountMessages,
+                      });
                       return (
-                        <li key={`${item.creatorId}:${item.key}`} className="border-b border-[#eef0f3] px-4 py-3">
+                        <li key={`${item.creatorId}:${item.key}`}>
                           <NotificationFanCard
                             item={item}
                             handle={handle}
-                            avatarUrl={avatar}
-                            lists={lists}
-                            renew={renew}
+                            avatarUrl={face.avatarUrl}
+                            renew={face.renewAuto}
+                            reply={reply}
                             onChat={thread ? () => openNote(item) : undefined}
                           />
                         </li>
@@ -1058,20 +1259,6 @@ export function RealChatsPage() {
               </>,
               document.body,
             ) : null}
-          </div>
-          <div className="flex items-center gap-2">
-            <select value={creatorId} onChange={(event) => setCreator(event.target.value)} className="h-8 min-w-0 flex-1 rounded-lg border border-[#e6e8ee] px-2 text-xs" aria-label="Bandeja">
-              <option value="all">Todas las bandejas</option>
-              {creators.map((creator) => <option key={creator.id} value={creator.id}>{creator.name}</option>)}
-            </select>
-            <span className="shrink-0 text-[10px] text-[#6d7585]">Más recientes</span>
-            {(() => {
-              if (viewBlocked) return <span className="shrink-0 text-[10px] text-[#8a5a12]">{SESSION_EXPIRED_LABEL}</span>;
-              const total = unreadTotalFor(data ? "ready" : "loading", countedThreads, creatorId);
-              if (total == null) return <span className="shrink-0 text-[10px] text-[#6d7585]" title="Sin datos">Sin datos</span>;
-              if (total === 0) return null;
-              return <span className="shrink-0 rounded-full bg-[#3b6cff] px-1.5 text-[10px] font-semibold text-white" aria-label={`${total} chats sin leer`}>{total}</span>;
-            })()}
           </div>
           <div className="flex gap-2">
             {([
@@ -1093,7 +1280,7 @@ export function RealChatsPage() {
         <div className="min-h-0 flex-1 overflow-y-auto" onScroll={(event) => {
           const node = event.currentTarget;
           if (node.scrollHeight - node.scrollTop - node.clientHeight > 48 || listLock.current) return;
-          const creator = creatorId === "all" ? selected?.creatorId : creatorId;
+          const creator = inboxCreator;
           if (!creator) return;
           listLock.current = true;
           void loadMoreChats({ data: { creatorId: creator } }).then(() => refresh()).catch(() => undefined).finally(() => {
@@ -1101,7 +1288,7 @@ export function RealChatsPage() {
           });
         }}>
         {visible.length === 0 ? (
-          <p className="px-4 py-8 text-sm text-[#6d7585]">{viewBlocked ? SESSION_EXPIRED_LABEL : sessionNotices.length > 0 && threads.length === 0 ? sessionNotices.join(" · ") : threads.length === 0 ? emptyChatsLabel(data) : "Sin datos"}</p>
+          <p className="px-4 py-8 text-sm text-[#6d7585]">{viewBlocked ? SESSION_EXPIRED_LABEL : sessionNotices.length > 0 && threads.length === 0 ? sessionNotices.join(" · ") : threads.length === 0 ? syncPhaseLabel(syncPhase) : "Sin datos"}</p>
         ) : (
           <ul>
             {visible.map((thread) => {
@@ -1115,7 +1302,7 @@ export function RealChatsPage() {
                 >
                   <span className="flex w-12 shrink-0 flex-col items-center gap-1">
                     {thread.avatarUrl ? (
-                      <img src={thread.avatarUrl} alt="" className="h-10 w-10 rounded-full object-cover" />
+                      <SfwMedia><img src={thread.avatarUrl} alt="" className="h-10 w-10 rounded-full object-cover" /></SfwMedia>
                     ) : (
                       <span className="grid h-10 w-10 place-items-center rounded-full bg-[#eef2ff] text-sm">{fanTitle(thread).slice(0, 1)}</span>
                     )}
@@ -1128,7 +1315,6 @@ export function RealChatsPage() {
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-1">
                       <span className={`truncate text-sm ${unread.bold ? "font-bold text-[#1d2433]" : "font-medium"}`}>{fanTitle(thread)}</span>
-                      {creatorId === "all" ? <span className="shrink-0 rounded bg-[#f3f4f6] px-1 text-[10px] text-[#6d7585]">{creators.find((creator) => creator.id === thread.creatorId)?.name ?? "Cuenta"}</span> : null}
                       {unread.badge != null && !marks.muted.includes(threadMark(thread.creatorId, thread.threadKey)) ? <span className="shrink-0 rounded-full bg-[#3b6cff] px-1.5 text-[10px] font-semibold text-white" aria-label={`${unread.badge} sin leer`}>{unread.badge}</span> : null}
                       {thread.online === false ? <span className="rounded bg-[#f3f4f6] px-1 text-[10px] text-[#6d7585]">OFF</span> : null}
                     </span>
@@ -1151,9 +1337,8 @@ export function RealChatsPage() {
         <header className="relative flex shrink-0 items-center justify-between gap-3 border-b border-[#e6e8ee] px-4 py-3">
               <div className="min-w-0">
                 <button type="button" className="truncate text-left font-medium" onClick={() => { setFanMenu((open) => !open); setRenaming(false); }} aria-expanded={fanMenu} aria-label="Opciones del fan">
-                  {selected ? fanTitle(selected) : "Sin sincronizar"}
+                  {selected ? fanTitle(selected) : syncPhaseLabel(syncPhase)}
                 </button>
-                {selected && creatorId === "all" ? <p className="truncate text-xs text-[#6d7585]">{creators.find((creator) => creator.id === selected.creatorId)?.name ?? "Cuenta"}</p> : null}
                 {fanMenu && selected ? (
                   <>
                     <button type="button" aria-label="Cerrar opciones del fan" className="fixed inset-0 z-20 cursor-default" onClick={() => { setFanMenu(false); setRenaming(false); }} />
@@ -1236,7 +1421,7 @@ export function RealChatsPage() {
             </header>
             {menu && selected ? (
               <div className="shrink-0 border-b border-[#e6e8ee] px-4 py-2 text-xs text-[#6d7585]">
-                {running ? "En curso" : meta?.status === "error" ? `Error · ${shortReason(meta.reason)}` : meta?.status === "ok" ? "OK" : "Sin sincronizar"}
+                {headerSyncLabel(syncPhase)}
                 {meta?.syncedAt ? ` · ${syncAge(meta.syncedAt)}` : ""}
                 {canForce ? (
                   <button
@@ -1256,16 +1441,42 @@ export function RealChatsPage() {
                 ) : null}
               </div>
             ) : null}
-            <ol ref={threadBox} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4" onScroll={(event) => {
+            <div className="relative min-h-0 flex-1">
+            {olderBusy ? <p className="pointer-events-none absolute inset-x-0 top-2 z-10 text-center text-xs text-[#6d7585]">Cargando mensajes anteriores…</p> : null}
+            <ol ref={threadBox} className="h-full space-y-3 overflow-y-auto px-4 py-4" onScroll={(event) => {
               const node = event.currentTarget;
               stickToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80;
-              if (node.scrollTop > 24 || !selected || olderLock.current) return;
+              if (node.scrollTop > 24 || !selected || olderLock.current || historyDone) return;
               olderLock.current = true;
-              void loadOlderMessages({ data: { creatorId: selected.creatorId, threadKey: selected.threadKey } }).then(() => refresh()).catch(() => undefined).finally(() => {
+              pinThreadScroll(node);
+              setOlderBusy(true);
+              const creatorId = selected.creatorId;
+              const threadKey = selected.threadKey;
+              const key = `${creatorId}:${threadKey}`;
+              const pull = async () => {
+                const page = await loadOlderMessages({ data: { creatorId, threadKey } });
+                if (page.retryAfterMs > 0) {
+                  await new Promise((resolve) => setTimeout(resolve, page.retryAfterMs));
+                  return loadOlderMessages({ data: { creatorId, threadKey } });
+                }
+                return page;
+              };
+              void pull().then(async (page) => {
+                const stored = await readThreadHistory({ data: { creatorId, threadKey } }).catch(() => null);
+                setThreadHistory((current) => ({
+                  ...current,
+                  [key]: { done: stored?.done ?? !page.hasMore, messages: (stored?.messages ?? current[key]?.messages ?? []) as NonNullable<CreatorChatList["messages"]> },
+                }));
+                void refresh();
+              }).catch(() => {
+                scrollMark.current = null;
+              }).finally(() => {
                 olderLock.current = false;
+                setOlderBusy(false);
               });
             }}>
-              {!selected || (messages.length === 0 && pendingForThread(pendingOut, selected).length === 0 && jobList.every((job) => job.creatorId !== selected.creatorId || job.threadKey !== selected.threadKey)) ? <li className="text-sm text-[#6d7585]">{selected ? "Sin datos" : "Sin sincronizar"}</li> : null}
+              {historyDone ? <li className="text-center text-xs text-[#6d7585]">Inicio de la conversación</li> : null}
+              {!selected || (messages.length === 0 && pendingForThread(pendingOut, selected).length === 0 && jobList.every((job) => job.creatorId !== selected.creatorId || job.threadKey !== selected.threadKey)) ? <li className="text-sm text-[#6d7585]">{selected ? "Sin datos" : syncPhaseLabel(syncPhase)}</li> : null}
               {messages.map((message) => (
                 <ThreadMessage key={message.messageKey} message={message} />
               ))}
@@ -1304,6 +1515,7 @@ export function RealChatsPage() {
               ))}
               {messages.some((message) => message.fromFan) && fanTranslation ? <li className="text-[10px] text-[#6d7585]">Traducción: Sin datos</li> : null}
             </ol>
+            </div>
             <form className="relative shrink-0 border-t border-[#e6e8ee] p-2" onSubmit={(event) => event.preventDefault()}>
               {panel && panel !== "guiones" && panel !== "vault" && panel !== "etiqueta" ? (
                 <div role="region" aria-label={panelLabel(panel)} className="absolute inset-x-2 bottom-full z-20 mb-1 max-h-52 overflow-y-auto rounded-xl border border-[#e6e8ee] bg-white p-3 text-sm shadow-lg">
@@ -1317,7 +1529,7 @@ export function RealChatsPage() {
                     textSize={textSize}
                     ofVault={ofVault}
                     vaultReload={vaultReload}
-                    creatorId={selected?.creatorId ?? creatorId}
+                    creatorId={threadCreator ?? ""}
                     fanKey={selected?.fanKey ?? null}
                     onReadVault={() => void loadOfVault()}
                     onVault={attachVault}
@@ -1329,8 +1541,38 @@ export function RealChatsPage() {
                   />
                 </div>
               ) : null}
-              {panel === "vault" || panel === "etiqueta" ? (
-                <div className={`absolute inset-x-2 bottom-full z-20 mb-1 flex flex-col overflow-hidden rounded-2xl border border-[#e6e8ee] bg-white shadow-xl ${panel === "vault" ? "h-[min(52vh,560px)]" : "max-h-[min(60vh,32rem)]"}`}>
+              {panel === "vault" ? (
+                <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-[3vmin]">
+                  <div className="flex h-[94vh] w-[94vw] min-h-0 flex-col overflow-hidden rounded-2xl border border-[#e6e8ee] bg-white shadow-xl">
+                    <ComposerPanelBody
+                      panel={panel}
+                      vaultItems={vaultItems}
+                      tagCreators={tagCreators}
+                      tagQuery={tagQuery}
+                      onTagQuery={setTagQuery}
+                      fanTranslation={fanTranslation}
+                      textSize={textSize}
+                      ofVault={ofVault}
+                      vaultReload={vaultReload}
+                      creatorId={threadCreator ?? ""}
+                      fanKey={selected?.fanKey ?? null}
+                      onReadVault={() => void loadOfVault()}
+                      onVault={attachVault}
+                      onTag={(handle) => { const name = handle.replace(/^@/, "").trim(); setTagHandle(name || null); insertAtCursor(mentionToken(handle)); setPanel(null); }}
+                      onFormat={formatCommand}
+                      onSize={setTextSize}
+                      onFanTranslation={() => setFanTranslation((value) => !value)}
+                      onEmoji={insertAtCursor}
+                      onClose={() => setPanel(null)}
+                      reading={vaultReading}
+                      thumbPage={thumbPage}
+                      onVaultMore={() => void loadOfVault(vaultPage.current.listId, vaultPage.current.offset)}
+                      onOpenFolder={(listId) => void loadOfVault(listId ?? "all", 0)}
+                    />
+                  </div>
+                </div>
+              ) : panel === "etiqueta" ? (
+                <div className="absolute inset-x-2 bottom-full z-20 mb-1 flex max-h-[min(60vh,32rem)] flex-col overflow-hidden rounded-2xl border border-[#e6e8ee] bg-white shadow-xl">
                   <ComposerPanelBody
                     panel={panel}
                     vaultItems={vaultItems}
@@ -1341,7 +1583,7 @@ export function RealChatsPage() {
                     textSize={textSize}
                     ofVault={ofVault}
                     vaultReload={vaultReload}
-                    creatorId={selected?.creatorId ?? creatorId}
+                    creatorId={threadCreator ?? ""}
                     fanKey={selected?.fanKey ?? null}
                     onReadVault={() => void loadOfVault()}
                     onVault={attachVault}
@@ -1441,8 +1683,8 @@ export function RealChatsPage() {
                 <div className="mb-1 flex gap-2 overflow-x-auto">
                   {attachments.filter((file) => file.kind !== "vault").map((file) => (
                     <figure key={file.id} className="relative shrink-0">
-                      {file.kind === "video" && file.url ? <video src={file.url} className="h-16 w-16 rounded object-cover" /> : null}
-                      {file.kind === "image" && file.url ? <img src={file.url} alt={file.name} className="h-16 w-16 rounded object-cover" /> : null}
+                      {file.kind === "video" && file.url ? <SfwMedia><video src={file.url} className="h-16 w-16 rounded object-cover" /></SfwMedia> : null}
+                      {file.kind === "image" && file.url ? <SfwMedia><img src={file.url} alt={file.name} className="h-16 w-16 rounded object-cover" /></SfwMedia> : null}
                       {!file.url ? <span className="grid h-16 w-16 place-items-center rounded bg-[#f3f4f6] px-1 text-center text-[10px] leading-tight">{file.name}</span> : null}
                       <figcaption className="max-w-16 truncate text-[10px] text-[#8a5a12]">Pendiente</figcaption>
                       <button type="button" aria-label={`Quitar ${file.name}`} className="mt-0.5 text-[10px] text-[#2456c7]" onClick={() => removeAttachment(file.id)}>Quitar</button>
@@ -1484,7 +1726,7 @@ export function RealChatsPage() {
                   event.target.value = "";
                 }}
               />
-              <div role="toolbar" aria-label="Herramientas del mensaje" className="mt-2 flex items-center gap-1">
+              <div role="toolbar" aria-label="Herramientas del mensaje" className="relative z-50 mt-2 flex items-center gap-1">
                 <ToolButton label="Add media" title="Add media · Añadir archivo" onClick={() => fileBox.current?.click()}><ImagePlus className="h-6 w-6" /></ToolButton>
                 <ToolButton label="GIF" title="GIF" active={panel === "gif"} onClick={() => toggle("gif")}><span className="text-[13px] font-bold leading-none">GIF</span></ToolButton>
                 <ToolButton label="Add from media vault" title="Add from media vault · Añadir del vault" active={panel === "vault"} onClick={() => { if (panel === "vault") setPanel(null); else void loadOfVault(); }}><FolderOpen className="h-6 w-6" /></ToolButton>
@@ -1505,7 +1747,7 @@ export function RealChatsPage() {
             <div className="flex shrink-0 items-center justify-end border-b border-[#e6e8ee] bg-white px-2 py-1">
               <button type="button" aria-label="Cerrar" className="rounded px-2 py-1 text-sm" onClick={() => setInsightsOpen(false)}>X</button>
             </div>
-            <div className="min-h-0 flex-1 overflow-hidden">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
               {selected ? (
                 <InsightPane thread={selected} cards={fanCards.fans} crmFans={crmFans} messages={messages} profiles={data?.profiles ?? []} notes={data?.notes ?? []} onNotes={saveNote} onProfile={(profile) => { void saveFanProfile({ data: profile }).then(() => refresh()); }} onCopyDraft={(body, price) => { replaceDraft(body); setDraftPrice(price); setPriceLabel(`$${(price / 100).toFixed(2)}`); setInsightsOpen(false); }} onCreatorNote={(body) => { if (!selected.fanKey) return; void saveFanNote({ data: { creatorId: selected.creatorId, fanKey: selected.fanKey, body } }).then(() => refresh()); }} />
               ) : (
@@ -1746,7 +1988,7 @@ function ComposerPanelBody({
 }: {
   panel: Exclude<ComposerPanel, "guiones" | null>;
   vaultItems: VaultItem[];
-  ofVault: Array<{ id: string; title: string; kind: "foto" | "video" | "audio" | null }>;
+  ofVault: Array<{ id: string; title: string; kind: "foto" | "video" | "audio" | "gif" | null }>;
   vaultReload: number;
   creatorId: string;
   fanKey: string | null;
@@ -1768,13 +2010,14 @@ function ComposerPanelBody({
   onVaultMore?: () => void;
   onOpenFolder?: (listId: string | null) => void;
 }) {
+  const language = useComposerLanguage();
   switch (panel) {
     case "vault": {
       return (
-        <div role="region" aria-label="Panel Add from media vault" className="flex h-full min-h-0 flex-col">
+        <div role="region" aria-label="Panel Add from media vault" className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {reading ? <p className="px-4 py-2 text-sm text-[#8a96a3]">Leyendo la bóveda de OnlyFans…</p> : null}
           {creatorId && creatorId !== "all" ? (
-            <VaultBrowser layout="of" creatorId={creatorId} fanKey={fanKey} reloadToken={vaultReload} thumbPage={thumbPage} onAttach={onVault} onClose={onClose} onMore={onVaultMore} onOpenFolder={onOpenFolder} />
+            <VaultBrowser layout="of" creatorId={creatorId} fanKey={fanKey} reloadToken={vaultReload} thumbPage={thumbPage} pageItems={ofVault} reading={reading} onAttach={onVault} onClose={onClose} onMore={onVaultMore} onOpenFolder={onOpenFolder} />
           ) : <p className="p-4 text-sm text-[#8a96a3]">Sin datos</p>}
         </div>
       );
@@ -1790,7 +2033,7 @@ function ComposerPanelBody({
       const needle = tagQuery.trim().toLowerCase();
       const visible = tagCreators.filter((creator) => !needle || creator.name.toLowerCase().includes(needle) || creator.handle.toLowerCase().includes(needle));
       return (
-        <div role="region" aria-label="Panel Tag other creator" className="flex min-h-[28rem] flex-col">
+        <div role="region" aria-label="Panel Tag other creator" className="flex max-h-[min(60vh,32rem)] min-h-0 flex-col">
           <div className="flex items-center gap-2 border-b border-[#eceff3] px-4 py-3">
             <p className="text-sm font-semibold tracking-wide">ETIQUETA A OTROS CREADORES</p>
             <input aria-label="Buscar creadora" value={tagQuery} placeholder="Buscar" onChange={(event) => onTagQuery(event.target.value)} className="ml-auto h-8 w-28 rounded-full border border-[#e6e8ee] px-3 text-xs" />
@@ -1803,7 +2046,7 @@ function ComposerPanelBody({
             <p>Agrega un formulario de publicación o etiqueta a otra persona cuando publiques contenido en el que aparezca.</p>
             <p className="mt-2 text-xs text-[#8a96a3]">El uso de contenido de terceros sin permiso legal constituye una violación de nuestra política de uso aceptable.</p>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="min-h-24 flex-1 overflow-y-auto">
             {/^[A-Za-z0-9._]{2,40}$/.test(tagQuery.replace(/^@/, "").trim()) ? (
               <button type="button" className="block w-full px-4 py-3 text-left text-sm hover:bg-[#f4f7fb]" onClick={() => onTag(tagQuery.replace(/^@/, "").trim())}>
                 Etiquetar @{tagQuery.replace(/^@/, "").trim()} en OnlyFans
@@ -1867,9 +2110,8 @@ function ComposerPanelBody({
       return (
         <div className="space-y-2 text-xs text-[#6d7585]">
           <label className="block">Idioma
-            <select aria-label="Idioma" className="mt-1 block h-8 rounded border border-[#e6e8ee] px-2 text-sm text-[#1c2333]">
-              <option>Español</option>
-              <option>Inglés</option>
+            <select aria-label="Idioma" value={language} onChange={(event) => setComposerLanguage(event.target.value === "en" ? "en" : "es")} className="mt-1 block h-8 rounded border border-[#e6e8ee] px-2 text-sm text-[#1c2333]">
+              {COMPOSER_LANGUAGES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
             </select>
           </label>
           <p>Sin datos: no hay servicio de traducción.</p>
@@ -1927,21 +2169,30 @@ function pendingCaption(item: { scheduledAt: string | null; authorName: string |
   return "Pendiente · no enviado";
 }
 
-function emptyChatsLabel(data: CreatorChatList | null): string {
-  if (data?.meta.some((item) => item.status === "error")) {
-    const reason = data.meta.find((item) => item.status === "error")?.reason;
-    return reason ? `Error · ${shortReason(reason)}` : "Error";
+function chatPhase(data: CreatorChatList | null, creatorId: string | null, running: boolean): ChatSyncInput {
+  if (!data) return { hasSession: true, loginInProgress: false, status: null, reason: null, running: false };
+  const accounts = data.accounts.filter((row) => creatorId == null || row.creatorId === creatorId);
+  const metas = data.meta.filter((row) => creatorId == null || row.creatorId === creatorId);
+  const account = accounts[0];
+  const meta = metas.find((row) => row.status === "error") ?? metas.find((row) => row.status === "ok") ?? metas[0];
+  const hasSession = accounts.some((row) => row.hasStorageState && row.status === "active");
+  const loginInProgress = accounts.some((row) => row.loginInProgress);
+  if (accounts.length > 1 && metas.some((row) => row.status === "ok")) {
+    return { hasSession: true, loginInProgress: false, status: "ok", reason: null, running };
   }
-  if (data?.meta.some((item) => item.status === "ok")) return "Sin conversaciones";
-  return "Sin sincronizar";
+  return {
+    hasSession: accounts.length === 1 || creatorId != null
+      ? Boolean(account?.hasStorageState && account?.status === "active")
+      : hasSession,
+    loginInProgress,
+    status: meta?.status ?? null,
+    reason: meta?.reason ?? null,
+    running,
+  };
 }
 
-function shortReason(reason: string | null | undefined): string {
-  if (!reason) return "error";
-  const cut = reason.split(". json:")[0] ?? reason;
-  const text = cut.replace(/https?:\/\/\S+/g, "").replace(/\s+/g, " ").trim();
-  if (/redirigido a login/i.test(text)) return "OnlyFans pide iniciar sesión: pulsa Reconectar";
-  return text;
+function syncPhaseLabel(phase: ChatSyncInput): string {
+  return chatSyncLabel(phase);
 }
 
 function syncAge(iso: string): string {

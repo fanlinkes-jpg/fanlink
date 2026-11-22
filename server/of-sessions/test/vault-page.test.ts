@@ -38,6 +38,21 @@ test("el JSON de la bóveda de OnlyFans trae carpetas y medios", () => {
   assert.equal(parsedMedia.items.length, 2);
   assert.equal(parsedMedia.items[0]?.kind, "foto");
   assert.equal(parsedMedia.items[0]?.preview, "https://cdn2.onlyfans.com/files/a/thumb.jpg");
+  const square = parseVaultBundle({
+    list: [{
+      id: 1,
+      type: "video",
+      files: {
+        thumb: { url: "https://cdn2.onlyfans.com/files/a/strip.jpg" },
+        squarePreview: { url: "https://cdn2.onlyfans.com/files/a/square.jpg" },
+      },
+    }, {
+      id: 2,
+      type: "gif",
+    }],
+  });
+  assert.equal(square.items[0]?.preview, "https://cdn2.onlyfans.com/files/a/square.jpg");
+  assert.equal(square.items[1]?.kind, "gif");
   assert.equal(parsedMedia.items[1]?.kind, "video");
   assert.equal(parsedMedia.items[1]?.seconds, 12);
   const nested = parseVaultBundle({

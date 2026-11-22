@@ -314,11 +314,21 @@ test("los medios sin sesión responden 401 y el log no lleva la URL", async () =
     log: (line) => lines.push(line),
   });
   assert.equal(ok.status, 200);
-  assert.equal(lines.length, 1);
-  assert.equal(lines[0]?.includes("http"), false);
-  assert.equal(lines[0]?.includes("onlyfans"), false);
-  assert.equal(lines[0]?.includes("Policy"), false);
-  assert.equal(mediaLogLine("c-1", "https://cdn2.onlyfans.com/a.mp4").includes("http"), false);
+  assert.equal(lines.length, 0);
+  assert.equal(mediaLogLine("c-1", "https://cdn2.onlyfans.com/a.mp4"), null);
+  const previousDebug = process.env.FANLINK_LIVE_VIEW_DEBUG;
+  process.env.FANLINK_LIVE_VIEW_DEBUG = "true";
+  try {
+    const hashed = mediaLogLine("c-1", "https://cdn2.onlyfans.com/a.mp4?Policy=sekret");
+    assert.equal(hashed?.includes("http"), false);
+    assert.equal(hashed?.includes("onlyfans"), false);
+    assert.equal(hashed?.includes("Policy"), false);
+    assert.equal(hashed?.includes("c-1"), false);
+    assert.equal(hashed?.includes("sekret"), false);
+  } finally {
+    if (previousDebug == null) delete process.env.FANLINK_LIVE_VIEW_DEBUG;
+    else process.env.FANLINK_LIVE_VIEW_DEBUG = previousDebug;
+  }
   const bytes = new Uint8Array(await ok.arrayBuffer());
   assert.equal(new TextDecoder().decode(bytes).includes("onlyfans"), false);
 });
@@ -730,6 +740,24 @@ test("sendChatMessageView no abre con los flags apagados ni con NO VENDER", asyn
   } finally {
     await db.close();
   }
+});
+
+test("el reproductor de un vídeo responde video/mp4 con 206", async () => {
+  const played = await handleVaultMedia(new Request("http://127.0.0.1/api/vault-media?creatorId=c-1&mediaId=v9&variant=full", {
+    headers: { range: "bytes=0-" },
+  }), {
+    session: async () => chatter("chatter-a"),
+    findPreview: async () => "https://cdn2.onlyfans.com/files/720.mp4",
+    fetchBytes: async () => ({
+      status: 206,
+      body: Uint8Array.from([0, 0, 0, 1]),
+      contentType: "video/mp4",
+      contentRange: "bytes 0-3/9",
+      contentLength: 4,
+    }),
+  });
+  assert.equal(played.status, 206);
+  assert.equal(played.headers.get("content-type"), "video/mp4");
 });
 
 function chatter(userId: string) {

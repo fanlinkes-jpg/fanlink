@@ -40,6 +40,66 @@ export const NOTIFICATION_TABS = [
 ] as const;
 export type NotificationTab = (typeof NOTIFICATION_TABS)[number];
 
+/**
+ * El `type` de GET /api2/v2/users/notifications, el de cada pestaña del centro.
+ * Etiquetas no está: OnlyFans las cuenta en /users/me (`newTagsCount`).
+ * Promociones es `message`. Una emisión en directo solo entra ahí si OnlyFans
+ * la devuelve con ese type.
+ */
+export const OF_NOTIFICATION_LIST_TYPES = [
+  "subscribed",
+  "purchases",
+  "tip",
+  "commented",
+  "mentioned",
+  "favorited",
+  "message",
+  "deactivated_media",
+] as const;
+export type OfNotificationListType = (typeof OF_NOTIFICATION_LIST_TYPES)[number];
+
+const OF_LIST_TAB: Record<OfNotificationListType, NotificationTab> = {
+  subscribed: "subscriptions",
+  purchases: "purchases",
+  tip: "tips",
+  commented: "comments",
+  mentioned: "mentions",
+  favorited: "likes",
+  message: "promotions",
+  deactivated_media: "onlyfans",
+};
+
+export function ofTabForListType(type: OfNotificationListType): NotificationTab {
+  return OF_LIST_TAB[type];
+}
+
+/** El type de la petición de esa pestaña. Todo no lleva type. Etiquetas tampoco. */
+export function ofListType(tab: NotificationTab): OfNotificationListType | null {
+  const found = (Object.entries(OF_LIST_TAB) as Array<[OfNotificationListType, NotificationTab]>).find(([, value]) => value === tab);
+  return found?.[0] ?? null;
+}
+
+/** La lista de una pestaña es la respuesta de su type, no una reclasificación. */
+export function noticesForOfTab<T extends { ofType?: string | null }>(rows: readonly T[], tab: NotificationTab): T[] {
+  if (tab === "all") return rows.filter((row) => row.ofType == null);
+  const type = ofListType(tab);
+  if (!type) return [];
+  return rows.filter((row) => row.ofType === type);
+}
+
+/**
+ * El número de la pestaña es el de no leídas de OnlyFans. La lista es la página
+ * de ese type, que puede incluir leídas o no traer las etiquetas.
+ */
+export function ofTabListNote(input: { tab: NotificationTab; unread: number | null; listed: number }): string | null {
+  if (input.unread == null || input.unread <= 0) return null;
+  if (input.listed === input.unread) return null;
+  if (input.tab === "tags" && input.listed === 0) {
+    return `${input.unread} no leídas. OnlyFans las cuenta en el perfil, no en esta lista.`;
+  }
+  return `${input.unread} no leídas. La lista es la página de OnlyFans para esta pestaña.`;
+}
+
 export const TAB_LABEL: Record<NotificationTab, string> = {
   all: "Todo",
   subscriptions: "Suscripciones",
@@ -99,6 +159,8 @@ export type ParsedNotification = {
   postRef?: string | null;
   postLink?: string | null;
   postText?: string | null;
+  /** Type de la petición que trajo el aviso. Null o ausente si vino en Todo, sin type. */
+  ofType?: string | null;
 };
 
 export type NotificationRecord = ParsedNotification & {
@@ -136,6 +198,45 @@ export function mergeKind(previous: NotificationKind, incoming: NotificationKind
 
 export function chatterVisibleKinds(): NotificationKind[] {
   return NOTIFICATION_KINDS.filter((kind) => !isOwnerOnlyKind(kind));
+}
+
+export function notesForCreator<T extends { creatorId: string }>(rows: readonly T[], creatorId: string | null): T[] {
+  if (!creatorId || creatorId === "all") return [];
+  return rows.filter((row) => row.creatorId === creatorId);
+}
+
+export function renewStatusLabel(value: boolean | null | undefined): string | null {
+  if (value == null) return null;
+  return value ? "Renew On" : "Renew Off";
+}
+
+/** El primer mensaje del equipo a ese fan, posterior al aviso, con el nombre del remitente. */
+export function notificationReplyLine(input: {
+  creatorId: string;
+  fanKey: string | null;
+  occurredAt: string | null;
+  messages: readonly {
+    creatorId: string;
+    fanKey: string | null;
+    fromFan: boolean;
+    sentAt: string;
+    authorName: string | null;
+    automatic?: boolean | null;
+  }[];
+}): string | null {
+  if (!input.creatorId || input.creatorId === "all" || !input.fanKey || !input.occurredAt) return null;
+  const noticeAt = Date.parse(input.occurredAt);
+  if (Number.isNaN(noticeAt)) return null;
+  const replies = input.messages.filter((message) => {
+    if (message.creatorId !== input.creatorId || message.fanKey !== input.fanKey) return false;
+    if (message.fromFan || message.automatic) return false;
+    const name = message.authorName?.trim();
+    if (!name) return false;
+    const sentAt = Date.parse(message.sentAt);
+    return !Number.isNaN(sentAt) && sentAt > noticeAt;
+  }).sort((left, right) => left.sentAt.localeCompare(right.sentAt));
+  const author = replies[0]?.authorName?.trim();
+  return author ? `${author} respondió a la notificación` : null;
 }
 
 export function tabOf(kind: NotificationKind): NotificationTab {
@@ -351,6 +452,8 @@ export function kindFromNotificationType(type: string | null): NotificationKind 
 export type ParseNotificationOptions = {
   /** auth_id de la cuenta. Esa persona no cuenta como fan. */
   accountUserId?: string | null;
+  /** Type de la query. La pestaña enseña estos avisos tal cual, sin reclasificar. */
+  listType?: OfNotificationListType | null;
 };
 
 export function parseNotificationPayload(value: unknown, options: ParseNotificationOptions = {}): ParsedNotification[] {
@@ -367,8 +470,8 @@ export function parseNotificationPayload(value: unknown, options: ParseNotificat
  * y, si también viene, `system`.
  */
 export function parseNotificationCounts(value: unknown): NotificationCounts | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const raw = value as Record<string, unknown>;
+  const raw = countSource(value);
+  if (!raw) return null;
   const media = countNumber(raw.deactivated_media);
   const system = countNumber(raw.system);
   const onlyfans = media == null && system == null ? null : (media ?? 0) + (system ?? 0);
@@ -377,7 +480,7 @@ export function parseNotificationCounts(value: unknown): NotificationCounts | nu
     subscriptions: countNumber(raw.subscribed),
     purchases: countNumber(raw.purchases),
     tips: countNumber(raw.tip),
-    tags: null,
+    tags: "tags" in raw ? countNumber(raw.tags) : null,
     comments: countNumber(raw.commented),
     mentions: countNumber(raw.mentioned),
     likes: countNumber(raw.favorited),
@@ -385,6 +488,18 @@ export function parseNotificationCounts(value: unknown): NotificationCounts | nu
     onlyfans,
   };
   return Object.values(counts).some((item) => item != null) ? counts : null;
+}
+
+function countSource(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  for (const key of ["counters", "counts"] as const) {
+    const nested = raw[key];
+    if (!nested || typeof nested !== "object" || Array.isArray(nested)) continue;
+    const inner = nested as Record<string, unknown>;
+    if (countNumber(inner.all) != null || "subscribed" in inner || "tip" in inner || "purchases" in inner) return inner;
+  }
+  return raw;
 }
 
 /** `newTagsCount` de GET /users/me. Si la clave no está, null. */
@@ -422,6 +537,15 @@ export function notificationBellCount(input: {
     return { count: input.fanlinkTotal, source: "fanlink" };
   }
   return { count: onlyfansUnread(input.counts, input.role), source: "onlyfans" };
+}
+
+/** Total de no leídas del centro de OnlyFans. No es el conteo interno de Fanlink. */
+export function ofNoticeTotal(counts: NotificationCounts | null): number | null {
+  if (!counts) return null;
+  if (counts.all != null) return counts.all;
+  const parts = NOTIFICATION_TABS.filter((tab) => tab !== "all").map((tab) => counts[tab]).filter((item): item is number => item != null);
+  if (parts.length === 0) return null;
+  return parts.reduce((total, item) => total + item, 0);
 }
 
 function onlyfansUnread(counts: NotificationCounts | null, role: "owner" | "member" | null): number | null {
@@ -583,10 +707,12 @@ function notificationFrom(record: Record<string, unknown>, options: ParseNotific
     body,
   });
   if (!key) return null;
+  const listType = options.listType ?? null;
+  const storedKey = listType ? `${key}\u001f${listType}` : key;
   const pending = placed.kind === "tag" && isPending(record, body);
   const card = fanCard(record);
   return {
-    key,
+    key: storedKey,
     kind: placed.kind,
     body,
     fanKey: placed.fanKey,
@@ -604,6 +730,7 @@ function notificationFrom(record: Record<string, unknown>, options: ParseNotific
     postRef: card.postRef,
     postLink: card.postLink,
     postText: card.postText,
+    ofType: listType,
   };
 }
 
@@ -652,6 +779,20 @@ export function isRecentFan(iso: string | null | undefined, now: number): boolea
   return age >= 0 && age <= DAY_MS;
 }
 
+/** Avatar y renovación del aviso, y si OF no los manda, los de la ficha o el hilo. */
+export function noticeFace(input: {
+  avatarUrl: string | null;
+  renewAuto: boolean | null;
+  threadAvatar: string | null;
+  threadRenew: boolean | null;
+  cardRenew: boolean | null;
+}): { avatarUrl: string | null; renewAuto: boolean | null } {
+  return {
+    avatarUrl: input.avatarUrl ?? input.threadAvatar,
+    renewAuto: input.renewAuto ?? input.threadRenew ?? input.cardRenew,
+  };
+}
+
 export function renewLabel(value: boolean | null | undefined): string | null {
   if (value == null) return null;
   return value ? "Renovación sí" : "Renovación no";
@@ -667,13 +808,14 @@ function fanCard(record: Record<string, unknown>): {
   postLink: string | null;
   postText: string | null;
 } {
-  const user = nested(record, ["user", "fromUser", "relatedUser", "subscriber"]);
+  const people = noticePeople(record);
+  const user = people[0] ?? null;
   const post = postOf(record);
   return {
     fanHandle: (user ? firstString(user, ["username"]) : null) ?? firstString(record, ["username"]),
-    avatarUrl: user ? avatarOf(user) : null,
+    avatarUrl: firstNoticeAvatar(people) ?? avatarOf(record),
     lists: user ? readFanLists(user) : null,
-    renewAuto: user ? readRenew(user) : null,
+    renewAuto: (user ? readRenew(user) : null) ?? readRenew(record),
     fanSeenAt: user ? firstTime(user, ["lastSeen"]) : null,
     postRef: post.id,
     postLink: post.link,
@@ -681,15 +823,189 @@ function fanCard(record: Record<string, unknown>): {
   };
 }
 
+function httpsUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const clean = value.trim();
+  const withProtocol = clean.startsWith("//") ? `https:${clean}` : clean;
+  if (!/^https?:\/\//i.test(withProtocol) || withProtocol.length > 400) return null;
+  return withProtocol;
+}
+
+const NOTICE_PERSON_KEYS = ["user", "fromUser", "relatedUser", "subscriber", "subscriberUser", "author"] as const;
+
+export function noticePeople(record: Record<string, unknown>): Record<string, unknown>[] {
+  const people: Record<string, unknown>[] = [];
+  const bags = [record, record.data, record.entity].filter((value): value is Record<string, unknown> => (
+    Boolean(value) && typeof value === "object" && !Array.isArray(value)
+  ));
+  for (const bag of bags) {
+    for (const key of NOTICE_PERSON_KEYS) {
+      const value = bag[key];
+      if (value && typeof value === "object" && !Array.isArray(value)) people.push(value as Record<string, unknown>);
+    }
+  }
+  return people;
+}
+
+/** Id numérico del fan. Un usuario tipo u7022542 no se convierte en número. */
+export function noticeFanId(record: Record<string, unknown>): string | null {
+  for (const person of noticePeople(record)) {
+    const id = numericId(firstString(person, ["id", "userId", "user_id"]));
+    if (id) return id;
+  }
+  const direct = numericId(firstString(record, ["userId", "user_id", "fanId", "fanKey", "fromUserId", "subscriberId"]));
+  if (direct) return direct;
+  for (const key of NOTICE_PERSON_KEYS) {
+    const id = numericId(record[key]);
+    if (id) return id;
+  }
+  const data = record.data;
+  if (data && typeof data === "object" && !Array.isArray(data)) {
+    const nestedId = noticeFanId(data as Record<string, unknown>);
+    if (nestedId) return nestedId;
+  }
+  return idFromNoticeLinks(record);
+}
+
+export function hashFanId(id: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < id.length; index += 1) {
+    hash ^= id.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+/** Línea de diagnóstico: hash del id y qué campos de foto llegan. Sin URL ni id. */
+export function noticeAvatarTrace(record: Record<string, unknown>): { hash: string | null; campos: string } {
+  const id = noticeFanId(record);
+  const parts: string[] = [];
+  const slots: Array<[string, unknown]> = [
+    ["user", record.user],
+    ["fromUser", record.fromUser],
+    ["subscriber", record.subscriber],
+    ["data", dataPerson(record)],
+  ];
+  for (const [name, value] of slots) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      parts.push(`${name}.avatar:ausente`);
+      parts.push(`${name}.avatarThumbs:ausente`);
+      continue;
+    }
+    const person = value as Record<string, unknown>;
+    parts.push(`${name}.avatar:${avatarFieldKind(person.avatar)}`);
+    parts.push(`${name}.avatarThumbs:${thumbFieldKind(person.avatarThumbs)}`);
+  }
+  parts.push(`enlace:${idFromNoticeLinks(record) ? "id" : "ausente"}`);
+  return { hash: id ? hashFanId(id) : null, campos: parts.join(",") };
+}
+
+export function noticePayloadTraces(value: unknown): string[] {
+  const lines: string[] = [];
+  for (const row of noticeRows(value)) {
+    if (lines.length >= 20) break;
+    if (firstNoticeAvatar(noticePeople(row)) || avatarOf(row)) continue;
+    const trace = noticeAvatarTrace(row);
+    lines.push(`[fanlink:notif] avatar hash=${trace.hash ?? "ausente"} campos=${trace.campos}`);
+  }
+  return lines;
+}
+
+export function firstNoticeAvatar(people: readonly Record<string, unknown>[]): string | null {
+  for (const person of people) {
+    const url = avatarOf(person);
+    if (url) return url;
+  }
+  return null;
+}
+
+/** Ids sin foto, para un GET /users/list cacheado. */
+export function noticeIdsMissingAvatar(rows: readonly { fanKey: string | null; avatarUrl: string | null }[]): string[] {
+  const ids: string[] = [];
+  for (const row of rows) {
+    if (row.avatarUrl || !row.fanKey || !/^\d{1,18}$/.test(row.fanKey) || ids.includes(row.fanKey)) continue;
+    ids.push(row.fanKey);
+    if (ids.length >= 20) break;
+  }
+  return ids;
+}
+
+export function usersListPath(ids: readonly string[]): string | null {
+  const clean = ids.filter((id) => /^\d{1,18}$/.test(id)).slice(0, 20);
+  if (clean.length === 0) return null;
+  return `/api2/v2/users/list?${clean.map((id) => `cl[]=${encodeURIComponent(id)}`).join("&")}`;
+}
+
+export function avatarsFromUserMap(value: unknown): Map<string, string> {
+  const map = new Map<string, string>();
+  collectDirectoryAvatars(value, null, map, 0);
+  return map;
+}
+
+export function directoryAvatarReport(value: unknown): {
+  shape: "mapa" | "lista" | "otro";
+  devueltos: number;
+  conFoto: number;
+  sinFoto: number;
+  sinFotoHashes: string[];
+} {
+  const people = directoryPeople(value);
+  const sinFotoHashes: string[] = [];
+  let conFoto = 0;
+  for (const person of people) {
+    if (avatarOf(person.record)) {
+      conFoto += 1;
+      continue;
+    }
+    if (person.id) sinFotoHashes.push(hashFanId(person.id));
+  }
+  return {
+    shape: directoryShape(value),
+    devueltos: people.length,
+    conFoto,
+    sinFoto: people.length - conFoto,
+    sinFotoHashes,
+  };
+}
+
+export function applyDirectoryAvatars<T extends { fanKey: string | null; avatarUrl?: string | null }>(
+  rows: readonly T[],
+  directory: ReadonlyMap<string, string>,
+): T[] {
+  return rows.map((row) => {
+    if (row.avatarUrl || !row.fanKey) return row;
+    const url = directory.get(row.fanKey);
+    return url ? { ...row, avatarUrl: url } : row;
+  });
+}
+
+export const NOTICE_TAB_TTL_MS = 45_000;
+
+export function noticeTabFresh(fetchedAt: number | null, now: number, ttl = NOTICE_TAB_TTL_MS): boolean {
+  return fetchedAt != null && now - fetchedAt < ttl && now >= fetchedAt;
+}
+
 function avatarOf(user: Record<string, unknown>): string | null {
-  const direct = user.avatar;
-  if (typeof direct === "string" && /^https?:\/\//.test(direct)) return direct;
+  const direct = httpsUrl(user.avatar);
+  if (direct) return direct;
+  if (user.avatar && typeof user.avatar === "object" && !Array.isArray(user.avatar)) {
+    const nested = httpsUrl((user.avatar as Record<string, unknown>).url);
+    if (nested) return nested;
+  }
   const thumbs = user.avatarThumbs;
   if (!thumbs || typeof thumbs !== "object" || Array.isArray(thumbs)) return null;
   const bag = thumbs as Record<string, unknown>;
-  for (const key of ["c144", "c50"]) {
-    const value = bag[key];
-    if (typeof value === "string" && /^https?:\/\//.test(value)) return value;
+  for (const key of ["c144", "c50", "c", "thumb"]) {
+    const value = httpsUrl(bag[key]);
+    if (value) return value;
+  }
+  for (const value of Object.values(bag)) {
+    const url = httpsUrl(value);
+    if (url) return url;
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const nested = httpsUrl((value as Record<string, unknown>).url);
+      if (nested) return nested;
+    }
   }
   return null;
 }
@@ -713,12 +1029,23 @@ function readFanLists(user: Record<string, unknown>): string[] | null {
 }
 
 function readRenew(user: Record<string, unknown>): boolean | null {
-  const nestedRenew = user.subscribedOnData;
-  const bag = nestedRenew && typeof nestedRenew === "object" && !Array.isArray(nestedRenew)
-    ? nestedRenew as Record<string, unknown>
-    : null;
-  const raw = bag?.autoRenew ?? bag?.renewedAuto ?? bag?.isAutoRenew ?? user.autoRenew;
-  return typeof raw === "boolean" ? raw : null;
+  const bags = [user.subscribedOnData, user.subscribedByData, user].filter((item): item is Record<string, unknown> => (
+    Boolean(item) && typeof item === "object" && !Array.isArray(item)
+  ));
+  for (const bag of bags) {
+    const raw = bag.autoRenew ?? bag.renewedAuto ?? bag.isAutoRenew ?? bag.renewAuto
+      ?? bag.subscribedOnAutoprolong ?? bag.subscribedByAutoprolong ?? bag.autoprolong;
+    const parsed = boolFlag(raw);
+    if (parsed != null) return parsed;
+  }
+  return null;
+}
+
+function boolFlag(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  if (value === 1 || value === "1" || value === "true") return true;
+  if (value === 0 || value === "0" || value === "false") return false;
+  return null;
 }
 
 function postOf(record: Record<string, unknown>): { id: string | null; link: string | null; text: string | null } {
@@ -813,13 +1140,121 @@ function isPending(record: Record<string, unknown>, body: string | null): boolea
 }
 
 function fanOf(record: Record<string, unknown>): { fanKey: string | null; fanName: string | null } {
-  const user = nested(record, ["user", "fromUser", "relatedUser", "subscriber"]);
-  const fanKey = firstString(record, ["userId", "fanId", "fanKey"]) ?? (user ? firstString(user, ["id", "userId"]) : null);
+  const people = noticePeople(record);
+  const user = people[0] ?? null;
+  const fanKey = noticeFanId(record);
   const fanName = (user ? firstString(user, ["name", "displayName"]) : null)
     ?? firstString(record, ["name", "fanName"])
     ?? (user ? firstString(user, ["username"]) : null)
     ?? firstString(record, ["username"]);
   return { fanKey, fanName };
+}
+
+function numericId(value: unknown): string | null {
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) return String(value);
+  if (typeof value === "string" && /^\d{1,18}$/.test(value.trim())) return value.trim();
+  return null;
+}
+
+function idFromNoticeLinks(record: Record<string, unknown>): string | null {
+  const chunks: string[] = [];
+  const text = firstString(record, ["text", "message", "body"]);
+  if (text) chunks.push(text);
+  const pairs = record.replacePairs;
+  if (pairs && typeof pairs === "object" && !Array.isArray(pairs)) {
+    for (const value of Object.values(pairs as Record<string, unknown>)) {
+      if (typeof value === "string") chunks.push(value);
+    }
+  }
+  for (const chunk of chunks) {
+    const profile = /onlyfans\.com\/(\d{4,18})(?:\b|\/|\?|"|')/i.exec(chunk);
+    if (profile?.[1]) return profile[1];
+    const chat = /\/chats\/chat\/(\d{4,18})\b/.exec(chunk);
+    if (chat?.[1]) return chat[1];
+  }
+  return null;
+}
+
+function dataPerson(record: Record<string, unknown>): unknown {
+  const data = record.data;
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+  const bag = data as Record<string, unknown>;
+  return bag.user ?? bag.subscriber ?? bag.fromUser ?? null;
+}
+
+function avatarFieldKind(value: unknown): "url" | "objeto" | "vacio" | "ausente" {
+  if (value == null) return "ausente";
+  if (typeof value === "string") return value.trim() ? "url" : "vacio";
+  if (typeof value === "object") return "objeto";
+  return "vacio";
+}
+
+function thumbFieldKind(value: unknown): string {
+  if (value == null) return "ausente";
+  if (typeof value !== "object" || Array.isArray(value)) return "vacio";
+  const keys = Object.keys(value as Record<string, unknown>).filter((key) => key !== "url").slice(0, 4);
+  return keys.length > 0 ? keys.join("+") : "vacio";
+}
+
+function noticeRows(value: unknown): Record<string, unknown>[] {
+  if (!value || typeof value !== "object") return [];
+  if (Array.isArray(value)) return value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item));
+  const record = value as Record<string, unknown>;
+  const list = record.list ?? record.items ?? record.notifications;
+  if (Array.isArray(list)) return noticeRows(list);
+  return [];
+}
+
+function directoryShape(value: unknown): "mapa" | "lista" | "otro" {
+  if (Array.isArray(value)) return "lista";
+  if (!value || typeof value !== "object") return "otro";
+  const record = value as Record<string, unknown>;
+  if (Array.isArray(record.list) || Array.isArray(record.users) || Array.isArray(record.items)) return "lista";
+  return "mapa";
+}
+
+function directoryPeople(value: unknown): Array<{ id: string | null; record: Record<string, unknown> }> {
+  const people: Array<{ id: string | null; record: Record<string, unknown> }> = [];
+  collectDirectoryPeople(value, null, people, 0);
+  return people;
+}
+
+function collectDirectoryPeople(
+  value: unknown,
+  fallbackId: string | null,
+  people: Array<{ id: string | null; record: Record<string, unknown> }>,
+  depth: number,
+): void {
+  if (!value || typeof value !== "object" || depth > 3 || people.length > 40) return;
+  if (Array.isArray(value)) {
+    for (const item of value) collectDirectoryPeople(item, null, people, depth + 1);
+    return;
+  }
+  const record = value as Record<string, unknown>;
+  const id = numericId(firstString(record, ["id", "userId", "user_id"])) ?? numericId(fallbackId);
+  if (id && (record.avatar != null || record.avatarThumbs != null || record.username != null || record.name != null)) {
+    people.push({ id, record });
+    return;
+  }
+  const nestedList = record.list ?? record.users ?? record.items;
+  if (Array.isArray(nestedList)) {
+    collectDirectoryPeople(nestedList, null, people, depth + 1);
+    return;
+  }
+  for (const [key, child] of Object.entries(record)) {
+    if (!child || typeof child !== "object") continue;
+    collectDirectoryPeople(child, numericId(key) ?? fallbackId, people, depth + 1);
+  }
+}
+
+function collectDirectoryAvatars(value: unknown, fallbackId: string | null, map: Map<string, string>, depth: number): void {
+  const people: Array<{ id: string | null; record: Record<string, unknown> }> = [];
+  collectDirectoryPeople(value, fallbackId, people, depth);
+  for (const person of people) {
+    if (!person.id || map.has(person.id)) continue;
+    const url = avatarOf(person.record);
+    if (url) map.set(person.id, url);
+  }
 }
 
 function unreadFlag(record: Record<string, unknown>): boolean | null {
@@ -860,10 +1295,12 @@ function amountFromPairs(record: Record<string, unknown>): number | null {
   return null;
 }
 
-function countNumber(value: unknown): number | null {
+function countNumber(value: unknown, depth = 0): number | null {
   if (typeof value === "number" && Number.isFinite(value) && value >= 0) return Math.floor(value);
   if (typeof value === "string" && /^\d+$/.test(value.trim())) return Number(value);
-  return null;
+  if (depth >= 1 || !value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  return countNumber(row.unread, depth + 1);
 }
 
 function fillGaps(previous: ParsedNotification, incoming: ParsedNotification): ParsedNotification {
@@ -886,6 +1323,7 @@ function fillGaps(previous: ParsedNotification, incoming: ParsedNotification): P
     postRef: incoming.postRef ?? previous.postRef ?? null,
     postLink: incoming.postLink ?? previous.postLink ?? null,
     postText: incoming.postText ?? previous.postText ?? null,
+    ofType: incoming.ofType ?? previous.ofType ?? null,
   };
 }
 

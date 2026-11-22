@@ -3,12 +3,13 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { tabOf } from "../../../src/lib/notifications.ts";
+import { ofTabListNote, tabOf } from "../../../src/lib/notifications.ts";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
 import { clearAccountChatPace } from "../sync/api-list-pace.ts";
 import { clearAccountPauses, noteAccountBlock } from "../sync/backoff.ts";
 import { passNotificationAccounts } from "../sync/notification-cycle.ts";
 import {
+  clearNotificationListPlans,
   dispatchNotificationMark,
   fetchSignedNotifications,
   notificationCountPath,
@@ -152,6 +153,37 @@ test("una lista vacía dice sin notificaciones", async () => {
   assert.equal(notificationListPath().includes("format=infinite"), true);
 });
 
+test("cada pestaña con no leídas pide su type y no se mezcla", async () => {
+  clearNotificationListPlans();
+  const counts = { all: 2, purchases: 1, tip: 1, subscribed: 0, commented: 0, mentioned: 0, favorited: 0, message: 0, deactivated_media: 0 };
+  const respond = (url: string) => {
+    const type = new URL(url).searchParams.get("type");
+    if (url.endsWith(notificationCountPath())) return json(200, counts);
+    if (url.endsWith("/users/me")) return json(200, { newTagsCount: 2 });
+    if (type === "purchases") return json(200, { list: [{ id: "c1", type: "paided_message", text: "pagó", createdAt: "2026-11-13T10:00:00.000Z", user: { id: 1, name: "Arias", username: "arias_crazy1" } }], hasMore: false });
+    if (type === "tip") return json(200, { list: [{ id: "t1", type: "tip", text: "propina", createdAt: "2026-11-13T11:00:00.000Z", user: { id: 2, name: "Mishell", username: "mishellxy" } }], hasMore: false });
+    return json(200, { list: [{ id: "mix", type: "paided_message", text: "pagó", createdAt: "2026-11-13T09:00:00.000Z", user: { id: 1, name: "Arias", username: "arias_crazy1" } }], hasMore: false });
+  };
+  const read = async () => {
+    const urls: string[] = [];
+    const methods: string[] = [];
+    const result = await fetchSignedNotifications(state(), { ...deps(urls, respond, methods), accountId: "tabs" });
+    return { urls, methods, result };
+  };
+  const first = await read();
+  const second = await read();
+  const third = await read();
+  assert.equal([...first.methods, ...second.methods, ...third.methods].every((method) => method === "GET"), true);
+  assert.equal(new URL(first.urls[0] ?? "").searchParams.get("type"), null);
+  assert.equal(new URL(second.urls[0] ?? "").searchParams.get("type"), "subscribed");
+  assert.equal(new URL(third.urls[0] ?? "").searchParams.get("type"), "purchases");
+  assert.equal(second.result.items.every((item) => item.ofType === "subscribed"), true);
+  assert.equal(third.result.items.every((item) => item.ofType === "purchases"), true);
+  assert.equal(third.result.items[0]?.fanHandle, "arias_crazy1");
+  assert.equal(second.result.counts?.tags, 2);
+  assert.equal(ofTabListNote({ tab: "tags", unread: 2, listed: 0 })?.includes("2 no leídas"), true);
+});
+
 test("un 429 en la lista no pide el contador ni a /users/me", async () => {
   const urls: string[] = [];
   const read = await fetchSignedNotifications(state(), deps(urls, () => json(429, { error: "slow" }, { retryAfter: "3" })));
@@ -164,6 +196,7 @@ test("un 429 en la lista no pide el contador ni a /users/me", async () => {
 test("el bucle real pide como mucho 6 veces por minuto y solo cuentas activas", async () => {
   clearAccountChatPace();
   clearAccountPauses();
+  clearNotificationListPlans();
   let now = 1_000_000;
   const calls: Array<{ at: number; account: string }> = [];
   const pace = new Map();

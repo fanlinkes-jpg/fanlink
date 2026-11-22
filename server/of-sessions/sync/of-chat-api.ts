@@ -2,11 +2,15 @@ import { BROWSER_FINGERPRINT } from "../sessions/browser-factory.ts";
 import { domainMatches, isCookieUnexpired, type StorageCookie, type StorageStateFile } from "../sessions/storage-state.ts";
 import { backoffDelayMs } from "./backoff.ts";
 import { mergeMessages, mergeThreads, parseChatList, parseChatMessages, parsePreviewMessages, type ChatMessage, type ChatThread } from "./chats.ts";
+import { olderChatMessagesPath } from "./history.ts";
 import { collectFanSpend } from "./fan-spend.ts";
-import { awaitAccountGap, REQUEST_GAP_MS } from "./api-list-pace.ts";
+import { awaitAccountGap, REQUEST_GAP_MS, withAccountApi } from "./api-list-pace.ts";
+import { accountPause } from "./backoff.ts";
+import { pauseVaultRate, VAULT_RATE_CAP_MS } from "./vault-pace.ts";
 import { noteMissingUnread } from "./unread-chats.ts";
 import { usersMeKeepsSession, usersMeVerdict } from "../identity.ts";
 import { loadSignRules, signedUserId, signOnlyfans, type SignRules } from "./of-sign.ts";
+import { vaultFolderMark } from "./vault-model.ts";
 import { SESSION_EXPIRED_LABEL } from "./session-link.ts";
 
 const HOST = "onlyfans.com";
@@ -241,16 +245,120 @@ export type SignedVaultRead = {
   sessionRejected: boolean;
   signatureRejected: boolean;
   retryAfterMs: number;
+  /** Parámetro que salió en la URL de vault/media. `list` también es el reintento. */
+  queryParam: "list" | "list_id" | null;
 };
 
+export type VaultFetchOptions = {
+  /** false: no pide vault/lists. Por defecto se pide solo en offset 0. */
+  includeLists?: boolean;
+  /** false: no pide vault/media. */
+  includeMedia?: boolean;
+  /** Página de vault/lists. El límite es el de la web: 50. */
+  listOffset?: number;
+  /** Nombre de la carpeta. Solo entra en la URL de reintento; no se escribe en el log. */
+  listName?: string | null;
+  /** El catálogo trae fotos, vídeos, GIF o audios. Un 200 vacío prueba la otra URL. */
+  expectMedia?: boolean;
+  /** Pide vault/media?list={id} en vez de lists/{id}/media. Lo usa el respaldo tras un 5xx. */
+  forceWebList?: boolean;
+}
+
+/** La web pide las carpetas de 50 en 50 (`view=main`) y sigue con offset mientras `hasMore`. */
+export const VAULT_LIST_LIMIT = 50;
 /**
- * Las mismas dos rutas de siempre, una vez cada una. No relee miniaturas.
+ * La web pagina con `limit` 40, `offset` y `sort=desc`.
+ * La web pide `limit`, `offset`, `field=recent`, `sort=desc` y `list`.
+ * `list=all` es Toda la bóveda. Una carpeta usa el mismo parámetro con su id.
+ * No va `type` ni `list_id`.
+ */
+export const VAULT_MEDIA_LIMIT = 40;
+
+export function vaultListsPath(offset: number): string {
+  return `/api2/v2/vault/lists?view=main&offset=${offset}&limit=${VAULT_LIST_LIMIT}`;
+}
+
+/** La misma query que la bóveda web: `field=recent`, `sort=desc` y `list`. */
+export function vaultMediaPath(listId: string, offset: number, name?: string | null): string {
+  const params = new URLSearchParams({
+    limit: String(VAULT_MEDIA_LIMIT),
+    offset: String(offset),
+    field: "recent",
+    sort: "desc",
+    list: listId.trim() || "all",
+  });
+  const label = name?.trim();
+  if (label) params.set("name", label);
+  return `/api2/v2/vault/media?${params.toString()}`;
+}
+
+/** Medios de una carpeta o subcarpeta. La web abre `lists/{id}/media`, no `vault/media?list=`. */
+export function vaultListMediaPath(listId: string, offset: number): string {
+  const id = listId.trim();
+  const params = new URLSearchParams({
+    limit: String(VAULT_MEDIA_LIMIT),
+    offset: String(offset),
+    list: id,
+    field: "recent",
+    sort: "desc",
+  });
+  return `/api2/v2/vault/lists/${encodeURIComponent(id)}/media?${params.toString()}`;
+}
+
+/** Un medio de la bóveda. La web lo pide al abrir un vídeo cuyo listado no trae URL. */
+export function vaultMediaDetailPath(mediaId: string): string {
+  const id = mediaId.trim();
+  return `/api2/v2/vault/media/${encodeURIComponent(id)}`;
+}
+
+/** Ruta, estado y conteos. Sin query firmada ni cookies. */
+export function vaultPageLog(input: {
+  route: string;
+  status: number | null;
+  count: number;
+  hasMore: string;
+  offset: number;
+  listId: string;
+  reason?: string | null;
+}): string {
+  const route = publicVaultRoute(input.route, input.listId);
+  const listId = input.listId === "listas" ? "listas" : vaultFolderMark(input.listId);
+  return `[fanlink:vault] pagina ruta=${route} status=${input.status ?? "sin"} motivo=${vaultPageReason(input.reason)} n=${input.count} hasMore=${input.hasMore} offset=${input.offset} list=${listId}`;
+}
+
+/** Motivo corto. Sin URL, cookie, firma, id ni nombre de carpeta. */
+export function vaultPageReason(reason: string | null | undefined): string {
+  if (!reason) return "sin";
+  const clean = reason
+    .replace(/https?:\/\/\S+/gi, "")
+    .replace(/cookie|sign|sess|x-bc|token|user-agent|name=/gi, "")
+    .replace(/[^a-zA-Z0-9 áéíóúñÁÉÍÓÚÑ.-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+  return clean || "sin";
+}
+
+function publicVaultRoute(route: string, listId: string): string {
+  const path = route.split("?")[0] || "/api2/v2/vault/media";
+  if (listId === "all" || listId === "listas") return path;
+  if (path.includes("/vault/lists/") && path.endsWith("/media")) return "/api2/v2/vault/lists/{carpeta}/media";
+  if (path.startsWith("/api2/v2/vault/media")) return "/api2/v2/vault/media";
+  return "/api2/v2/vault/media";
+}
+
+/**
+ * Una página de `vault/lists` y/o `vault/media`. No relee miniaturas.
  * El estado HTTP sale en el resultado: un 401 no es una lista vacía.
+ * Quien quiera el resto de las páginas llama otra vez con el offset siguiente.
  */
 export async function fetchSignedVault(state: StorageStateFile, deps: {
   fetch: typeof fetch;
   now: () => number;
-}, listId = "all", offset = 0): Promise<SignedVaultRead> {
+  /** Misma cola que el chat: una petición firmada a la vez, con el hueco de la cuenta. */
+  accountId?: string;
+  sleep?: (ms: number) => Promise<void>;
+}, listId = "all", offset = 0, options?: VaultFetchOptions): Promise<SignedVaultRead> {
   const empty: SignedVaultRead = {
     payloads: [],
     status: null,
@@ -258,34 +366,235 @@ export async function fetchSignedVault(state: StorageStateFile, deps: {
     sessionRejected: false,
     signatureRejected: false,
     retryAfterMs: 0,
+    queryParam: null,
   };
   const auth = sessionForApi(state, deps.now());
   if ("reason" in auth) return { ...empty, reason: auth.reason };
   const rules = await loadSignRules(deps.fetch, deps.now());
   const list = listId.trim().slice(0, 80) || "all";
   const skip = Number.isFinite(offset) && offset > 0 ? Math.min(2_000, Math.floor(offset)) : 0;
-  const paths = [
-    ...(skip === 0 ? ["/api2/v2/vault/lists?view=main&offset=0&limit=100"] : []),
-    `/api2/v2/vault/media?limit=40&offset=${skip}&field=recent&sort=desc&list=${encodeURIComponent(list)}`,
-  ];
+  const listSkip = Number.isFinite(options?.listOffset) && (options?.listOffset ?? 0) > 0
+    ? Math.min(2_000, Math.floor(options?.listOffset ?? 0))
+    : 0;
+  const wantLists = options?.includeLists ?? skip === 0;
+  const wantMedia = options?.includeMedia !== false;
   const payloads: unknown[] = [];
   let status: number | null = null;
-  for (const path of paths) {
-    const read = await getJson(deps.fetch, path, signedHeaders(rules, path, auth, deps.now()), deps.now());
+  if (wantLists) {
+    const path = vaultListsPath(listSkip);
+    const read = await readVaultPath(deps, () => getJson(deps.fetch, path, signedHeaders(rules, path, auth, deps.now()), deps.now()));
     status = read.status;
-    if (read.sessionRejected) {
-      return { payloads, status: 401, reason: SESSION_EXPIRED_LABEL, sessionRejected: true, signatureRejected: false, retryAfterMs: 0 };
-    }
-    if (read.signatureRejected) {
-      return { payloads, status: 400, reason: "OnlyFans ha rechazado la firma", sessionRejected: false, signatureRejected: true, retryAfterMs: 0 };
-    }
-    if (read.retryAfterMs > 0) {
-      return { payloads, status: 429, reason: "OnlyFans respondió 429", sessionRejected: false, signatureRejected: false, retryAfterMs: read.retryAfterMs };
-    }
+    console.info(vaultPageLog({ route: path, status: read.status, count: listCountOf(read.body), hasMore: hasMoreLabelOf(read.body), offset: listSkip, listId: "listas", reason: read.reason }));
+    const stopped = stopVaultRead(payloads, read);
+    if (stopped) return holdVaultRate(deps, stopped);
     if (read.ok) payloads.push(read.body);
     else return { ...empty, status: read.status, reason: read.reason };
   }
-  return { ...empty, payloads, status, reason: payloads.length === 0 ? "No se ha podido leer la bóveda." : null };
+  let queryParam: "list" | "list_id" | null = null;
+  if (wantMedia) {
+    const primary = list === "all" || options?.forceWebList ? vaultMediaPath(list, skip) : vaultListMediaPath(list, skip);
+    queryParam = "list";
+    let read = await readVaultPath(deps, () => getJson(deps.fetch, primary, signedHeaders(rules, primary, auth, deps.now()), deps.now()));
+    logVaultPage(list, primary, read, skip);
+    if (read.status === 429 || read.retryAfterMs > 0) {
+      return holdVaultRate(deps, {
+        payloads,
+        status: 429,
+        reason: "OnlyFans respondió 429",
+        sessionRejected: false,
+        signatureRejected: false,
+        retryAfterMs: read.retryAfterMs > 0 ? read.retryAfterMs : backoffDelayMs(0),
+        queryParam,
+      });
+    }
+    const listed = folderListedCounts(payloads, list);
+    const catalogHasMedia = options?.expectMedia === true || (listed != null && listed.total > 0);
+    const emptyCounted = read.ok && mediaCountOf(read.body) === 0 && catalogHasMedia;
+    const folderName = options?.listName?.trim() || nameFromLists(payloads, list);
+    if (options?.forceWebList && list !== "all" && mediaCountOf(read.body) === 0 && folderName) {
+      const namedPath = vaultMediaPath(list, skip, folderName);
+      if (deps.sleep) await deps.sleep(800);
+      const named = await readVaultPath(deps, () => getJson(deps.fetch, namedPath, signedHeaders(rules, namedPath, auth, deps.now()), deps.now()));
+      logVaultPage(list, namedPath, named, skip);
+      if (mediaCountOf(named.body) > 0) read = named;
+    } else if (!options?.forceWebList && list !== "all" && mediaCountOf(read.body) === 0 && (clientFolderMiss(read) || emptyCounted)) {
+      const folderName = options?.listName?.trim() || nameFromLists(payloads, list);
+      const webPath = vaultMediaPath(list, skip);
+      if (deps.sleep) await deps.sleep(800);
+      const web = await readVaultPath(deps, () => getJson(deps.fetch, webPath, signedHeaders(rules, webPath, auth, deps.now()), deps.now()));
+      logVaultPage(list, webPath, web, skip);
+      if (mediaCountOf(web.body) > 0) {
+        read = web;
+      } else if (folderName) {
+        const namedPath = vaultMediaPath(list, skip, folderName);
+        if (deps.sleep) await deps.sleep(800);
+        const named = await readVaultPath(deps, () => getJson(deps.fetch, namedPath, signedHeaders(rules, namedPath, auth, deps.now()), deps.now()));
+        logVaultPage(list, namedPath, named, skip);
+        if (mediaCountOf(named.body) > 0) read = named;
+      }
+    }
+    status = read.status;
+    const stopped = stopVaultRead(payloads, read, queryParam);
+    if (stopped) return holdVaultRate(deps, stopped);
+    if (read.ok) payloads.push(read.body);
+    else return { ...empty, payloads, status: read.status, reason: read.reason, queryParam };
+  }
+  return { ...empty, payloads, status, queryParam, reason: payloads.length === 0 ? "No se ha podido leer la bóveda." : null };
+}
+
+/** Detalle firmado de un medio. No registra la URL ni el id. */
+export async function fetchSignedMediaDetail(state: StorageStateFile, deps: {
+  fetch: typeof fetch;
+  now: () => number;
+  accountId?: string;
+  sleep?: (ms: number) => Promise<void>;
+}, mediaId: string): Promise<{ status: number | null; body: unknown; reason: string | null }> {
+  const auth = sessionForApi(state, deps.now());
+  if ("reason" in auth) return { status: null, body: null, reason: auth.reason };
+  const rules = await loadSignRules(deps.fetch, deps.now());
+  const path = vaultMediaDetailPath(mediaId);
+  const read = await readVaultPath(deps, () => getJson(deps.fetch, path, signedHeaders(rules, path, auth, deps.now()), deps.now()));
+  console.info(`[fanlink:vault] video medio=${vaultFolderMark(mediaId)} detalle status=${read.status || "sin"}`);
+  if (!read.ok) return { status: read.status, body: null, reason: read.reason };
+  return { status: read.status, body: read.body, reason: null };
+}
+
+function holdVaultRate(deps: { accountId?: string; now: () => number }, read: SignedVaultRead): SignedVaultRead {
+  if (deps.accountId && (read.status === 429 || read.retryAfterMs > 0)) {
+    pauseVaultRate(deps.accountId, read.retryAfterMs, deps.now());
+  }
+  return read;
+}
+
+function stopVaultRead(payloads: unknown[], read: JsonPage, queryParam: "list" | "list_id" | null = null): SignedVaultRead | null {
+  if (read.sessionRejected) {
+    return { payloads, status: 401, reason: SESSION_EXPIRED_LABEL, sessionRejected: true, signatureRejected: false, retryAfterMs: 0, queryParam };
+  }
+  if (read.signatureRejected) {
+    return { payloads, status: 400, reason: "OnlyFans ha rechazado la firma", sessionRejected: false, signatureRejected: true, retryAfterMs: 0, queryParam };
+  }
+  if (read.status === 429 || read.retryAfterMs > 0) {
+    return {
+      payloads,
+      status: 429,
+      reason: "OnlyFans respondió 429",
+      sessionRejected: false,
+      signatureRejected: false,
+      retryAfterMs: read.retryAfterMs > 0 ? read.retryAfterMs : backoffDelayMs(0),
+      queryParam,
+    };
+  }
+  return null;
+}
+
+function listCountOf(body: unknown): number {
+  if (!body || typeof body !== "object") return 0;
+  const raw = body as Record<string, unknown>;
+  if (Array.isArray(raw.list)) return raw.list.length;
+  if (Array.isArray(raw.lists)) return raw.lists.length;
+  return 0;
+}
+
+function mediaCountOf(body: unknown): number {
+  if (!body || typeof body !== "object") return 0;
+  const raw = body as Record<string, unknown>;
+  for (const key of ["medias", "list", "media", "items"]) {
+    const value = raw[key];
+    if (Array.isArray(value) && value.length > 0) return value.length;
+  }
+  for (const key of ["medias", "list", "media", "items"]) {
+    if (Array.isArray(raw[key])) return 0;
+  }
+  return 0;
+}
+
+function clientFolderMiss(read: JsonPage): boolean {
+  return read.status != null && read.status >= 400 && read.status < 500 && read.status !== 401 && read.status !== 429;
+}
+
+function logVaultPage(list: string, route: string, read: JsonPage, offset: number): void {
+  console.info(vaultPageLog({
+    route,
+    status: read.status,
+    count: mediaCountOf(read.body),
+    hasMore: hasMoreLabelOf(read.body),
+    offset,
+    listId: list,
+    reason: read.reason,
+  }));
+}
+
+function folderListedCounts(payloads: readonly unknown[], listId: string): { total: number } | null {
+  for (const payload of payloads) {
+    if (!payload || typeof payload !== "object") continue;
+    const raw = payload as Record<string, unknown>;
+    const rows = [raw.list, raw.lists].find((value) => Array.isArray(value));
+    if (!Array.isArray(rows)) continue;
+    for (const row of rows) {
+      if (!row || typeof row !== "object") continue;
+      const item = row as Record<string, unknown>;
+      if (String(item.id) !== listId) continue;
+      const total = countField(item.photosCount ?? item.photos)
+        + countField(item.videosCount ?? item.videos)
+        + countField(item.gifsCount ?? item.gifs)
+        + countField(item.audiosCount ?? item.audios);
+      return { total };
+    }
+  }
+  return null;
+}
+
+function countField(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function folderMediaRoute(pathWithQuery: string): boolean {
+  const path = pathWithQuery.split("?")[0] ?? "";
+  if (/^\/api2\/v2\/vault\/lists\/[^/]+\/media$/.test(path)) return true;
+  if (path !== "/api2/v2/vault/media") return false;
+  const list = new URLSearchParams(pathWithQuery.split("?")[1] ?? "").get("list");
+  return list != null && list !== "" && list !== "all";
+}
+
+function nameFromLists(payloads: readonly unknown[], listId: string): string | null {
+  for (const payload of payloads) {
+    if (!payload || typeof payload !== "object") continue;
+    const raw = payload as Record<string, unknown>;
+    const rows = [raw.list, raw.lists].find((value) => Array.isArray(value));
+    if (!Array.isArray(rows)) continue;
+    for (const row of rows) {
+      if (!row || typeof row !== "object") continue;
+      const item = row as Record<string, unknown>;
+      if (String(item.id) !== listId) continue;
+      if (typeof item.name === "string" && item.name.trim()) return item.name.trim();
+    }
+  }
+  return null;
+}
+
+function hasMoreLabelOf(body: unknown): string {
+  if (!body || typeof body !== "object") return "ausente";
+  const raw = body as Record<string, unknown>;
+  if (!("hasMore" in raw) && !("has_more" in raw)) return "ausente";
+  return raw.hasMore === true || raw.has_more === true ? "si" : "no";
+}
+
+async function readVaultPath(deps: {
+  accountId?: string;
+  now: () => number;
+  sleep?: (ms: number) => Promise<void>;
+}, load: () => Promise<JsonPage>): Promise<JsonPage> {
+  if (!deps.accountId) return load();
+  const accountId = deps.accountId;
+  return withAccountApi(accountId, async () => {
+    const paused = accountPause(accountId, deps.now());
+    if (paused && deps.sleep) {
+      const wait = Math.min(Math.max(0, paused.until - deps.now()), VAULT_RATE_CAP_MS);
+      if (wait > 0) await deps.sleep(wait);
+    }
+    if (deps.sleep) await awaitAccountGap(accountId, deps.now, deps.sleep, REQUEST_GAP_MS);
+    return load();
+  });
 }
 
 /** users/me firmado. Un 200 de invitado no es una sesión válida. No escribe el estado. */
@@ -354,6 +663,9 @@ async function getJson(fetchImpl: typeof fetch, pathWithQuery: string, headers: 
     return { ok: false, body: null, reason: "OnlyFans ha rechazado la sesión (401). Pulsa Reconectar.", status: 401, sessionRejected: true, signatureRejected: false, retryAfterMs: 0, rotatedCookies };
   }
   if (response.status === 400) {
+    if (folderMediaRoute(pathWithQuery)) {
+      return { ok: false, body: null, reason: "OnlyFans respondió 400", status: 400, sessionRejected: false, signatureRejected: false, retryAfterMs: 0, rotatedCookies };
+    }
     return { ok: false, body: null, reason: "OnlyFans rechazó la firma", status: 400, sessionRejected: false, signatureRejected: true, retryAfterMs: 0, rotatedCookies };
   }
   if (response.status === 429) {
@@ -409,8 +721,35 @@ function openThreadKeys(options: SignedChatOptions): string[] {
 }
 
 function messagesPath(threadKey: string, cursor: string | null): string {
-  const cursorQuery = cursor ? `&id=${encodeURIComponent(cursor)}` : "";
-  return `/api2/v2/chats/${encodeURIComponent(threadKey)}/messages?limit=${MESSAGE_PAGE}&order=desc&skip_users=all${cursorQuery}`;
+  return olderChatMessagesPath(threadKey, cursor, MESSAGE_PAGE);
+}
+
+/** Una página más antigua, GET firmado. Un 429 no marca leído y deja la espera. */
+export async function fetchOlderChatPage(
+  state: StorageStateFile,
+  deps: SignedChatDeps,
+  input: { threadKey: string; fanKey: string | null; accountUserId: string; oldestMessageId: string | null },
+): Promise<{ messages: ChatMessage[]; hasMore: boolean; cursor: string | null; retryAfterMs: number; status: number | null; reason: string | null }> {
+  const auth = sessionForApi(state, deps.now());
+  if ("reason" in auth) {
+    return { messages: [], hasMore: true, cursor: input.oldestMessageId, retryAfterMs: 0, status: null, reason: auth.reason };
+  }
+  const rules = deps.rules ?? await loadSignRules(deps.fetch, deps.now());
+  const path = messagesPath(input.threadKey, input.oldestMessageId);
+  if (deps.accountId && deps.sleep) await awaitAccountGap(deps.accountId, deps.now, deps.sleep, deps.minGapMs ?? REQUEST_GAP_MS);
+  const page = await getJson(deps.fetch, path, signedHeaders(rules, path, auth, deps.now()), deps.now());
+  if (!page.ok) {
+    return { messages: [], hasMore: true, cursor: input.oldestMessageId, retryAfterMs: page.retryAfterMs, status: page.status, reason: page.reason };
+  }
+  const messages = parseChatMessages(page.body, input.threadKey, input.fanKey, input.accountUserId);
+  return {
+    messages,
+    hasMore: messageHasMore(page.body),
+    cursor: messageCursor(page.body),
+    retryAfterMs: 0,
+    status: page.status,
+    reason: null,
+  };
 }
 
 function listHasMore(body: unknown, count: number): boolean {
@@ -452,12 +791,13 @@ function messageCursor(body: unknown): string | null {
 }
 
 function retryAfterMs(response: Response, nowMs: number): number {
-  const header = response.headers.get("retry-after");
-  if (header) {
+  const header = response.headers.get("retry-after")?.trim() ?? "";
+  if (/^\d+$/.test(header)) {
     const seconds = Number(header);
-    if (Number.isFinite(seconds) && seconds >= 0) return Math.min(Math.round(seconds * 1000), MAX_RETRY_MS);
+    if (seconds > 0) return Math.min(seconds * 1000, MAX_RETRY_MS);
+  } else if (/[a-z]/i.test(header)) {
     const at = Date.parse(header);
-    if (Number.isFinite(at)) return Math.min(Math.max(0, at - nowMs), MAX_RETRY_MS);
+    if (Number.isFinite(at) && at > nowMs) return Math.min(at - nowMs, MAX_RETRY_MS);
   }
   return backoffDelayMs(0);
 }

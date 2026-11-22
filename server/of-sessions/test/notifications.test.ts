@@ -215,6 +215,7 @@ test("una 0046 ya aplicada recibe el enlace del comentario y el insert sigue", a
     await pg.exec(oldCard);
     await pg.exec(await readFile(path.join(root, "migrations/0048_notification_post.sql"), "utf8"));
     await pg.exec(await readFile(path.join(root, "migrations/0048_notification_post.sql"), "utf8"));
+    await pg.exec(await readFile(path.join(root, "migrations/0055_notification_of_type.sql"), "utf8"));
     const sql = {
       query: async <T>(text: string, params: unknown[] = []) => (await pg.query<T>(text, params)).rows,
     };
@@ -302,7 +303,7 @@ test("la ficha guarda listas y renovación y deja null lo que no vino", async ()
 test("las migraciones de notificaciones se aplican dos veces", async () => {
   const pg = new PGlite();
   try {
-    for (const name of ["0034_notifications.sql", "0035_notification_first_seen.sql", "0036_notification_key_text.sql", "0047_notification_counts.sql", "0046_notification_fan_card.sql", "0048_notification_post.sql"]) {
+    for (const name of ["0034_notifications.sql", "0035_notification_first_seen.sql", "0036_notification_key_text.sql", "0047_notification_counts.sql", "0046_notification_fan_card.sql", "0048_notification_post.sql", "0055_notification_of_type.sql"]) {
       const sql = await readFile(path.join(root, "migrations", name), "utf8");
       await pg.exec(sql);
       await pg.exec(sql);
@@ -562,6 +563,7 @@ async function database() {
   await pg.exec(await readFile(path.join(root, "migrations/0047_notification_counts.sql"), "utf8"));
   await pg.exec(await readFile(path.join(root, "migrations/0046_notification_fan_card.sql"), "utf8"));
   await pg.exec(await readFile(path.join(root, "migrations/0048_notification_post.sql"), "utf8"));
+  await pg.exec(await readFile(path.join(root, "migrations/0055_notification_of_type.sql"), "utf8"));
   const sql = {
     query: async <T>(text: string, params: unknown[] = []) => (await pg.query<T>(text, params)).rows,
   };

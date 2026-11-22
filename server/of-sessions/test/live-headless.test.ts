@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { BrowserContext } from "playwright";
 import { mkdir, mkdtemp, readlink, rm, symlink } from "node:fs/promises";
-import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { isLiveChallengeText, isLiveLoginText, LIVE_CHALLENGE_NOTICE } from "../live/challenge.ts";
@@ -10,7 +9,7 @@ import { LOGIN_CLIENT_HINTS, loginUserAgentOverride } from "../live/fingerprint.
 import { isTargetClosedMessage, shouldReviveLive } from "../live/closed.ts";
 import { clearStaleProfileLock, readProfileLock, waitForProfileLock } from "../sessions/profile-lock.ts";
 import { profileHasClearanceName } from "../live/clearance-file.ts";
-import { clearancePresent, liveRequestTrace, liveViewDebug } from "../live/debug.ts";
+import { clearancePresent, liveRequestTrace, liveViewDebug, vaultCdnTrace, vaultWebTrace } from "../live/debug.ts";
 import { liveLaunchMode, liveVisibility } from "../live/headless.ts";
 import { profileSaveReason } from "../sessions/profile-owner.ts";
 import { hideLiveProcess, liveContextOpen, liveHideScript, tuckLiveWindow } from "../live/window.ts";
@@ -143,6 +142,29 @@ test("el diagnostico no escribe query, hash ni el valor de cf_clearance", () => 
   assert.equal(traced?.includes("sign="), false);
   assert.equal(clearancePresent(["sess", "cf_clearance"]), true);
   assert.equal(clearancePresent(["sess"]), false);
+  const web = vaultWebTrace(
+    "GET",
+    "https://onlyfans.com/api2/v2/vault/lists/28619188/media?limit=40&offset=0&list=28619188&field=recent&sort=desc&sign=abc&name=B%2FG%20LA%20DUCHA",
+  );
+  assert.equal(web, "GET /api2/v2/vault/lists/<n>/media?limit=<n>&offset=<n>&list=<n>&field=recent&sort=desc&name=<t>");
+  assert.equal(web?.includes("28619188"), false);
+  assert.equal(web?.includes("DUCHA"), false);
+  assert.equal(web?.includes("sign"), false);
+  const secret = vaultWebTrace("GET", "https://onlyfans.com/api2/v2/vault/media?list=all&session=abc&x-bc-extra=1&user-id=9&user_id=9&field=recent");
+  assert.equal(secret, "GET /api2/v2/vault/media?list=all&field=recent");
+  assert.equal(secret?.includes("user-id"), false);
+  assert.equal(secret?.includes("user_id"), false);
+  assert.equal(secret?.includes("session"), false);
+  assert.equal(secret?.includes("x-bc"), false);
+  assert.equal(vaultWebTrace("GET", "https://onlyfans.com/my/vault"), null);
+  const cdn = vaultCdnTrace("GET", "https://cdn3.onlyfans.com/hls/files/a.m3u8?Policy=sek", "CloudFront-Policy=sek; CloudFront-Signature=sig");
+  assert.match(cdn ?? "", /^GET cdn tipo=m3u8 firma=si origen=[0-9a-f]{6}$/);
+  assert.equal(cdn?.includes("sek"), false);
+  assert.equal(cdn?.includes("m3u8"), true);
+  const segment = vaultCdnTrace("GET", "https://cdn3.onlyfans.com/hls/seg-0.m4s", null);
+  assert.match(segment ?? "", /^GET cdn tipo=segmento firma=no /);
+  assert.equal(segment?.includes("seg-0"), false);
+  assert.equal(vaultWebTrace("GET", "https://onlyfans.com/api2/v2/vault/media?list=all&limit=40"), "GET /api2/v2/vault/media?list=all&limit=<n>");
 });
 
 test("un Chromium vivo bloquea el perfil y uno muerto se puede soltar", async () => {
@@ -169,7 +191,9 @@ test("el perfil guarda el nombre cf_clearance y no hace falta su valor", async (
   try {
     const folder = path.join(dir, "Default", "Network");
     await mkdir(folder, { recursive: true });
-    const db = new DatabaseSync(path.join(folder, "Cookies"));
+    const sqlite = await import("node:sqlite").catch(() => null) as { DatabaseSync?: new (file: string) => { exec(sql: string): void; prepare(sql: string): { run(...args: string[]): void }; close(): void } } | null;
+    if (!sqlite?.DatabaseSync) return;
+    const db = new sqlite.DatabaseSync(path.join(folder, "Cookies"));
     db.exec("CREATE TABLE cookies (name TEXT, value TEXT)");
     db.prepare("INSERT INTO cookies (name, value) VALUES (?, ?)").run("cf_clearance", "no-se-lee");
     db.close();

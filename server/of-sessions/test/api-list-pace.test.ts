@@ -25,7 +25,7 @@ const RULES = {
   remove_headers: ["user-id"],
 };
 
-test("veinte hilos abiertos se quedan cerca de 150 peticiones por minuto", async () => {
+test("veinte hilos abiertos se quedan en unas 40 peticiones por minuto", async () => {
   clearSignRulesCache();
   clearAccountChatPace();
   clearFanSpendCache();
@@ -65,8 +65,8 @@ test("veinte hilos abiertos se quedan cerca de 150 peticiones por minuto", async
     }
     now += OPEN_PULL_MS;
   }
-  assert.ok(requests <= 170, `peticiones=${requests}`);
-  assert.ok(requests >= 120, `peticiones=${requests}`);
+  assert.ok(requests <= 55, `peticiones=${requests}`);
+  assert.ok(requests >= 30, `peticiones=${requests}`);
   clearSignRulesCache();
   clearAccountChatPace();
 });
@@ -163,7 +163,7 @@ test("la bandeja, el bucle y readChatsNow no pisan el fetch", async () => {
     assert.equal(launches, 0);
     assert.ok(starts.length >= 2, `fetches=${starts.length}`);
     for (let index = 1; index < starts.length; index += 1) {
-      assert.ok(starts[index] - starts[index - 1] >= 300, `${starts[index - 1]}→${starts[index]}`);
+      assert.ok(starts[index] - starts[index - 1] >= 1_500, `${starts[index - 1]}→${starts[index]}`);
     }
   } finally {
     clearSignRulesCache();

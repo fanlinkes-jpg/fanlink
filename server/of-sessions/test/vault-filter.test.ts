@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
-import { emptyVaultQuery, filterVault, rememberVaultQuery, restoredVaultQuery, searchVaultLists, searchVaultMedia, vaultQueryFor, type VaultFolder, type VaultQuery } from "../sync/vault-filter.ts";
+import { emptyVaultQuery, filterVault, rememberVaultQuery, restoredVaultQuery, searchVaultLists, searchVaultMedia, vaultQueryFor, vaultQueryForCreator, type VaultFolder, type VaultQuery } from "../sync/vault-filter.ts";
 import { historyFromMedia, mergeFanUses, suggestVaultPrice, trailerPackages, vaultSaleBlocked, type VaultFile } from "../sync/vault-model.ts";
 import { loadVaultQuery, saveVaultQuery } from "../sync/vault-store.ts";
 import type { ReadSql } from "../sync/store.ts";
@@ -153,6 +153,17 @@ test("no vender bloquea, el precio sugerido no se inventa y el historial no dupl
     item({ id: "incognito", title: "Tráiler", priceCents: null, tags: ["Tráiler"], paidWithId: "pago" }),
     item({ id: "pago", title: "de pago", priceCents: 2500 }),
   ]).length, 0);
+});
+
+test("un folderId ajeno o desconocido abre toda la bóveda de la creadora", () => {
+  const saved = { ...emptyVaultQuery(), scope: "carpeta" as const, folderId: "mensajes-de-jose" };
+  const opened = vaultQueryForCreator(saved, ["sets-allison"]);
+  assert.equal(opened.scope, "todas");
+  assert.equal(opened.folderId, null);
+  const own = vaultQueryForCreator({ ...emptyVaultQuery(), scope: "carpeta", folderId: "sets-allison" }, ["sets-allison"]);
+  assert.equal(own.scope, "carpeta");
+  assert.equal(own.folderId, "sets-allison");
+  assert.equal(vaultQueryForCreator(emptyVaultQuery(), []).scope, "todas");
 });
 
 test("el buscador encuentra por etiqueta o por carpeta, dentro de la abierta o en todas", () => {

@@ -10,10 +10,10 @@ export function CreatorMark({
   name: string;
   hue: number;
   avatarUrl?: string | null;
-  size?: "sm" | "md";
+  size?: "sm" | "md" | "lg";
 }) {
   const [failed, setFailed] = useState(false);
-  const box = size === "md" ? "h-7 w-7 text-xs" : "h-5 w-5 text-[10px]";
+  const box = size === "lg" ? "h-9 w-9 text-sm" : size === "md" ? "h-7 w-7 text-xs" : "h-5 w-5 text-[10px]";
   if (avatarUrl && !failed) {
     return (
       <img

@@ -387,7 +387,7 @@ function fanFrom(record: Record<string, unknown>, now: Date): FanRow | null {
     subscribedAt,
     status,
     spentCents: spent,
-    renewAuto: boolOrNull(nested?.autoRenew ?? nested?.renewedAuto ?? nested?.isAutoRenew ?? record.autoRenew),
+    renewAuto: boolOrNull(nested?.autoRenew ?? nested?.renewedAuto ?? nested?.isAutoRenew ?? nested?.subscribedOnAutoprolong ?? nested?.subscribedByAutoprolong ?? nested?.autoprolong ?? record.autoRenew ?? record.subscribedOnAutoprolong ?? record.subscribedByAutoprolong),
     expiresAt:
       iso(record.expiredAt) ??
       iso(record.expireDate) ??

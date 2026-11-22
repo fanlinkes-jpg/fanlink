@@ -62,6 +62,7 @@ async function readVault(status: number, marked: number[]) {
   return readChatVaultView({ creatorId: "9ikis52", threadKey: "t" }, {
     fetch: fetchStatus(status),
     now: () => 1,
+    sleep: async () => undefined,
     sql: { async query() { throw new Error("no sql"); } },
     access: { role: "owner", perms: [] },
     sessions: {

@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { authMiddleware } from "@/lib/auth/middleware";
-import type { NotificationCounts, NotificationKind, NotificationLabels, NotificationTab } from "@/lib/notifications";
+import { canReadCreatorNotifications, ofNoticeTotal, type NotificationCounts, type NotificationKind, type NotificationLabels, type NotificationTab } from "@/lib/notifications";
 import { SESSION_EXPIRED_LABEL, signedReadsBlocked } from "../../server/of-sessions/sync/session-link.ts";
 
 // Los módulos de base y de disco solo se cargan dentro del handler: si fueran
@@ -27,6 +27,7 @@ export type NotificationListItem = {
   postRef: string | null;
   postLink: string | null;
   postText: string | null;
+  ofType: string | null;
   labels: NotificationLabels;
 };
 
@@ -53,6 +54,14 @@ export type NotificationMarkResult = {
   markOnOnlyfans: boolean;
   fanlinkUnread: number | null;
 };
+
+export const ensureNoticeTab = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string; tab: NotificationTab }) => input)
+  .handler(async ({ context, data }) => {
+    const { ensureNotificationTabView } = await import("./of-sessions-runtime.server");
+    return ensureNotificationTabView(context.userId, data);
+  });
 
 export const listCreatorNotifications = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
@@ -119,6 +128,29 @@ export const markCreatorNotificationsRead = createServerFn({ method: "POST" })
       markOnOnlyfans: marked.motivo !== "marcado apagado",
       fanlinkUnread,
     };
+  });
+
+export const listCreatorNoticeBadges = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorIds?: string[] } | undefined) => {
+    const ids = [...new Set((input?.creatorIds ?? []).map((id) => id.trim()).filter((id) => id && id !== "all"))].slice(0, 24);
+    return { creatorIds: ids };
+  })
+  .handler(async ({ context, data }): Promise<{ badges: Array<{ creatorId: string; unread: number | null }> }> => {
+    const { getSql } = await import("@/lib/db");
+    const { ensureStaff } = await import("@/lib/workspace-store");
+    const { DEV_USER_ID, authConfigured } = await import("@/lib/auth/verify.server");
+    const { notificationPageFor } = await import("../../server/of-sessions/sync/notification-store.ts");
+    const sql = await getSql();
+    const devMode = !authConfigured && context.userId === DEV_USER_ID;
+    const access = await ensureStaff(sql, context.userId, devMode);
+    const badges: Array<{ creatorId: string; unread: number | null }> = [];
+    for (const creatorId of data.creatorIds) {
+      if (!canReadCreatorNotifications(access, creatorId)) continue;
+      const page = await notificationPageFor(sql, access, creatorId);
+      badges.push({ creatorId, unread: ofNoticeTotal(page.counts) });
+    }
+    return { badges };
   });
 
 async function markReadEnabled(creatorId: string): Promise<boolean> {

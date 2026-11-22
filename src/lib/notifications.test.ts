@@ -22,6 +22,26 @@ import {
   spanishNotificationText,
   relativeNotificationWhen,
   redactedNotificationUrl,
+  NOTIFICATION_KINDS,
+  NOTIFICATION_TABS,
+  notesForCreator,
+  noticeFace,
+  noticesForOfTab,
+  ofListType,
+  ofTabListNote,
+  ofNoticeTotal,
+  noticeIdsMissingAvatar,
+  noticeAvatarTrace,
+  noticeFanId,
+  noticePayloadTraces,
+  directoryAvatarReport,
+  hashFanId,
+  usersListPath,
+  avatarsFromUserMap,
+  applyDirectoryAvatars,
+  noticeTabFresh,
+  notificationReplyLine,
+  renewStatusLabel,
   tabOf,
   unreadCount,
   canReadCreatorNotifications,
@@ -232,6 +252,9 @@ test("filtra por pestaña, texto y fechas, y cuenta no leídas", () => {
   assert.equal(counts?.tips, 1);
   assert.equal(counts?.promotions, 1);
   assert.equal(counts?.tags, null);
+  assert.equal(parseNotificationCounts({ counters: { all: 6, tip: 2 } })?.all, 6);
+  assert.equal(parseNotificationCounts({ all: { unread: 7 } })?.all, 7);
+  assert.equal(parseNotificationCounts({ all: { count: 9, total: 3 } }), null);
   assert.equal(counts?.onlyfans, 2);
   assert.equal(parseNotificationCounts({ all: 1 })?.purchases, null);
   assert.equal(notificationBellCount({ markOnOnlyfans: true, counts, fanlinkTotal: null, role: "owner" }).count, 4);
@@ -358,6 +381,226 @@ test("un comentario guarda el texto y la publicación si vienen", () => {
   ]) {
     assert.equal(onlyfansPostLink(hostile), null, hostile);
   }
+});
+
+test("cada categoría de OnlyFans tiene su pestaña y no mezcla tipos", () => {
+  assert.deepEqual([...NOTIFICATION_TABS], [
+    "all",
+    "subscriptions",
+    "purchases",
+    "tips",
+    "tags",
+    "comments",
+    "mentions",
+    "likes",
+    "promotions",
+    "onlyfans",
+  ]);
+  const rows = NOTIFICATION_KINDS.map((kind) => ({ kind }));
+  for (const tab of NOTIFICATION_TABS) {
+    if (tab === "all") continue;
+    const kinds = rows.filter((row) => tabOf(row.kind) === tab).map((row) => row.kind);
+    assert.ok(kinds.length > 0, tab);
+    for (const kind of kinds) assert.equal(tabOf(kind), tab);
+  }
+  assert.deepEqual(rows.filter((row) => tabOf(row.kind) === "likes").map((row) => row.kind), ["like"]);
+  assert.deepEqual(rows.filter((row) => tabOf(row.kind) === "comments").map((row) => row.kind), ["comment"]);
+  assert.deepEqual(rows.filter((row) => tabOf(row.kind) === "tags").map((row) => row.kind), ["tag"]);
+  assert.deepEqual(rows.filter((row) => tabOf(row.kind) === "mentions").map((row) => row.kind), ["mention"]);
+  assert.deepEqual(rows.filter((row) => tabOf(row.kind) === "tips").map((row) => row.kind), ["tip"]);
+  assert.notEqual(tabOf("like"), tabOf("comment"));
+  assert.notEqual(tabOf("like"), "onlyfans");
+  assert.notEqual(tabOf("tag"), "onlyfans");
+  assert.equal(renewStatusLabel(true), "Renew On");
+  assert.equal(renewStatusLabel(false), "Renew Off");
+  assert.equal(renewStatusLabel(null), null);
+});
+
+test("el panel solo enseña avisos de la creadora activa y la respuesta es de su remitente", () => {
+  const notes = [
+    { creatorId: "jose", key: "j" },
+    { creatorId: "allison", key: "a" },
+    { creatorId: "9ikis52", key: "x" },
+  ];
+  assert.deepEqual(notesForCreator(notes, "jose").map((row) => row.key), ["j"]);
+  assert.deepEqual(notesForCreator(notes, "all"), []);
+  assert.deepEqual(notesForCreator(notes, null), []);
+  const messages = [
+    { creatorId: "allison", fanKey: "7", fromFan: false, sentAt: "2026-11-14T12:05:00.000Z", authorName: "Elena", automatic: false },
+    { creatorId: "jose", fanKey: "7", fromFan: true, sentAt: "2026-11-14T12:10:00.000Z", authorName: "Fan", automatic: false },
+    { creatorId: "jose", fanKey: "7", fromFan: false, sentAt: "2026-11-14T11:00:00.000Z", authorName: "Antes", automatic: false },
+    { creatorId: "jose", fanKey: "7", fromFan: false, sentAt: "2026-11-14T12:30:00.000Z", authorName: "Marta", automatic: true },
+    { creatorId: "jose", fanKey: "7", fromFan: false, sentAt: "2026-11-14T13:00:00.000Z", authorName: "  ", automatic: false },
+    { creatorId: "jose", fanKey: "7", fromFan: false, sentAt: "2026-11-14T14:00:00.000Z", authorName: "Luis", automatic: false },
+  ];
+  assert.equal(notificationReplyLine({
+    creatorId: "jose",
+    fanKey: "7",
+    occurredAt: "2026-11-14T12:00:00.000Z",
+    messages,
+  }), "Luis respondió a la notificación");
+  assert.equal(notificationReplyLine({
+    creatorId: "allison",
+    fanKey: "7",
+    occurredAt: "2026-11-14T12:00:00.000Z",
+    messages,
+  }), "Elena respondió a la notificación");
+  assert.equal(notificationReplyLine({
+    creatorId: "jose",
+    fanKey: null,
+    occurredAt: "2026-11-14T12:00:00.000Z",
+    messages,
+  }), null);
+});
+
+test("cada pestaña usa el type de OnlyFans y no mezcla compras con propinas", () => {
+  const rows = [
+    { ofType: null, key: "todo" },
+    { ofType: "purchases", key: "compra" },
+    { ofType: "tip", key: "propina" },
+    { ofType: "message", key: "directo", body: "emisión en directo" },
+  ];
+  assert.equal(ofListType("purchases"), "purchases");
+  assert.equal(ofListType("tips"), "tip");
+  assert.equal(ofListType("promotions"), "message");
+  assert.equal(ofListType("tags"), null);
+  assert.equal(ofListType("all"), null);
+  assert.deepEqual(noticesForOfTab(rows, "purchases").map((row) => row.key), ["compra"]);
+  assert.deepEqual(noticesForOfTab(rows, "tips").map((row) => row.key), ["propina"]);
+  assert.deepEqual(noticesForOfTab(rows, "promotions").map((row) => row.key), ["directo"]);
+  assert.deepEqual(noticesForOfTab(rows, "all").map((row) => row.key), ["todo"]);
+  assert.deepEqual(noticesForOfTab(rows, "tags"), []);
+  assert.match(ofTabListNote({ tab: "tags", unread: 2, listed: 0 }) ?? "", /2 no leídas/);
+  assert.match(ofTabListNote({ tab: "promotions", unread: 3, listed: 1 }) ?? "", /3 no leídas/);
+  assert.equal(ofTabListNote({ tab: "tips", unread: 1, listed: 1 }), null);
+  const live = parseNotificationPayload({
+    list: [{ id: "live", type: "message", text: "emisión en directo", createdAt: "2026-11-13T10:00:00.000Z" }],
+  }, { listType: "message" });
+  assert.equal(live[0]?.ofType, "message");
+  assert.deepEqual(noticesForOfTab(live, "promotions").map((row) => row.key), [live[0]?.key]);
+  assert.deepEqual(noticesForOfTab(live, "tips"), []);
+});
+
+test("la foto sale del fromUser si el user no la trae, y un lote rellena las que faltan", () => {
+  const parsed = parseNotificationPayload({
+    list: [{
+      id: "sin",
+      type: "subscribed",
+      createdAt: "2026-11-13T10:00:00.000Z",
+      user: { id: 9, username: "u9" },
+      fromUser: { id: 9, avatarThumbs: { c144: "https://cdn.example/u9.jpg" } },
+    }],
+  });
+  assert.equal(parsed[0]?.avatarUrl, "https://cdn.example/u9.jpg");
+  assert.deepEqual(noticeIdsMissingAvatar([
+    { fanKey: "9", avatarUrl: "https://cdn.example/u9.jpg" },
+    { fanKey: "4", avatarUrl: null },
+    { fanKey: "no", avatarUrl: null },
+  ]), ["4"]);
+  assert.equal(usersListPath(["4", "8"]), "/api2/v2/users/list?cl[]=4&cl[]=8");
+  const filled = applyDirectoryAvatars(
+    [{ fanKey: "4", avatarUrl: null }, { fanKey: "8", avatarUrl: "https://cdn.example/keep.jpg" }],
+    new Map([["4", "https://cdn.example/4.jpg"]]),
+  );
+  assert.equal(filled[0]?.avatarUrl, "https://cdn.example/4.jpg");
+  assert.equal(filled[1]?.avatarUrl, "https://cdn.example/keep.jpg");
+  assert.equal(noticeTabFresh(1_000, 1_000 + 44_000), true);
+  assert.equal(noticeTabFresh(1_000, 1_000 + 46_000), false);
+});
+
+test("el badge verde usa el total de OnlyFans, no las no vistas en Fanlink", () => {
+  assert.equal(ofNoticeTotal({ all: 3, subscriptions: 0, purchases: null, tips: null, tags: null, comments: null, mentions: null, likes: null, promotions: null, onlyfans: 3 }), 3);
+  assert.equal(ofNoticeTotal({ all: null, subscriptions: null, purchases: null, tips: null, tags: null, comments: null, mentions: null, likes: null, promotions: null, onlyfans: 3 }), 3);
+  assert.equal(notificationBellCount({
+    markOnOnlyfans: false,
+    counts: { all: 3, subscriptions: null, purchases: null, tips: null, tags: null, comments: null, mentions: null, likes: null, promotions: null, onlyfans: 3 },
+    fanlinkTotal: 0,
+    role: "owner",
+  }).count, 0);
+});
+
+test("Renew On sale del usuario de la suscripción o de la ficha", () => {
+  const fromSubscription = parseNotificationPayload({
+    list: [{ id: "sub", type: "subscribed", createdAt: "2026-11-13T10:00:00.000Z", user: { id: 4, name: "Nora", username: "nora", subscribedByData: { renewedAuto: true } } }],
+  });
+  assert.equal(fromSubscription[0]?.renewAuto, true);
+  const prolonged = parseNotificationPayload({
+    list: [{ id: "pro", type: "subscribed", createdAt: "2026-11-13T10:00:00.000Z", user: { id: 5, name: "Luz", subscribedOnData: { subscribedOnAutoprolong: false, renewedAt: "2026-11-01T00:00:00.000Z" } } }],
+  });
+  assert.equal(prolonged[0]?.renewAuto, false);
+  const fromThumb = parseNotificationPayload({
+    list: [{ id: "foto", type: "tip", createdAt: "2026-11-13T10:00:00.000Z", user: { id: 8, name: "Lia", avatarThumbs: { thumb: "https://cdn.example/lia.jpg" } } }],
+  });
+  assert.equal(fromThumb[0]?.avatarUrl, "https://cdn.example/lia.jpg");
+  assert.deepEqual(noticeFace({
+    avatarUrl: null,
+    renewAuto: null,
+    threadAvatar: "https://cdn.example/ficha.jpg",
+    threadRenew: null,
+    cardRenew: false,
+  }), { avatarUrl: "https://cdn.example/ficha.jpg", renewAuto: false });
+});
+
+test("la foto de una compra sale del subscriber, del enlace numérico o del lote", () => {
+  const bought = parseNotificationPayload({
+    list: [{
+      id: "compra",
+      type: "paided_message",
+      createdAt: "2026-11-13T10:00:00.000Z",
+      text: "pagó",
+      replacePairs: { "{NAME}": "<a href=\"https://onlyfans.com/u7022542\">Ben</a>" },
+      data: { subscriber: { id: 7022542, name: "Ben" } },
+    }],
+  });
+  assert.equal(bought[0]?.fanKey, "7022542");
+  assert.equal(bought[0]?.avatarUrl, null);
+  const linked = parseNotificationPayload({
+    list: [{
+      id: "enlace",
+      type: "subscribed",
+      createdAt: "2026-11-13T10:00:00.000Z",
+      text: "alta",
+      replacePairs: { "{SUBSCRIBER_LINK}": "https://onlyfans.com/482191" },
+    }],
+  });
+  assert.equal(linked[0]?.fanKey, "482191");
+  const handleOnly = parseNotificationPayload({
+    list: [{
+      id: "usuario",
+      type: "subscribed",
+      createdAt: "2026-11-13T10:00:00.000Z",
+      text: "alta",
+      replacePairs: { "{NAME}": "https://onlyfans.com/u7022542" },
+    }],
+  });
+  assert.equal(handleOnly[0]?.fanKey, null);
+  const raw = {
+    id: "compra",
+    type: "paided_message",
+    createdAt: "2026-11-13T10:00:00.000Z",
+    user: { id: 482191 },
+    replacePairs: { "{NAME}": "https://onlyfans.com/u7022542" },
+  };
+  const trace = noticeAvatarTrace(raw);
+  assert.equal(trace.hash, hashFanId("482191"));
+  assert.equal(trace.campos.includes("user.avatar:ausente"), true);
+  assert.equal(trace.campos.includes("482191") || trace.campos.includes("cdn.example") || trace.hash?.includes("482191"), false);
+  const lines = noticePayloadTraces({ list: [raw] });
+  assert.equal(lines.some((line) => line.includes("482191") || line.includes("http")), false);
+  assert.equal(noticeFanId({ user: 15 }), "15");
+  const directory = {
+    list: [
+      { id: 4, avatarThumbs: { c50: "https://cdn.example/4.jpg" } },
+      { id: 5, name: "Sin" },
+    ],
+  };
+  assert.equal(avatarsFromUserMap(directory).get("4"), "https://cdn.example/4.jpg");
+  const report = directoryAvatarReport(directory);
+  assert.equal(report.shape, "lista");
+  assert.equal(report.devueltos, 2);
+  assert.equal(report.conFoto, 1);
+  assert.equal(report.sinFoto, 1);
+  assert.deepEqual(report.sinFotoHashes, [hashFanId("5")]);
 });
 
 test("lastSeen de hace días no cuenta como reciente", () => {

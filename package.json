@@ -2,7 +2,7 @@
   "name": "app-builder-workspace",
   "private": true,
   "engines": {
-    "node": ">=22.3"
+    "node": ">=22.13"
   },
   "sideEffects": false,
   "type": "module",
@@ -10,7 +10,7 @@
     "nf3": "0.3.17"
   },
   "scripts": {
-    "dev": "node scripts/with-app-env.mjs vite dev --host 0.0.0.0 --port 8080",
+    "dev": "node scripts/with-app-env.mjs vite dev --host 0.0.0.0",
     "build": "node scripts/with-app-env.mjs vite build && npm run db:migrate",
     "db:migrate": "node scripts/migrate.mjs",
     "build:dev": "node scripts/with-app-env.mjs vite build --mode development",
@@ -20,6 +20,8 @@
     "typecheck": "tsc --noEmit",
     "check:auth": "node scripts/check-auth-invariant.mjs",
     "probe:sign": "node --experimental-strip-types server/of-sessions/sync/sign-probe.ts",
+    "probe:vault": "node --experimental-strip-types server/of-sessions/sync/vault-probe.ts",
+    "probe:vault-folders": "node --experimental-strip-types server/of-sessions/sync/vault-probe.ts --subfolders",
     "test": "node --test 'scripts/**/*.test.mjs' && node --experimental-strip-types --test 'server/of-sessions/test/*.test.ts' 'server/of-sessions/metrics/*.test.ts' 'server/of-sessions/campaigns/*.test.ts' 'server/of-sessions/notify/*.test.ts' 'src/lib/*.test.ts' 'src/lib/mass/*.test.ts'",
     "lint": "eslint .",
     "format": "prettier --write ."
@@ -55,11 +57,14 @@
     "@tanstack/react-table": "^8.21.0",
     "@tanstack/router-plugin": "^1.168.0",
     "@vitejs/plugin-react": "^5.2.0",
+    "@xmldom/xmldom": "^0.9.12",
     "better-auth": "~1.6.30",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
+    "dashjs": "^5.3.0",
     "date-fns": "^4.0.0",
+    "hls.js": "^1.7.4",
     "jose": "6.2.9",
     "kysely": "^0.28.5",
     "lightningcss": "^1.28.0",

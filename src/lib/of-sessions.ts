@@ -210,6 +210,9 @@ export type CreatorChatList = {
     creatorId: string;
     sessionRejected: boolean;
     connection: "not_checked" | "live" | "rejected" | "inconclusive" | "login_required";
+    hasStorageState: boolean;
+    loginInProgress: boolean;
+    status: "active" | "expired" | "pending_login";
   }>;
   sessionNotices: string[];
 };
@@ -342,9 +345,17 @@ export const markChatOpened = createServerFn({ method: "POST" })
 export const loadOlderMessages = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((input: { creatorId: string; threadKey: string }) => input)
-  .handler(async ({ context, data }) => {
+  .handler(async ({ context, data }): Promise<{ ok: boolean; hasMore: boolean; retryAfterMs: number }> => {
     const { loadOlderMessagesView } = await import("./of-sessions-runtime.server");
     return loadOlderMessagesView(context.userId, data);
+  });
+
+export const readThreadHistory = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string; threadKey: string }) => input)
+  .handler(async ({ context, data }) => {
+    const { readThreadHistoryView } = await import("./of-sessions-runtime.server");
+    return readThreadHistoryView(context.userId, data);
   });
 
 export const loadMoreChats = createServerFn({ method: "POST" })

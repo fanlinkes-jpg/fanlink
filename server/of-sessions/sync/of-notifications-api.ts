@@ -2,9 +2,13 @@ import { creatorAvatarOf } from "../../../src/lib/creator-avatar.ts";
 import type { NotificationCounts, ParsedNotification } from "../../../src/lib/notifications.ts";
 import {
   NOTIFICATION_LIST_LIMIT,
+  OF_NOTIFICATION_LIST_TYPES,
   newTagsCountOf,
+  ofTabForListType,
+  noticePayloadTraces,
   parseNotificationCounts,
   parseNotificationPayload,
+  type OfNotificationListType,
 } from "../../../src/lib/notifications.ts";
 import { awaitAccountGap, REQUEST_GAP_MS } from "./api-list-pace.ts";
 import { backoffDelayMs } from "./backoff.ts";
@@ -79,6 +83,37 @@ export type MarkNotificationsResult = {
 export type SignedNotificationDeps = SignedChatDeps;
 
 export const NOTIFICATION_LIST_PATH = `/api2/v2/users/notifications?limit=${NOTIFICATION_LIST_LIMIT}&format=infinite`;
+
+type ListPlan = { cursor: number; counts: NotificationCounts | null };
+const listPlans = new Map<string, ListPlan>();
+
+/** La siguiente lista cabe en las 3 lecturas de la pasada: Todo, o un type con no leídas. */
+export function clearNotificationListPlans(): void {
+  listPlans.clear();
+}
+
+/** Todo y cada type, también si el contador de no leídas es 0. */
+export function noticeListQueue(): Array<OfNotificationListType | null> {
+  return [null, ...OF_NOTIFICATION_LIST_TYPES];
+}
+
+export function nextNoticeListType(cursor: number): { type: OfNotificationListType | null; next: number } {
+  const queue = noticeListQueue();
+  return { type: queue[cursor % queue.length] ?? null, next: cursor + 1 };
+}
+
+function plannedListType(accountId: string | undefined): OfNotificationListType | null {
+  if (!accountId) return null;
+  const plan = listPlans.get(accountId);
+  if (!plan) return null;
+  return nextNoticeListType(plan.cursor).type;
+}
+
+function rememberListPlan(accountId: string | undefined, counts: NotificationCounts | null): void {
+  if (!accountId) return;
+  const plan = listPlans.get(accountId);
+  listPlans.set(accountId, { cursor: (plan?.cursor ?? 0) + 1, counts });
+}
 export const NOTIFICATION_COUNT_PATH = "/api2/v2/users/notifications/count";
 export const NOTIFICATION_ME_PATH = "/api2/v2/users/me";
 export const NOTIFICATION_MARK_ALL_PATH = "/api2/v2/users/notifications/read";
@@ -87,8 +122,9 @@ export function notificationMarkTypePath(type: string): string {
   return `/api2/v2/users/notifications/read/${encodeURIComponent(type)}`;
 }
 
-export function notificationListPath(): string {
-  return NOTIFICATION_LIST_PATH;
+export function notificationListPath(type?: string | null): string {
+  if (!type) return NOTIFICATION_LIST_PATH;
+  return `${NOTIFICATION_LIST_PATH}&type=${encodeURIComponent(type)}`;
 }
 
 export function notificationCountPath(): string {
@@ -121,11 +157,13 @@ export async function fetchSignedNotifications(state: StorageStateFile, deps: Si
     return page;
   };
 
-  const listPage = await request(NOTIFICATION_LIST_PATH);
-  routes.push(routeLog("lista", listPage, listPage.ok ? parseNotificationPayload(listPage.body, { accountUserId: auth.userId }).length : 0));
+  const listType = plannedListType(deps.accountId);
+  const listPage = await request(notificationListPath(listType));
+  if (listPage.ok) logNoticeAvatars(listPage.body);
+  routes.push(routeLog("lista", listPage, listPage.ok ? parseNotificationPayload(listPage.body, { accountUserId: auth.userId, listType }).length : 0));
   if (halt(listPage)) return stoppedRead(listPage, [], routes);
 
-  const items = parseNotificationPayload(listPage.body, { accountUserId: auth.userId });
+  let items = parseNotificationPayload(listPage.body, { accountUserId: auth.userId, listType });
   const countPage = await request(NOTIFICATION_COUNT_PATH);
   const counts = countPage.ok ? parseNotificationCounts(countPage.body) : null;
   routes.push(routeLog("contador", countPage, counts?.all ?? 0));
@@ -143,6 +181,7 @@ export async function fetchSignedNotifications(state: StorageStateFile, deps: Si
 
   const countMotivo = countPage.ok && counts ? null : countPage.ok ? "no se pudo leer" : countPage.motivo;
   const nextCounts = countPage.ok ? counts : null;
+  if (countPage.ok) rememberListPlan(deps.accountId, nextCounts);
 
   const mePage = await request(NOTIFICATION_ME_PATH);
   const tags = mePage.ok ? newTagsCountOf(mePage.body) : null;
@@ -161,7 +200,7 @@ export async function fetchSignedNotifications(state: StorageStateFile, deps: Si
       avatarUrl,
     };
   }
-  const withTagCounts = nextCounts ? withTags(nextCounts, mePage.ok ? tags : nextCounts.tags) : null;
+  const withTagCounts = nextCounts ? withTags(nextCounts, tags != null ? tags : nextCounts.tags) : null;
   const empty = items.length === 0 && withTagCounts?.all === 0;
   return {
     items,
@@ -177,6 +216,27 @@ export async function fetchSignedNotifications(state: StorageStateFile, deps: Si
     status: listPage.status,
     retryAfterMs: 0,
     avatarUrl,
+  };
+}
+
+/** Una pestaña, un GET. La caché de quien llama decide si hace falta. */
+export async function fetchNotificationList(
+  state: StorageStateFile,
+  deps: SignedNotificationDeps,
+  listType: OfNotificationListType | null,
+): Promise<{ items: ParsedNotification[]; retryAfterMs: number; status: number | null }> {
+  const auth = sessionForApi(state, deps.now());
+  if ("reason" in auth) return { items: [], retryAfterMs: 0, status: null };
+  const rules = deps.rules ?? await loadSignRules(deps.fetch, deps.now());
+  const path = notificationListPath(listType);
+  if (deps.accountId && deps.sleep) await awaitAccountGap(deps.accountId, deps.now, deps.sleep, deps.minGapMs ?? REQUEST_GAP_MS);
+  const page = await getJson(deps.fetch, path, signedHeaders(rules, path, auth, deps.now()), deps.now(), "GET");
+  if (!page.ok) return { items: [], retryAfterMs: page.retryAfterMs, status: page.status };
+  logNoticeAvatars(page.body);
+  return {
+    items: parseNotificationPayload(page.body, { accountUserId: auth.userId, listType }),
+    retryAfterMs: 0,
+    status: page.status,
   };
 }
 
@@ -296,6 +356,10 @@ function stoppedRead(page: JsonPage, items: ParsedNotification[], routes: Notifi
     status: page.status,
     retryAfterMs: page.retryAfterMs,
   };
+}
+
+function logNoticeAvatars(body: unknown): void {
+  for (const line of noticePayloadTraces(body)) console.info(line);
 }
 
 function routeLog(route: NotificationRouteName, page: JsonPage, count: number): NotificationRouteLog {

@@ -1,6 +1,7 @@
-import { ClientOnly, Link, useNavigate, useRouterState } from "@tanstack/react-router";
-import { listCreatorChats } from "@/lib/of-sessions";
-import { unreadTotalFor } from "../../server/of-sessions/sync/unread-chats.ts";
+import { ClientOnly, Link, useRouterState } from "@tanstack/react-router";
+import { readInboxCreator, resolveInboxCreator, showsCreatorRail, writeInboxCreator } from "@/lib/inbox-scope";
+import { CreatorRail } from "@/components/creator-rail";
+import { bindUiUser, COMPOSER_LANGUAGES, setComposerLanguage, setSfwEnabled, useComposerLanguage, useSfw } from "@/lib/ui-prefs";
 import { useEffect, useState, type ReactNode } from "react";
 import {
   Home,
@@ -18,9 +19,7 @@ import {
 } from "lucide-react";
 import { Toaster } from "sonner";
 import { cn } from "@/lib/cn";
-import { CreatorMark } from "@/components/creator-mark";
 import { useCrm } from "@/lib/crm";
-import { useCreatorSessions } from "@/lib/use-creator-sessions";
 import {
   canAccessPath,
   navRoleFromAccess,
@@ -99,15 +98,9 @@ export function Splash() {
 function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean }) {
   const [mobile, setMobile] = useState(false);
   const path = useRouterState({ select: (s) => s.location.pathname });
-  const navigate = useNavigate();
   const creators = useCrm((s) => s.creators);
   const creatorId = useCrm((s) => s.creatorId);
   const setCreator = useCrm((s) => s.setCreator);
-  const fans = useCrm((s) => s.fans);
-  const query = useCrm((s) => s.query);
-  const setQuery = useCrm((s) => s.setQuery);
-  const translate = useCrm((s) => s.translate);
-  const setTranslate = useCrm((s) => s.setTranslate);
   const workspaceReady = useCrm((s) => s.workspaceReady);
   const workspaceNotice = useCrm((s) => s.workspaceNotice);
   const teamAccess = useCrm((s) => s.teamAccess);
@@ -117,11 +110,17 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
   }, []);
   useEffect(() => {
     chatSendSession.bindUser(user?.id ?? null, { pending: isPending });
+    bindUiUser(user?.id ?? null);
   }, [user?.id, isPending]);
 
-  const unreadChats = useUnreadChats(creatorId);
-  const { sessions } = useCreatorSessions();
-  const avatars = Object.fromEntries(sessions.map((session) => [session.creatorId, session.avatarUrl]));
+  const creatorRail = showsCreatorRail(path);
+  const rememberedCreator = typeof window === "undefined" ? null : readInboxCreator(window.localStorage);
+  const resolvedCreator = resolveInboxCreator({ requested: creatorId, creators, remembered: rememberedCreator });
+  useEffect(() => {
+    if (!creatorRail || !resolvedCreator) return;
+    writeInboxCreator(window.localStorage, resolvedCreator);
+    if (resolvedCreator !== creatorId) setCreator(resolvedCreator);
+  }, [creatorRail, resolvedCreator, creatorId, setCreator]);
   const navRole = navRoleFromAccess(teamAccess);
   const blocks = visibleNavBlocks(navRole, teamAccess);
   const currentOk = canAccessPath(path, navRole, teamAccess);
@@ -137,21 +136,11 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
           mobile={mobile}
           setMobile={setMobile}
           path={path}
-          navigate={navigate}
-          creators={creators}
-          creatorId={creatorId}
-          setCreator={setCreator}
-          fans={fans}
-          query={query}
-          setQuery={setQuery}
-          translate={translate}
-          setTranslate={setTranslate}
+          creatorRail={creatorRail}
           workspaceNotice={workspaceNotice}
           teamAccess={teamAccess}
           blocks={blocks}
           currentOk={currentOk}
-          unreadChats={unreadChats}
-          avatars={avatars}
         >
           {children}
         </ShellFrame>
@@ -160,34 +149,60 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
   );
 }
 
-function unreadLabel(total: number | null, name: string): string {
-  if (total == null) return `${name}, Sin datos`;
-  if (total > 0) return `${name}, ${total} chats sin leer`;
-  return name;
-}
-
-function useUnreadChats(creatorId: string): number | null {
-  const [state, setState] = useState<{ status: "loading" | "error" | "ready"; threads: Array<{ creatorId: string; unread: number | null }> }>({
-    status: "loading",
-    threads: [],
-  });
-  useEffect(() => {
-    let stop = false;
-    const pull = () => {
-      void listCreatorChats().then((list) => {
-        if (!stop) setState({ status: "ready", threads: list.threads });
-      }).catch(() => {
-        if (!stop) setState({ status: "error", threads: [] });
-      });
-    };
-    pull();
-    const timer = window.setInterval(pull, 15_000);
-    return () => {
-      stop = true;
-      window.clearInterval(timer);
-    };
-  }, []);
-  return unreadTotalFor(state.status, state.threads, creatorId);
+function HeaderTools({ devMode, displayName }: { devMode: boolean; displayName: string }) {
+  const language = useComposerLanguage();
+  const sfw = useSfw();
+  const [open, setOpen] = useState(false);
+  const current = COMPOSER_LANGUAGES.find((item) => item.id === language) ?? COMPOSER_LANGUAGES[0];
+  const localHint = "Modo local de un solo operador. Solo vale en localhost y no aísla a un equipo.";
+  return (
+    <div className="flex shrink-0 items-center gap-2">
+      <div className="relative">
+        <button
+          type="button"
+          aria-label="Traducción"
+          aria-expanded={open}
+          onClick={() => setOpen((value) => !value)}
+          className={cn("flex h-8 items-center gap-1 rounded-lg px-2", open ? "bg-[#ff7a2f]" : "bg-white/10")}
+        >
+          <Languages className="h-4 w-4" />
+          <span className="text-[10px] font-semibold uppercase">{current.id}</span>
+        </button>
+        {open ? (
+          <div className="absolute right-0 z-30 mt-1 w-36 rounded-lg border border-[#e6e8ee] bg-white p-1 text-[#1c2333] shadow-lg" role="listbox" aria-label="Idioma">
+            {COMPOSER_LANGUAGES.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                role="option"
+                aria-selected={item.id === language}
+                className={cn("block w-full rounded px-2 py-1.5 text-left text-xs", item.id === language ? "bg-[#e7f3ff]" : "hover:bg-[#f4f6f8]")}
+                onClick={() => {
+                  setComposerLanguage(item.id);
+                  setOpen(false);
+                }}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={sfw}
+        aria-label="SFW"
+        onClick={() => setSfwEnabled(!sfw)}
+        className={cn("h-8 rounded-lg px-2 text-xs font-semibold", sfw ? "bg-[#1f9d55] text-white" : "bg-white/10")}
+      >
+        SFW
+      </button>
+      <div className="rounded-lg bg-white px-2 py-0.5 text-[#1c2333]" title={devMode ? localHint : displayName}>
+        <UserButton />
+      </div>
+    </div>
+  );
 }
 
 function ShellFrame({
@@ -196,42 +211,22 @@ function ShellFrame({
   mobile,
   setMobile,
   path,
-  navigate,
-  creators,
-  creatorId,
-  setCreator,
-  fans,
-  query,
-  setQuery,
-  translate,
-  setTranslate,
+  creatorRail,
   workspaceNotice,
   teamAccess,
   blocks,
   currentOk,
-  unreadChats,
-  avatars,
 }: {
   children: ReactNode;
   bleed?: boolean;
   mobile: boolean;
   setMobile: (value: boolean) => void;
   path: string;
-  navigate: ReturnType<typeof useNavigate>;
-  creators: Array<{ id: string; name: string; hue: number }>;
-  creatorId: string;
-  setCreator: (id: string) => void;
-  fans: Array<{ creatorId: string; unread: number }>;
-  query: string;
-  setQuery: (value: string) => void;
-  translate: boolean;
-  setTranslate: (value: boolean) => void;
+  creatorRail: boolean;
   workspaceNotice: string | null;
   teamAccess: { displayName: string; devMode: boolean };
   blocks: NavLink[];
   currentOk: boolean;
-  unreadChats: number | null;
-  avatars: Record<string, string | null>;
 }) {
 
   return (
@@ -241,20 +236,17 @@ function ShellFrame({
         {blocks.map((block) => {
           const Icon = BLOCK_ICONS[block.id] ?? LayoutGrid;
           const active = pathMatchesNavLink(path, block);
-          const isChat = block.id === "chat";
           return (
             <NavRouteLink
               key={block.id}
               item={block}
-              aria-label={isChat ? unreadLabel(unreadChats, block.label) : block.label}
-              title={isChat && unreadChats == null ? "Sin datos" : undefined}
+              aria-label={block.label}
               className={cn(
-                "relative grid h-10 w-10 place-items-center rounded-xl",
+                "grid h-10 w-10 place-items-center rounded-xl",
                 active ? "bg-[#3b6cff] text-white" : "text-muted hover:bg-raised",
               )}
             >
               <Icon className="h-5 w-5" />
-              {isChat && unreadChats != null && unreadChats > 0 ? <span className="absolute -top-1 -right-1 min-w-4 rounded-full bg-danger px-1 text-[10px] font-semibold text-white">{unreadChats}</span> : null}
             </NavRouteLink>
           );
         })}
@@ -296,68 +288,20 @@ function ShellFrame({
           <button className="rounded-md p-2 md:hidden" onClick={() => setMobile(true)} aria-label="Abrir menú">
             <Menu className="h-4 w-4" />
           </button>
-          <Link to="/mensajes" aria-label={unreadLabel(unreadChats, "Mensajes")} title={unreadChats == null ? "Sin datos" : undefined} className={cn("flex shrink-0 items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium", path.startsWith("/mensajes") ? "bg-[#3b6cff] text-white" : "bg-white text-[#1d2433]")}>
-            Mensajes
-            {unreadChats == null ? <span className="text-[10px] font-semibold opacity-80">Sin datos</span> : unreadChats > 0 ? <span className="rounded-full bg-danger px-1 text-[10px] font-semibold text-white">{unreadChats}</span> : null}
-          </Link>
-          <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto">
-            {creators.map((c) => {
-              const unread = fans.filter((f) => f.creatorId === c.id && f.unread > 0).length;
-              const active = creatorId === c.id;
-              return (
-                <button
-                  key={c.id}
-                  onClick={() => setCreator(c.id)}
-                  className={cn(
-                    "flex shrink-0 items-center gap-2 rounded-lg px-2 py-1 text-xs",
-                    active ? "bg-white text-[#1d2433]" : "bg-white/10",
-                  )}
-                >
-                  <CreatorMark name={c.name} hue={c.hue} avatarUrl={avatars[c.id]} />
-                  <span className="max-w-24 truncate">{c.name}</span>
-                  {unread > 0 && <span className="rounded-full bg-danger px-1 text-[10px] text-white">{unread}</span>}
-                </button>
-              );
-            })}
-            <button onClick={() => setCreator("all")} className={cn("shrink-0 rounded-lg px-2 py-1 text-xs", creatorId === "all" ? "bg-white text-[#1d2433]" : "bg-white/10")}>
-              Todas
-            </button>
-          </div>
-          <span className="hidden max-w-40 truncate rounded-lg bg-white/10 px-2 py-1 text-xs md:inline" title={teamAccess.devMode ? "Modo local de un solo operador" : teamAccess.displayName}>
-            {teamAccess.displayName}
-          </span>
-          <button
-            aria-label="Traducción"
-            onClick={() => setTranslate(translate === false)}
-            className={cn("grid h-8 w-8 place-items-center rounded-lg", translate !== false ? "bg-[#ff7a2f]" : "bg-white/10")}
-          >
-            <Languages className="h-4 w-4" />
-          </button>
-          <div className="rounded-lg bg-white px-2 py-0.5 text-[#1c2333]">
-            <UserButton />
-          </div>
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void navigate({ to: "/mensajes" });
-            }}
-            placeholder="Buscar"
-            aria-label="Buscar fan"
-            className="hidden w-28 rounded-lg border border-white/15 bg-white/10 px-2 py-1 text-xs placeholder:text-white/50 lg:block"
-          />
+          <span className="min-w-0 flex-1" />
+          <HeaderTools devMode={teamAccess.devMode} displayName={teamAccess.displayName} />
         </header>
-        <main className={cn("flex min-h-0 flex-1 flex-col", bleed ? "overflow-hidden" : "overflow-auto pb-16 md:pb-0")}>
-          {teamAccess.devMode && (
-            <p className="shrink-0 bg-[#fff6e8] px-4 py-2 text-xs text-[#8a5a12]">Modo local de un solo operador. Solo vale en localhost y no aísla a un equipo.</p>
-          )}
-          {workspaceNotice && <p className="shrink-0 bg-amber-50 px-4 py-2 text-xs text-amber-800">{workspaceNotice}</p>}
-          <div className={bleed ? "relative min-h-0 flex-1 overflow-hidden" : "shrink-0"}>
-            {currentOk ? children : (
-              <div className="grid h-full place-items-center p-6 text-center">
-                <p className="text-sm text-muted">{teamAccess.displayName} no tiene acceso a esta sección.</p>
-              </div>
-            )}
+        <main className={cn("flex min-h-0 flex-1", creatorRail ? "overflow-hidden" : bleed ? "flex-col overflow-hidden" : "flex-col overflow-auto pb-16 md:pb-0")}>
+          {creatorRail ? <CreatorRail /> : null}
+          <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col", creatorRail && !bleed ? "overflow-auto pb-16 md:pb-0" : undefined)}>
+            {workspaceNotice && <p className="shrink-0 bg-amber-50 px-4 py-2 text-xs text-amber-800">{workspaceNotice}</p>}
+            <div className={bleed ? "relative min-h-0 flex-1 overflow-hidden" : creatorRail ? "min-h-0" : "shrink-0"}>
+              {currentOk ? children : (
+                <div className="grid h-full place-items-center p-6 text-center">
+                  <p className="text-sm text-muted">{teamAccess.displayName} no tiene acceso a esta sección.</p>
+                </div>
+              )}
+            </div>
           </div>
         </main>
         <nav className="fixed inset-x-0 bottom-0 z-30 flex border-t border-line bg-surface md:hidden">

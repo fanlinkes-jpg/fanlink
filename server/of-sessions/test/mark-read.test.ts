@@ -106,11 +106,13 @@ test("el flag apagado, otra cuenta o un fallo no mandan un 0 inventado", async (
   };
   try {
     const off = await markOpenedChat({ ...input(sql, fetchImpl, logs, rules, authOf()), flag: undefined });
+    const explicitOff = await markOpenedChat({ ...input(sql, fetchImpl, logs, rules, authOf()), flag: "false" });
     const outsider = await markOpenedChat({
       ...input(sql, fetchImpl, logs, rules, authOf()),
       account: { ...account, creatorId: "otra", handle: "otra", userId: "1", accountId: "acc-otra", label: "Otra" },
     });
     assert.equal(off.posted, false);
+    assert.equal(explicitOff.posted, false);
     assert.equal(outsider.posted, false);
     assert.equal(fetches, 0);
     const failed = await markOpenedChat(input(sql, fetchImpl, logs, rules, authOf()));

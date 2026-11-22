@@ -1,5 +1,6 @@
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
 import { defineConfig } from "vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
@@ -30,6 +31,20 @@ function hasGlobbedMigrations(root: string): boolean {
  * migrations — no schema to apply — skips it entirely rather than paying for a
  * PGLite instance it never queries.
  */
+/** El SSR no mete dash.js ni hls.js (1 MB). El navegador los carga con import(). */
+function playerSsrStub(): Plugin {
+  const stub = fileURLToPath(new URL("./src/lib/player-ssr-stub.ts", import.meta.url));
+  return {
+    name: "fanlink-player-ssr-stub",
+    enforce: "pre",
+    resolveId(source, _importer, options) {
+      if (!options?.ssr) return null;
+      if (source !== "dashjs" && source !== "hls.js") return null;
+      return stub;
+    },
+  };
+}
+
 function liveViewPlugin(): Plugin {
   return {
     name: "fanlink-live-view",
@@ -178,7 +193,9 @@ export default defineConfig(({ command, isPreview }) => ({
     strictPort: true,
   },
   resolve: { tsconfigPaths: true },
+  ssr: { external: ["dashjs", "hls.js"] },
   plugins: [
+    playerSsrStub(),
     pgliteBootstrapPlugin(),
     liveViewPlugin(),
     // Before tanstackStart so /auth/popup never falls through to the SPA.

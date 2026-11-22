@@ -53,6 +53,18 @@
   }
 }
 
+html[data-sfw="1"] .sfw-media img,
+html[data-sfw="1"] .sfw-media video {
+  filter: blur(14px);
+}
+
+html[data-sfw="1"] .sfw-media:hover img,
+html[data-sfw="1"] .sfw-media:hover video,
+html[data-sfw="1"] .sfw-media.sfw-revealed img,
+html[data-sfw="1"] .sfw-media.sfw-revealed video {
+  filter: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

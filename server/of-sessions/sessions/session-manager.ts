@@ -92,6 +92,8 @@ export interface SessionManagerOptions {
    */
   afterLoginPageOpen?: (page: Page, accountId: string) => Promise<void> | void;
   logger?: { info(message: string): void; warn(message: string): void };
+  /** Tras guardar la sesión. No debe esperar el perfil: el login ya lo soltó. */
+  onSessionStored?: (accountId: string) => void;
 }
 
 const silentLogger = { info() {}, warn() {} };
@@ -155,6 +157,7 @@ export class SessionManager {
 
   async addAccount(label: string, creatorId?: string | null): Promise<Account> {
     const account = await this.options.store.create(label, creatorId);
+    console.info(`[fanlink:sync] creator=${account.creatorId ?? "-"} estado=sin-sesion`);
     this.startLogin(account.id);
     return this.options.store.get(account.id);
   }
@@ -166,7 +169,11 @@ export class SessionManager {
   async ensureAccount(label: string, creatorId: string): Promise<Account> {
     const linked = parseCreatorId(creatorId);
     const existing = await this.options.store.findByCreator(linked);
-    if (!existing) return this.options.store.create(label, linked);
+    if (!existing) {
+      const created = await this.options.store.create(label, linked);
+      console.info(`[fanlink:sync] creator=${created.creatorId ?? linked} estado=sin-sesion`);
+      return created;
+    }
     if (existing.label !== label)
       return this.options.store.update(existing.id, { label });
     return existing;
@@ -1008,6 +1015,7 @@ export class SessionManager {
 
   private async runLogin(accountId: string): Promise<void> {
     let leased: { context: BrowserContext; release: () => Promise<void> } | null = null;
+    let stored = false;
     this.rotateSessionEpoch(accountId);
     try {
       if (this.closed) return;
@@ -1068,6 +1076,9 @@ export class SessionManager {
         ...successfulLoginPatch(),
         lastCheckedAt: this.now().toISOString(),
       });
+      stored = true;
+      const saved = await this.options.store.get(accountId);
+      console.info(`[fanlink:sync] creator=${saved.creatorId ?? "-"} estado=sesion-guardada`);
       this.log.info(`session stored account=${accountId}`);
     } catch (error) {
       const explained = explainLaunchError(error);
@@ -1085,6 +1096,7 @@ export class SessionManager {
       this.log.warn(`login failed account=${accountId}`);
     } finally {
       await leased?.release().catch(() => undefined);
+      if (stored) this.options.onSessionStored?.(accountId);
     }
   }
 

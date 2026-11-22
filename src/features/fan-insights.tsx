@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { FAN_CARD_TABS } from "@/lib/fan-card-tabs";
 import { fanInsightModel } from "@/lib/fan-insights";
 import { ppvTimeline, type PpvSource } from "@/lib/ppv-timeline";
 
@@ -37,10 +38,8 @@ export type FanInsightProps = {
   onCreatorNote?: (body: string) => void;
 };
 
-const TABS = ["Insights", "Ventas", "Notas"] as const;
-
 export function FanInsights(props: FanInsightProps) {
-  const [tab, setTab] = useState<(typeof TABS)[number]>("Insights");
+  const [tab, setTab] = useState<(typeof FAN_CARD_TABS)[number]>("Insights");
   const model = fanInsightModel({
     spentCents: props.spentCents,
     tipsCents: props.tipsCents,
@@ -54,8 +53,8 @@ export function FanInsights(props: FanInsightProps) {
     ppvPrices: props.ppvPrices,
   });
   return (
-    <aside className="flex h-full min-h-0 flex-col bg-[#f7f8fb]">
-      <div className="border-b border-[#e6e8ee] bg-white px-4 py-3">
+    <aside className="flex min-h-0 flex-1 flex-col bg-[#f7f8fb]">
+      <div className="shrink-0 border-b border-[#e6e8ee] bg-white px-4 py-3">
         <p className="text-sm font-semibold">Ficha del fan</p>
         <p className="truncate text-xs text-[#6d7585]">{props.name ?? "Fan"}{props.handle ? ` · @${props.handle.replace(/^@/, "")}` : ""}</p>
       </div>
@@ -101,8 +100,8 @@ export function FanInsights(props: FanInsightProps) {
           </div>
         )}
       </div>
-      <div className="grid grid-cols-3 border-t border-[#e6e8ee] bg-white">
-        {TABS.map((item) => (
+      <div className="grid shrink-0 grid-cols-3 border-t border-[#e6e8ee] bg-white">
+        {FAN_CARD_TABS.map((item) => (
           <button
             key={item}
             type="button"
@@ -155,9 +154,9 @@ function SalesPane({ messages, onCopy }: { messages: PpvSource[]; onCopy?: (body
   return (
     <div className="space-y-3">
       <Card title="PPV">
-        <Pair label="Buy rate" value={timeline.rate} />
-        <Pair label="Precio más alto" value={timeline.high} />
-        <Pair label="Precio más bajo" value={timeline.low} />
+        <Pair label="Buy rate" value={timeline.rows.length === 0 ? "0%" : timeline.rate} />
+        <Pair label="Precio más alto" value={timeline.rows.length === 0 ? "$0.00" : timeline.high} />
+        <Pair label="Precio más bajo" value={timeline.rows.length === 0 ? "$0.00" : timeline.low} />
       </Card>
       {timeline.rows.length === 0 ? <p className="text-sm text-[#6d7585]">Sin datos</p> : timeline.rows.map((row) => (
         <article key={row.messageKey} className="rounded-xl border border-[#e6e8ee] bg-white p-3">

@@ -5,7 +5,8 @@ export const LIST_HEAD_MS = 15_000;
 /** Lista completa, con el tope de páginas. */
 export const FULL_LIST_MS = 120_000;
 /** Mínimo entre dos peticiones de la misma cuenta. */
-export const REQUEST_GAP_MS = 300;
+/** Espacio entre dos GET de la misma cuenta: bóveda, avisos e histórico. */
+export const REQUEST_GAP_MS = 1_500;
 /**
  * Primera página de notificaciones. 45 s está entre 30 y 60:
  * no se pide más de una vez por ese tramo.
@@ -58,13 +59,15 @@ export function rememberChatPace(accountId: string, pace: ChatPace): void {
 
 /** Separa las peticiones de una cuenta aunque vengan de llamadas distintas. */
 export async function awaitAccountGap(accountId: string, now: () => number, sleep: (ms: number) => Promise<void>, gapMs = REQUEST_GAP_MS): Promise<void> {
+  const gap = Math.max(gapMs, REQUEST_GAP_MS);
+  const wall = now();
   const prev = lastRequestAt.get(accountId);
-  const current = now();
-  if (prev != null) {
-    const wait = gapMs - (current - prev);
-    if (wait > 0) await sleep(wait);
-  }
-  lastRequestAt.set(accountId, now());
+  const logicalNow = prev == null ? wall : Math.max(wall, prev);
+  const earliest = prev == null ? wall : prev + gap;
+  const slot = Math.max(logicalNow, earliest);
+  lastRequestAt.set(accountId, slot);
+  const wait = slot - logicalNow;
+  if (wait > 0) await sleep(wait);
 }
 
 export function clearAccountChatPace(): void {

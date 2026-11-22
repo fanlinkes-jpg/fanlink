@@ -18,9 +18,21 @@ import { listCreatorChats, listTeamMetrics, setCreatorProxy, type TeamMetricView
 import { PLATFORMS } from "@/features/growth-pages";
 import { Badge, Button, Field, Panel, Select } from "@/components/ui";
 
-export function AnalyticsPage({ initialView, embedded = false }: { initialView?: "creadoras" | "equipo" | "fans"; embedded?: boolean } = {}) {
+export function AnalyticsPage({
+  initialView,
+  embedded = false,
+  period: periodProp,
+  onPeriod,
+}: {
+  initialView?: "creadoras" | "equipo" | "fans";
+  embedded?: boolean;
+  period?: MetricPeriod;
+  onPeriod?: (period: MetricPeriod) => void;
+} = {}) {
   const [view, setView] = useState<"creadoras" | "equipo" | "fans">(initialView ?? "creadoras");
-  const [period, setPeriod] = useState<MetricPeriod>("month");
+  const [ownPeriod, setOwnPeriod] = useState<MetricPeriod>("month");
+  const period = periodProp ?? ownPeriod;
+  const setPeriod = onPeriod ?? setOwnPeriod;
   const [teamRows, setTeamRows] = useState<TeamMetricView[]>([]);
   const [chatOkCreators, setChatOkCreators] = useState<string[]>([]);
   const [ppvRows, setPpvRows] = useState<Array<{ creatorId: string; fanKey: string | null; sentAt: string; priceCents: number | null; purchased: boolean | null }>>([]);
