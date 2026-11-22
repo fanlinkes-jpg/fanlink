@@ -235,6 +235,7 @@ test("una carpeta con medios entra en el sondeo y --folder recorta por hash", as
             { id: 88002, type: "custom", name },
             { id: 99001, type: "posts", name: "Publicaciones" },
             { id: 77001, type: "messages", name: name, photosCount: 4, videosCount: 0 },
+            { id: 66001, type: "album", name: "Otra", photosCount: 1, videosCount: 0 },
           ],
           hasMore: false,
         });
@@ -266,8 +267,22 @@ test("una carpeta con medios entra en el sondeo y --folder recorta por hash", as
       stdout: (row) => lines.push(row),
       fetch: fetchImpl,
     });
-    assert.equal(calls.some((call) => call.includes("/vault/lists/77001/media")), true);
+    assert.equal(calls.some((call) => call.includes("/vault/lists/77001/media")), false);
     assert.equal(calls.some((call) => call.includes("/vault/lists/99001/media")), false);
+    assert.equal(calls.some((call) => call.includes("/vault/lists/66001/media")), true);
+    assert.equal(calls.some((call) => call.includes("/vault/lists/88002/media")), true);
+    calls.length = 0;
+    await executeSubfolderCheck({
+      account: "3zk7kbr",
+      folder: vaultFolderMark("77001"),
+      env,
+      now: () => 1_700_000_000_000,
+      pause: async () => undefined,
+      stdout: (row) => lines.push(row),
+      fetch: fetchImpl,
+    });
+    assert.equal(calls.some((call) => call.includes("/vault/lists/77001/media")), true);
+    assert.equal(calls.some((call) => call.includes("/vault/lists/88002/media")), false);
     const printed = lines.join("\n");
     assert.equal(printed.includes(name), false);
     assert.equal(printed.includes("88002"), false);

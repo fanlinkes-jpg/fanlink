@@ -478,7 +478,7 @@ export async function executeSubfolderCheck(input: {
   const reads: Array<{ name: string; path: string; status: number | null; body: unknown }> = [];
   const bodies = await readListPages(input, rules, auth, reads);
   const wanted = input.folder?.trim() || null;
-  const folders = bodies.flatMap(listRows).filter(isCheckedFolder).filter((row) => folderSelected(row, wanted));
+  const folders = bodies.flatMap(listRows).filter((row) => isCheckedFolder(row, wanted)).filter((row) => folderSelected(row, wanted));
   input.stdout(`[fanlink:vault] subcarpetas=${folders.length}`);
   for (const folder of folders) {
     const id = String(folder.id);
@@ -488,7 +488,7 @@ export async function executeSubfolderCheck(input: {
     let total = 0;
     let status: number | null = null;
     for (let page = 0; page < 40; page += 1) {
-      const read = await readFolderProbe(input.fetch, rules, auth, input.now, id, offset, text(folder.name), pause, input.stdout);
+      const read = await readFolderProbe(input.fetch, rules, auth, input.now, id, offset, text(folder.name), pause, input.stdout, folderHasCatalogMedia(folder));
       status = read.status;
       const count = probeItems(read.body).length;
       pages += 1;
@@ -518,6 +518,7 @@ async function readFolderProbe(
   name: string,
   pause: (ms: number) => Promise<void>,
   stdout: (line: string) => void,
+  catalogHasMedia: boolean,
 ): Promise<{ status: number | null; body: unknown }> {
   let read = await probeOnce(fetchImpl, rules, auth, now, vaultListMediaPath(id, offset));
   stdout(probePageLine(id, offset, read.status));
@@ -528,7 +529,9 @@ async function readFolderProbe(
     read = await probeOnce(fetchImpl, rules, auth, now, vaultListMediaPath(id, offset));
     stdout(probePageLine(id, offset, read.status));
   }
-  if (read.status != null && read.status >= 400 && read.status < 500 && read.status !== 401 && read.status !== 429 && probeItems(read.body).length === 0) {
+  const clientMiss = read.status != null && read.status >= 400 && read.status < 500 && read.status !== 401 && read.status !== 429;
+  const emptyCounted = read.status === 200 && probeItems(read.body).length === 0 && catalogHasMedia;
+  if ((clientMiss || emptyCounted) && probeItems(read.body).length === 0) {
     await pause(800);
     const web = await probeOnce(fetchImpl, rules, auth, now, vaultMediaPath(id, offset));
     stdout(probePageLine(id, offset, web.status));
@@ -558,16 +561,26 @@ function probePageLine(id: string, offset: number, status: number | null): strin
   return `[fanlink:vault] subcarpeta=${vaultFolderMark(id)} pagina offset=${offset} status=${status ?? "sin"} motivo=${motivo}`;
 }
 
+const SYSTEM_LIST = new Set(["posts", "stories", "messages", "streams", "media"]);
+
 /**
- * Custom, las que declaran padre, y cualquier tipo con fotos, vídeos, GIF o audios.
- * Una carpeta de sistema sin medios no se pide. `--folder` recorta a una.
+ * Sin `--folder`: custom, y cualquier lista que no sea de sistema y tenga medios.
+ * messages, posts, stories, streams y media solo entran si se piden con `--folder`.
  */
-function isCheckedFolder(row: Record<string, unknown>): boolean {
+function isCheckedFolder(row: Record<string, unknown>, wanted: string | null): boolean {
   const id = row.id;
   if (typeof id !== "number" && typeof id !== "string") return false;
-  const type = text(row.type);
-  if (type === "custom" || row.parentId != null || row.parent_id != null || row.parentListId != null) return true;
+  if (wanted && folderSelected(row, wanted)) return true;
+  if (SYSTEM_LIST.has(text(row.type))) return false;
+  if (text(row.type) === "custom") return true;
   return folderMediaTotal(row) > 0;
+}
+
+function folderHasCatalogMedia(row: Record<string, unknown>): boolean {
+  return ["photosCount", "photos", "videosCount", "videos"].some((key) => {
+    const value = row[key];
+    return typeof value === "number" && Number.isFinite(value) && value > 0;
+  });
 }
 
 function folderMediaTotal(row: Record<string, unknown>): number {

@@ -1,4 +1,5 @@
 import type { StorageStateFile } from "../sessions/storage-state.ts";
+import { VAULT_FOLDER_READ_ERROR } from "../../../src/lib/vault-folder-label.ts";
 import { fetchSignedVault, vaultPageReason, VAULT_MEDIA_LIMIT, type SignedVaultRead } from "./of-chat-api.ts";
 import type { ReadSql } from "./store.ts";
 import { folderMediaCap, mediaStateHits, mergeVaultList, parseVaultBundle, vaultAllList, vaultFolderMark, vaultKeyNames, vaultMediaMatching, vaultPayloadKind, type VaultFile, type VaultList } from "./vault-model.ts";
@@ -158,19 +159,20 @@ async function walkOne(
     if (budget.left <= 0 && !mustRead) {
       hasMore = true;
       nextOffset = offset;
-      reason = reason ?? "No se ha podido leer la carpeta.";
+      reason = reason ?? VAULT_FOLDER_READ_ERROR;
       console.info(`[fanlink:vault] corte presupuesto lista=${vaultFolderMark(listId)} offset=${offset}`);
       break;
     }
     if (budget.left > 0) budget.left -= 1;
-    let read = await readVaultPage(input, listId, offset, includeLists && pages === 0, listName);
+    const expectMedia = listId !== "all" && ((counts?.photos ?? 0) > 0 || (counts?.videos ?? 0) > 0);
+    let read = await readVaultPage(input, listId, offset, includeLists && pages === 0, listName, expectMedia);
     let tries = 0;
     while (pages === 0 && shouldRetryFolder(read) && tries < 2) {
       tries += 1;
       const wait = VAULT_PAGE_GAP_MS * tries;
       console.info(`[fanlink:vault] reintento lista=${vaultFolderMark(listId)} intento=${tries} status=${read.status ?? "sin"}`);
       await pauseWalk(input, wait);
-      read = await readVaultPage(input, listId, offset, includeLists && pages === 0, listName);
+      read = await readVaultPage(input, listId, offset, includeLists && pages === 0, listName, expectMedia);
     }
     status = read.status;
     reason = read.reason;
@@ -286,10 +288,10 @@ async function walkOne(
     await finishListMembers(input.sql, input.creatorId, listId, items.map((item) => item.id));
   }
   const needsFullMembers = singlePage && listId !== "all" && start === 0 && hasMore && !suspicious && items.length > 0 && !sessionRejected && !signatureRejected && retryAfterMs === 0;
-  const counted = counts != null && ((counts.photos ?? 0) > 0 || (counts.videos ?? 0) > 0);
+  const counted = counts != null && ((counts.photos ?? 0) > 0 || (counts.videos ?? 0) > 0 || (counts.gifs ?? 0) > 0 || (counts.audios ?? 0) > 0);
   if (listId !== "all" && items.length === 0 && counted) {
     console.info(`[fanlink:vault] carpeta=${vaultFolderMark(listId)} error=sin-medios fotos=${counts?.photos ?? "sin"} videos=${counts?.videos ?? "sin"} status=${status ?? "sin"}`);
-    reason = "No se ha podido leer la carpeta";
+    reason = VAULT_FOLDER_READ_ERROR;
   }
   console.info(`[fanlink:vault] fin lista=${vaultFolderMark(listId)} paginas=${pages} medios=${items.length} hasMore=${hasMore ? "si" : "no"}`);
   console.info(`[fanlink:vault] carpeta=${vaultFolderMark(listId)} n=${items.length}`);
@@ -384,12 +386,13 @@ function vaultDeps(input: WalkInput): { fetch: typeof fetch; now: () => number; 
   return { fetch: input.fetch, now: input.now, accountId: input.accountId, sleep: input.sleep };
 }
 
-async function readVaultPage(input: WalkInput, listId: string, offset: number, includeLists: boolean, listName: string | null): Promise<SignedVaultRead> {
+async function readVaultPage(input: WalkInput, listId: string, offset: number, includeLists: boolean, listName: string | null, expectMedia = false): Promise<SignedVaultRead> {
   try {
     return await fetchSignedVault(input.state, vaultDeps(input), listId, offset, {
       includeLists,
       includeMedia: true,
       listName,
+      expectMedia,
     });
   } catch {
     return {

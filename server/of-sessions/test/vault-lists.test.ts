@@ -5,12 +5,15 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { clearAccountChatPace } from "../sync/api-list-pace.ts";
+import { accountPause, clearAccountPauses } from "../sync/backoff.ts";
 import { fetchSignedVault, sessionForApi, signedHeaders, vaultListMediaPath } from "../sync/of-chat-api.ts";
 import { clearSignRulesCache, parseSignRules } from "../sync/of-sign.ts";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
+import type { Account } from "../types.ts";
 import type { ReadSql } from "../sync/store.ts";
-import { folderColumnView, vaultFolderLabel } from "../../../src/lib/vault-folder-label.ts";
+import { folderColumnView, VAULT_FOLDER_READ_ERROR, vaultFolderLabel } from "../../../src/lib/vault-folder-label.ts";
 import { emptyVaultQuery } from "../sync/vault-filter.ts";
+import { readChatVaultView } from "../sync/vault-read.ts";
 import { queryVaultForActor } from "../sync/vault-query.ts";
 import { vaultFolderMark } from "../sync/vault-model.ts";
 import { clearVaultWalkCache, VAULT_WALK_CAP, walkVault } from "../sync/vault-walk.ts";
@@ -1364,6 +1367,171 @@ test("si la primera página falla, cuenta la página y no marca la carpeta como 
     }, { photos: 0, videos: 0, gifs: 0 }), "vacío");
   } finally {
     console.info = previous;
+    clearSignRulesCache();
+    clearVaultWalkCache();
+    await db.close();
+  }
+});
+
+test("un 200 vacío con fotos en el catálogo prueba vault/media?list=", async () => {
+  clearSignRulesCache();
+  clearVaultWalkCache();
+  const db = new PGlite();
+  const seen: string[] = [];
+  const lines: string[] = [];
+  const previous = console.info;
+  console.info = (line?: unknown) => {
+    lines.push(String(line));
+  };
+  try {
+    await migrateVault(db);
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const href = String(input);
+      seen.push(href);
+      if (href.includes("dynamic-rules")) return Response.json(RULES);
+      if (isVaultListsIndex(href)) {
+        return Response.json({
+          list: [{ id: 88024, type: "custom", name: "Sub", photosCount: 4, videosCount: 2, hasMedia: true }],
+          hasMore: false,
+        });
+      }
+      const url = new URL(href);
+      if (url.pathname.endsWith("/vault/lists/88024/media")) return Response.json({ medias: [], hasMore: false });
+      if (url.pathname.endsWith("/vault/media") && url.searchParams.get("list") === "88024" && !url.searchParams.get("name")) {
+        return Response.json({ medias: [{ id: 21, type: "photo" }, { id: 22, type: "video" }], hasMore: false });
+      }
+      return Response.json({ list: [], hasMore: false });
+    }) as typeof fetch;
+    const walked = await walkVault({
+      creatorId: "3zk7kbr",
+      state: storedState(),
+      fetch: fetchImpl,
+      now: () => 1_700_000_000_000,
+      sql: asSql(db),
+      sleep: async () => undefined,
+      listId: "88024",
+    });
+    assert.deepEqual(walked.items.map((item) => item.id).sort(), ["21", "22"]);
+    assert.equal(walked.signatureRejected, false);
+    assert.equal(seen.some((href) => href.includes("/vault/lists/88024/media")), true);
+    assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("list=88024")), true);
+    assert.equal(lines.join("\n").includes("88024"), false);
+  } finally {
+    console.info = previous;
+    clearSignRulesCache();
+    clearVaultWalkCache();
+    await db.close();
+  }
+});
+
+test("un 400 de lists/id/media es un error de carpeta y no pausa la cuenta", async () => {
+  clearSignRulesCache();
+  clearVaultWalkCache();
+  clearAccountPauses();
+  const db = new PGlite();
+  try {
+    await migrateVault(db);
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const href = String(input);
+      if (href.includes("dynamic-rules")) return Response.json(RULES);
+      if (isVaultListsIndex(href)) {
+        return Response.json({
+          list: [{ id: 88025, type: "custom", name: "Sub", photosCount: 4, videosCount: 2, hasMedia: true }],
+          hasMore: false,
+        });
+      }
+      const url = new URL(href);
+      if (url.pathname.endsWith("/vault/media") && url.searchParams.get("list") === "all") return new Response("no", { status: 400 });
+      if (url.pathname.endsWith("/vault/lists/88025/media")) return new Response("no", { status: 400 });
+      if (url.pathname.endsWith("/vault/media")) return new Response("no", { status: 400 });
+      return new Response("no", { status: 404 });
+    }) as typeof fetch;
+    const signed = await fetchSignedVault(storedState(), {
+      fetch: fetchImpl,
+      now: () => 1_700_000_000_000,
+    }, "all", 0, { includeLists: false, includeMedia: true });
+    assert.equal(signed.signatureRejected, true);
+    const view = await readChatVaultView({ creatorId: "3zk7kbr", listId: "88025", offset: 0 }, {
+      fetch: fetchImpl,
+      now: () => 1_700_000_000_000,
+      sql: asSql(db),
+      sleep: async () => undefined,
+      access: { role: "owner", perms: ["vault"] },
+      sessions: {
+        listAccounts: async () => [{
+          id: "acc-carpeta-400",
+          creatorId: "3zk7kbr",
+          label: "Prueba",
+          status: "active",
+          loginInProgress: false,
+          sessionRejected: false,
+          hasStorageState: true,
+          connection: "live",
+          identityState: "unavailable",
+          identityLabel: null,
+          identityHandle: null,
+          identityName: null,
+          identityUserId: null,
+          identityCheckedAt: null,
+          identityReason: null,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          lastCheckedAt: null,
+          lastError: null,
+        } satisfies Account],
+        readStorageState: async () => storedState(),
+        borrowProfile: async () => {
+          throw new Error("no");
+        },
+      },
+    });
+    assert.equal(view.reason, VAULT_FOLDER_READ_ERROR);
+    assert.equal(view.items.length, 0);
+    assert.equal(accountPause("acc-carpeta-400"), null);
+  } finally {
+    clearAccountPauses();
+    clearSignRulesCache();
+    clearVaultWalkCache();
+    await db.close();
+  }
+});
+
+test("un catálogo solo con GIF también marca la carpeta como no leída", async () => {
+  clearSignRulesCache();
+  clearVaultWalkCache();
+  const db = new PGlite();
+  try {
+    await migrateVault(db);
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const href = String(input);
+      if (href.includes("dynamic-rules")) return Response.json(RULES);
+      if (isVaultListsIndex(href)) {
+        return Response.json({
+          list: [{ id: 88026, type: "custom", name: "Gif", photosCount: 0, videosCount: 0, gifsCount: 2, audiosCount: 0, hasMedia: true }],
+          hasMore: false,
+        });
+      }
+      return Response.json({ medias: [], hasMore: false });
+    }) as typeof fetch;
+    const walked = await walkVault({
+      creatorId: "3zk7kbr",
+      state: storedState(),
+      fetch: fetchImpl,
+      now: () => 1_700_000_000_000,
+      sql: asSql(db),
+      sleep: async () => undefined,
+      listId: "88026",
+    });
+    assert.equal(walked.items.length, 0);
+    assert.equal(walked.reason, VAULT_FOLDER_READ_ERROR);
+    const view = await queryVaultForActor(asSql(db), { userId: "dueña", role: "owner", perms: ["vault"] }, {
+      creatorId: "3zk7kbr",
+      remember: false,
+      query: { ...emptyVaultQuery(), folderId: "88026", scope: "carpeta" },
+    });
+    assert.equal(view.payload.notice, VAULT_FOLDER_READ_ERROR);
+    assert.equal(view.payload.lists.find((list) => list.id === "88026")?.gifs, 2);
+  } finally {
     clearSignRulesCache();
     clearVaultWalkCache();
     await db.close();

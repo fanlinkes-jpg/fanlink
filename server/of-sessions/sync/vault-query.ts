@@ -1,4 +1,5 @@
 import { creatorIdsForChats } from "../../../src/lib/access-policy.ts";
+import { VAULT_FOLDER_READ_ERROR } from "../../../src/lib/vault-folder-label.ts";
 import { emptyVaultQuery, folderAndChildren, searchVaultLists, vaultQueryFromUnknown, type VaultQuery } from "./vault-filter.ts";
 import { itemSaleBlocked } from "./vault-block.ts";
 import { folderMediaCap, suggestVaultPrice, trailerPackages, vaultFolderMark, vaultKindOf, type VaultFile, type VaultKind } from "./vault-model.ts";
@@ -164,7 +165,7 @@ export async function queryVaultForActor(sql: ReadSql, actor: VaultActor, body: 
     payload: {
       chatterId,
       restored,
-      notice: cards.length === 0 && folderCountsUnread(query, lists) ? "No se ha podido leer la carpeta" : cards.length === 0 ? "Sin datos" : null,
+      notice: cards.length === 0 && folderCountsUnread(query, lists) ? VAULT_FOLDER_READ_ERROR : cards.length === 0 ? "Sin datos" : null,
       lists,
       items: cards,
       query,
@@ -172,11 +173,11 @@ export async function queryVaultForActor(sql: ReadSql, actor: VaultActor, body: 
   };
 }
 
-function folderCountsUnread(query: { scope: string; folderId: string | null }, lists: readonly { id: string; photos: number | null; videos: number | null }[]): boolean {
+function folderCountsUnread(query: { scope: string; folderId: string | null }, lists: readonly { id: string; photos: number | null; videos: number | null; gifs: number | null; audios: number | null }[]): boolean {
   if (query.scope !== "carpeta" || !query.folderId) return false;
   const open = lists.find((folder) => folder.id === query.folderId);
   if (!open) return false;
-  return (open.photos ?? 0) > 0 || (open.videos ?? 0) > 0;
+  return (open.photos ?? 0) > 0 || (open.videos ?? 0) > 0 || (open.gifs ?? 0) > 0 || (open.audios ?? 0) > 0;
 }
 
 export function vaultOfferLabel(cents: number | null): string | null {

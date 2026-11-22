@@ -255,6 +255,8 @@ export type VaultFetchOptions = {
   listOffset?: number;
   /** Nombre de la carpeta. Solo entra en la URL de reintento; no se escribe en el log. */
   listName?: string | null;
+  /** El catálogo de esta carpeta trae fotos o vídeos. Un 200 vacío prueba la otra URL. */
+  expectMedia?: boolean;
 }
 
 /** La web pide las carpetas de 50 en 50 (`view=main`) y sigue con offset mientras `hasMore`. */
@@ -389,7 +391,10 @@ export async function fetchSignedVault(state: StorageStateFile, deps: {
     queryParam = "list";
     let read = await readVaultPath(deps, () => getJson(deps.fetch, primary, signedHeaders(rules, primary, auth, deps.now()), deps.now()));
     logVaultPage(list, primary, read, skip);
-    if (list !== "all" && clientFolderMiss(read) && mediaCountOf(read.body) === 0) {
+    const listed = folderListedCounts(payloads, list);
+    const catalogHasMedia = options?.expectMedia === true || (listed != null && (listed.photos > 0 || listed.videos > 0));
+    const emptyCounted = read.ok && mediaCountOf(read.body) === 0 && catalogHasMedia;
+    if (list !== "all" && mediaCountOf(read.body) === 0 && (clientFolderMiss(read) || emptyCounted)) {
       const folderName = options?.listName?.trim() || nameFromLists(payloads, list);
       const webPath = vaultMediaPath(list, skip);
       if (deps.sleep) await deps.sleep(800);
@@ -479,6 +484,31 @@ function logVaultPage(list: string, route: string, read: JsonPage, offset: numbe
     listId: list,
     reason: read.reason,
   }));
+}
+
+function folderListedCounts(payloads: readonly unknown[], listId: string): { photos: number; videos: number } | null {
+  for (const payload of payloads) {
+    if (!payload || typeof payload !== "object") continue;
+    const raw = payload as Record<string, unknown>;
+    const rows = [raw.list, raw.lists].find((value) => Array.isArray(value));
+    if (!Array.isArray(rows)) continue;
+    for (const row of rows) {
+      if (!row || typeof row !== "object") continue;
+      const item = row as Record<string, unknown>;
+      if (String(item.id) !== listId) continue;
+      return { photos: countField(item.photosCount ?? item.photos), videos: countField(item.videosCount ?? item.videos) };
+    }
+  }
+  return null;
+}
+
+function countField(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function folderMediaRoute(pathWithQuery: string): boolean {
+  const path = pathWithQuery.split("?")[0] ?? "";
+  return /^\/api2\/v2\/vault\/lists\/[^/]+\/media$/.test(path);
 }
 
 function nameFromLists(payloads: readonly unknown[], listId: string): string | null {
@@ -583,6 +613,9 @@ async function getJson(fetchImpl: typeof fetch, pathWithQuery: string, headers: 
     return { ok: false, body: null, reason: "OnlyFans ha rechazado la sesión (401). Pulsa Reconectar.", status: 401, sessionRejected: true, signatureRejected: false, retryAfterMs: 0, rotatedCookies };
   }
   if (response.status === 400) {
+    if (folderMediaRoute(pathWithQuery)) {
+      return { ok: false, body: null, reason: "OnlyFans respondió 400", status: 400, sessionRejected: false, signatureRejected: false, retryAfterMs: 0, rotatedCookies };
+    }
     return { ok: false, body: null, reason: "OnlyFans rechazó la firma", status: 400, sessionRejected: false, signatureRejected: true, retryAfterMs: 0, rotatedCookies };
   }
   if (response.status === 429) {

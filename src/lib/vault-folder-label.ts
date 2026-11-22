@@ -1,3 +1,6 @@
+/** Aviso cuando el catálogo tiene medios y la lectura de la carpeta acaba en cero. */
+export const VAULT_FOLDER_READ_ERROR = "No se ha podido leer la carpeta";
+
 export type VaultFolderCounts = {
   photos: number | null;
   videos: number | null;
