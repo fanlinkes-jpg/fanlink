@@ -154,6 +154,7 @@ async function walkOne(
   let counts = listId === "all" ? null : await storedFolderCounts(input.sql, input.creatorId, listId);
   const cap = folderMediaCap(counts);
   let suspicious = false;
+  let viaWeb = false;
   while (pages < VAULT_WALK_CAP) {
     const mustRead = pages === 0 && listId !== "all" && counts != null && !countsAreEmpty(counts);
     if (budget.left <= 0 && !mustRead) {
@@ -165,14 +166,25 @@ async function walkOne(
     }
     if (budget.left > 0) budget.left -= 1;
     const expectMedia = listId !== "all" && ((counts?.photos ?? 0) > 0 || (counts?.videos ?? 0) > 0 || (counts?.gifs ?? 0) > 0 || (counts?.audios ?? 0) > 0);
-    let read = await readVaultPage(input, listId, offset, includeLists && pages === 0, listName, expectMedia);
+    let read = await readVaultPage(input, listId, offset, includeLists && pages === 0, listName, expectMedia, viaWeb);
     let tries = 0;
-    while (pages === 0 && shouldRetryFolder(read) && tries < 2) {
+    while (pages === 0 && !viaWeb && shouldRetryFolder(read) && tries < 2) {
       tries += 1;
       const wait = VAULT_PAGE_GAP_MS * tries;
       console.info(`[fanlink:vault] reintento lista=${vaultFolderMark(listId)} intento=${tries} status=${read.status ?? "sin"}`);
       await pauseWalk(input, wait);
-      read = await readVaultPage(input, listId, offset, includeLists && pages === 0, listName, expectMedia);
+      read = await readVaultPage(input, listId, offset, includeLists && pages === 0, listName, expectMedia, false);
+    }
+    if (pages === 0 && listId !== "all" && !viaWeb && read.status != null && read.status >= 500 && !read.sessionRejected && !read.signatureRejected) {
+      const listsStatus = read.status;
+      const fallback = await readVaultPage(input, listId, offset, false, listName, expectMedia, true);
+      console.info(`[fanlink:vault] respaldo lista=${vaultFolderMark(listId)} lists=${listsStatus} media=${fallback.status ?? "sin"}`);
+      const got = mediaCount(mediaBody(fallback.payloads));
+      if (fallback.status === 200 && got > 0 && !fallback.sessionRejected && !fallback.signatureRejected) {
+        const lists = read.payloads.filter((payload) => vaultPayloadKind(payload) === "lists");
+        viaWeb = true;
+        read = { ...fallback, payloads: [...lists, ...fallback.payloads] };
+      }
     }
     status = read.status;
     reason = read.reason;
@@ -386,13 +398,14 @@ function vaultDeps(input: WalkInput): { fetch: typeof fetch; now: () => number; 
   return { fetch: input.fetch, now: input.now, accountId: input.accountId, sleep: input.sleep };
 }
 
-async function readVaultPage(input: WalkInput, listId: string, offset: number, includeLists: boolean, listName: string | null, expectMedia = false): Promise<SignedVaultRead> {
+async function readVaultPage(input: WalkInput, listId: string, offset: number, includeLists: boolean, listName: string | null, expectMedia = false, forceWebList = false): Promise<SignedVaultRead> {
   try {
     return await fetchSignedVault(input.state, vaultDeps(input), listId, offset, {
       includeLists,
       includeMedia: true,
       listName,
       expectMedia,
+      forceWebList,
     });
   } catch {
     return {

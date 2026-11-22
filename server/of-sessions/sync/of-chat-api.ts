@@ -257,6 +257,8 @@ export type VaultFetchOptions = {
   listName?: string | null;
   /** El catálogo trae fotos, vídeos, GIF o audios. Un 200 vacío prueba la otra URL. */
   expectMedia?: boolean;
+  /** Pide vault/media?list={id} en vez de lists/{id}/media. Lo usa el respaldo tras un 5xx. */
+  forceWebList?: boolean;
 }
 
 /** La web pide las carpetas de 50 en 50 (`view=main`) y sigue con offset mientras `hasMore`. */
@@ -387,14 +389,21 @@ export async function fetchSignedVault(state: StorageStateFile, deps: {
   }
   let queryParam: "list" | "list_id" | null = null;
   if (wantMedia) {
-    const primary = list === "all" ? vaultMediaPath(list, skip) : vaultListMediaPath(list, skip);
+    const primary = list === "all" || options?.forceWebList ? vaultMediaPath(list, skip) : vaultListMediaPath(list, skip);
     queryParam = "list";
     let read = await readVaultPath(deps, () => getJson(deps.fetch, primary, signedHeaders(rules, primary, auth, deps.now()), deps.now()));
     logVaultPage(list, primary, read, skip);
     const listed = folderListedCounts(payloads, list);
     const catalogHasMedia = options?.expectMedia === true || (listed != null && listed.total > 0);
     const emptyCounted = read.ok && mediaCountOf(read.body) === 0 && catalogHasMedia;
-    if (list !== "all" && mediaCountOf(read.body) === 0 && (clientFolderMiss(read) || emptyCounted)) {
+    const folderName = options?.listName?.trim() || nameFromLists(payloads, list);
+    if (options?.forceWebList && list !== "all" && mediaCountOf(read.body) === 0 && folderName) {
+      const namedPath = vaultMediaPath(list, skip, folderName);
+      if (deps.sleep) await deps.sleep(800);
+      const named = await readVaultPath(deps, () => getJson(deps.fetch, namedPath, signedHeaders(rules, namedPath, auth, deps.now()), deps.now()));
+      logVaultPage(list, namedPath, named, skip);
+      if (mediaCountOf(named.body) > 0) read = named;
+    } else if (!options?.forceWebList && list !== "all" && mediaCountOf(read.body) === 0 && (clientFolderMiss(read) || emptyCounted)) {
       const folderName = options?.listName?.trim() || nameFromLists(payloads, list);
       const webPath = vaultMediaPath(list, skip);
       if (deps.sleep) await deps.sleep(800);

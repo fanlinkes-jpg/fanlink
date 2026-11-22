@@ -487,8 +487,17 @@ export async function executeSubfolderCheck(input: {
     let pages = 0;
     let total = 0;
     let status: number | null = null;
+    let viaWeb = false;
+    let fallbackStatus: number | null = null;
     for (let page = 0; page < 40; page += 1) {
-      const read = await readFolderProbe(input.fetch, rules, auth, input.now, id, offset, text(folder.name), pause, input.stdout, folderHasCatalogMedia(folder));
+      const read = viaWeb
+        ? { ...await probeOnce(input.fetch, rules, auth, input.now, vaultMediaPath(id, offset)), viaWeb: true, respaldo: null, listsStatus: null }
+        : await readFolderProbe(input.fetch, rules, auth, input.now, id, offset, text(folder.name), pause, input.stdout, folderHasCatalogMedia(folder));
+      if (!viaWeb && read.respaldo != null) {
+        fallbackStatus = read.respaldo;
+        input.stdout(`[fanlink:vault] respaldo subcarpeta=${vaultFolderMark(id)} lists=${read.listsStatus ?? "sin"} media=${read.respaldo}`);
+      }
+      if (read.viaWeb) viaWeb = true;
       status = read.status;
       const count = probeItems(read.body).length;
       pages += 1;
@@ -498,7 +507,7 @@ export async function executeSubfolderCheck(input: {
       offset += count;
       await pause(800);
     }
-    input.stdout(`[fanlink:vault] subcarpeta=${vaultFolderMark(id)} paginas=${pages} medios=${total} status=${status ?? "sin"}`);
+    input.stdout(`[fanlink:vault] subcarpeta=${vaultFolderMark(id)} paginas=${pages} medios=${total} status=${status ?? "sin"}${fallbackStatus == null ? "" : ` respaldo=${fallbackStatus}`}`);
   }
 }
 
@@ -519,7 +528,7 @@ async function readFolderProbe(
   pause: (ms: number) => Promise<void>,
   stdout: (line: string) => void,
   catalogHasMedia: boolean,
-): Promise<{ status: number | null; body: unknown }> {
+): Promise<{ status: number | null; body: unknown; viaWeb: boolean; respaldo: number | null; listsStatus: number | null }> {
   let read = await probeOnce(fetchImpl, rules, auth, now, vaultListMediaPath(id, offset));
   stdout(probePageLine(id, offset, read.status));
   let tries = 0;
@@ -529,21 +538,25 @@ async function readFolderProbe(
     read = await probeOnce(fetchImpl, rules, auth, now, vaultListMediaPath(id, offset));
     stdout(probePageLine(id, offset, read.status));
   }
+  const listsStatus = read.status;
   const clientMiss = read.status != null && read.status >= 400 && read.status < 500 && read.status !== 401 && read.status !== 429;
   const emptyCounted = read.status === 200 && probeItems(read.body).length === 0 && catalogHasMedia;
-  if ((clientMiss || emptyCounted) && probeItems(read.body).length === 0) {
+  const serverMiss = (read.status == null || read.status >= 500) && probeItems(read.body).length === 0;
+  if ((clientMiss || emptyCounted || serverMiss) && probeItems(read.body).length === 0) {
     await pause(800);
     const web = await probeOnce(fetchImpl, rules, auth, now, vaultMediaPath(id, offset));
     stdout(probePageLine(id, offset, web.status));
-    if (probeItems(web.body).length > 0) return web;
+    if (web.status === 200 && probeItems(web.body).length > 0) return { ...web, viaWeb: true, respaldo: web.status, listsStatus };
     if (name.trim()) {
       await pause(800);
       const named = await probeOnce(fetchImpl, rules, auth, now, vaultMediaPath(id, offset, name));
       stdout(probePageLine(id, offset, named.status));
-      if (probeItems(named.body).length > 0) return named;
+      if (named.status === 200 && probeItems(named.body).length > 0) return { ...named, viaWeb: true, respaldo: named.status, listsStatus };
+      if (serverMiss) return { ...named, viaWeb: false, respaldo: named.status, listsStatus };
     }
+    if (serverMiss || clientMiss || emptyCounted) return { ...web, viaWeb: web.status === 200 && probeItems(web.body).length > 0, respaldo: web.status, listsStatus };
   }
-  return read;
+  return { ...read, viaWeb: false, respaldo: null, listsStatus };
 }
 
 async function probeOnce(

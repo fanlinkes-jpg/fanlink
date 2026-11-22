@@ -15,7 +15,7 @@ import { folderColumnView, VAULT_FOLDER_READ_ERROR, vaultFolderLabel } from "../
 import { emptyVaultQuery } from "../sync/vault-filter.ts";
 import { readChatVaultView } from "../sync/vault-read.ts";
 import { queryVaultForActor } from "../sync/vault-query.ts";
-import { vaultFolderMark } from "../sync/vault-model.ts";
+import { parseVaultBundle, vaultFolderMark } from "../sync/vault-model.ts";
 import { clearVaultWalkCache, VAULT_WALK_CAP, walkVault } from "../sync/vault-walk.ts";
 import { VAULT_LISTS_FIXTURE, VAULT_MEDIA_ALL_FIXTURE, VAULT_MEDIA_FOLDER_FIXTURE } from "./fixtures/vault-of-shape.ts";
 
@@ -1633,6 +1633,129 @@ test("un catálogo solo con GIF también marca la carpeta como no leída", async
     clearVaultWalkCache();
     await db.close();
   }
+});
+
+test("tres 500 de lists/{id}/media usan el respaldo y lo paginan", async () => {
+  clearSignRulesCache();
+  clearVaultWalkCache();
+  const db = new PGlite();
+  const seen: string[] = [];
+  const lines: string[] = [];
+  const previous = console.info;
+  console.info = (line?: unknown) => {
+    lines.push(String(line));
+  };
+  let hits = 0;
+  try {
+    await migrateVault(db);
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const href = String(input);
+      seen.push(href);
+      if (href.includes("dynamic-rules")) return Response.json(RULES);
+      if (isVaultListsIndex(href)) {
+        return Response.json({
+          list: [{ id: 30436423, type: "messages", name: "Mensajes", photosCount: 4, videosCount: 2, hasMedia: true }],
+          hasMore: false,
+        });
+      }
+      const url = new URL(href);
+      if (url.pathname.endsWith("/vault/lists/30436423/media")) {
+        hits += 1;
+        return new Response("no", { status: 500 });
+      }
+      if (url.pathname.endsWith("/vault/media") && url.searchParams.get("list") === "30436423") {
+        const offset = Number(url.searchParams.get("offset") ?? "0");
+        if (offset === 0) {
+          return Response.json({
+            medias: Array.from({ length: 40 }, (_, index) => ({ id: index + 1, type: index < 4 ? "photo" : "video", duration: index < 4 ? 0 : 3 })),
+            hasMore: true,
+          });
+        }
+        return Response.json({ medias: [{ id: 41, type: "photo", duration: 0 }, { id: 42, type: "video", duration: 8 }], hasMore: false });
+      }
+      return new Response("no", { status: 404 });
+    }) as typeof fetch;
+    const walked = await walkVault({
+      creatorId: "3zk7kbr",
+      state: storedState(),
+      fetch: fetchImpl,
+      now: () => 1_700_000_000_000,
+      sql: asSql(db),
+      sleep: async () => undefined,
+      listId: "30436423",
+    });
+    assert.equal(hits, 3);
+    assert.equal(walked.items.length, 42);
+    assert.equal(walked.items.filter((item) => item.kind === "foto").every((item) => item.seconds == null), true);
+    assert.equal(walked.items.find((item) => item.id === "42")?.seconds, 8);
+    assert.equal(seen.filter((href) => href.includes("/vault/lists/30436423/media")).length, 3);
+    assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("list=30436423") && href.includes("offset=0")), true);
+    assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("list=30436423") && href.includes("offset=40")), true);
+    assert.equal(seen.filter((href) => href.includes("/vault/lists/30436423/media") && href.includes("offset=40")).length, 0);
+    const printed = lines.join("\n");
+    assert.match(printed, /respaldo lista=.* lists=500 media=200/);
+    assert.equal(printed.includes("Mensajes"), false);
+    assert.equal(printed.includes("30436423"), false);
+  } finally {
+    console.info = previous;
+    clearSignRulesCache();
+    clearVaultWalkCache();
+    await db.close();
+  }
+});
+
+test("si lists y el respaldo responden 500, la carpeta queda como no leída", async () => {
+  clearSignRulesCache();
+  clearVaultWalkCache();
+  const db = new PGlite();
+  const lines: string[] = [];
+  const previous = console.info;
+  console.info = (line?: unknown) => {
+    lines.push(String(line));
+  };
+  try {
+    await migrateVault(db);
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const href = String(input);
+      if (href.includes("dynamic-rules")) return Response.json(RULES);
+      if (isVaultListsIndex(href)) {
+        return Response.json({
+          list: [{ id: 29011495, type: "custom", name: "Dos", photosCount: 0, videosCount: 2, hasMedia: true }],
+          hasMore: false,
+        });
+      }
+      return new Response("no", { status: 500 });
+    }) as typeof fetch;
+    const walked = await walkVault({
+      creatorId: "u1fpdnp",
+      state: storedState(),
+      fetch: fetchImpl,
+      now: () => 1_700_000_000_000,
+      sql: asSql(db),
+      sleep: async () => undefined,
+      listId: "29011495",
+    });
+    assert.equal(walked.items.length, 0);
+    assert.equal(walked.reason, VAULT_FOLDER_READ_ERROR);
+    assert.equal(walked.signatureRejected, false);
+    const printed = lines.join("\n");
+    assert.match(printed, /respaldo lista=.* lists=500 media=500/);
+    assert.equal(printed.includes("29011495"), false);
+  } finally {
+    console.info = previous;
+    clearSignRulesCache();
+    clearVaultWalkCache();
+    await db.close();
+  }
+});
+
+test("una foto no guarda duración aunque el JSON traiga 0", () => {
+  const parsed = parseVaultBundle({
+    list: [{ id: 7, type: "photo", duration: 0, title: "" }, { id: 8, type: "video", duration: 8 }],
+  });
+  assert.equal(parsed.items.find((item) => item.id === "7")?.kind, "foto");
+  assert.equal(parsed.items.find((item) => item.id === "7")?.seconds, null);
+  assert.equal(parsed.items.find((item) => item.id === "8")?.seconds, 8);
 });
 
 async function migrateVault(db: PGlite): Promise<void> {

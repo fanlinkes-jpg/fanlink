@@ -303,8 +303,8 @@ export function VaultBrowser({
                     {item.dateLabel && item.dateLabel !== "Sin datos" ? (
                       <span className="rounded-full bg-[#1c2333] px-1.5 py-0.5 text-[10px] text-white">{item.dateLabel}</span>
                     ) : null}
-                    {item.kind === "video" && item.seconds != null ? (
-                      <span className="rounded bg-[#1c2333] px-1 py-0.5 text-[10px] text-white">{formatSeconds(item.seconds)}</span>
+                    {mediaDuration(item) ? (
+                      <span className="rounded bg-[#1c2333] px-1 py-0.5 text-[10px] text-white">{mediaDuration(item)}</span>
                     ) : null}
                     {item.priceLabel && item.priceLabel !== "Sin datos" && item.priceLabel !== "Free" ? (
                       <span className="rounded-full bg-[#1c2333] px-1.5 py-0.5 text-[10px] text-white">{item.priceLabel}</span>
@@ -445,7 +445,7 @@ export function VaultBrowser({
                 <VaultStill creatorId={creatorId} mediaId={item.id} className="mb-1 h-16 w-full rounded object-cover" listId={thumbPage.listId} offset={thumbPage.offset} />
               )}
               <p className="font-medium">{item.title || "Sin datos"}</p>
-              <p>{item.seconds == null ? "Sin datos" : formatSeconds(item.seconds)} · {item.folder ?? "Sin datos"}</p>
+              <p>{mediaDuration(item) ? `${mediaDuration(item)} · ` : ""}{item.folder ?? "Sin datos"}</p>
               <p>{item.ventasLabel}{item.salesCount == null ? "" : ` ${item.salesCount}`}{item.bestSellerLabel ? ` · ${item.bestSellerLabel}` : ""}</p>
               <p>Precio sugerido: {item.suggestedLabel}</p>
               <p>{item.packageLabel || "Sin datos"}</p>
@@ -865,6 +865,12 @@ function priceChip(label: string | null | undefined): "Gratis" | "PPV" | null {
   if (!label || label === "Sin datos") return null;
   if (label === "Free" || label === "Gratis") return "Gratis";
   return "PPV";
+}
+
+function mediaDuration(item: { kind: string | null; seconds: number | null }): string | null {
+  if (item.kind !== "video" && item.kind !== "audio") return null;
+  if (item.seconds == null || item.seconds <= 0) return null;
+  return formatSeconds(item.seconds);
 }
 
 function formatSeconds(seconds: number): string {

@@ -325,7 +325,7 @@ function parseVaultItem(item: unknown, lists: readonly VaultList[]): VaultFile[]
         : type.includes("photo") || type.includes("image") || type.includes("foto")
           ? "foto"
           : null;
-  const seconds = countOrNull(row.duration ?? row.durationSeconds);
+  const seconds = kind === "foto" || kind === "gif" ? null : countOrNull(row.duration ?? row.durationSeconds);
   const membership = listMembership(row, lists);
   const posted = boolFlag(row, ["hasPosts", "isPosted", "posted"]);
   const sent = boolFlag(row, ["hasMessages", "isSent"]);
