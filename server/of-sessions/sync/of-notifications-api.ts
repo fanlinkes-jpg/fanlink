@@ -2,9 +2,12 @@ import { creatorAvatarOf } from "../../../src/lib/creator-avatar.ts";
 import type { NotificationCounts, ParsedNotification } from "../../../src/lib/notifications.ts";
 import {
   NOTIFICATION_LIST_LIMIT,
+  OF_NOTIFICATION_LIST_TYPES,
   newTagsCountOf,
+  ofTabForListType,
   parseNotificationCounts,
   parseNotificationPayload,
+  type OfNotificationListType,
 } from "../../../src/lib/notifications.ts";
 import { awaitAccountGap, REQUEST_GAP_MS } from "./api-list-pace.ts";
 import { backoffDelayMs } from "./backoff.ts";
@@ -79,6 +82,29 @@ export type MarkNotificationsResult = {
 export type SignedNotificationDeps = SignedChatDeps;
 
 export const NOTIFICATION_LIST_PATH = `/api2/v2/users/notifications?limit=${NOTIFICATION_LIST_LIMIT}&format=infinite`;
+
+type ListPlan = { cursor: number; counts: NotificationCounts | null };
+const listPlans = new Map<string, ListPlan>();
+
+/** La siguiente lista cabe en las 3 lecturas de la pasada: Todo, o un type con no leídas. */
+export function clearNotificationListPlans(): void {
+  listPlans.clear();
+}
+
+function plannedListType(accountId: string | undefined): OfNotificationListType | null {
+  if (!accountId) return null;
+  const plan = listPlans.get(accountId);
+  if (!plan?.counts) return null;
+  const pending = OF_NOTIFICATION_LIST_TYPES.filter((type) => (plan.counts?.[ofTabForListType(type)] ?? 0) > 0);
+  const queue: Array<OfNotificationListType | null> = [null, ...pending];
+  return queue[plan.cursor % queue.length] ?? null;
+}
+
+function rememberListPlan(accountId: string | undefined, counts: NotificationCounts | null): void {
+  if (!accountId) return;
+  const plan = listPlans.get(accountId);
+  listPlans.set(accountId, { cursor: (plan?.cursor ?? 0) + 1, counts });
+}
 export const NOTIFICATION_COUNT_PATH = "/api2/v2/users/notifications/count";
 export const NOTIFICATION_ME_PATH = "/api2/v2/users/me";
 export const NOTIFICATION_MARK_ALL_PATH = "/api2/v2/users/notifications/read";
@@ -87,8 +113,9 @@ export function notificationMarkTypePath(type: string): string {
   return `/api2/v2/users/notifications/read/${encodeURIComponent(type)}`;
 }
 
-export function notificationListPath(): string {
-  return NOTIFICATION_LIST_PATH;
+export function notificationListPath(type?: string | null): string {
+  if (!type) return NOTIFICATION_LIST_PATH;
+  return `${NOTIFICATION_LIST_PATH}&type=${encodeURIComponent(type)}`;
 }
 
 export function notificationCountPath(): string {
@@ -121,11 +148,12 @@ export async function fetchSignedNotifications(state: StorageStateFile, deps: Si
     return page;
   };
 
-  const listPage = await request(NOTIFICATION_LIST_PATH);
-  routes.push(routeLog("lista", listPage, listPage.ok ? parseNotificationPayload(listPage.body, { accountUserId: auth.userId }).length : 0));
+  const listType = plannedListType(deps.accountId);
+  const listPage = await request(notificationListPath(listType));
+  routes.push(routeLog("lista", listPage, listPage.ok ? parseNotificationPayload(listPage.body, { accountUserId: auth.userId, listType }).length : 0));
   if (halt(listPage)) return stoppedRead(listPage, [], routes);
 
-  const items = parseNotificationPayload(listPage.body, { accountUserId: auth.userId });
+  let items = parseNotificationPayload(listPage.body, { accountUserId: auth.userId, listType });
   const countPage = await request(NOTIFICATION_COUNT_PATH);
   const counts = countPage.ok ? parseNotificationCounts(countPage.body) : null;
   routes.push(routeLog("contador", countPage, counts?.all ?? 0));
@@ -143,6 +171,7 @@ export async function fetchSignedNotifications(state: StorageStateFile, deps: Si
 
   const countMotivo = countPage.ok && counts ? null : countPage.ok ? "no se pudo leer" : countPage.motivo;
   const nextCounts = countPage.ok ? counts : null;
+  if (countPage.ok) rememberListPlan(deps.accountId, nextCounts);
 
   const mePage = await request(NOTIFICATION_ME_PATH);
   const tags = mePage.ok ? newTagsCountOf(mePage.body) : null;

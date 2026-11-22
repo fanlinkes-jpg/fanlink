@@ -5,7 +5,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { Window } from "happy-dom";
 import { clearAccountChatPace, withAccountApi } from "../../server/of-sessions/sync/api-list-pace.ts";
-import { MARK_SEEN_MS, arrowIgnored, inboxByRecent, useInboxSelection } from "./inbox-selection.ts";
+import { MARK_SEEN_MS, arrowIgnored, inboxByRecent, nextInboxSelection, useInboxSelection } from "./inbox-selection.ts";
 
 type Row = { id: string; unread: number | null; lastMessageAt: string };
 
@@ -18,6 +18,24 @@ Object.assign(globalThis, {
   KeyboardEvent: dom.KeyboardEvent,
   Event: dom.Event,
   IS_REACT_ACT_ENVIRONMENT: true,
+});
+
+test("al cambiar de creadora sin hilo abierto se elige el primero, o ninguno", () => {
+  assert.equal(nextInboxSelection({
+    selectedId: "jose:1",
+    threadIds: ["allison:9", "allison:8"],
+    firstId: "allison:9",
+  }), "allison:9");
+  assert.equal(nextInboxSelection({
+    selectedId: "jose:1",
+    threadIds: [],
+    firstId: null,
+  }), null);
+  assert.equal(nextInboxSelection({
+    selectedId: "allison:9",
+    threadIds: ["allison:9", "allison:8"],
+    firstId: "allison:8",
+  }), "allison:9");
 });
 
 test("la lista queda del más reciente arriba", () => {
@@ -179,7 +197,7 @@ test("la marca espera 800 ms a la vista y no ocupa el lector; salir o tapar la p
   }
 });
 
-test("al cambiar de cuenta se suelta el hilo fijado y no queda seleccionado", async () => {
+test("al cambiar de cuenta se elige el primer hilo de la nueva", async () => {
   mock.timers.enable({ apis: ["setTimeout"] });
   const posts: string[] = [];
   const view = await mount({
@@ -197,8 +215,8 @@ test("al cambiar de cuenta se suelta el hilo fijado y no queda seleccionado", as
     await act(async () => {
       mock.timers.tick(MARK_SEEN_MS);
     });
-    assert.equal(text("selected"), "");
-    assert.deepEqual(posts, []);
+    assert.equal(text("selected"), "c");
+    assert.deepEqual(posts, ["c"]);
   } finally {
     await view.close();
     mock.timers.reset();

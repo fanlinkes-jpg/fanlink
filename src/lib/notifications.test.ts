@@ -26,6 +26,9 @@ import {
   NOTIFICATION_TABS,
   notesForCreator,
   noticeFace,
+  noticesForOfTab,
+  ofListType,
+  ofTabListNote,
   ofNoticeTotal,
   notificationReplyLine,
   renewStatusLabel,
@@ -437,6 +440,34 @@ test("el panel solo enseña avisos de la creadora activa y la respuesta es de su
   }), null);
 });
 
+test("cada pestaña usa el type de OnlyFans y no mezcla compras con propinas", () => {
+  const rows = [
+    { ofType: null, key: "todo" },
+    { ofType: "purchases", key: "compra" },
+    { ofType: "tip", key: "propina" },
+    { ofType: "message", key: "directo", body: "emisión en directo" },
+  ];
+  assert.equal(ofListType("purchases"), "purchases");
+  assert.equal(ofListType("tips"), "tip");
+  assert.equal(ofListType("promotions"), "message");
+  assert.equal(ofListType("tags"), null);
+  assert.equal(ofListType("all"), null);
+  assert.deepEqual(noticesForOfTab(rows, "purchases").map((row) => row.key), ["compra"]);
+  assert.deepEqual(noticesForOfTab(rows, "tips").map((row) => row.key), ["propina"]);
+  assert.deepEqual(noticesForOfTab(rows, "promotions").map((row) => row.key), ["directo"]);
+  assert.deepEqual(noticesForOfTab(rows, "all").map((row) => row.key), ["todo"]);
+  assert.deepEqual(noticesForOfTab(rows, "tags"), []);
+  assert.match(ofTabListNote({ tab: "tags", unread: 2, listed: 0 }) ?? "", /2 no leídas/);
+  assert.match(ofTabListNote({ tab: "promotions", unread: 3, listed: 1 }) ?? "", /3 no leídas/);
+  assert.equal(ofTabListNote({ tab: "tips", unread: 1, listed: 1 }), null);
+  const live = parseNotificationPayload({
+    list: [{ id: "live", type: "message", text: "emisión en directo", createdAt: "2026-11-13T10:00:00.000Z" }],
+  }, { listType: "message" });
+  assert.equal(live[0]?.ofType, "message");
+  assert.deepEqual(noticesForOfTab(live, "promotions").map((row) => row.key), [live[0]?.key]);
+  assert.deepEqual(noticesForOfTab(live, "tips"), []);
+});
+
 test("el badge verde usa el total de OnlyFans, no las no vistas en Fanlink", () => {
   assert.equal(ofNoticeTotal({ all: 3, subscriptions: 0, purchases: null, tips: null, tags: null, comments: null, mentions: null, likes: null, promotions: null, onlyfans: 3 }), 3);
   assert.equal(ofNoticeTotal({ all: null, subscriptions: null, purchases: null, tips: null, tags: null, comments: null, mentions: null, likes: null, promotions: null, onlyfans: 3 }), 3);
@@ -453,6 +484,10 @@ test("Renew On sale del usuario de la suscripción o de la ficha", () => {
     list: [{ id: "sub", type: "subscribed", createdAt: "2026-11-13T10:00:00.000Z", user: { id: 4, name: "Nora", username: "nora", subscribedByData: { renewedAuto: true } } }],
   });
   assert.equal(fromSubscription[0]?.renewAuto, true);
+  const prolonged = parseNotificationPayload({
+    list: [{ id: "pro", type: "subscribed", createdAt: "2026-11-13T10:00:00.000Z", user: { id: 5, name: "Luz", subscribedOnData: { subscribedOnAutoprolong: false, renewedAt: "2026-11-01T00:00:00.000Z" } } }],
+  });
+  assert.equal(prolonged[0]?.renewAuto, false);
   const fromThumb = parseNotificationPayload({
     list: [{ id: "foto", type: "tip", createdAt: "2026-11-13T10:00:00.000Z", user: { id: 8, name: "Lia", avatarThumbs: { thumb: "https://cdn.example/lia.jpg" } } }],
   });

@@ -8,7 +8,7 @@ import { unreadChatRow } from "../../server/of-sessions/sync/unread-chats.ts";
 import { inboxPillCounts, matchesInboxPill, tipThreads, type InboxPill } from "../../server/of-sessions/sync/chat-pills.ts";
 import { accountFigure, everyAccountBlocked, SESSION_EXPIRED_LABEL } from "../../server/of-sessions/sync/session-link.ts";
 import { listCreatorNotifications, markCreatorNotificationsRead, type NotificationListItem } from "@/lib/of-notifications";
-import { NOTIFICATION_TABS, TAB_LABEL, isOwnerOnlyKind, notesForCreator, noticeFace, notificationReplyLine, tabOf, type NotificationCounts, type NotificationTab } from "@/lib/notifications";
+import { NOTIFICATION_TABS, TAB_LABEL, isOwnerOnlyKind, notesForCreator, noticeFace, notificationReplyLine, noticesForOfTab, ofTabListNote, tabOf, type NotificationCounts, type NotificationTab } from "@/lib/notifications";
 import { NotificationFanCard } from "@/features/notification-card";
 import { useCrm, type VaultItem } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
@@ -63,11 +63,7 @@ function madridClock(value: string): string {
 type NoteRow = NotificationListItem & { creatorId: string };
 
 function panelNotes(rows: NoteRow[] | null, creatorId: string | null, tab: NotificationTab): NoteRow[] {
-  return notesForCreator(rows ?? [], creatorId).filter((item) => {
-    if (isOwnerOnlyKind(item.kind)) return false;
-    if (tab === "all") return true;
-    return tabOf(item.kind) === tab;
-  });
+  return noticesForOfTab(notesForCreator(rows ?? [], creatorId).filter((item) => !isOwnerOnlyKind(item.kind)), tab);
 }
 
 function noteBadge(counts: NotificationCounts | null, tab: NotificationTab): string {
@@ -562,7 +558,7 @@ export function RealChatsPage() {
   const selected = inbox.selected;
   const threadVaultId = selected ? `${selected.creatorId}:${selected.threadKey}` : null;
   if (threadVaultId !== vaultThread.current) {
-    const nextCreator = chatVaultCreator(selected);
+    const nextCreator = chatVaultCreator(selected, inboxCreator);
     const moved = vaultFolderOnAccountChange(vaultMemory.current, vaultCreator.current, nextCreator, thumbPage.listId);
     const restarted = chatVaultOnThreadChange({
       previousThreadId: vaultThread.current,
@@ -581,7 +577,10 @@ export function RealChatsPage() {
     }
   }
   const visible = inbox.visible;
-  const fanCards = useChatFanCards(visible);
+  const fanCards = useChatFanCards([
+    ...threads,
+    ...(notes ?? []).flatMap((item) => item.creatorId === inboxCreator && item.fanKey ? [{ creatorId: item.creatorId, fanKey: item.fanKey }] : []),
+  ]);
   const spendAsked = useRef("");
   const spendTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [spendTick, setSpendTick] = useState(0);
@@ -703,7 +702,7 @@ export function RealChatsPage() {
   const scriptHits = matchScripts(scripts, slash != null ? slash : libraryQuery);
   const showScripts = panel === "guiones" || slash != null;
   const realSend = selected != null && sendCreators.includes(selected.creatorId);
-  const threadCreator = chatVaultCreator(selected);
+  const threadCreator = chatVaultCreator(selected, inboxCreator);
   const vaultItems = rowsForCreator(vault, threadCreator);
   const tagCreators = creators.filter((creator) => creator.id !== selected?.creatorId && creator.handle.trim() !== "");
 
@@ -1145,6 +1144,9 @@ export function RealChatsPage() {
                     <button type="button" aria-label="Actualizar notificaciones" className="grid h-8 w-8 place-items-center rounded-full text-[#6d7585] hover:bg-[#f4f7ff]" onClick={() => void loadNotes()}><RefreshCw className="h-4 w-4" /></button>
                   </div>
                   <NoteTabRow filter={noteFilter} counts={noteCounts} onSelect={(id) => { setNoteFilter(id); if (id !== "all") markNotes(panelNotes(notes, inboxCreator, id)); }} />
+                  {ofTabListNote({ tab: noteFilter, unread: noteCounts?.[noteFilter] ?? null, listed: panelNotes(notes, inboxCreator, noteFilter).length }) ? (
+                    <p className="px-4 pb-2 text-[11px] text-[#6d7585]">{ofTabListNote({ tab: noteFilter, unread: noteCounts?.[noteFilter] ?? null, listed: panelNotes(notes, inboxCreator, noteFilter).length })}</p>
+                  ) : null}
                   <ul className="min-h-0 flex-1 divide-y divide-[#eceff3] overflow-y-auto px-4">
                     {noteNotice ? <li className="py-6 text-sm text-[#8a5a12]">{noteNotice}</li> : null}
                     {notes == null && !noteNotice ? <li className="py-6 text-sm text-[#6d7585]">Sin datos</li> : null}

@@ -9,6 +9,19 @@ export type InboxThread = {
   lastMessageAt: string | null;
 };
 
+/**
+ * Si el hilo elegido ya no está (cambió la creadora), pasa al primero de la lista nueva.
+ * Sin hilos, no queda ninguno seleccionado.
+ */
+export function nextInboxSelection(input: {
+  selectedId: string | null;
+  threadIds: readonly string[];
+  firstId: string | null;
+}): string | null {
+  if (input.selectedId && input.threadIds.includes(input.selectedId)) return input.selectedId;
+  return input.firstId;
+}
+
 /** Orden fijo de la bandeja: el mensaje más reciente arriba. */
 export function inboxByRecent<T extends { lastMessageAt: string | null }>(threads: readonly T[]): T[] {
   return [...threads].sort((left, right) => (right.lastMessageAt ?? "").localeCompare(left.lastMessageAt ?? ""));
@@ -76,11 +89,15 @@ export function useInboxSelection<T extends InboxThread>(input: {
 
   const threadIds = input.threads.map((thread) => thread.id).join("\0");
   useEffect(() => {
-    if (!selectedId) return;
-    if (input.threads.some((thread) => thread.id === selectedId)) return;
+    const next = nextInboxSelection({
+      selectedId,
+      threadIds: threadIds ? threadIds.split("\0") : [],
+      firstId,
+    });
+    if (next === selectedId) return;
     pinned.current = true;
-    setSelectedId(null);
-  }, [selectedId, threadIds]);
+    setSelectedId(next);
+  }, [selectedId, threadIds, firstId]);
 
   const selectedRef = useRef(selected);
   selectedRef.current = selected;

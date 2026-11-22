@@ -63,11 +63,13 @@ export function vaultFolderOnAccountChange(
   return { memory: next, listId: saved || "all" };
 }
 
-/** La bóveda abierta desde un hilo solo es de esa creadora. No hay otra cuenta que elegir. */
-export function chatVaultCreator(thread: { creatorId: string } | null): string | null {
+/** La bóveda del chat es la de la creadora del hilo. Sin hilo, la de la creadora activa. */
+export function chatVaultCreator(thread: { creatorId: string } | null, activeCreatorId?: string | null): string | null {
   const id = thread?.creatorId.trim() ?? "";
-  if (!id || id === "all") return null;
-  return id;
+  if (id && id !== "all") return id;
+  const active = activeCreatorId?.trim() ?? "";
+  if (!active || active === "all") return null;
+  return active;
 }
 
 /** Si el hilo cambia, la lectura anterior no vale y la bóveda pasa a la creadora nueva. */

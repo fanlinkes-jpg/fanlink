@@ -53,6 +53,9 @@ test("la bóveda del hilo queda fijada a su creadora y se reinicia si el hilo ca
   assert.equal(chatVaultCreator({ creatorId: "allison" }), "allison");
   assert.equal(chatVaultCreator({ creatorId: "all" }), null);
   assert.equal(chatVaultCreator(null), null);
+  assert.equal(chatVaultCreator(null, "allison"), "allison");
+  assert.equal(chatVaultCreator(null, "all"), null);
+  assert.equal(chatVaultCreator({ creatorId: "jose" }, "allison"), "jose");
   const jose = "jose:hilo-1";
   const allison = "allison:hilo-2";
   const moved = chatVaultOnThreadChange({ previousThreadId: jose, nextThreadId: allison, generation: 4 });

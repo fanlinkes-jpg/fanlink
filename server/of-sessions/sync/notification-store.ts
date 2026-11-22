@@ -62,8 +62,8 @@ export async function saveNotificationRead(
       `insert into of_notification (
          creator_id, notification_key, kind, body, fan_key, fan_name, thread_key,
          amount_cents, occurred_at, pending, first_seen_at, synced_at, origin, of_unread,
-         fan_handle, avatar_url, fan_lists, renew_auto, fan_seen_at, post_ref, post_link, post_text
-       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+         fan_handle, avatar_url, fan_lists, renew_auto, fan_seen_at, post_ref, post_link, post_text, of_type
+       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
        on conflict (creator_id, notification_key) do update set
          kind = case
            when of_notification.kind in ('agency', 'other')
@@ -90,7 +90,8 @@ export async function saveNotificationRead(
          fan_seen_at = coalesce(excluded.fan_seen_at, of_notification.fan_seen_at),
          post_ref = coalesce(excluded.post_ref, of_notification.post_ref),
          post_link = coalesce(excluded.post_link, of_notification.post_link),
-         post_text = coalesce(excluded.post_text, of_notification.post_text)`,
+         post_text = coalesce(excluded.post_text, of_notification.post_text),
+         of_type = coalesce(excluded.of_type, of_notification.of_type)`,
       [
         creatorId,
         item.key,
@@ -114,6 +115,7 @@ export async function saveNotificationRead(
         item.postRef ?? null,
         item.postLink ?? null,
         item.postText ?? null,
+        item.ofType ?? null,
       ],
     );
   }
@@ -193,11 +195,12 @@ export async function listNotificationRows(
     post_ref: string | null;
     post_link: string | null;
     post_text: string | null;
+    of_type: string | null;
   }>(
     `select n.notification_key, n.kind, n.body, n.fan_key, n.fan_name, n.thread_key,
             n.amount_cents, n.occurred_at, n.pending, s.seen_at, n.of_unread,
             n.fan_handle, n.avatar_url, n.fan_lists, n.renew_auto, n.fan_seen_at, n.post_ref,
-            n.post_link, n.post_text
+            n.post_link, n.post_text, n.of_type
      from of_notification n
      left join of_notification_seen s
        on s.creator_id = n.creator_id
@@ -235,6 +238,7 @@ export async function listNotificationRows(
         postRef: row.post_ref,
         postLink: row.post_link,
         postText: row.post_text,
+        ofType: row.of_type,
       },
     ];
   });
@@ -348,6 +352,7 @@ export async function notificationPageFor(
           postRef: row.postRef ?? null,
           postLink: row.postLink ?? null,
           postText: row.postText ?? null,
+          ofType: row.ofType ?? null,
           labels,
         },
       ];
@@ -376,6 +381,7 @@ export type NotificationListRow = {
   postRef: string | null;
   postLink: string | null;
   postText: string | null;
+  ofType: string | null;
   labels: NonNullable<ReturnType<typeof notificationLabels>>;
 };
 

@@ -27,6 +27,7 @@ export type NotificationListItem = {
   postRef: string | null;
   postLink: string | null;
   postText: string | null;
+  ofType: string | null;
   labels: NotificationLabels;
 };
 

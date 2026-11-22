@@ -40,6 +40,66 @@ export const NOTIFICATION_TABS = [
 ] as const;
 export type NotificationTab = (typeof NOTIFICATION_TABS)[number];
 
+/**
+ * El `type` de GET /api2/v2/users/notifications, el de cada pestaña del centro.
+ * Etiquetas no está: OnlyFans las cuenta en /users/me (`newTagsCount`).
+ * Promociones es `message`. Una emisión en directo solo entra ahí si OnlyFans
+ * la devuelve con ese type.
+ */
+export const OF_NOTIFICATION_LIST_TYPES = [
+  "subscribed",
+  "purchases",
+  "tip",
+  "commented",
+  "mentioned",
+  "favorited",
+  "message",
+  "deactivated_media",
+] as const;
+export type OfNotificationListType = (typeof OF_NOTIFICATION_LIST_TYPES)[number];
+
+const OF_LIST_TAB: Record<OfNotificationListType, NotificationTab> = {
+  subscribed: "subscriptions",
+  purchases: "purchases",
+  tip: "tips",
+  commented: "comments",
+  mentioned: "mentions",
+  favorited: "likes",
+  message: "promotions",
+  deactivated_media: "onlyfans",
+};
+
+export function ofTabForListType(type: OfNotificationListType): NotificationTab {
+  return OF_LIST_TAB[type];
+}
+
+/** El type de la petición de esa pestaña. Todo no lleva type. Etiquetas tampoco. */
+export function ofListType(tab: NotificationTab): OfNotificationListType | null {
+  const found = (Object.entries(OF_LIST_TAB) as Array<[OfNotificationListType, NotificationTab]>).find(([, value]) => value === tab);
+  return found?.[0] ?? null;
+}
+
+/** La lista de una pestaña es la respuesta de su type, no una reclasificación. */
+export function noticesForOfTab<T extends { ofType?: string | null }>(rows: readonly T[], tab: NotificationTab): T[] {
+  if (tab === "all") return rows.filter((row) => row.ofType == null);
+  const type = ofListType(tab);
+  if (!type) return [];
+  return rows.filter((row) => row.ofType === type);
+}
+
+/**
+ * El número de la pestaña es el de no leídas de OnlyFans. La lista es la página
+ * de ese type, que puede incluir leídas o no traer las etiquetas.
+ */
+export function ofTabListNote(input: { tab: NotificationTab; unread: number | null; listed: number }): string | null {
+  if (input.unread == null || input.unread <= 0) return null;
+  if (input.listed === input.unread) return null;
+  if (input.tab === "tags" && input.listed === 0) {
+    return `${input.unread} no leídas. OnlyFans las cuenta en el perfil, no en esta lista.`;
+  }
+  return `${input.unread} no leídas. La lista es la página de OnlyFans para esta pestaña.`;
+}
+
 export const TAB_LABEL: Record<NotificationTab, string> = {
   all: "Todo",
   subscriptions: "Suscripciones",
@@ -99,6 +159,8 @@ export type ParsedNotification = {
   postRef?: string | null;
   postLink?: string | null;
   postText?: string | null;
+  /** Type de la petición que trajo el aviso. Null o ausente si vino en Todo, sin type. */
+  ofType?: string | null;
 };
 
 export type NotificationRecord = ParsedNotification & {
@@ -390,6 +452,8 @@ export function kindFromNotificationType(type: string | null): NotificationKind 
 export type ParseNotificationOptions = {
   /** auth_id de la cuenta. Esa persona no cuenta como fan. */
   accountUserId?: string | null;
+  /** Type de la query. La pestaña enseña estos avisos tal cual, sin reclasificar. */
+  listType?: OfNotificationListType | null;
 };
 
 export function parseNotificationPayload(value: unknown, options: ParseNotificationOptions = {}): ParsedNotification[] {
@@ -631,10 +695,12 @@ function notificationFrom(record: Record<string, unknown>, options: ParseNotific
     body,
   });
   if (!key) return null;
+  const listType = options.listType ?? null;
+  const storedKey = listType ? `${key}\u001f${listType}` : key;
   const pending = placed.kind === "tag" && isPending(record, body);
   const card = fanCard(record);
   return {
-    key,
+    key: storedKey,
     kind: placed.kind,
     body,
     fanKey: placed.fanKey,
@@ -652,6 +718,7 @@ function notificationFrom(record: Record<string, unknown>, options: ParseNotific
     postRef: card.postRef,
     postLink: card.postLink,
     postText: card.postText,
+    ofType: listType,
   };
 }
 
@@ -746,8 +813,9 @@ function fanCard(record: Record<string, unknown>): {
 function httpsUrl(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const clean = value.trim();
-  if (!/^https?:\/\//i.test(clean) || clean.length > 400) return null;
-  return clean;
+  const withProtocol = clean.startsWith("//") ? `https:${clean}` : clean;
+  if (!/^https?:\/\//i.test(withProtocol) || withProtocol.length > 400) return null;
+  return withProtocol;
 }
 
 function avatarOf(user: Record<string, unknown>): string | null {
@@ -767,6 +835,10 @@ function avatarOf(user: Record<string, unknown>): string | null {
   for (const value of Object.values(bag)) {
     const url = httpsUrl(value);
     if (url) return url;
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const nested = httpsUrl((value as Record<string, unknown>).url);
+      if (nested) return nested;
+    }
   }
   return null;
 }
@@ -794,7 +866,8 @@ function readRenew(user: Record<string, unknown>): boolean | null {
     Boolean(item) && typeof item === "object" && !Array.isArray(item)
   ));
   for (const bag of bags) {
-    const raw = bag.autoRenew ?? bag.renewedAuto ?? bag.isAutoRenew ?? bag.renewAuto;
+    const raw = bag.autoRenew ?? bag.renewedAuto ?? bag.isAutoRenew ?? bag.renewAuto
+      ?? bag.subscribedOnAutoprolong ?? bag.subscribedByAutoprolong ?? bag.autoprolong;
     const parsed = boolFlag(raw);
     if (parsed != null) return parsed;
   }
@@ -973,6 +1046,7 @@ function fillGaps(previous: ParsedNotification, incoming: ParsedNotification): P
     postRef: incoming.postRef ?? previous.postRef ?? null,
     postLink: incoming.postLink ?? previous.postLink ?? null,
     postText: incoming.postText ?? previous.postText ?? null,
+    ofType: incoming.ofType ?? previous.ofType ?? null,
   };
 }
 
