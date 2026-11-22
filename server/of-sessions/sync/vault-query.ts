@@ -1,7 +1,7 @@
 import { creatorIdsForChats } from "../../../src/lib/access-policy.ts";
 import { VAULT_FOLDER_READ_ERROR, VAULT_FOLDER_STALE } from "../../../src/lib/vault-folder-label.ts";
 import { folderReadMark } from "./vault-pace.ts";
-import { emptyVaultQuery, folderAndChildren, searchVaultLists, vaultQueryFromUnknown, type VaultQuery } from "./vault-filter.ts";
+import { emptyVaultQuery, folderAndChildren, searchVaultLists, vaultQueryForCreator, vaultQueryFromUnknown, type VaultQuery } from "./vault-filter.ts";
 import { itemSaleBlocked } from "./vault-block.ts";
 import { folderMediaCap, suggestVaultPrice, trailerPackages, vaultFolderMark, vaultKindOf, type VaultFile, type VaultKind } from "./vault-model.ts";
 import type { ReadSql } from "./store.ts";
@@ -125,10 +125,11 @@ export async function queryVaultForActor(sql: ReadSql, actor: VaultActor, body: 
   const fanKey = typeof record.fanKey === "string" && record.fanKey.trim() ? record.fanKey : null;
   const chatterId = lockedChatterId(actor, typeof record.chatterId === "string" ? record.chatterId : null);
   const restored = record.query == null;
-  const query = restored ? await loadVaultQuery(sql, actor.userId) : vaultQueryFromUnknown(record.query);
-  if (!restored && record.remember !== false) await saveVaultQuery(sql, actor.userId, query);
+  const loaded = restored ? await loadVaultQuery(sql, actor.userId) : vaultQueryFromUnknown(record.query);
   const listText = typeof record.listText === "string" ? record.listText : "";
   const mirror = await loadVaultMirror(sql, creatorId);
+  const query = vaultQueryForCreator(loaded, mirror.lists.map((list) => list.id));
+  if (!restored && record.remember !== false) await saveVaultQuery(sql, actor.userId, query);
   const uses = fanKey ? await fanVaultUses(sql, creatorId, fanKey) : [];
   const sentIds = new Set(uses.map((use) => use.itemKey));
   const boughtIds = new Set(uses.filter((use) => use.purchased === true).map((use) => use.itemKey));

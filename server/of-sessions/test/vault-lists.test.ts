@@ -1993,6 +1993,34 @@ test("el índice de listas se pide una vez y el respaldo espera 800 ms", async (
   }
 });
 
+test("la bóveda de una creadora no abre una carpeta que no es suya", async () => {
+  clearSignRulesCache();
+  clearVaultWalkCache();
+  const db = new PGlite();
+  try {
+    await migrateVault(db);
+    await db.query(
+      `insert into of_vault_item (creator_id, item_key, title, kind, list_key) values ('allison', 'foto-1', 'Foto', 'photo', '88090')`,
+    );
+    await db.query(
+      `insert into of_vault_list (creator_id, list_key, name, photos_count, videos_count, synced_at) values ('allison', '88090', 'Sets', 1, 0, '2026-01-01T00:00:00.000Z')`,
+    );
+    const view = await queryVaultForActor(asSql(db), { userId: "dueña", role: "owner", perms: ["vault"] }, {
+      creatorId: "allison",
+      remember: false,
+      query: { ...emptyVaultQuery(), scope: "carpeta", folderId: "mensajes-de-jose" },
+    });
+    assert.equal(view.payload.query.scope, "todas");
+    assert.equal(view.payload.query.folderId, null);
+    assert.equal(view.payload.items.some((item) => item.id === "foto-1"), true);
+    assert.notEqual(view.payload.notice, "Sin datos");
+  } finally {
+    clearSignRulesCache();
+    clearVaultWalkCache();
+    await db.close();
+  }
+});
+
 test("un 5xx deja el atajo en esa cuenta y las dos rutas fallidas no fingen éxito", async () => {
   clearSignRulesCache();
   clearVaultWalkCache();

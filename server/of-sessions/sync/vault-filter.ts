@@ -45,6 +45,15 @@ const COUPLES: readonly CoupleTag[] = ["B/G", "G/G", "SOLA", "INDIVIDUAL", "PELI
 const KINDS: readonly Exclude<VaultKind, null>[] = ["video", "foto", "audio", "gif"];
 const SORTS: readonly VaultSort[] = ["fecha", "duracion", "ventas", "precio"];
 
+/** Una carpeta guardada que no está en esta creadora no deja la página en cero. */
+export function vaultQueryForCreator(query: VaultQuery, folderIds: readonly string[]): VaultQuery {
+  if (query.scope !== "carpeta" || !query.folderId || !folderIds.includes(query.folderId)) {
+    if (query.scope === "todas" && !query.folderId) return query;
+    return { ...query, scope: "todas", folderId: null };
+  }
+  return query;
+}
+
 export function emptyVaultQuery(): VaultQuery {
   return {
     text: "",
