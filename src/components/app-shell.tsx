@@ -154,7 +154,7 @@ function HeaderTools({ devMode, displayName }: { devMode: boolean; displayName: 
   const sfw = useSfw();
   const [open, setOpen] = useState(false);
   const current = COMPOSER_LANGUAGES.find((item) => item.id === language) ?? COMPOSER_LANGUAGES[0];
-  const localHint = "Modo local de un solo operador. Solo vale en localhost y no aísla a un equipo.";
+  const localHint = displayName;
   return (
     <div className="flex shrink-0 items-center gap-2">
       <div className="relative">
@@ -194,7 +194,7 @@ function HeaderTools({ devMode, displayName }: { devMode: boolean; displayName: 
         aria-checked={sfw}
         aria-label="SFW"
         onClick={() => setSfwEnabled(!sfw)}
-        className={cn("h-8 rounded-lg px-2 text-xs font-semibold", sfw ? "bg-[#1f9d55] text-white" : "bg-white/10")}
+        className={cn("h-8 rounded-lg px-2 text-xs font-semibold", sfw ? "bg-success text-white" : "bg-white/10")}
       >
         SFW
       </button>

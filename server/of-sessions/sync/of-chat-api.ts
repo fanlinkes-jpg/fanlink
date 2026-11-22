@@ -1,6 +1,7 @@
 import { BROWSER_FINGERPRINT } from "../sessions/browser-factory.ts";
 import { domainMatches, isCookieUnexpired, type StorageCookie, type StorageStateFile } from "../sessions/storage-state.ts";
 import { backoffDelayMs } from "./backoff.ts";
+import { purchasedPpvSeries, type PpvPoint } from "../../../src/lib/composer-tools.ts";
 import { mergeMessages, mergeThreads, parseChatList, parseChatMessages, parsePreviewMessages, type ChatMessage, type ChatThread } from "./chats.ts";
 import { olderChatMessagesPath } from "./history.ts";
 import { collectFanSpend } from "./fan-spend.ts";
@@ -750,6 +751,36 @@ export async function fetchOlderChatPage(
     status: page.status,
     reason: null,
   };
+}
+
+/** Páginas de compras de un fan. Cada una espera el hueco de la cuenta. */
+export const PURCHASE_PAGE_CAP = 8;
+
+/** GET de solo lectura de los PPV que el fan ya compró. No marca nada. */
+export async function fetchPurchasedPpvs(
+  state: StorageStateFile,
+  deps: SignedChatDeps,
+  input: { threadKey: string; fanKey: string | null; accountUserId: string },
+): Promise<{ maxCents: number | null; avgCents: number | null; points: PpvPoint[]; retryAfterMs: number }> {
+  const empty = { maxCents: null, avgCents: null, points: [] as PpvPoint[], retryAfterMs: 0 };
+  const auth = sessionForApi(state, deps.now());
+  if ("reason" in auth) return empty;
+  const rules = deps.rules ?? await loadSignRules(deps.fetch, deps.now());
+  const found: ChatMessage[] = [];
+  let cursor: string | null = null;
+  for (let page = 0; page < PURCHASE_PAGE_CAP; page += 1) {
+    const path = olderChatMessagesPath(input.threadKey, cursor, MESSAGE_PAGE);
+    if (deps.accountId && deps.sleep) await awaitAccountGap(deps.accountId, deps.now, deps.sleep, deps.minGapMs ?? REQUEST_GAP_MS);
+    const read = await getJson(deps.fetch, path, signedHeaders(rules, path, auth, deps.now()), deps.now());
+    if (!read.ok) return { ...purchasedPpvSeries(found), retryAfterMs: read.retryAfterMs };
+    const messages = parseChatMessages(read.body, input.threadKey, input.fanKey, input.accountUserId);
+    found.push(...messages);
+    if (!messageHasMore(read.body) || messages.length === 0) break;
+    const next = [...messages].sort((left, right) => left.sentAt.localeCompare(right.sentAt))[0]?.messageKey ?? null;
+    if (!next || next === cursor) break;
+    cursor = next;
+  }
+  return { ...purchasedPpvSeries(found), retryAfterMs: 0 };
 }
 
 function listHasMore(body: unknown, count: number): boolean {

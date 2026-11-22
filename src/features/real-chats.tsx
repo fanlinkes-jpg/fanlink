@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { AtSign, Bell, ChevronLeft, ChevronRight, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, RefreshCw, ScrollText, Send, Type } from "lucide-react";
+import { AtSign, Bell, ChevronLeft, ChevronRight, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, RefreshCw, ScrollText, Send, Smile, Type } from "lucide-react";
 import { broadcastOnlineFans, cancelOnlineBroadcast, chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, markChatOpened, readChatVault, readThreadHistory, readVisibleFanSpend, recordChatOutbound, resolveOnlineOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
 import { OnlineFansPanel, type OnlineBroadcastPayload } from "@/features/online-fans-panel";
 import type { OnlineFanRow } from "@/lib/online-fan-row";
@@ -206,9 +206,9 @@ function ThreadMessage({ message }: { message: {
   return (
     <li data-message-id={message.messageKey} className={message.fromFan ? "" : "text-right"} data-layout={layout.layout} data-automatic={message.automatic ? "1" : "0"}>
       {(openSlides.length > 0 || message.body || pay) ? (
-      <div className={`inline-block max-w-[70%] rounded-2xl px-3 py-2 text-left text-sm ${message.fromFan ? "bg-[#f4f6fb]" : "bg-[#e7f0ff]"}`}>
+      <div className={`inline-block max-w-[70%] rounded-2xl px-3 py-2 text-left text-sm ${message.fromFan ? "bg-bubble-in" : "bg-bubble-out"}`}>
         {layout.layout === "carousel" ? <MediaStrip>{players}</MediaStrip> : players}
-        {pay ? <p className="text-[11px] font-medium text-[#1d2433]">{pay}</p> : null}
+        {pay ? <p className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${message.purchased === true ? "bg-success/15 text-success" : message.purchased === false ? "bg-warning/15 text-warning" : "bg-raised text-muted"}`}>{pay}</p> : null}
         {message.body ? <p>{message.body}</p> : null}
       </div>
       ) : null}
@@ -238,7 +238,7 @@ function OutboundBubbleView({
   const caption = bubbleCaption(job.state, job.reason);
   return (
     <li className="text-right">
-      <div className="inline-block max-w-[70%] rounded-2xl bg-[#e7f0ff] px-3 py-2 text-left text-sm">
+      <div className="inline-block max-w-[70%] rounded-2xl bg-bubble-out px-3 py-2 text-left text-sm">
         {job.vault.length > 0 ? <p className="text-[10px] text-[#6d7585]">{job.vault.map((item) => item.name).join(", ")}</p> : null}
         {job.body ? <p>{job.body}</p> : null}
       </div>
@@ -1198,12 +1198,12 @@ export function RealChatsPage() {
             <button
               ref={notesButton}
               type="button"
-              className="relative inline-flex items-center gap-1.5 rounded-lg bg-[#1f9d55] px-3 py-1.5 text-xs font-medium text-white"
+              className="relative inline-flex items-center gap-1.5 rounded-lg bg-success px-3 py-1.5 text-xs font-medium text-white"
               onClick={() => { placeNotes(); setNotesOpen((open) => !open); if (inboxCreator) void ensureNoticeTab({ data: { creatorId: inboxCreator, tab: noteFilter } }).catch(() => undefined); void loadNotes(); }}
             >
               <Bell className="h-3.5 w-3.5" />
               Notificaciones
-              {noticeCount > 0 ? <span className="min-w-5 rounded-full bg-white px-1 text-center text-[10px] font-semibold tabular-nums text-[#1f9d55]" aria-label={`${noticeCount} notificaciones`}>{noticeCount}</span> : null}
+              {noticeCount > 0 ? <span className="min-w-5 rounded-full bg-white px-1 text-center text-[10px] font-semibold tabular-nums text-success" aria-label={`${noticeCount} notificaciones`}>{noticeCount}</span> : null}
             </button>
             {notesOpen ? createPortal(
               <>
@@ -1541,8 +1541,8 @@ export function RealChatsPage() {
                   />
                 </div>
               ) : null}
-              {panel === "vault" ? (
-                <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-[3vmin]">
+              {panel === "vault" && typeof document !== "undefined" ? createPortal(
+                <div className="fixed inset-0 z-[80] flex items-center justify-center bg-overlay p-[3vmin]">
                   <div className="flex h-[94vh] w-[94vw] min-h-0 flex-col overflow-hidden rounded-2xl border border-[#e6e8ee] bg-white shadow-xl">
                     <ComposerPanelBody
                       panel={panel}
@@ -1570,7 +1570,8 @@ export function RealChatsPage() {
                       onOpenFolder={(listId) => void loadOfVault(listId ?? "all", 0)}
                     />
                   </div>
-                </div>
+                </div>,
+                document.body,
               ) : panel === "etiqueta" ? (
                 <div className="absolute inset-x-2 bottom-full z-20 mb-1 flex max-h-[min(60vh,32rem)] flex-col overflow-hidden rounded-2xl border border-[#e6e8ee] bg-white shadow-xl">
                   <ComposerPanelBody
@@ -1619,12 +1620,6 @@ export function RealChatsPage() {
                 </div>
               ) : null}
               <div className="flex items-start gap-2">
-                <div className="grid shrink-0 gap-0" style={{ gridTemplateColumns: "repeat(14, 32px)" }}>
-                  {QUICK_EMOJIS.map((emoji) => (
-                    <button key={emoji} type="button" className="grid h-8 w-8 place-items-center text-[20px] leading-none" onClick={() => insertAtCursor(emoji)}>{emoji}</button>
-                  ))}
-                  <button type="button" aria-label="Más emojis" title="Más emojis" className="grid h-8 w-8 place-items-center text-xs text-[#2456c7]" onClick={() => toggle("emojis")}>+</button>
-                </div>
                 <div className="ml-auto flex shrink-0 gap-1">
                   <button type="button" aria-label="Guiones" title="Guiones" className="flex h-9 items-center gap-1 rounded-lg border border-[#e6e8ee] px-2 text-xs" onClick={() => toggle("guiones")}><ScrollText className="h-4 w-4" />Guiones</button>
                 </div>
@@ -1734,6 +1729,7 @@ export function RealChatsPage() {
                 <ToolButton label="Price" title="Price · Precio" active={dialog === "precio"} onClick={() => { setPanel(null); setDialog((current) => current === "precio" ? null : "precio"); }}><DollarSign className="h-6 w-6" /></ToolButton>
                 <ToolButton label="Tag other creator" title="Tag other creator · Etiquetar otra creadora" active={panel === "etiqueta"} onClick={() => toggle("etiqueta")}><AtSign className="h-6 w-6" /></ToolButton>
                 <ToolButton label="Format text" title="Format text · Formato de texto" active={panel === "formato"} onClick={() => toggle("formato")}><Type className="h-6 w-6" /></ToolButton>
+                <ToolButton label="Emojis" title="Emojis" active={panel === "emojis"} onClick={() => toggle("emojis")}><Smile className="h-6 w-6" /></ToolButton>
                 <ToolButton label="Translation" title="Translation · Traducción" active={panel === "traduccion"} onClick={() => toggle("traduccion")}><Languages className="h-6 w-6" /></ToolButton>
                 <button type="button" disabled={!realSend || !draft.trim()} title={realSend ? "Enviar" : "Envío real desactivado en esta cuenta"} aria-label="Enviar" onClick={() => commitSend("Enter", false, false)} className="ml-auto grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#3b6cff] text-white disabled:opacity-60"><Send className="h-5 w-5" /></button>
               </div>
@@ -1774,7 +1770,8 @@ export function RealChatsPage() {
       {dialog === "precio" ? (
         <MessagePriceDialog
           initial={draftPrice == null ? "" : (draftPrice / 100).toFixed(2)}
-          messages={messages}
+          creatorId={selected?.creatorId ?? null}
+          threadKey={selected?.threadKey ?? null}
           onCancel={() => {
             offerPriceId.current = null;
             setDialog(null);
@@ -1795,7 +1792,7 @@ export function RealChatsPage() {
         />
       ) : null}
       {dialog === "programar" && typeof document !== "undefined" ? createPortal(
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4" onMouseDown={() => setDialog(null)}>
+        <div className="fixed inset-0 z-[90] grid place-items-center bg-overlay p-4" onMouseDown={() => setDialog(null)}>
           <div role="dialog" aria-modal="true" aria-label="Programar tu mensaje" className="w-full max-w-sm rounded-2xl bg-white p-4 shadow-xl" onMouseDown={(event) => event.stopPropagation()}>
             <h2 className="text-base font-semibold">Programar tu mensaje</h2>
             <input type="datetime-local" aria-label="Fecha programada" value={scheduleAt} onChange={(event) => setScheduleAt(event.target.value)} className="mt-3 h-10 w-full rounded-lg border border-[#e6e8ee] px-2 text-sm" />
@@ -1910,7 +1907,7 @@ function VaultOfferThumb({
 }) {
   const [broken, setBroken] = useState(false);
   return (
-    <figure className="relative h-28 w-24 shrink-0 overflow-hidden rounded-xl bg-[#d7dee8]">
+    <figure className="relative h-28 w-24 shrink-0 overflow-hidden rounded-xl bg-raised">
       {broken || !creatorId ? (
         <span className="grid h-full w-full place-items-center px-1 text-center text-[10px] text-[#5c6570]">{broken ? VAULT_THUMB_MISSING : name}</span>
       ) : (
@@ -1920,14 +1917,14 @@ function VaultOfferThumb({
         type="button"
         aria-pressed={!free}
         aria-label={free ? "Gratis. Pulsar para dejarlo de pago" : "De pago. Pulsar para dejarlo gratis"}
-        className={`absolute left-1 top-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${free ? "bg-black/70 text-white" : "bg-[#ff5a7a] text-white"}`}
+        className="absolute left-1 top-1 rounded-full bg-overlay/80 px-1.5 py-0.5 text-[10px] font-semibold text-white"
         onClick={onToggle}
       >
         {free ? "Gratis" : (offerLabel ?? "De pago")}
       </button>
-      <button type="button" aria-label={`Quitar ${name}`} className="absolute right-1 top-1 grid h-4 w-4 place-items-center rounded-full bg-black/70 text-[10px] text-white" onClick={onRemove}>×</button>
-      {seconds != null ? <span className="absolute bottom-1 right-1 rounded bg-black/70 px-1 text-[10px] text-white">{formatClip(seconds)}</span> : null}
-      {dateLabel ? <span className="absolute bottom-1 left-1 rounded bg-black/70 px-1 text-[10px] text-white">{dateLabel}</span> : null}
+      <button type="button" aria-label={`Quitar ${name}`} className="absolute right-1 top-1 grid h-4 w-4 place-items-center rounded-full bg-overlay/80 text-[10px] text-white" onClick={onRemove}>×</button>
+      {seconds != null ? <span className="absolute bottom-1 right-1 rounded-full bg-overlay/80 px-1.5 py-0.5 text-[10px] font-semibold text-white">{formatClip(seconds)}</span> : null}
+      {dateLabel ? <span className="absolute bottom-1 left-1 rounded-full bg-overlay/80 px-1.5 py-0.5 text-[10px] font-semibold text-white">{dateLabel}</span> : null}
     </figure>
   );
 }
@@ -2121,8 +2118,8 @@ function ComposerPanelBody({
     case "emojis":
       return (
         <div className="grid gap-0" style={{ gridTemplateColumns: "repeat(14, 32px)" }}>
-          {FULL_EMOJIS.map((emoji) => (
-            <button key={`full-${emoji}`} type="button" className="grid h-8 w-8 place-items-center text-[20px] leading-none" onClick={() => onEmoji(emoji)}>{emoji}</button>
+          {[...QUICK_EMOJIS, ...FULL_EMOJIS].map((emoji, index) => (
+            <button key={`${emoji}-${index}`} type="button" className="grid h-8 w-8 place-items-center text-[20px] leading-none" onClick={() => onEmoji(emoji)}>{emoji}</button>
           ))}
         </div>
       );

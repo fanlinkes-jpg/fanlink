@@ -204,17 +204,20 @@ function NotificationPanel({
           <Button type="button" variant="ghost" onClick={onClose}>Cerrar</Button>
         </header>
         <div className="space-y-3 border-b border-line px-4 py-3">
-          <div className="flex flex-wrap gap-1">
+          <div className="relative">
+          <div className="flex gap-1 overflow-x-auto [scrollbar-width:none]">
             {NOTIFICATION_TABS.map((id) => (
               <button
                 key={id}
                 type="button"
                 onClick={() => setTab(id)}
-                className={`whitespace-nowrap rounded-md px-2 py-1 text-xs ${tab === id ? "bg-primary text-primary-fg" : "bg-raised text-muted"}`}
+                className={`shrink-0 whitespace-nowrap rounded-md px-2 py-1 text-xs ${tab === id ? "bg-primary text-primary-fg" : "bg-raised text-muted"}`}
               >
                 {TAB_LABEL[id]} {pillCount(counts, id)}
               </button>
             ))}
+          </div>
+          <div className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-surface to-transparent" />
           </div>
           <Field aria-label="Buscar notificaciones" value={text} placeholder="Buscar" onChange={(event) => setText(event.target.value)} />
           <div className="flex gap-2">

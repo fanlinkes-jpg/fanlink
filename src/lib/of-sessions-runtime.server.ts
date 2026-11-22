@@ -42,7 +42,7 @@ import { openWorkPage } from "../../server/of-sessions/sessions/work-page.ts";
 import { type VaultFile } from "../../server/of-sessions/sync/vault-listen.ts";
 import { readChatVaultView as readVaultPage, type VaultPageResult, type VaultReadDeps } from "../../server/of-sessions/sync/vault-read.ts";
 import { fetchSignedOnlineFans } from "../../server/of-sessions/sync/online-fans.ts";
-import { fetchOlderChatPage, sessionForApi, signedHeaders } from "../../server/of-sessions/sync/of-chat-api.ts";
+import { fetchOlderChatPage, fetchPurchasedPpvs, sessionForApi, signedHeaders } from "../../server/of-sessions/sync/of-chat-api.ts";
 import { fetchNotificationList } from "../../server/of-sessions/sync/of-notifications-api.ts";
 import { applyDirectoryAvatars, avatarsFromUserMap, directoryAvatarReport, hashFanId, noticeIdsMissingAvatar, noticeTabFresh, ofListType, usersListPath, type NotificationTab } from "@/lib/notifications";
 import { awaitAccountGap, withAccountApi } from "../../server/of-sessions/sync/api-list-pace.ts";
@@ -1339,6 +1339,36 @@ export async function ensureNotificationTabView(userId: string, input: { creator
     noticeTabAt.set(key, Date.now());
   }
   return { ok: page.status === 200, fresh: false };
+}
+
+export async function readFanPurchasesView(userId: string, input: { creatorId: string; threadKey: string }): Promise<{ maxCents: number | null; avgCents: number | null; points: Array<{ sentAt: string; priceCents: number }> }> {
+  const empty = { maxCents: null, avgCents: null, points: [] as Array<{ sentAt: string; priceCents: number }> };
+  const access = await accessFor(userId);
+  if (access.role !== "owner" && !access.perms.includes("mensajes")) {
+    throw new WorkspaceAccessError("No tienes permiso para escribir.");
+  }
+  const sessions = await getOfSessionManager();
+  const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
+  if (!account) return empty;
+  let state;
+  try {
+    state = await sessions.readStorageState(account.id);
+  } catch {
+    return empty;
+  }
+  const read = await fetchPurchasedPpvs(state, {
+    fetch: globalThis.fetch,
+    now: () => Date.now(),
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    minGapMs: 1_500,
+    accountId: account.id,
+  }, {
+    threadKey: input.threadKey,
+    fanKey: input.threadKey,
+    accountUserId: account.identityUserId ?? "",
+  });
+  if (read.retryAfterMs > 0) noteAccountBlock(account.id, "429");
+  return { maxCents: read.maxCents, avgCents: read.avgCents, points: read.points };
 }
 
 export async function loadOlderMessagesView(userId: string, input: { creatorId: string; threadKey: string }): Promise<{ ok: boolean; hasMore: boolean; retryAfterMs: number }> {

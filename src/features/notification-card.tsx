@@ -38,7 +38,7 @@ export function NotificationFanCard({
         ) : (
           <span className="flex h-10 w-10 items-center justify-center rounded-full bg-[#eef1f4] text-xs font-semibold text-[#3c4456]">{initial}</span>
         )}
-        <span className="absolute -right-1 -bottom-1 grid h-4 w-4 place-items-center rounded-full bg-white text-[#1f9d55] ring-1 ring-[#e6e8ee]">
+        <span className="absolute -right-1 -bottom-1 grid h-4 w-4 place-items-center rounded-full bg-white text-success ring-1 ring-line">
           <TypeIcon className="h-2.5 w-2.5" />
         </span>
       </span>
@@ -57,12 +57,12 @@ export function NotificationFanCard({
         {renewText || recent ? (
           <p className="mt-1 flex flex-wrap gap-1 text-[11px]">
             {renewText ? <span className="rounded bg-[#f2f3f5] px-1.5 py-0.5 text-[#3c4456]">{renewText}</span> : null}
-            {recent ? <span className="rounded bg-[#e7f8ef] px-1.5 py-0.5 text-[#1a7f45]">Reciente (últimas 24 h)</span> : null}
+            {recent ? <span className="rounded bg-success/15 px-1.5 py-0.5 text-success">Reciente (últimas 24 h)</span> : null}
           </p>
         ) : null}
         {text ? <p className="mt-1 text-[#1c2333]">{text}</p> : null}
         {stamp ? <p className="mt-1 text-xs text-[#8b909a]">{stamp}</p> : null}
-        {reply ? <p className="mt-1 text-xs text-[#1f9d55]">{reply}</p> : null}
+        {reply ? <p className="mt-1 text-xs text-success">{reply}</p> : null}
         {onMark ? (
           <button type="button" className="mt-1 text-xs text-[#6d7585] underline" onClick={onMark}>Marcar leída</button>
         ) : null}

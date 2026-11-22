@@ -1134,9 +1134,6 @@ function TeamAccessPanel({ creatorIds }: { creatorIds: string[] }) {
   return (
     <Panel title="Acceso del servidor">
       <p className="text-sm">Sesión autenticada: {access.displayName}. {access.role === "owner" ? "Dueña" : "Miembro"}.</p>
-      {access.devMode && (
-        <p className="mt-2 text-sm text-[#8a5a12]">Modo local de un solo operador, solo en localhost. No separa a varias personas.</p>
-      )}
       {access.role !== "owner" && (
         <p className="mt-2 text-sm text-muted">Los permisos y las creadoras los asigna la dueña. No se eligen en un desplegable.</p>
       )}

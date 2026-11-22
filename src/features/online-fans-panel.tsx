@@ -120,7 +120,7 @@ export function OnlineFansPanel({
               ) : (
                 <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#e8eefc] text-[11px] font-semibold text-[#2456c7]">{fanInitials(fan.fanName, fan.fanHandle)}</span>
               )}
-              {fan.online ? <span className="absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border border-white bg-[#1f9d55]" /> : null}
+              {fan.online ? <span className="absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border border-white bg-success" /> : null}
             </span>
             <span className="min-w-0 flex-1">
               <span className="block min-w-0 truncate text-sm font-medium">{fan.fanName ?? fan.fanHandle ?? "Sin datos"}</span>
