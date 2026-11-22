@@ -12,6 +12,7 @@ import type { ReadSql } from "../sync/store.ts";
 import { folderColumnView, vaultFolderLabel } from "../../../src/lib/vault-folder-label.ts";
 import { emptyVaultQuery } from "../sync/vault-filter.ts";
 import { queryVaultForActor } from "../sync/vault-query.ts";
+import { vaultFolderMark } from "../sync/vault-model.ts";
 import { clearVaultWalkCache, VAULT_WALK_CAP, walkVault } from "../sync/vault-walk.ts";
 import { VAULT_LISTS_FIXTURE, VAULT_MEDIA_ALL_FIXTURE, VAULT_MEDIA_FOLDER_FIXTURE } from "./fixtures/vault-of-shape.ts";
 
@@ -1186,6 +1187,194 @@ test("una subcarpeta pagina lists/{id}/media y no se queda en paginas=0", async 
     await db.close();
   }
 });
+
+test("un 500 en la carpeta se reintenta y la página queda contada", async () => {
+  clearSignRulesCache();
+  clearVaultWalkCache();
+  const db = new PGlite();
+  const lines: string[] = [];
+  const waits: number[] = [];
+  const previous = console.info;
+  console.info = (line?: unknown) => {
+    lines.push(String(line));
+  };
+  let hits = 0;
+  try {
+    await migrateVault(db);
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const href = String(input);
+      if (href.includes("dynamic-rules")) return Response.json(RULES);
+      if (isVaultListsIndex(href)) {
+        return Response.json({
+          list: [{ id: 88021, type: "custom", name: "Sub", photosCount: 4, videosCount: 2, hasMedia: true }],
+          hasMore: false,
+        });
+      }
+      const url = new URL(href);
+      if (url.pathname.endsWith("/vault/lists/88021/media")) {
+        hits += 1;
+        if (hits < 3) return new Response("no", { status: 500 });
+        return Response.json({ medias: [{ id: 7, type: "photo" }, { id: 8, type: "video" }], hasMore: false });
+      }
+      return new Response("no", { status: 404 });
+    }) as typeof fetch;
+    const walked = await walkVault({
+      creatorId: "3zk7kbr",
+      state: storedState(),
+      fetch: fetchImpl,
+      now: () => 1_700_000_000_000,
+      sql: asSql(db),
+      sleep: async (ms: number) => {
+        waits.push(ms);
+      },
+      listId: "88021",
+    });
+    assert.equal(walked.items.length, 2);
+    assert.equal(hits, 3);
+    assert.equal(waits.filter((ms) => ms >= 800).length >= 2, true);
+    const printed = lines.join("\n");
+    assert.match(printed, new RegExp(`list=${vaultFolderMark("88021")}`));
+    assert.match(printed, /status=500/);
+    assert.match(printed, /motivo=/);
+    assert.equal(printed.includes("paginas=0"), false);
+    assert.equal(printed.includes("88021"), false);
+  } finally {
+    console.info = previous;
+    clearSignRulesCache();
+    clearVaultWalkCache();
+    await db.close();
+  }
+});
+
+test("un 4xx de lists/id/media usa la variante de la web y se queda con los medios", async () => {
+  clearSignRulesCache();
+  clearVaultWalkCache();
+  const db = new PGlite();
+  const lines: string[] = [];
+  const seen: string[] = [];
+  const previous = console.info;
+  console.info = (line?: unknown) => {
+    lines.push(String(line));
+  };
+  const name = "Secreto Carpeta";
+  try {
+    await migrateVault(db);
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const href = String(input);
+      seen.push(href);
+      if (href.includes("dynamic-rules")) return Response.json(RULES);
+      if (isVaultListsIndex(href)) {
+        return Response.json({
+          list: [{ id: 88022, type: "custom", name, photosCount: 4, videosCount: 2, hasMedia: true }],
+          hasMore: false,
+        });
+      }
+      const url = new URL(href);
+      if (url.pathname.endsWith("/vault/lists/88022/media")) return new Response("no", { status: 404 });
+      if (url.pathname.endsWith("/vault/media") && url.searchParams.get("list") === "88022" && !url.searchParams.get("name")) {
+        return Response.json({ medias: [], hasMore: false });
+      }
+      if (url.pathname.endsWith("/vault/media") && url.searchParams.get("name") === name) {
+        return Response.json({ medias: [{ id: 11, type: "photo" }, { id: 12, type: "video" }], hasMore: false });
+      }
+      return new Response("no", { status: 404 });
+    }) as typeof fetch;
+    const walked = await walkVault({
+      creatorId: "3zk7kbr",
+      state: storedState(),
+      fetch: fetchImpl,
+      now: () => 1_700_000_000_000,
+      sql: asSql(db),
+      sleep: async () => undefined,
+      listId: "88022",
+    });
+    assert.deepEqual(walked.items.map((item) => item.id).sort(), ["11", "12"]);
+    assert.equal(seen.some((href) => href.includes("/vault/lists/88022/media")), true);
+    assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("list=88022") && href.includes("name=")), true);
+    const printed = lines.join("\n");
+    assert.equal(printed.includes(name), false);
+    assert.equal(printed.includes("88022"), false);
+    assert.match(printed, /status=404/);
+    assert.match(printed, /motivo=/);
+    assert.match(printed, new RegExp(`list=${vaultFolderMark("88022")}`));
+  } finally {
+    console.info = previous;
+    clearSignRulesCache();
+    clearVaultWalkCache();
+    await db.close();
+  }
+});
+
+test("si la primera página falla, cuenta la página y no marca la carpeta como vacía", async () => {
+  clearSignRulesCache();
+  clearVaultWalkCache();
+  const db = new PGlite();
+  const lines: string[] = [];
+  const previous = console.info;
+  console.info = (line?: unknown) => {
+    lines.push(String(line));
+  };
+  try {
+    await migrateVault(db);
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const href = String(input);
+      if (href.includes("dynamic-rules")) return Response.json(RULES);
+      if (isVaultListsIndex(href)) {
+        return Response.json({
+          list: [{ id: 88023, type: "custom", name: "Sub", photosCount: 4, videosCount: 2, hasMedia: true }],
+          hasMore: false,
+        });
+      }
+      if (new URL(href).pathname.endsWith("/vault/lists/88023/media")) return new Response("no", { status: 500 });
+      return new Response("no", { status: 404 });
+    }) as typeof fetch;
+    const walked = await walkVault({
+      creatorId: "3zk7kbr",
+      state: storedState(),
+      fetch: fetchImpl,
+      now: () => 1_700_000_000_000,
+      sql: asSql(db),
+      sleep: async () => undefined,
+      listId: "88023",
+    });
+    assert.equal(walked.items.length, 0);
+    assert.equal(walked.reason, "No se ha podido leer la carpeta");
+    const printed = lines.join("\n");
+    assert.match(printed, /paginas=1/);
+    assert.equal(printed.includes("paginas=0"), false);
+    assert.match(printed, /status=500/);
+    assert.match(printed, /motivo=/);
+    assert.match(printed, /error=sin-medios fotos=4 videos=2/);
+    assert.equal(printed.includes("vacío"), false);
+    assert.equal(printed.includes("88023"), false);
+    const view = await queryVaultForActor(asSql(db), { userId: "dueña", role: "owner", perms: ["vault"] }, {
+      creatorId: "3zk7kbr",
+      remember: false,
+      query: { ...emptyVaultQuery(), folderId: "88023", scope: "carpeta" },
+    });
+    assert.equal(view.payload.notice, "No se ha podido leer la carpeta");
+    assert.equal(view.payload.lists.find((list) => list.id === "88023")?.photos, 4);
+    assert.equal(view.payload.lists.find((list) => list.id === "88023")?.videos, 2);
+    assert.notEqual(vaultFolderLabel({
+      photos: 4,
+      videos: 2,
+      gifs: 0,
+      audios: 0,
+      hasMedia: true,
+    }, { photos: 0, videos: 0, gifs: 0 }), "vacío");
+  } finally {
+    console.info = previous;
+    clearSignRulesCache();
+    clearVaultWalkCache();
+    await db.close();
+  }
+});
+
+async function migrateVault(db: PGlite): Promise<void> {
+  for (const file of ["0037_vault_mirror.sql", "0038_vault_fan_filter.sql", "0040_vault_full_tags.sql", "0042_vault_paid_with.sql", "0044_vault_thumb_page.sql", "0050_vault_list_counts.sql", "0051_vault_list_media.sql"]) {
+    await db.exec(await readFile(path.join(root, "migrations", file), "utf8"));
+  }
+}
 
 function creatorLists(
   all: [number, number, number, number],

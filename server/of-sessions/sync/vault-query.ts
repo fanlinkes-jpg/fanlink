@@ -164,12 +164,19 @@ export async function queryVaultForActor(sql: ReadSql, actor: VaultActor, body: 
     payload: {
       chatterId,
       restored,
-      notice: cards.length === 0 ? "Sin datos" : null,
+      notice: cards.length === 0 && folderCountsUnread(query, lists) ? "No se ha podido leer la carpeta" : cards.length === 0 ? "Sin datos" : null,
       lists,
       items: cards,
       query,
     },
   };
+}
+
+function folderCountsUnread(query: { scope: string; folderId: string | null }, lists: readonly { id: string; photos: number | null; videos: number | null }[]): boolean {
+  if (query.scope !== "carpeta" || !query.folderId) return false;
+  const open = lists.find((folder) => folder.id === query.folderId);
+  if (!open) return false;
+  return (open.photos ?? 0) > 0 || (open.videos ?? 0) > 0;
 }
 
 export function vaultOfferLabel(cents: number | null): string | null {

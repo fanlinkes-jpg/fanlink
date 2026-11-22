@@ -1,5 +1,5 @@
 import type { StorageStateFile } from "../sessions/storage-state.ts";
-import { fetchSignedVault, VAULT_MEDIA_LIMIT } from "./of-chat-api.ts";
+import { fetchSignedVault, vaultPageReason, VAULT_MEDIA_LIMIT, type SignedVaultRead } from "./of-chat-api.ts";
 import type { ReadSql } from "./store.ts";
 import { folderMediaCap, mediaStateHits, mergeVaultList, parseVaultBundle, vaultAllList, vaultFolderMark, vaultKeyNames, vaultMediaMatching, vaultPayloadKind, type VaultFile, type VaultList } from "./vault-model.ts";
 import { finishListMembers, listMemberCount, mirroredFolderItems, persistVaultRead, storedFolderCounts } from "./vault-store.ts";
@@ -150,7 +150,7 @@ async function walkOne(
   let sessionRejected = false;
   let signatureRejected = false;
   let retryAfterMs = 0;
-  const counts = listId === "all" ? null : await storedFolderCounts(input.sql, input.creatorId, listId);
+  let counts = listId === "all" ? null : await storedFolderCounts(input.sql, input.creatorId, listId);
   const cap = folderMediaCap(counts);
   let suspicious = false;
   while (pages < VAULT_WALK_CAP) {
@@ -163,20 +163,41 @@ async function walkOne(
       break;
     }
     if (budget.left > 0) budget.left -= 1;
-    const read = await fetchSignedVault(input.state, vaultDeps(input), listId, offset, {
-      includeLists: includeLists && pages === 0,
-      includeMedia: true,
-    });
+    let read = await readVaultPage(input, listId, offset, includeLists && pages === 0, listName);
+    let tries = 0;
+    while (pages === 0 && shouldRetryFolder(read) && tries < 2) {
+      tries += 1;
+      const wait = VAULT_PAGE_GAP_MS * tries;
+      console.info(`[fanlink:vault] reintento lista=${vaultFolderMark(listId)} intento=${tries} status=${read.status ?? "sin"}`);
+      await pauseWalk(input, wait);
+      read = await readVaultPage(input, listId, offset, includeLists && pages === 0, listName);
+    }
     status = read.status;
     reason = read.reason;
     sessionRejected = read.sessionRejected;
     signatureRejected = read.signatureRejected;
     retryAfterMs = read.retryAfterMs;
-    if (read.sessionRejected || read.signatureRejected || read.retryAfterMs > 0 || (read.payloads.length === 0 && read.reason)) {
-      if (items.length === 0) break;
+    const seenList = listsOf(read.payloads).find((folder) => folder.id === listId);
+    if (seenList && (counts == null || countsAreEmpty(counts))) {
+      counts = {
+        photos: seenList.photos ?? null,
+        videos: seenList.videos ?? null,
+        gifs: seenList.gifs ?? null,
+        audios: seenList.audios ?? null,
+      };
+    }
+    if (read.sessionRejected || read.signatureRejected || read.retryAfterMs > 0 || folderReadFailed(read)) {
+      if (items.length === 0) {
+        const lists = read.payloads.filter((payload) => vaultPayloadKind(payload) === "lists");
+        if (lists.length > 0) await persistVaultRead(input.sql, input.creatorId, lists, { listId: "all", offset: 0 });
+        pages += 1;
+        console.info(`[fanlink:vault] carpeta=${vaultFolderMark(listId)} pagina offset=${offset} status=${read.status ?? "sin"} motivo=${vaultPageReason(read.reason)} n=0`);
+        break;
+      }
       hasMore = true;
       nextOffset = offset;
-      console.info(`[fanlink:vault] corte lista=${vaultFolderMark(listId)} offset=${offset} status=${read.status ?? "sin"}`);
+      pages += 1;
+      console.info(`[fanlink:vault] corte lista=${vaultFolderMark(listId)} offset=${offset} status=${read.status ?? "sin"} motivo=${vaultPageReason(read.reason)}`);
       break;
     }
     const peeked = mediaBody(read.payloads);
@@ -265,6 +286,11 @@ async function walkOne(
     await finishListMembers(input.sql, input.creatorId, listId, items.map((item) => item.id));
   }
   const needsFullMembers = singlePage && listId !== "all" && start === 0 && hasMore && !suspicious && items.length > 0 && !sessionRejected && !signatureRejected && retryAfterMs === 0;
+  const counted = counts != null && ((counts.photos ?? 0) > 0 || (counts.videos ?? 0) > 0);
+  if (listId !== "all" && items.length === 0 && counted) {
+    console.info(`[fanlink:vault] carpeta=${vaultFolderMark(listId)} error=sin-medios fotos=${counts?.photos ?? "sin"} videos=${counts?.videos ?? "sin"} status=${status ?? "sin"}`);
+    reason = "No se ha podido leer la carpeta";
+  }
   console.info(`[fanlink:vault] fin lista=${vaultFolderMark(listId)} paginas=${pages} medios=${items.length} hasMore=${hasMore ? "si" : "no"}`);
   console.info(`[fanlink:vault] carpeta=${vaultFolderMark(listId)} n=${items.length}`);
   return {
@@ -356,6 +382,47 @@ async function walkListPages(input: WalkInput, payloads: readonly unknown[], bud
 
 function vaultDeps(input: WalkInput): { fetch: typeof fetch; now: () => number; accountId?: string; sleep?: (ms: number) => Promise<void> } {
   return { fetch: input.fetch, now: input.now, accountId: input.accountId, sleep: input.sleep };
+}
+
+async function readVaultPage(input: WalkInput, listId: string, offset: number, includeLists: boolean, listName: string | null): Promise<SignedVaultRead> {
+  try {
+    return await fetchSignedVault(input.state, vaultDeps(input), listId, offset, {
+      includeLists,
+      includeMedia: true,
+      listName,
+    });
+  } catch {
+    return {
+      payloads: [],
+      status: null,
+      reason: "sin respuesta",
+      sessionRejected: false,
+      signatureRejected: false,
+      retryAfterMs: 0,
+      queryParam: null,
+    };
+  }
+}
+
+function shouldRetryFolder(read: SignedVaultRead): boolean {
+  if (read.sessionRejected || read.signatureRejected || read.retryAfterMs > 0) return false;
+  if (read.status != null && read.status >= 500) return true;
+  if (read.status == null && read.reason) return true;
+  const clientError = read.status != null && read.status >= 400 && read.status < 500;
+  return read.payloads.length === 0 && Boolean(read.reason) && !clientError;
+}
+
+function folderReadFailed(read: SignedVaultRead): boolean {
+  if (read.status != null && read.status >= 500) return true;
+  if (read.status == null && read.reason) return true;
+  if (read.status != null && read.status >= 400 && read.status < 500 && read.reason) return true;
+  return read.payloads.length === 0 && Boolean(read.reason);
+}
+
+async function pauseWalk(input: WalkInput, ms: number): Promise<void> {
+  const wait = Math.max(VAULT_PAGE_GAP_MS, ms);
+  if (input.sleep) await input.sleep(wait);
+  else await new Promise((resolve) => setTimeout(resolve, wait));
 }
 
 function publicWalk(walk: PageWalk): VaultWalk {

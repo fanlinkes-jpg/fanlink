@@ -6,7 +6,7 @@ import { writeEncryptedSession } from "../crypto.ts";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
 import { AccountStore } from "../store/account-store.ts";
 import { vaultListMediaPath, vaultMediaPath, vaultPageLog } from "../sync/of-chat-api.ts";
-import { assertProbeFileSafe, executeSubfolderCheck, folderProbePaths, folderProbeVerdict, pickSmallVideoFolder, probeExpectedCount, probePageContinues, readProbeFolders, sanitizeVaultShape, vaultListLines } from "../sync/vault-probe.ts";
+import { assertProbeFileSafe, executeSubfolderCheck, folderProbePaths, folderProbeVerdict, pickSmallVideoFolder, probeExpectedCount, probePageContinues, readProbeFolder, readProbeFolders, sanitizeVaultShape, vaultListLines } from "../sync/vault-probe.ts";
 import { removeDir, tempDataDir, TEST_SESSION_KEY } from "./helpers.ts";
 import { VAULT_LISTS_FIXTURE } from "./fixtures/vault-of-shape.ts";
 import { mediaAcceptHeader, vaultPlayerLog } from "../sync/media-bytes.ts";
@@ -34,7 +34,7 @@ test("la página de medios usa list y limit 40, sin type ni field", () => {
   assert.match(folder, /sort=desc/);
   assert.equal(folder.includes("name="), false);
   const line = vaultPageLog({ route: all, status: 200, count: 40, hasMore: "si", offset: 0, listId: "all" });
-  assert.match(line, /ruta=\/api2\/v2\/vault\/media status=200 n=40 hasMore=si offset=0 list=todos/);
+  assert.match(line, /ruta=\/api2\/v2\/vault\/media status=200 motivo=sin n=40 hasMore=si offset=0 list=todos/);
   const mark = vaultFolderMark("28619188");
   assert.equal(mark, vaultFolderMark("28619188"));
   assert.notEqual(mark, vaultFolderMark("29012649"));
@@ -201,6 +201,81 @@ test("executeSubfolderCheck solo hace GET, se corta en 40 y no imprime secretos"
   assert.equal(printed.includes("88002"), false);
   assert.equal(printed.includes("sign"), false);
   assert.equal(calls.some((call) => call.sign !== "" && printed.includes(call.sign)), false);
+});
+
+test("una carpeta con medios entra en el sondeo y --folder recorta por hash", async () => {
+  const dataDir = await tempDataDir();
+  const name = "No imprimir";
+  const lines: string[] = [];
+  const calls: string[] = [];
+  try {
+    await mkdir(path.join(dataDir, "sessions"));
+    const store = new AccountStore(path.join(dataDir, "accounts.json"));
+    await store.init();
+    const account = await store.create("Prueba", "3zk7kbr");
+    await writeEncryptedSession(path.join(dataDir, "sessions", `${account.id}.json`), probeState("sess-oculta"), TEST_SESSION_KEY);
+    const fetchImpl = (async (input: unknown, init?: RequestInit) => {
+      const href = String(input);
+      calls.push(`${init?.method ?? "GET"} ${href}`);
+      if (href.includes("dynamic-rules")) {
+        return Response.json({
+          static_param: "param",
+          format: "1:{}:{:x}:2",
+          checksum_indexes: [0, 1],
+          checksum_constants: [5, 5],
+          checksum_constant: 10,
+          app_token: "token",
+          remove_headers: ["user-id"],
+        });
+      }
+      const url = new URL(href);
+      if (url.pathname.endsWith("/vault/lists")) {
+        return Response.json({
+          list: [
+            { id: 88002, type: "custom", name },
+            { id: 99001, type: "posts", name: "Publicaciones" },
+            { id: 77001, type: "messages", name: name, photosCount: 4, videosCount: 0 },
+          ],
+          hasMore: false,
+        });
+      }
+      if (url.pathname.includes("/media")) return Response.json({ medias: [{ id: 1, type: "photo" }], hasMore: false });
+      return new Response("no", { status: 404 });
+    }) as typeof fetch;
+    const env = { FANLINK_SESSION_KEY: TEST_SESSION_KEY.toString("base64"), FANLINK_DATA_DIR: dataDir };
+    assert.equal(readProbeFolder(["--folder", vaultFolderMark("88002")]), vaultFolderMark("88002"));
+    assert.throws(() => readProbeFolder(["--folder"]), /Falta --folder/);
+    await executeSubfolderCheck({
+      account: "3zk7kbr",
+      folder: vaultFolderMark("88002"),
+      env,
+      now: () => 1_700_000_000_000,
+      pause: async () => undefined,
+      stdout: (row) => lines.push(row),
+      fetch: fetchImpl,
+    });
+    assert.equal(calls.some((call) => call.includes("/vault/lists/88002/media")), true);
+    assert.equal(calls.some((call) => call.includes("/vault/lists/77001/media")), false);
+    assert.equal(calls.some((call) => call.includes("/vault/lists/99001/media")), false);
+    calls.length = 0;
+    await executeSubfolderCheck({
+      account: "3zk7kbr",
+      env,
+      now: () => 1_700_000_000_000,
+      pause: async () => undefined,
+      stdout: (row) => lines.push(row),
+      fetch: fetchImpl,
+    });
+    assert.equal(calls.some((call) => call.includes("/vault/lists/77001/media")), true);
+    assert.equal(calls.some((call) => call.includes("/vault/lists/99001/media")), false);
+    const printed = lines.join("\n");
+    assert.equal(printed.includes(name), false);
+    assert.equal(printed.includes("88002"), false);
+    assert.equal(printed.includes("77001"), false);
+    assert.match(printed, /motivo=/);
+  } finally {
+    await removeDir(dataDir);
+  }
 });
 
 function probeState(secret: string): StorageStateFile {

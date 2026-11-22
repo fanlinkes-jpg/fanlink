@@ -802,6 +802,7 @@ export function RealChatsPage() {
       const step = result.nextOffset > offset ? result.nextOffset : offset + 40;
       vaultPage.current = { listId, offset: result.hasMore ? step : -1, busy: false };
       if (offset === 0 && result.items.length === 0 && listId === "all") setError(result.reason ?? "La bóveda de OnlyFans ha llegado vacía.");
+      if (offset === 0 && result.items.length === 0 && listId !== "all" && result.reason === "No se ha podido leer la carpeta") setError(result.reason);
     } catch (err) {
       if (generation !== vaultGen.current) return;
       vaultPage.current = { listId, offset, busy: false };

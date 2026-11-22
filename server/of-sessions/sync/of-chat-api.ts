@@ -253,6 +253,8 @@ export type VaultFetchOptions = {
   includeMedia?: boolean;
   /** Página de vault/lists. El límite es el de la web: 50. */
   listOffset?: number;
+  /** Nombre de la carpeta. Solo entra en la URL de reintento; no se escribe en el log. */
+  listName?: string | null;
 }
 
 /** La web pide las carpetas de 50 en 50 (`view=main`) y sigue con offset mientras `hasMore`. */
@@ -270,7 +272,7 @@ export function vaultListsPath(offset: number): string {
 }
 
 /** La misma query que la bóveda web: `field=recent`, `sort=desc` y `list`. */
-export function vaultMediaPath(listId: string, offset: number): string {
+export function vaultMediaPath(listId: string, offset: number, name?: string | null): string {
   const params = new URLSearchParams({
     limit: String(VAULT_MEDIA_LIMIT),
     offset: String(offset),
@@ -278,6 +280,8 @@ export function vaultMediaPath(listId: string, offset: number): string {
     sort: "desc",
     list: listId.trim() || "all",
   });
+  const label = name?.trim();
+  if (label) params.set("name", label);
   return `/api2/v2/vault/media?${params.toString()}`;
 }
 
@@ -308,10 +312,32 @@ export function vaultPageLog(input: {
   hasMore: string;
   offset: number;
   listId: string;
+  reason?: string | null;
 }): string {
-  const route = input.route.split("?")[0] || "/api2/v2/vault/media";
+  const route = publicVaultRoute(input.route, input.listId);
   const listId = input.listId === "listas" ? "listas" : vaultFolderMark(input.listId);
-  return `[fanlink:vault] pagina ruta=${route} status=${input.status ?? "sin"} n=${input.count} hasMore=${input.hasMore} offset=${input.offset} list=${listId}`;
+  return `[fanlink:vault] pagina ruta=${route} status=${input.status ?? "sin"} motivo=${vaultPageReason(input.reason)} n=${input.count} hasMore=${input.hasMore} offset=${input.offset} list=${listId}`;
+}
+
+/** Motivo corto. Sin URL, cookie, firma, id ni nombre de carpeta. */
+export function vaultPageReason(reason: string | null | undefined): string {
+  if (!reason) return "sin";
+  const clean = reason
+    .replace(/https?:\/\/\S+/gi, "")
+    .replace(/cookie|sign|sess|x-bc|token|user-agent|name=/gi, "")
+    .replace(/[^a-zA-Z0-9 áéíóúñÁÉÍÓÚÑ.-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+  return clean || "sin";
+}
+
+function publicVaultRoute(route: string, listId: string): string {
+  const path = route.split("?")[0] || "/api2/v2/vault/media";
+  if (listId === "all" || listId === "listas") return path;
+  if (path.includes("/vault/lists/") && path.endsWith("/media")) return "/api2/v2/vault/lists/{carpeta}/media";
+  if (path.startsWith("/api2/v2/vault/media")) return "/api2/v2/vault/media";
+  return "/api2/v2/vault/media";
 }
 
 /**
@@ -351,7 +377,7 @@ export async function fetchSignedVault(state: StorageStateFile, deps: {
     const path = vaultListsPath(listSkip);
     const read = await readVaultPath(deps, () => getJson(deps.fetch, path, signedHeaders(rules, path, auth, deps.now()), deps.now()));
     status = read.status;
-    console.info(vaultPageLog({ route: path, status: read.status, count: listCountOf(read.body), hasMore: hasMoreLabelOf(read.body), offset: listSkip, listId: "listas" }));
+    console.info(vaultPageLog({ route: path, status: read.status, count: listCountOf(read.body), hasMore: hasMoreLabelOf(read.body), offset: listSkip, listId: "listas", reason: read.reason }));
     const stopped = stopVaultRead(payloads, read);
     if (stopped) return stopped;
     if (read.ok) payloads.push(read.body);
@@ -361,10 +387,23 @@ export async function fetchSignedVault(state: StorageStateFile, deps: {
   if (wantMedia) {
     const primary = list === "all" ? vaultMediaPath(list, skip) : vaultListMediaPath(list, skip);
     queryParam = "list";
-    const read = await readVaultPath(deps, () => getJson(deps.fetch, primary, signedHeaders(rules, primary, auth, deps.now()), deps.now()));
-    const mediaCount = mediaCountOf(read.body);
-    if (list === "all") {
-      console.info(vaultPageLog({ route: primary, status: read.status, count: mediaCount, hasMore: hasMoreLabelOf(read.body), offset: skip, listId: "all" }));
+    let read = await readVaultPath(deps, () => getJson(deps.fetch, primary, signedHeaders(rules, primary, auth, deps.now()), deps.now()));
+    logVaultPage(list, primary, read, skip);
+    if (list !== "all" && clientFolderMiss(read) && mediaCountOf(read.body) === 0) {
+      const folderName = options?.listName?.trim() || nameFromLists(payloads, list);
+      const webPath = vaultMediaPath(list, skip);
+      if (deps.sleep) await deps.sleep(800);
+      const web = await readVaultPath(deps, () => getJson(deps.fetch, webPath, signedHeaders(rules, webPath, auth, deps.now()), deps.now()));
+      logVaultPage(list, webPath, web, skip);
+      if (mediaCountOf(web.body) > 0) {
+        read = web;
+      } else if (folderName) {
+        const namedPath = vaultMediaPath(list, skip, folderName);
+        if (deps.sleep) await deps.sleep(800);
+        const named = await readVaultPath(deps, () => getJson(deps.fetch, namedPath, signedHeaders(rules, namedPath, auth, deps.now()), deps.now()));
+        logVaultPage(list, namedPath, named, skip);
+        if (mediaCountOf(named.body) > 0) read = named;
+      }
     }
     status = read.status;
     const stopped = stopVaultRead(payloads, read, queryParam);
@@ -415,8 +454,47 @@ function listCountOf(body: unknown): number {
 
 function mediaCountOf(body: unknown): number {
   if (!body || typeof body !== "object") return 0;
-  const list = (body as Record<string, unknown>).list;
-  return Array.isArray(list) ? list.length : 0;
+  const raw = body as Record<string, unknown>;
+  for (const key of ["medias", "list", "media", "items"]) {
+    const value = raw[key];
+    if (Array.isArray(value) && value.length > 0) return value.length;
+  }
+  for (const key of ["medias", "list", "media", "items"]) {
+    if (Array.isArray(raw[key])) return 0;
+  }
+  return 0;
+}
+
+function clientFolderMiss(read: JsonPage): boolean {
+  return read.status != null && read.status >= 400 && read.status < 500 && read.status !== 401 && read.status !== 429;
+}
+
+function logVaultPage(list: string, route: string, read: JsonPage, offset: number): void {
+  console.info(vaultPageLog({
+    route,
+    status: read.status,
+    count: mediaCountOf(read.body),
+    hasMore: hasMoreLabelOf(read.body),
+    offset,
+    listId: list,
+    reason: read.reason,
+  }));
+}
+
+function nameFromLists(payloads: readonly unknown[], listId: string): string | null {
+  for (const payload of payloads) {
+    if (!payload || typeof payload !== "object") continue;
+    const raw = payload as Record<string, unknown>;
+    const rows = [raw.list, raw.lists].find((value) => Array.isArray(value));
+    if (!Array.isArray(rows)) continue;
+    for (const row of rows) {
+      if (!row || typeof row !== "object") continue;
+      const item = row as Record<string, unknown>;
+      if (String(item.id) !== listId) continue;
+      if (typeof item.name === "string" && item.name.trim()) return item.name.trim();
+    }
+  }
+  return null;
 }
 
 function hasMoreLabelOf(body: unknown): string {

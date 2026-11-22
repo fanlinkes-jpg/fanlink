@@ -80,6 +80,11 @@ const EMPTY_QUERY = {
   themes: [] as string[],
 };
 
+function emptyVaultCopy(notice: string | null): string {
+  if (notice && notice !== "Sin datos") return notice;
+  return "Sin datos";
+}
+
 export function VaultBrowser({
   creatorId,
   fanKey,
@@ -262,7 +267,7 @@ export function VaultBrowser({
                 if (el.scrollTop + el.clientHeight >= el.scrollHeight - 160) onMore?.();
               }}
             >
-              {grid.length === 0 ? <p className="col-span-4 text-sm text-[#8a96a3]">{reading ? "Cargando…" : "Sin datos"}</p> : null}
+              {grid.length === 0 ? <p className="col-span-4 text-sm text-[#8a96a3]">{reading ? "Cargando…" : emptyVaultCopy(notice)}</p> : null}
               {grid.map((item) => {
                 const selected = picked.includes(item.id);
                 const sentLabel = vaultSentPill(item.sent ?? null, item.sentCount ?? null);
@@ -429,7 +434,7 @@ export function VaultBrowser({
         </div>
         {notice ? <p className="text-xs text-[#6d7585]">{notice}</p> : null}
         <div className="grid max-h-64 grid-cols-2 gap-2 overflow-y-auto md:grid-cols-3">
-          {items.length === 0 ? <p className="text-xs text-[#6d7585]">Sin datos</p> : null}
+          {items.length === 0 ? <p className="text-xs text-[#6d7585]">{emptyVaultCopy(notice)}</p> : null}
           {items.map((item) => (
             <article key={item.id} className="rounded border border-[#e6e8ee] p-2 text-[11px]">
               {item.kind === "video" ? (

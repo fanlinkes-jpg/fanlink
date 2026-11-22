@@ -29,6 +29,14 @@ export function readProbeSubfolders(argv: readonly string[]): boolean {
   return argv.includes("--subfolders");
 }
 
+export function readProbeFolder(argv: readonly string[]): string | null {
+  const index = argv.indexOf("--folder");
+  const inline = argv.find((item) => item.startsWith("--folder="));
+  const value = index >= 0 ? argv[index + 1] : inline?.slice("--folder=".length);
+  if ((index >= 0 || inline) && (!value || value.startsWith("-"))) throw new Error("Falta --folder.");
+  return value?.trim() || null;
+}
+
 export function readProbeAccount(argv: readonly string[]): string {
   const index = argv.indexOf("--account");
   const inline = argv.find((item) => item.startsWith("--account="));
@@ -457,6 +465,8 @@ export async function executeSubfolderCheck(input: {
   now: () => number;
   stdout: (line: string) => void;
   pause?: (ms: number) => Promise<void>;
+  /** Hash de 6 caracteres o id. Sin esto recorre las carpetas que entran. */
+  folder?: string | null;
 }): Promise<void> {
   const pause = input.pause ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   const config = loadConfig(input.env);
@@ -467,7 +477,8 @@ export async function executeSubfolderCheck(input: {
   const rules = await loadSignRules(input.fetch, input.now());
   const reads: Array<{ name: string; path: string; status: number | null; body: unknown }> = [];
   const bodies = await readListPages(input, rules, auth, reads);
-  const folders = bodies.flatMap(listRows).filter(isCheckedFolder);
+  const wanted = input.folder?.trim() || null;
+  const folders = bodies.flatMap(listRows).filter(isCheckedFolder).filter((row) => folderSelected(row, wanted));
   input.stdout(`[fanlink:vault] subcarpetas=${folders.length}`);
   for (const folder of folders) {
     const id = String(folder.id);
@@ -477,8 +488,7 @@ export async function executeSubfolderCheck(input: {
     let total = 0;
     let status: number | null = null;
     for (let page = 0; page < 40; page += 1) {
-      const route = vaultListMediaPath(id, offset);
-      const read = await probeGet(input.fetch, route, signedHeaders(rules, route, auth, input.now()));
+      const read = await readFolderProbe(input.fetch, rules, auth, input.now, id, offset, text(folder.name), pause, input.stdout);
       status = read.status;
       const count = probeItems(read.body).length;
       pages += 1;
@@ -492,24 +502,91 @@ export async function executeSubfolderCheck(input: {
   }
 }
 
+function folderSelected(row: Record<string, unknown>, wanted: string | null): boolean {
+  if (!wanted) return true;
+  const id = String(row.id);
+  return id === wanted || vaultFolderMark(id) === wanted;
+}
+
+async function readFolderProbe(
+  fetchImpl: typeof fetch,
+  rules: Parameters<typeof signedHeaders>[0],
+  auth: Parameters<typeof signedHeaders>[2],
+  now: () => number,
+  id: string,
+  offset: number,
+  name: string,
+  pause: (ms: number) => Promise<void>,
+  stdout: (line: string) => void,
+): Promise<{ status: number | null; body: unknown }> {
+  let read = await probeOnce(fetchImpl, rules, auth, now, vaultListMediaPath(id, offset));
+  stdout(probePageLine(id, offset, read.status));
+  let tries = 0;
+  while ((read.status == null || read.status >= 500) && tries < 2) {
+    tries += 1;
+    await pause(Math.max(800, 800 * tries));
+    read = await probeOnce(fetchImpl, rules, auth, now, vaultListMediaPath(id, offset));
+    stdout(probePageLine(id, offset, read.status));
+  }
+  if (read.status != null && read.status >= 400 && read.status < 500 && read.status !== 401 && read.status !== 429 && probeItems(read.body).length === 0) {
+    await pause(800);
+    const web = await probeOnce(fetchImpl, rules, auth, now, vaultMediaPath(id, offset));
+    stdout(probePageLine(id, offset, web.status));
+    if (probeItems(web.body).length > 0) return web;
+    if (name.trim()) {
+      await pause(800);
+      const named = await probeOnce(fetchImpl, rules, auth, now, vaultMediaPath(id, offset, name));
+      stdout(probePageLine(id, offset, named.status));
+      if (probeItems(named.body).length > 0) return named;
+    }
+  }
+  return read;
+}
+
+async function probeOnce(
+  fetchImpl: typeof fetch,
+  rules: Parameters<typeof signedHeaders>[0],
+  auth: Parameters<typeof signedHeaders>[2],
+  now: () => number,
+  route: string,
+): Promise<{ status: number | null; body: unknown }> {
+  return probeGet(fetchImpl, route, signedHeaders(rules, route, auth, now()));
+}
+
+function probePageLine(id: string, offset: number, status: number | null): string {
+  const motivo = status == null ? "red" : status >= 500 ? "servidor" : status >= 400 ? "cliente" : "sin";
+  return `[fanlink:vault] subcarpeta=${vaultFolderMark(id)} pagina offset=${offset} status=${status ?? "sin"} motivo=${motivo}`;
+}
+
 /**
- * Solo custom y las que declaran padre. posts, stories, messages y streams
- * no son subcarpetas de la bóveda: pedirlas sumaría GET firmados que el panel
- * ya cubre con Toda la bóveda. Ver LEEME, «Licencia Widevine y carpetas».
+ * Custom, las que declaran padre, y cualquier tipo con fotos, vídeos, GIF o audios.
+ * Una carpeta de sistema sin medios no se pide. `--folder` recorta a una.
  */
 function isCheckedFolder(row: Record<string, unknown>): boolean {
   const id = row.id;
   if (typeof id !== "number" && typeof id !== "string") return false;
   const type = text(row.type);
-  return type === "custom" || row.parentId != null || row.parent_id != null || row.parentListId != null;
+  if (type === "custom" || row.parentId != null || row.parent_id != null || row.parentListId != null) return true;
+  return folderMediaTotal(row) > 0;
+}
+
+function folderMediaTotal(row: Record<string, unknown>): number {
+  let sum = 0;
+  for (const key of ["photosCount", "photos", "videosCount", "videos", "gifsCount", "gifs", "audiosCount", "audios"]) {
+    const value = row[key];
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) sum += value;
+  }
+  return sum;
 }
 
 const isMain = process.argv[1] != null && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) {
   const account = readProbeAccount(process.argv);
+  const folder = readProbeFolder(process.argv);
   const run = readProbeSubfolders(process.argv)
     ? executeSubfolderCheck({
       account,
+      folder,
       env: process.env,
       fetch: globalThis.fetch,
       now: () => Date.now(),
