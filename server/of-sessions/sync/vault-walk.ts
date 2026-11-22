@@ -3,6 +3,7 @@ import { VAULT_FOLDER_READ_ERROR } from "../../../src/lib/vault-folder-label.ts"
 import { fetchSignedVault, vaultPageReason, VAULT_MEDIA_LIMIT, type SignedVaultRead } from "./of-chat-api.ts";
 import type { ReadSql } from "./store.ts";
 import { folderMediaCap, mediaStateHits, mergeVaultList, parseVaultBundle, vaultAllList, vaultFolderMark, vaultKeyNames, vaultMediaMatching, vaultPayloadKind, type VaultFile, type VaultList } from "./vault-model.ts";
+import { clearVaultPace, listMediaDown, noteListMediaDown, pauseVaultRate, recordFolderRead, VAULT_FOLDER_BATCH, VAULT_FOLDER_GAP_MS, withFolderRead } from "./vault-pace.ts";
 import { finishListMembers, listMemberCount, mirroredFolderItems, persistVaultRead, storedFolderCounts } from "./vault-store.ts";
 
 /** Pausa entre páginas. Más lenta que el chat: la bóveda pesa. */
@@ -46,6 +47,8 @@ type WalkInput = {
   accountId?: string;
   /** Tope de páginas de este recorrido. Las pruebas lo bajan. */
   budget?: number;
+  /** El arranque reparte las carpetas con hueco, en vez de leerlas todas seguidas. */
+  background?: boolean;
 };
 
 const cache = new Map<string, CacheMark>();
@@ -54,6 +57,7 @@ const inflight = new Map<string, Promise<VaultWalk>>();
 export function clearVaultWalkCache(): void {
   cache.clear();
   inflight.clear();
+  clearVaultPace();
 }
 
 export async function walkVault(input: WalkInput & { listId?: string; offset?: number; singlePage?: boolean }): Promise<VaultWalk> {
@@ -98,27 +102,12 @@ async function runWalk(input: WalkInput, listId: string, offset: number, singleP
   const extraLists = await walkListPages(input, payloads, budget);
   payloads = payloads.concat(extraLists);
   if (main.items.length > 0 || listsOf(payloads).length > 0) {
-    for (const folder of listsOf(payloads)) {
-      const counted = (folder.photos ?? 0) + (folder.videos ?? 0) + (folder.gifs ?? 0) + (folder.audios ?? 0) > 0;
-      if (budget.left <= 0 && !counted) {
-        console.info(`[fanlink:vault] corte presupuesto listas=${listsOf(payloads).length}`);
-        main.hasMore = true;
-        break;
-      }
-      const cachedFolder = fresh(input.creatorId, folder.id, input.now());
-      if (cachedFolder && cachedFolder.items.length > 0) {
-        console.info(`[fanlink:vault] cache lista=${vaultFolderMark(folder.id)} medios=guardada`);
-        continue;
-      }
-      logList(folder);
-      if (folder.hasMedia === false && folder.type !== "custom") continue;
-      const child = await walkOne(input, folder.id, 0, false, budget, true, folder.name);
-      if (child.hasMore) main.hasMore = true;
-      if (child.sessionRejected || child.signatureRejected || child.retryAfterMs > 0) {
-        main.hasMore = true;
-        break;
-      }
+    const children = walkFolders(input, listsOf(payloads), budget, main);
+    if (input.background) {
+      main.membersSettled = children;
+      return main;
     }
+    await children;
   }
   if (!main.hasMore && main.retryAfterMs === 0 && !main.sessionRejected && !main.signatureRejected) {
     remember(input.creatorId, listId, input.now(), main.items, main.thumbItems);
@@ -128,7 +117,63 @@ async function runWalk(input: WalkInput, listId: string, offset: number, singleP
 
 type PageWalk = VaultWalk & { payloads: unknown[]; needsFullMembers: boolean };
 
+async function walkFolders(input: WalkInput, folders: readonly VaultList[], budget: { left: number }, main: PageWalk): Promise<void> {
+  const pace = input.accountId || input.creatorId;
+  let seen = 0;
+  for (const folder of folders) {
+    const counted = (folder.photos ?? 0) + (folder.videos ?? 0) + (folder.gifs ?? 0) + (folder.audios ?? 0) > 0;
+    if (budget.left <= 0 && !counted) {
+      console.info(`[fanlink:vault] corte presupuesto listas=${folders.length}`);
+      main.hasMore = true;
+      break;
+    }
+    if (input.background && seen >= VAULT_FOLDER_BATCH) {
+      main.hasMore = true;
+      console.info(`[fanlink:vault] corte tanda listas=${seen}`);
+      break;
+    }
+    if (!input.background) {
+      const cachedFolder = fresh(input.creatorId, folder.id, input.now());
+      if (cachedFolder && cachedFolder.items.length > 0) {
+        console.info(`[fanlink:vault] cache lista=${vaultFolderMark(folder.id)} medios=guardada`);
+        continue;
+      }
+    }
+    logList(folder);
+    if (folder.hasMedia === false && folder.type !== "custom") continue;
+    if (input.background && seen > 0 && input.sleep) await input.sleep(VAULT_FOLDER_GAP_MS);
+    const child = await walkOne(input, folder.id, 0, false, budget, true, folder.name);
+    seen += 1;
+    if (child.hasMore) main.hasMore = true;
+    if (child.sessionRejected || child.signatureRejected) {
+      main.hasMore = true;
+      break;
+    }
+    if (child.retryAfterMs > 0) {
+      main.hasMore = true;
+      console.info(`[fanlink:vault] corte ritmo lista=${vaultFolderMark(folder.id)} offset=${child.nextOffset}`);
+      break;
+    }
+    if (listMediaDown(pace, input.now()) && input.background) {
+      console.info(`[fanlink:vault] atajo cuenta listas=5xx`);
+    }
+  }
+}
+
 async function walkOne(
+  input: WalkInput,
+  listId: string,
+  start: number,
+  includeLists: boolean,
+  budget: { left: number },
+  store: boolean,
+  listName: string | null = null,
+  singlePage = false,
+): Promise<PageWalk> {
+  return withFolderRead(input.creatorId, listId, () => readFolderWalk(input, listId, start, includeLists, budget, store, listName, singlePage));
+}
+
+async function readFolderWalk(
   input: WalkInput,
   listId: string,
   start: number,
@@ -154,7 +199,8 @@ async function walkOne(
   let counts = listId === "all" ? null : await storedFolderCounts(input.sql, input.creatorId, listId);
   const cap = folderMediaCap(counts);
   let suspicious = false;
-  let viaWeb = false;
+  let viaWeb = listId !== "all" && listMediaDown(input.accountId || input.creatorId, input.now());
+  let askedLists = false;
   while (pages < VAULT_WALK_CAP) {
     const mustRead = pages === 0 && listId !== "all" && counts != null && !countsAreEmpty(counts);
     if (budget.left <= 0 && !mustRead) {
@@ -165,26 +211,47 @@ async function walkOne(
       break;
     }
     if (budget.left > 0) budget.left -= 1;
+    let catalogPayloads: unknown[] = [];
     const expectMedia = listId !== "all" && ((counts?.photos ?? 0) > 0 || (counts?.videos ?? 0) > 0 || (counts?.gifs ?? 0) > 0 || (counts?.audios ?? 0) > 0);
-    let read = await readVaultPage(input, listId, offset, includeLists && pages === 0, listName, expectMedia, viaWeb);
+    const withLists = includeLists && pages === 0 && !askedLists && !viaWeb;
+    let read = await readVaultPage(input, listId, offset, withLists, listName, expectMedia, viaWeb);
+    if (withLists) {
+      askedLists = true;
+      catalogPayloads = read.payloads.filter((payload) => vaultPayloadKind(payload) === "lists");
+    }
     let tries = 0;
     while (pages === 0 && !viaWeb && shouldRetryFolder(read) && tries < 2) {
       tries += 1;
       const wait = VAULT_PAGE_GAP_MS * tries;
       console.info(`[fanlink:vault] reintento lista=${vaultFolderMark(listId)} intento=${tries} status=${read.status ?? "sin"}`);
       await pauseWalk(input, wait);
-      read = await readVaultPage(input, listId, offset, includeLists && pages === 0, listName, expectMedia, false);
+      read = await readVaultPage(input, listId, offset, false, listName, expectMedia, false);
+    }
+    let rateTries = 0;
+    while (read.retryAfterMs > 0 && rateTries < 3 && !read.sessionRejected && !read.signatureRejected) {
+      const wait = pauseVaultRate(input.accountId || input.creatorId, read.retryAfterMs, input.now());
+      console.info(`[fanlink:vault] pausa lista=${vaultFolderMark(listId)} status=429 espera=${wait}`);
+      await pauseWalk(input, wait);
+      rateTries += 1;
+      read = await readVaultPage(input, listId, offset, false, listName, expectMedia, viaWeb);
     }
     if (pages === 0 && listId !== "all" && !viaWeb && read.status != null && read.status >= 500 && !read.sessionRejected && !read.signatureRejected) {
+      noteListMediaDown(input.accountId || input.creatorId, input.now());
       const listsStatus = read.status;
+      await pauseWalk(input, VAULT_PAGE_GAP_MS);
       const fallback = await readVaultPage(input, listId, offset, false, listName, expectMedia, true);
       console.info(`[fanlink:vault] respaldo lista=${vaultFolderMark(listId)} lists=${listsStatus} media=${fallback.status ?? "sin"}`);
       const got = mediaCount(mediaBody(fallback.payloads));
-      if (fallback.status === 200 && got > 0 && !fallback.sessionRejected && !fallback.signatureRejected) {
+      if (fallback.status === 200 && got > 0 && !fallback.sessionRejected && !fallback.signatureRejected && fallback.retryAfterMs === 0) {
         const lists = read.payloads.filter((payload) => vaultPayloadKind(payload) === "lists");
         viaWeb = true;
         read = { ...fallback, payloads: [...lists, ...fallback.payloads] };
+      } else {
+        recordFolderRead(input.creatorId, listId, "fallo");
       }
+    }
+    if (catalogPayloads.length > 0 && !listsOf(read.payloads).some((folder) => folder.id === listId)) {
+      read = { ...read, payloads: [...catalogPayloads, ...read.payloads] };
     }
     status = read.status;
     reason = read.reason;
@@ -293,17 +360,27 @@ async function walkOne(
   if (hasMore && pages >= VAULT_WALK_CAP) {
     console.info(`[fanlink:vault] corte tope lista=${vaultFolderMark(listId)} offset=${nextOffset}`);
   }
+  const rateLimited = status === 429 || retryAfterMs > 0;
+  if (listId !== "all" && rateLimited) {
+    hasMore = true;
+    if (nextOffset < offset) nextOffset = offset;
+  }
   if (store && start === 0 && items.length > 0 && !hasMore && !sessionRejected && !signatureRejected && retryAfterMs === 0) {
     remember(input.creatorId, listId, input.now(), items, thumbItems);
   }
-  if (listId !== "all" && start === 0 && !hasMore && !suspicious && !sessionRejected && !signatureRejected && (items.length > 0 || countsAreEmpty(counts))) {
+  if (listId !== "all" && start === 0 && !hasMore && !suspicious && !sessionRejected && !signatureRejected && retryAfterMs === 0 && (items.length > 0 || countsAreEmpty(counts))) {
     await finishListMembers(input.sql, input.creatorId, listId, items.map((item) => item.id));
   }
   const needsFullMembers = singlePage && listId !== "all" && start === 0 && hasMore && !suspicious && items.length > 0 && !sessionRejected && !signatureRejected && retryAfterMs === 0;
   const counted = counts != null && ((counts.photos ?? 0) > 0 || (counts.videos ?? 0) > 0 || (counts.gifs ?? 0) > 0 || (counts.audios ?? 0) > 0);
-  if (listId !== "all" && items.length === 0 && counted) {
+  if (listId !== "all" && rateLimited) {
+    recordFolderRead(input.creatorId, listId, items.length > 0 ? "parcial" : "fallo");
+  } else if (listId !== "all" && items.length === 0 && counted) {
+    recordFolderRead(input.creatorId, listId, "fallo");
     console.info(`[fanlink:vault] carpeta=${vaultFolderMark(listId)} error=sin-medios fotos=${counts?.photos ?? "sin"} videos=${counts?.videos ?? "sin"} status=${status ?? "sin"}`);
     reason = VAULT_FOLDER_READ_ERROR;
+  } else if (listId !== "all" && !hasMore && items.length > 0) {
+    recordFolderRead(input.creatorId, listId, "ok");
   }
   console.info(`[fanlink:vault] fin lista=${vaultFolderMark(listId)} paginas=${pages} medios=${items.length} hasMore=${hasMore ? "si" : "no"}`);
   console.info(`[fanlink:vault] carpeta=${vaultFolderMark(listId)} n=${items.length}`);
@@ -453,7 +530,7 @@ function publicWalk(walk: PageWalk): VaultWalk {
     sessionRejected: walk.sessionRejected,
     signatureRejected: walk.signatureRejected,
     retryAfterMs: walk.retryAfterMs,
-    membersSettled: Promise.resolve(),
+    membersSettled: walk.membersSettled,
   };
 }
 

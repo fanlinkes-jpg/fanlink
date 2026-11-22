@@ -4,6 +4,8 @@ import { backoffDelayMs } from "./backoff.ts";
 import { mergeMessages, mergeThreads, parseChatList, parseChatMessages, parsePreviewMessages, type ChatMessage, type ChatThread } from "./chats.ts";
 import { collectFanSpend } from "./fan-spend.ts";
 import { awaitAccountGap, REQUEST_GAP_MS, withAccountApi } from "./api-list-pace.ts";
+import { accountPause } from "./backoff.ts";
+import { VAULT_RATE_CAP_MS } from "./vault-pace.ts";
 import { noteMissingUnread } from "./unread-chats.ts";
 import { usersMeKeepsSession, usersMeVerdict } from "../identity.ts";
 import { loadSignRules, signedUserId, signOnlyfans, type SignRules } from "./of-sign.ts";
@@ -558,6 +560,11 @@ async function readVaultPath(deps: {
   if (!deps.accountId) return load();
   const accountId = deps.accountId;
   return withAccountApi(accountId, async () => {
+    const paused = accountPause(accountId, deps.now());
+    if (paused && deps.sleep) {
+      const wait = Math.min(Math.max(0, paused.until - deps.now()), VAULT_RATE_CAP_MS);
+      if (wait > 0) await deps.sleep(wait);
+    }
     if (deps.sleep) await awaitAccountGap(accountId, deps.now, deps.sleep, REQUEST_GAP_MS);
     return load();
   });

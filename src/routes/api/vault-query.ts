@@ -58,7 +58,9 @@ async function refreshVault(sql: Awaited<ReturnType<typeof getSql>>, raw: string
       now: () => Date.now(),
       sql,
       sleep,
+      background: true,
     });
+    void walked.membersSettled;
     console.info(`[fanlink:vault] creator=${creatorId} status=${walked.status ?? "sin"}`);
     if (walked.sessionRejected || walked.signatureRejected || walked.retryAfterMs > 0) return;
     const saved = walked.thumbItems.length > 0 ? walked.thumbItems : walked.items;

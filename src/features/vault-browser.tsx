@@ -260,6 +260,7 @@ export function VaultBrowser({
                 </button>
               ))}
             </div>
+            {notice && notice !== "Sin datos" ? <p className="px-4 py-2 text-xs text-[#8a5a12]">{notice}</p> : null}
             <div
               className={VAULT_GRID_CLASS}
               onScroll={(event) => {

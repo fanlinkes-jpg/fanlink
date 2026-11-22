@@ -480,6 +480,7 @@ export async function executeSubfolderCheck(input: {
   const wanted = input.folder?.trim() || null;
   const folders = bodies.flatMap(listRows).filter((row) => isCheckedFolder(row, wanted)).filter((row) => folderSelected(row, wanted));
   input.stdout(`[fanlink:vault] subcarpetas=${folders.length}`);
+  let listsDown = false;
   for (const folder of folders) {
     const id = String(folder.id);
     await pause(800);
@@ -490,9 +491,10 @@ export async function executeSubfolderCheck(input: {
     let viaWeb = false;
     let fallbackStatus: number | null = null;
     for (let page = 0; page < 40; page += 1) {
-      const read = viaWeb
+      const read = viaWeb || listsDown
         ? { ...await probeOnce(input.fetch, rules, auth, input.now, vaultMediaPath(id, offset)), viaWeb: true, respaldo: null, listsStatus: null }
         : await readFolderProbe(input.fetch, rules, auth, input.now, id, offset, text(folder.name), pause, input.stdout, folderHasCatalogMedia(folder));
+      if (read.listsStatus != null && read.listsStatus >= 500) listsDown = true;
       if (!viaWeb && read.respaldo != null) {
         fallbackStatus = read.respaldo;
         input.stdout(`[fanlink:vault] respaldo subcarpeta=${vaultFolderMark(id)} lists=${read.listsStatus ?? "sin"} media=${read.respaldo}`);
@@ -531,6 +533,12 @@ async function readFolderProbe(
 ): Promise<{ status: number | null; body: unknown; viaWeb: boolean; respaldo: number | null; listsStatus: number | null }> {
   let read = await probeOnce(fetchImpl, rules, auth, now, vaultListMediaPath(id, offset));
   stdout(probePageLine(id, offset, read.status));
+  if (read.status === 429) {
+    await pause(800);
+    stdout(`[fanlink:vault] pausa subcarpeta=${vaultFolderMark(id)} status=429 espera=800`);
+    read = await probeOnce(fetchImpl, rules, auth, now, vaultListMediaPath(id, offset));
+    stdout(probePageLine(id, offset, read.status));
+  }
   let tries = 0;
   while ((read.status == null || read.status >= 500) && tries < 2) {
     tries += 1;

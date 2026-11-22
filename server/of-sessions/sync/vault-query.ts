@@ -1,5 +1,6 @@
 import { creatorIdsForChats } from "../../../src/lib/access-policy.ts";
-import { VAULT_FOLDER_READ_ERROR } from "../../../src/lib/vault-folder-label.ts";
+import { VAULT_FOLDER_READ_ERROR, VAULT_FOLDER_STALE } from "../../../src/lib/vault-folder-label.ts";
+import { folderReadMark } from "./vault-pace.ts";
 import { emptyVaultQuery, folderAndChildren, searchVaultLists, vaultQueryFromUnknown, type VaultQuery } from "./vault-filter.ts";
 import { itemSaleBlocked } from "./vault-block.ts";
 import { folderMediaCap, suggestVaultPrice, trailerPackages, vaultFolderMark, vaultKindOf, type VaultFile, type VaultKind } from "./vault-model.ts";
@@ -165,12 +166,28 @@ export async function queryVaultForActor(sql: ReadSql, actor: VaultActor, body: 
     payload: {
       chatterId,
       restored,
-      notice: cards.length === 0 && folderCountsUnread(query, lists) ? VAULT_FOLDER_READ_ERROR : cards.length === 0 ? "Sin datos" : null,
+      notice: vaultNotice(creatorId, query, lists, cards.length),
       lists,
       items: cards,
       query,
     },
   };
+}
+
+function vaultNotice(
+  creatorId: string,
+  query: { scope: string; folderId: string | null },
+  lists: readonly { id: string; photos: number | null; videos: number | null; gifs: number | null; audios: number | null }[],
+  shown: number,
+): string | null {
+  if (query.scope === "carpeta" && query.folderId) {
+    const mark = folderReadMark(creatorId, query.folderId);
+    const open = lists.find((folder) => folder.id === query.folderId);
+    const total = (open?.photos ?? 0) + (open?.videos ?? 0) + (open?.gifs ?? 0) + (open?.audios ?? 0);
+    if (shown > 0 && (mark === "fallo" || mark === "parcial" || total > shown)) return VAULT_FOLDER_STALE;
+  }
+  if (shown === 0 && folderCountsUnread(query, lists)) return VAULT_FOLDER_READ_ERROR;
+  return shown === 0 ? "Sin datos" : null;
 }
 
 function folderCountsUnread(query: { scope: string; folderId: string | null }, lists: readonly { id: string; photos: number | null; videos: number | null; gifs: number | null; audios: number | null }[]): boolean {

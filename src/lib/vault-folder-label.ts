@@ -1,5 +1,7 @@
 /** Aviso cuando el catálogo tiene medios y la lectura de la carpeta acaba en cero. */
 export const VAULT_FOLDER_READ_ERROR = "No se ha podido leer la carpeta";
+/** El espejo sigue en pantalla, pero la última lectura no pudo actualizarlo. */
+export const VAULT_FOLDER_STALE = "No se ha podido actualizar";
 
 export type VaultFolderCounts = {
   photos: number | null;
