@@ -24,10 +24,37 @@ test("las pestañas de creadora caben en 1280 y los badges no se pisan", async (
     const column = page.getByRole("complementary", { name: "Creadoras" });
     await column.getByRole("button", { name: "Allison Miller" }).waitFor();
     await column.getByRole("button", { name: /Jose/ }).getByText("128", { exact: true }).waitFor();
+    await column.getByRole("button", { name: /Jose/ }).getByText("3", { exact: true }).waitFor();
     await column.getByRole("button", { name: "Allison Miller" }).getByText("256", { exact: true }).waitFor();
     assert.equal(await column.getByRole("button", { name: "9ikis52" }).count(), 0);
     assert.equal(await page.getByRole("link", { name: "Mensajes" }).count(), 0);
     assert.equal(await page.getByRole("combobox", { name: "Bandeja" }).count(), 0);
+    assert.equal(await page.getByRole("textbox", { name: "Buscar fan" }).count(), 0);
+    assert.equal(await page.getByText("Operador local").count(), 0);
+    await page.getByRole("button", { name: "Traducción" }).click();
+    await page.getByRole("option", { name: "Inglés" }).click();
+    await page.getByRole("button", { name: "Translation", exact: true }).click();
+    await page.getByRole("combobox", { name: "Idioma" }).selectOption("en");
+    assert.equal(await page.getByRole("button", { name: "Traducción", exact: true }).innerText(), "EN");
+    assert.equal(await page.getByRole("combobox", { name: "Idioma" }).inputValue(), "en");
+    await column.getByRole("button", { name: /Jose/ }).click();
+    await page.getByRole("button", { name: /^Notificaciones/ }).click();
+    await page.getByText("Renew On").waitFor();
+    await page.getByText("Renew Off").waitFor();
+    const onlyfans = page.getByRole("button", { name: /OnlyFans/ });
+    await onlyfans.evaluate((node) => {
+      const scroller = node.parentElement;
+      if (scroller) scroller.scrollLeft = scroller.scrollWidth;
+    });
+    assert.match(await onlyfans.innerText(), /OnlyFans\s+3/);
+    assert.match(await page.locator("img[src^='data:image/svg+xml']").nth(1).getAttribute("src") ?? "", /^data:image\/svg\+xml/);
+    await page.screenshot({ path: "/opt/cursor/artifacts/notificaciones-of.png" });
+    await page.getByRole("button", { name: "Cerrar notificaciones" }).evaluate((node) => (node as HTMLButtonElement).click());
+    await page.getByRole("button", { name: "Cerrar notificaciones" }).waitFor({ state: "hidden" });
+    await page.getByRole("switch", { name: "SFW" }).click();
+    assert.equal(await page.evaluate(() => document.documentElement.dataset.sfw), "1");
+    await page.getByRole("switch", { name: "SFW" }).click();
+    assert.equal(await page.evaluate(() => document.documentElement.dataset.sfw), "0");
     const layout = await column.locator("ul").evaluate((node) => {
       const badges = [...node.querySelectorAll("[data-badge]")].map((badge) => {
         const rect = badge.getBoundingClientRect();
@@ -117,8 +144,22 @@ async function seed(dir: string): Promise<void> {
   await pg.exec(`insert into of_notification (creator_id, notification_key, kind, body, synced_at, origin, first_seen_at)
     select 'allison', 'n' || n, 'like', 'hola', now(), 'onlyfans', now()
     from generate_series(1, 256) n`);
-  await pg.exec(`insert into of_notification_sync (creator_id, last_status, consecutive_failures, last_attempt_at)
-    values ('allison', 'ok', 0, now())`);
+  await pg.exec(`insert into of_notification_sync (creator_id, last_status, consecutive_failures, last_attempt_at, unread_counts)
+    values
+      ('allison', 'ok', 0, now(), '{"all":256,"likes":256}'::jsonb),
+      ('jose', 'ok', 0, now(), '{"all":3,"onlyfans":3}'::jsonb)`);
+  const face = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40'%3E%3Ccircle cx='20' cy='20' r='20' fill='%233b6cff'/%3E%3C/svg%3E";
+  await pg.query(`insert into of_notification (
+      creator_id, notification_key, kind, body, fan_key, fan_name, fan_handle, avatar_url, renew_auto,
+      synced_at, origin, first_seen_at, occurred_at
+    ) values
+      ('jose', 'sub-lia', 'subscription', 'Nueva suscripción', 'fan-lia', 'Lia', 'lia', $1, true, now(), 'onlyfans', now(), now()),
+      ('jose', 'sub-nora', 'subscription', 'Sin foto en el aviso', 'fan-nora', 'Nora', 'nora', null, null, now(), 'onlyfans', now(), now())`, [face]);
+  await pg.query(`insert into of_chat_thread (
+      creator_id, thread_key, fan_key, fan_name, fan_handle, last_message_at, excerpt, unread, synced_at, origin, avatar_url, renew_auto
+    ) values (
+      'jose', 'fan-nora', 'fan-nora', 'Nora', 'nora', now(), 'hola', 0, now(), 'onlyfans', $1, false
+    )`, [face]);
   await pg.close();
   const store = new AccountStore(path.join(dir, "accounts.json"));
   await store.init();

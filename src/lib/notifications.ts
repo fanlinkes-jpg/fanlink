@@ -463,6 +463,15 @@ export function notificationBellCount(input: {
   return { count: onlyfansUnread(input.counts, input.role), source: "onlyfans" };
 }
 
+/** Total de no leídas del centro de OnlyFans. No es el conteo interno de Fanlink. */
+export function ofNoticeTotal(counts: NotificationCounts | null): number | null {
+  if (!counts) return null;
+  if (counts.all != null) return counts.all;
+  const parts = NOTIFICATION_TABS.filter((tab) => tab !== "all").map((tab) => counts[tab]).filter((item): item is number => item != null);
+  if (parts.length === 0) return null;
+  return parts.reduce((total, item) => total + item, 0);
+}
+
 function onlyfansUnread(counts: NotificationCounts | null, role: "owner" | "member" | null): number | null {
   if (!counts) return null;
   if (role === "member") {
@@ -691,6 +700,20 @@ export function isRecentFan(iso: string | null | undefined, now: number): boolea
   return age >= 0 && age <= DAY_MS;
 }
 
+/** Avatar y renovación del aviso, y si OF no los manda, los de la ficha o el hilo. */
+export function noticeFace(input: {
+  avatarUrl: string | null;
+  renewAuto: boolean | null;
+  threadAvatar: string | null;
+  threadRenew: boolean | null;
+  cardRenew: boolean | null;
+}): { avatarUrl: string | null; renewAuto: boolean | null } {
+  return {
+    avatarUrl: input.avatarUrl ?? input.threadAvatar,
+    renewAuto: input.renewAuto ?? input.threadRenew ?? input.cardRenew,
+  };
+}
+
 export function renewLabel(value: boolean | null | undefined): string | null {
   if (value == null) return null;
   return value ? "Renovación sí" : "Renovación no";
@@ -710,9 +733,9 @@ function fanCard(record: Record<string, unknown>): {
   const post = postOf(record);
   return {
     fanHandle: (user ? firstString(user, ["username"]) : null) ?? firstString(record, ["username"]),
-    avatarUrl: user ? avatarOf(user) : null,
+    avatarUrl: (user ? avatarOf(user) : null) ?? avatarOf(record),
     lists: user ? readFanLists(user) : null,
-    renewAuto: user ? readRenew(user) : null,
+    renewAuto: (user ? readRenew(user) : null) ?? readRenew(record),
     fanSeenAt: user ? firstTime(user, ["lastSeen"]) : null,
     postRef: post.id,
     postLink: post.link,
@@ -720,15 +743,30 @@ function fanCard(record: Record<string, unknown>): {
   };
 }
 
+function httpsUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const clean = value.trim();
+  if (!/^https?:\/\//i.test(clean) || clean.length > 400) return null;
+  return clean;
+}
+
 function avatarOf(user: Record<string, unknown>): string | null {
-  const direct = user.avatar;
-  if (typeof direct === "string" && /^https?:\/\//.test(direct)) return direct;
+  const direct = httpsUrl(user.avatar);
+  if (direct) return direct;
+  if (user.avatar && typeof user.avatar === "object" && !Array.isArray(user.avatar)) {
+    const nested = httpsUrl((user.avatar as Record<string, unknown>).url);
+    if (nested) return nested;
+  }
   const thumbs = user.avatarThumbs;
   if (!thumbs || typeof thumbs !== "object" || Array.isArray(thumbs)) return null;
   const bag = thumbs as Record<string, unknown>;
-  for (const key of ["c144", "c50"]) {
-    const value = bag[key];
-    if (typeof value === "string" && /^https?:\/\//.test(value)) return value;
+  for (const key of ["c144", "c50", "c", "thumb"]) {
+    const value = httpsUrl(bag[key]);
+    if (value) return value;
+  }
+  for (const value of Object.values(bag)) {
+    const url = httpsUrl(value);
+    if (url) return url;
   }
   return null;
 }
@@ -752,12 +790,22 @@ function readFanLists(user: Record<string, unknown>): string[] | null {
 }
 
 function readRenew(user: Record<string, unknown>): boolean | null {
-  const nestedRenew = user.subscribedOnData;
-  const bag = nestedRenew && typeof nestedRenew === "object" && !Array.isArray(nestedRenew)
-    ? nestedRenew as Record<string, unknown>
-    : null;
-  const raw = bag?.autoRenew ?? bag?.renewedAuto ?? bag?.isAutoRenew ?? user.autoRenew;
-  return typeof raw === "boolean" ? raw : null;
+  const bags = [user.subscribedOnData, user.subscribedByData, user].filter((item): item is Record<string, unknown> => (
+    Boolean(item) && typeof item === "object" && !Array.isArray(item)
+  ));
+  for (const bag of bags) {
+    const raw = bag.autoRenew ?? bag.renewedAuto ?? bag.isAutoRenew ?? bag.renewAuto;
+    const parsed = boolFlag(raw);
+    if (parsed != null) return parsed;
+  }
+  return null;
+}
+
+function boolFlag(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  if (value === 1 || value === "1" || value === "true") return true;
+  if (value === 0 || value === "0" || value === "false") return false;
+  return null;
 }
 
 function postOf(record: Record<string, unknown>): { id: string | null; link: string | null; text: string | null } {

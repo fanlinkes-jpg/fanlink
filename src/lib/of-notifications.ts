@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { authMiddleware } from "@/lib/auth/middleware";
-import { canReadCreatorNotifications, notificationBellCount, type NotificationCounts, type NotificationKind, type NotificationLabels, type NotificationTab } from "@/lib/notifications";
+import { canReadCreatorNotifications, ofNoticeTotal, type NotificationCounts, type NotificationKind, type NotificationLabels, type NotificationTab } from "@/lib/notifications";
 import { SESSION_EXPIRED_LABEL, signedReadsBlocked } from "../../server/of-sessions/sync/session-link.ts";
 
 // Los módulos de base y de disco solo se cargan dentro del handler: si fueran
@@ -139,13 +139,7 @@ export const listCreatorNoticeBadges = createServerFn({ method: "GET" })
     for (const creatorId of data.creatorIds) {
       if (!canReadCreatorNotifications(access, creatorId)) continue;
       const page = await notificationPageFor(sql, access, creatorId);
-      const bell = notificationBellCount({
-        markOnOnlyfans: await markReadEnabled(creatorId),
-        counts: page.counts,
-        fanlinkTotal: page.fanlinkUnread,
-        role: access.role,
-      });
-      badges.push({ creatorId, unread: bell.count });
+      badges.push({ creatorId, unread: ofNoticeTotal(page.counts) });
     }
     return { badges };
   });

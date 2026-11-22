@@ -1,4 +1,5 @@
 import { AtSign, Bell, DollarSign, Heart, Megaphone, MessageCircle, MessageSquare, ShoppingBag, Tag, ThumbsUp } from "lucide-react";
+import { SfwMedia } from "@/components/sfw-media";
 import type { NotificationListItem } from "@/lib/of-notifications";
 import { isRecentFan, notificationStamp, renewStatusLabel, spanishNotificationText, tabOf, type NotificationTab } from "@/lib/notifications";
 
@@ -33,7 +34,7 @@ export function NotificationFanCard({
     <article className="flex gap-3 py-3 text-sm">
       <span className="relative h-10 w-10 shrink-0">
         {avatarUrl ? (
-          <img src={avatarUrl} alt="" className="h-10 w-10 rounded-full object-cover" />
+          <SfwMedia><img src={avatarUrl} alt="" className="h-10 w-10 rounded-full object-cover" /></SfwMedia>
         ) : (
           <span className="flex h-10 w-10 items-center justify-center rounded-full bg-[#eef1f4] text-xs font-semibold text-[#3c4456]">{initial}</span>
         )}

@@ -25,6 +25,8 @@ import {
   NOTIFICATION_KINDS,
   NOTIFICATION_TABS,
   notesForCreator,
+  noticeFace,
+  ofNoticeTotal,
   notificationReplyLine,
   renewStatusLabel,
   tabOf,
@@ -433,6 +435,35 @@ test("el panel solo enseña avisos de la creadora activa y la respuesta es de su
     occurredAt: "2026-11-14T12:00:00.000Z",
     messages,
   }), null);
+});
+
+test("el badge verde usa el total de OnlyFans, no las no vistas en Fanlink", () => {
+  assert.equal(ofNoticeTotal({ all: 3, subscriptions: 0, purchases: null, tips: null, tags: null, comments: null, mentions: null, likes: null, promotions: null, onlyfans: 3 }), 3);
+  assert.equal(ofNoticeTotal({ all: null, subscriptions: null, purchases: null, tips: null, tags: null, comments: null, mentions: null, likes: null, promotions: null, onlyfans: 3 }), 3);
+  assert.equal(notificationBellCount({
+    markOnOnlyfans: false,
+    counts: { all: 3, subscriptions: null, purchases: null, tips: null, tags: null, comments: null, mentions: null, likes: null, promotions: null, onlyfans: 3 },
+    fanlinkTotal: 0,
+    role: "owner",
+  }).count, 0);
+});
+
+test("Renew On sale del usuario de la suscripción o de la ficha", () => {
+  const fromSubscription = parseNotificationPayload({
+    list: [{ id: "sub", type: "subscribed", createdAt: "2026-11-13T10:00:00.000Z", user: { id: 4, name: "Nora", username: "nora", subscribedByData: { renewedAuto: true } } }],
+  });
+  assert.equal(fromSubscription[0]?.renewAuto, true);
+  const fromThumb = parseNotificationPayload({
+    list: [{ id: "foto", type: "tip", createdAt: "2026-11-13T10:00:00.000Z", user: { id: 8, name: "Lia", avatarThumbs: { thumb: "https://cdn.example/lia.jpg" } } }],
+  });
+  assert.equal(fromThumb[0]?.avatarUrl, "https://cdn.example/lia.jpg");
+  assert.deepEqual(noticeFace({
+    avatarUrl: null,
+    renewAuto: null,
+    threadAvatar: "https://cdn.example/ficha.jpg",
+    threadRenew: null,
+    cardRenew: false,
+  }), { avatarUrl: "https://cdn.example/ficha.jpg", renewAuto: false });
 });
 
 test("lastSeen de hace días no cuenta como reciente", () => {

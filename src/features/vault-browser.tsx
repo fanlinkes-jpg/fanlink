@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { SfwMedia } from "@/components/sfw-media";
 import { queryVaultMirror } from "@/lib/of-sessions";
 import { VAULT_THUMB_MISSING, vaultMediaSrc } from "@/lib/chat-media";
 import { VAULT_CARD_FRAME, VAULT_CARD_IMAGE } from "@/lib/vault-card-frame";
@@ -375,11 +376,11 @@ export function VaultBrowser({
             <button type="button" className="absolute inset-0" aria-label="Cerrar vista previa" onClick={() => setPreview(null)} />
             <div data-preview-stage className="relative z-10 h-[80vh] w-[80vw]">
               {preview.kind === "video" ? (
-                <VaultPlayback src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} />
+                <SfwMedia className="block h-full w-full"><VaultPlayback src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} /></SfwMedia>
               ) : preview.kind === "audio" ? (
                 <audio controls className="h-full w-full" src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} />
               ) : (
-                <img alt={preview.title} className="h-full w-full object-contain" src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} />
+                <SfwMedia className="block h-full w-full"><img alt={preview.title} className="h-full w-full object-contain" src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} /></SfwMedia>
               )}
             </div>
           </div>
@@ -496,11 +497,11 @@ export function VaultBrowser({
             <button type="button" className="absolute inset-0" aria-label="Cerrar vista previa" onClick={() => setPreview(null)} />
             <div data-preview-stage className="relative z-10 h-[80vh] w-[80vw]">
               {preview.kind === "video" ? (
-                <VaultPlayback src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} />
+                <SfwMedia className="block h-full w-full"><VaultPlayback src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} /></SfwMedia>
               ) : preview.kind === "audio" ? (
                 <audio controls className="h-full w-full" src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} />
               ) : (
-                <img alt={preview.title} className="h-full w-full object-contain" src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} />
+                <SfwMedia className="block h-full w-full"><img alt={preview.title} className="h-full w-full object-contain" src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} /></SfwMedia>
               )}
             </div>
           </div>
@@ -581,7 +582,7 @@ function HoverClip({ src, title }: { src: string; title: string }) {
   }, []);
   if (failed) return null;
   return (
-    <video
+    <SfwMedia className="block h-full w-full"><video
       ref={node}
       muted
       playsInline
@@ -592,7 +593,7 @@ function HoverClip({ src, title }: { src: string; title: string }) {
       src={src}
       onCanPlay={() => setReady(true)}
       onError={() => setFailed(true)}
-    />
+    /></SfwMedia>
   );
 }
 
@@ -732,7 +733,7 @@ function VaultPlayback({ src }: { src: string }) {
   return (
     <div className="relative h-full w-full">
       {ready ? null : <p className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-sm text-white">Cargando…</p>}
-      <video
+      <SfwMedia className="block h-full w-full"><video
         ref={node}
         data-playback={src}
         controls
@@ -747,7 +748,7 @@ function VaultPlayback({ src }: { src: string }) {
           setOpenVault(false);
           setState("error");
         }}
-      />
+      /></SfwMedia>
     </div>
   );
 }
@@ -825,13 +826,15 @@ function VaultStill({ creatorId, mediaId, className, title = "", listId, offset,
     return <span className={`grid place-items-center bg-[#f2f3f5] px-2 text-center text-[11px] text-[#5c6570] ${className}`}>{VAULT_THUMB_MISSING}</span>;
   }
   return (
-    <img
-      src={vaultMediaSrc(creatorId, mediaId, "preview", { list: listId, offset })}
-      alt={title}
-      className={className}
-      style={imageStyle}
-      onError={() => setMissing(true)}
-    />
+    <SfwMedia className="block w-full">
+      <img
+        src={vaultMediaSrc(creatorId, mediaId, "preview", { list: listId, offset })}
+        alt={title}
+        className={className}
+        style={imageStyle}
+        onError={() => setMissing(true)}
+      />
+    </SfwMedia>
   );
 }
 

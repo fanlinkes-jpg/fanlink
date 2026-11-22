@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from "react";
+import { SfwMedia } from "@/components/sfw-media";
 import { MessageCircle, RefreshCw } from "lucide-react";
 import { fanInitials, filterOnlineFans, nextOnlineBatchId, onlineBatchPayload, onlineCapPhrase, onlineListNames, spendLabel, type OnlineFanRow } from "@/lib/online-fan-row";
 
@@ -115,7 +116,7 @@ export function OnlineFansPanel({
           <div key={fan.fanKey} className="flex min-w-0 items-center gap-2 overflow-hidden py-2 pl-3 pr-4">
             <span className="relative h-8 w-8 shrink-0">
               {fan.avatarUrl ? (
-                <img src={fan.avatarUrl} alt="" className="h-8 w-8 rounded-full object-cover" />
+                <SfwMedia><img src={fan.avatarUrl} alt="" className="h-8 w-8 rounded-full object-cover" /></SfwMedia>
               ) : (
                 <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#e8eefc] text-[11px] font-semibold text-[#2456c7]">{fanInitials(fan.fanName, fan.fanHandle)}</span>
               )}

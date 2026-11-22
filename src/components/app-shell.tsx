@@ -1,5 +1,6 @@
-import { ClientOnly, Link, useNavigate, useRouterState } from "@tanstack/react-router";
+import { ClientOnly, Link, useRouterState } from "@tanstack/react-router";
 import { readInboxCreator, resolveInboxCreator } from "@/lib/inbox-scope";
+import { bindUiUser, COMPOSER_LANGUAGES, setComposerLanguage, setSfwEnabled, useComposerLanguage, useSfw } from "@/lib/ui-prefs";
 import { useEffect, useState, type ReactNode } from "react";
 import {
   Home,
@@ -96,14 +97,9 @@ export function Splash() {
 function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean }) {
   const [mobile, setMobile] = useState(false);
   const path = useRouterState({ select: (s) => s.location.pathname });
-  const navigate = useNavigate();
   const creators = useCrm((s) => s.creators);
   const creatorId = useCrm((s) => s.creatorId);
   const setCreator = useCrm((s) => s.setCreator);
-  const query = useCrm((s) => s.query);
-  const setQuery = useCrm((s) => s.setQuery);
-  const translate = useCrm((s) => s.translate);
-  const setTranslate = useCrm((s) => s.setTranslate);
   const workspaceReady = useCrm((s) => s.workspaceReady);
   const workspaceNotice = useCrm((s) => s.workspaceNotice);
   const teamAccess = useCrm((s) => s.teamAccess);
@@ -113,6 +109,7 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
   }, []);
   useEffect(() => {
     chatSendSession.bindUser(user?.id ?? null, { pending: isPending });
+    bindUiUser(user?.id ?? null);
   }, [user?.id, isPending]);
 
   const rememberedCreator = typeof window === "undefined" ? null : readInboxCreator(window.localStorage);
@@ -136,11 +133,6 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
           mobile={mobile}
           setMobile={setMobile}
           path={path}
-          navigate={navigate}
-          query={query}
-          setQuery={setQuery}
-          translate={translate}
-          setTranslate={setTranslate}
           workspaceNotice={workspaceNotice}
           teamAccess={teamAccess}
           blocks={blocks}
@@ -153,17 +145,68 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
   );
 }
 
+function HeaderTools({ devMode, displayName }: { devMode: boolean; displayName: string }) {
+  const language = useComposerLanguage();
+  const sfw = useSfw();
+  const [open, setOpen] = useState(false);
+  const current = COMPOSER_LANGUAGES.find((item) => item.id === language) ?? COMPOSER_LANGUAGES[0];
+  const localHint = "Modo local de un solo operador. Solo vale en localhost y no aísla a un equipo.";
+  return (
+    <div className="flex shrink-0 items-center gap-2">
+      <div className="relative">
+        <button
+          type="button"
+          aria-label="Traducción"
+          aria-expanded={open}
+          onClick={() => setOpen((value) => !value)}
+          className={cn("flex h-8 items-center gap-1 rounded-lg px-2", open ? "bg-[#ff7a2f]" : "bg-white/10")}
+        >
+          <Languages className="h-4 w-4" />
+          <span className="text-[10px] font-semibold uppercase">{current.id}</span>
+        </button>
+        {open ? (
+          <div className="absolute right-0 z-30 mt-1 w-36 rounded-lg border border-[#e6e8ee] bg-white p-1 text-[#1c2333] shadow-lg" role="listbox" aria-label="Idioma">
+            {COMPOSER_LANGUAGES.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                role="option"
+                aria-selected={item.id === language}
+                className={cn("block w-full rounded px-2 py-1.5 text-left text-xs", item.id === language ? "bg-[#e7f3ff]" : "hover:bg-[#f4f6f8]")}
+                onClick={() => {
+                  setComposerLanguage(item.id);
+                  setOpen(false);
+                }}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={sfw}
+        aria-label="SFW"
+        onClick={() => setSfwEnabled(!sfw)}
+        className={cn("h-8 rounded-lg px-2 text-xs font-semibold", sfw ? "bg-[#1f9d55] text-white" : "bg-white/10")}
+      >
+        SFW
+      </button>
+      <div className="rounded-lg bg-white px-2 py-0.5 text-[#1c2333]" title={devMode ? localHint : displayName}>
+        <UserButton />
+      </div>
+    </div>
+  );
+}
+
 function ShellFrame({
   children,
   bleed,
   mobile,
   setMobile,
   path,
-  navigate,
-  query,
-  setQuery,
-  translate,
-  setTranslate,
   workspaceNotice,
   teamAccess,
   blocks,
@@ -174,11 +217,6 @@ function ShellFrame({
   mobile: boolean;
   setMobile: (value: boolean) => void;
   path: string;
-  navigate: ReturnType<typeof useNavigate>;
-  query: string;
-  setQuery: (value: string) => void;
-  translate: boolean;
-  setTranslate: (value: boolean) => void;
   workspaceNotice: string | null;
   teamAccess: { displayName: string; devMode: boolean };
   blocks: NavLink[];
@@ -245,34 +283,9 @@ function ShellFrame({
             <Menu className="h-4 w-4" />
           </button>
           <span className="min-w-0 flex-1" />
-          <span className="hidden max-w-40 truncate rounded-lg bg-white/10 px-2 py-1 text-xs md:inline" title={teamAccess.devMode ? "Modo local de un solo operador" : teamAccess.displayName}>
-            {teamAccess.displayName}
-          </span>
-          <button
-            aria-label="Traducción"
-            onClick={() => setTranslate(translate === false)}
-            className={cn("grid h-8 w-8 place-items-center rounded-lg", translate !== false ? "bg-[#ff7a2f]" : "bg-white/10")}
-          >
-            <Languages className="h-4 w-4" />
-          </button>
-          <div className="rounded-lg bg-white px-2 py-0.5 text-[#1c2333]">
-            <UserButton />
-          </div>
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void navigate({ to: "/mensajes" });
-            }}
-            placeholder="Buscar"
-            aria-label="Buscar fan"
-            className="hidden w-28 rounded-lg border border-white/15 bg-white/10 px-2 py-1 text-xs placeholder:text-white/50 lg:block"
-          />
+          <HeaderTools devMode={teamAccess.devMode} displayName={teamAccess.displayName} />
         </header>
         <main className={cn("flex min-h-0 flex-1 flex-col", bleed ? "overflow-hidden" : "overflow-auto pb-16 md:pb-0")}>
-          {teamAccess.devMode && (
-            <p className="shrink-0 bg-[#fff6e8] px-4 py-2 text-xs text-[#8a5a12]">Modo local de un solo operador. Solo vale en localhost y no aísla a un equipo.</p>
-          )}
           {workspaceNotice && <p className="shrink-0 bg-amber-50 px-4 py-2 text-xs text-amber-800">{workspaceNotice}</p>}
           <div className={bleed ? "relative min-h-0 flex-1 overflow-hidden" : "shrink-0"}>
             {currentOk ? children : (

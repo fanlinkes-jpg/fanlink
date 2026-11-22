@@ -8,7 +8,7 @@ import { unreadChatRow } from "../../server/of-sessions/sync/unread-chats.ts";
 import { inboxPillCounts, matchesInboxPill, tipThreads, type InboxPill } from "../../server/of-sessions/sync/chat-pills.ts";
 import { accountFigure, everyAccountBlocked, SESSION_EXPIRED_LABEL } from "../../server/of-sessions/sync/session-link.ts";
 import { listCreatorNotifications, markCreatorNotificationsRead, type NotificationListItem } from "@/lib/of-notifications";
-import { NOTIFICATION_TABS, TAB_LABEL, isOwnerOnlyKind, notesForCreator, notificationReplyLine, tabOf, type NotificationCounts, type NotificationTab } from "@/lib/notifications";
+import { NOTIFICATION_TABS, TAB_LABEL, isOwnerOnlyKind, notesForCreator, noticeFace, notificationReplyLine, tabOf, type NotificationCounts, type NotificationTab } from "@/lib/notifications";
 import { NotificationFanCard } from "@/features/notification-card";
 import { useCrm, type VaultItem } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
@@ -16,6 +16,8 @@ import { creatorChipBadges, inboxCreators, inboxThreadList, readInboxCreator, re
 import { CreatorColumn } from "@/components/creator-tabs";
 import { useCreatorSessions } from "@/lib/use-creator-sessions";
 import { useCreatorNoticeBadges } from "@/lib/use-creator-notice-badges";
+import { COMPOSER_LANGUAGES, setComposerLanguage, useComposerLanguage } from "@/lib/ui-prefs";
+import { SfwMedia } from "@/components/sfw-media";
 import { chatVaultCanAttach, chatVaultCreator, chatVaultOnThreadChange, mergeVaultPage, vaultFolderOnAccountChange, vaultLoadAllowed, vaultReadApplies } from "@/lib/vault-load";
 import { VAULT_FOLDER_READ_ERROR } from "@/lib/vault-folder-label";
 import { clearOpenThread, peekOpenThread } from "@/lib/open-thread";
@@ -110,7 +112,7 @@ function NoteTabRow({
           </button>
         </>
       ) : null}
-      <div ref={scroller} onScroll={measure} className="flex gap-2 overflow-x-auto px-4 pb-3 [scrollbar-width:none]">
+      <div ref={scroller} onScroll={measure} className="flex gap-2 overflow-x-auto px-10 pb-3 [scrollbar-width:none]">
         {NOTIFICATION_TABS.map((id) => {
           const on = filter === id;
           return (
@@ -1172,8 +1174,14 @@ export function RealChatsPage() {
                         || (item.fanKey != null && (row.fanKey === item.fanKey || row.threadKey === item.fanKey || row.fanHandle?.replace(/^@/, "") === item.fanKey))
                       ));
                       const handle = item.fanHandle ?? thread?.fanHandle?.replace(/^@/, "") ?? null;
-                      const renew = item.renewAuto ?? thread?.renewAuto ?? null;
-                      const avatar = item.avatarUrl ?? thread?.avatarUrl ?? null;
+                      const card = chatFanCardFor(fanCards.fans, item.creatorId, item.fanKey);
+                      const face = noticeFace({
+                        avatarUrl: item.avatarUrl,
+                        renewAuto: item.renewAuto ?? null,
+                        threadAvatar: thread?.avatarUrl ?? null,
+                        threadRenew: thread?.renewAuto ?? null,
+                        cardRenew: card?.renewAuto ?? null,
+                      });
                       const reply = notificationReplyLine({
                         creatorId: item.creatorId,
                         fanKey: item.fanKey,
@@ -1185,8 +1193,8 @@ export function RealChatsPage() {
                           <NotificationFanCard
                             item={item}
                             handle={handle}
-                            avatarUrl={avatar}
-                            renew={renew}
+                            avatarUrl={face.avatarUrl}
+                            renew={face.renewAuto}
                             reply={reply}
                             onChat={thread ? () => openNote(item) : undefined}
                           />
@@ -1241,7 +1249,7 @@ export function RealChatsPage() {
                 >
                   <span className="flex w-12 shrink-0 flex-col items-center gap-1">
                     {thread.avatarUrl ? (
-                      <img src={thread.avatarUrl} alt="" className="h-10 w-10 rounded-full object-cover" />
+                      <SfwMedia><img src={thread.avatarUrl} alt="" className="h-10 w-10 rounded-full object-cover" /></SfwMedia>
                     ) : (
                       <span className="grid h-10 w-10 place-items-center rounded-full bg-[#eef2ff] text-sm">{fanTitle(thread).slice(0, 1)}</span>
                     )}
@@ -1595,8 +1603,8 @@ export function RealChatsPage() {
                 <div className="mb-1 flex gap-2 overflow-x-auto">
                   {attachments.filter((file) => file.kind !== "vault").map((file) => (
                     <figure key={file.id} className="relative shrink-0">
-                      {file.kind === "video" && file.url ? <video src={file.url} className="h-16 w-16 rounded object-cover" /> : null}
-                      {file.kind === "image" && file.url ? <img src={file.url} alt={file.name} className="h-16 w-16 rounded object-cover" /> : null}
+                      {file.kind === "video" && file.url ? <SfwMedia><video src={file.url} className="h-16 w-16 rounded object-cover" /></SfwMedia> : null}
+                      {file.kind === "image" && file.url ? <SfwMedia><img src={file.url} alt={file.name} className="h-16 w-16 rounded object-cover" /></SfwMedia> : null}
                       {!file.url ? <span className="grid h-16 w-16 place-items-center rounded bg-[#f3f4f6] px-1 text-center text-[10px] leading-tight">{file.name}</span> : null}
                       <figcaption className="max-w-16 truncate text-[10px] text-[#8a5a12]">Pendiente</figcaption>
                       <button type="button" aria-label={`Quitar ${file.name}`} className="mt-0.5 text-[10px] text-[#2456c7]" onClick={() => removeAttachment(file.id)}>Quitar</button>
@@ -1922,6 +1930,7 @@ function ComposerPanelBody({
   onVaultMore?: () => void;
   onOpenFolder?: (listId: string | null) => void;
 }) {
+  const language = useComposerLanguage();
   switch (panel) {
     case "vault": {
       return (
@@ -2021,9 +2030,8 @@ function ComposerPanelBody({
       return (
         <div className="space-y-2 text-xs text-[#6d7585]">
           <label className="block">Idioma
-            <select aria-label="Idioma" className="mt-1 block h-8 rounded border border-[#e6e8ee] px-2 text-sm text-[#1c2333]">
-              <option>Español</option>
-              <option>Inglés</option>
+            <select aria-label="Idioma" value={language} onChange={(event) => setComposerLanguage(event.target.value === "en" ? "en" : "es")} className="mt-1 block h-8 rounded border border-[#e6e8ee] px-2 text-sm text-[#1c2333]">
+              {COMPOSER_LANGUAGES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
             </select>
           </label>
           <p>Sin datos: no hay servicio de traducción.</p>
