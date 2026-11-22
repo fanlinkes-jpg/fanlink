@@ -6,6 +6,36 @@ export const LIST_MEDIA_DOWN_MS = 10 * 60 * 1000;
 export const VAULT_RATE_CAP_MS = 2 * 60 * 1000;
 /** Hueco entre carpetas del recorrido de fondo. */
 export const VAULT_FOLDER_GAP_MS = 2_500;
+
+/** Entre dos páginas de bóveda: 3 s más un jitter de hasta 1,5 s. */
+export function vaultPageWaitMs(unit: number): number {
+  const span = Number.isFinite(unit) ? Math.min(1, Math.max(0, unit)) : 0;
+  return 3_000 + Math.floor(span * 1_500);
+}
+
+let tailTicket = 0;
+let tailCreatorId = "";
+let tailActive = false;
+
+/** La cola de fondo de otra creadora se cancela. Solo sigue una. */
+export function beginVaultTail(creatorId: string): number {
+  tailCreatorId = creatorId;
+  tailActive = true;
+  tailTicket += 1;
+  return tailTicket;
+}
+
+export function vaultTailLive(ticket: number): boolean {
+  return ticket === tailTicket;
+}
+
+export function vaultTailBusy(creatorId: string): boolean {
+  return tailActive && tailCreatorId === creatorId;
+}
+
+export function finishVaultTail(ticket: number): void {
+  if (ticket === tailTicket) tailActive = false;
+}
 /** Carpetas por tanda. El resto sigue después del hueco, no las 92 seguidas. */
 export const VAULT_FOLDER_BATCH = 6;
 /** Veces que una carpeta puede seguir cortada antes de pasar al final de la vuelta. */
@@ -95,4 +125,7 @@ export function clearVaultPace(): void {
   folderFlights.clear();
   readMarks.clear();
   folderCursor.clear();
+  tailTicket += 1;
+  tailActive = false;
+  tailCreatorId = "";
 }

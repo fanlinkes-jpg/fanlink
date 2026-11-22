@@ -31,7 +31,13 @@ import {
   ofTabListNote,
   ofNoticeTotal,
   noticeIdsMissingAvatar,
+  noticeAvatarTrace,
+  noticeFanId,
+  noticePayloadTraces,
+  directoryAvatarReport,
+  hashFanId,
   usersListPath,
+  avatarsFromUserMap,
   applyDirectoryAvatars,
   noticeTabFresh,
   notificationReplyLine,
@@ -530,6 +536,68 @@ test("Renew On sale del usuario de la suscripción o de la ficha", () => {
     threadRenew: null,
     cardRenew: false,
   }), { avatarUrl: "https://cdn.example/ficha.jpg", renewAuto: false });
+});
+
+test("la foto de una compra sale del subscriber, del enlace numérico o del lote", () => {
+  const bought = parseNotificationPayload({
+    list: [{
+      id: "compra",
+      type: "paided_message",
+      createdAt: "2026-11-13T10:00:00.000Z",
+      text: "pagó",
+      replacePairs: { "{NAME}": "<a href=\"https://onlyfans.com/u7022542\">Ben</a>" },
+      data: { subscriber: { id: 7022542, name: "Ben" } },
+    }],
+  });
+  assert.equal(bought[0]?.fanKey, "7022542");
+  assert.equal(bought[0]?.avatarUrl, null);
+  const linked = parseNotificationPayload({
+    list: [{
+      id: "enlace",
+      type: "subscribed",
+      createdAt: "2026-11-13T10:00:00.000Z",
+      text: "alta",
+      replacePairs: { "{SUBSCRIBER_LINK}": "https://onlyfans.com/482191" },
+    }],
+  });
+  assert.equal(linked[0]?.fanKey, "482191");
+  const handleOnly = parseNotificationPayload({
+    list: [{
+      id: "usuario",
+      type: "subscribed",
+      createdAt: "2026-11-13T10:00:00.000Z",
+      text: "alta",
+      replacePairs: { "{NAME}": "https://onlyfans.com/u7022542" },
+    }],
+  });
+  assert.equal(handleOnly[0]?.fanKey, null);
+  const raw = {
+    id: "compra",
+    type: "paided_message",
+    createdAt: "2026-11-13T10:00:00.000Z",
+    user: { id: 482191 },
+    replacePairs: { "{NAME}": "https://onlyfans.com/u7022542" },
+  };
+  const trace = noticeAvatarTrace(raw);
+  assert.equal(trace.hash, hashFanId("482191"));
+  assert.equal(trace.campos.includes("user.avatar:ausente"), true);
+  assert.equal(trace.campos.includes("482191") || trace.campos.includes("cdn.example") || trace.hash?.includes("482191"), false);
+  const lines = noticePayloadTraces({ list: [raw] });
+  assert.equal(lines.some((line) => line.includes("482191") || line.includes("http")), false);
+  assert.equal(noticeFanId({ user: 15 }), "15");
+  const directory = {
+    list: [
+      { id: 4, avatarThumbs: { c50: "https://cdn.example/4.jpg" } },
+      { id: 5, name: "Sin" },
+    ],
+  };
+  assert.equal(avatarsFromUserMap(directory).get("4"), "https://cdn.example/4.jpg");
+  const report = directoryAvatarReport(directory);
+  assert.equal(report.shape, "lista");
+  assert.equal(report.devueltos, 2);
+  assert.equal(report.conFoto, 1);
+  assert.equal(report.sinFoto, 1);
+  assert.deepEqual(report.sinFotoHashes, [hashFanId("5")]);
 });
 
 test("lastSeen de hace días no cuenta como reciente", () => {

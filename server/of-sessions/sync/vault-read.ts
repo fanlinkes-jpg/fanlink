@@ -8,6 +8,7 @@ import { openProfileThumbs } from "./vault-owner.ts";
 import { persistVaultRead } from "./vault-store.ts";
 import { rememberVaultThumbs, type ThumbBrowser } from "./vault-thumbs.ts";
 import { walkVault } from "./vault-walk.ts";
+import { vaultPageWaitMs } from "./vault-pace.ts";
 
 export type VaultReadSessions = Pick<SessionManager, "listAccounts" | "readStorageState" | "borrowProfile"> & {
   sessionGeneration?: (accountId: string) => number;
@@ -56,7 +57,8 @@ export async function readChatVaultView(
   const offset = input.offset ?? 0;
   const now = deps.now ?? (() => Date.now());
   const epoch = deps.sessions.sessionGeneration?.(account.id);
-  const paced = list === "all" && offset === 0;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  if (offset > 0) await sleep(vaultPageWaitMs(Math.random()));
   const walked = await walkVault({
     creatorId: input.creatorId,
     listId: list,
@@ -66,16 +68,11 @@ export async function readChatVaultView(
     now,
     sql: deps.sql,
     accountId: account.id,
-    sleep: deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
-    singlePage: list !== "all",
-    background: paced,
+    sleep,
+    singlePage: true,
+    follow: false,
+    background: false,
   });
-  if (paced) {
-    void walked.membersSettled.catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : "no se pudo seguir la bóveda";
-      console.info(`[fanlink:vault] fondo ${message.replace(/https?:\/\/\S+/gi, "").slice(0, 120)}`);
-    });
-  }
   console.info(`[fanlink:vault] creator=${input.creatorId} status=${walked.status ?? "sin"}`);
   if ((walked.status === 429 || walked.retryAfterMs > 0) && !walked.sessionRejected && !walked.signatureRejected) {
     const saved = walked.thumbItems.length > 0 ? walked.thumbItems : walked.items;

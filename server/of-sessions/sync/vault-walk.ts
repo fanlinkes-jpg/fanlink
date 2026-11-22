@@ -1,18 +1,14 @@
 import type { StorageStateFile } from "../sessions/storage-state.ts";
 import { VAULT_FOLDER_READ_ERROR } from "../../../src/lib/vault-folder-label.ts";
-import { REQUEST_GAP_MS } from "./api-list-pace.ts";
 import { backoffDelayMs } from "./backoff.ts";
 import { fetchSignedVault, vaultPageReason, VAULT_MEDIA_LIMIT, type SignedVaultRead } from "./of-chat-api.ts";
 import type { ReadSql } from "./store.ts";
 import { folderMediaCap, mediaStateHits, mergeVaultList, parseVaultBundle, vaultAllList, vaultFolderMark, vaultKeyNames, vaultMediaMatching, vaultPayloadKind, type VaultFile, type VaultList } from "./vault-model.ts";
-import { clearVaultPace, folderCursorState, forgetFolderCursor, listMediaDown, noteListMediaDown, pauseVaultRate, recordFolderRead, rememberFolderCursor, rememberFolderCut, shareFolderRead, VAULT_FOLDER_BATCH, VAULT_FOLDER_CUT_PASSES, VAULT_FOLDER_GAP_MS } from "./vault-pace.ts";
+import { beginVaultTail, clearVaultPace, finishVaultTail, folderCursorState, forgetFolderCursor, listMediaDown, noteListMediaDown, pauseVaultRate, recordFolderRead, rememberFolderCursor, rememberFolderCut, shareFolderRead, vaultPageWaitMs, vaultTailLive, VAULT_FOLDER_BATCH, VAULT_FOLDER_CUT_PASSES, VAULT_FOLDER_GAP_MS } from "./vault-pace.ts";
 import { finishListMembers, listMemberCount, mirroredFolderItems, persistVaultRead, storedFolderCounts } from "./vault-store.ts";
 
-/**
- * Pausa entre páginas de la bóveda. Cabe el hueco de la cuenta dos veces,
- * para que una carpeta abierta cuele su página antes de la siguiente de Todos.
- */
-export const VAULT_PAGE_GAP_MS = REQUEST_GAP_MS * 2 + 500;
+/** Mínimo entre páginas de la bóveda. El hueco real suma un jitter. */
+export const VAULT_PAGE_GAP_MS = 3_000;
 /** Páginas de una sola lista. 40 × 40 cubre una bóveda de más de mil medios. */
 export const VAULT_WALK_CAP = 40;
 /** Páginas en total. La lista «all» tiene que poder terminar antes de las carpetas. */
@@ -54,6 +50,8 @@ type WalkInput = {
   budget?: number;
   /** El arranque reparte las carpetas con hueco, en vez de leerlas todas seguidas. */
   background?: boolean;
+  /** false: no sigue el resto de la carpeta al cerrar la primera página. */
+  follow?: boolean;
 };
 
 const cache = new Map<string, CacheMark>();
@@ -77,7 +75,7 @@ export async function walkVault(input: WalkInput & { listId?: string; offset?: n
       return main;
     }
     const walk = publicWalk(main);
-    if (main.needsFullMembers) {
+    if (main.needsFullMembers && input.follow !== false) {
       inflight.delete(flight);
       walk.membersSettled = walkVault({ ...input, listId, offset: 0, singlePage: false }).then(() => undefined, () => undefined);
       return walk;
@@ -113,6 +111,7 @@ async function runWalk(input: WalkInput, listId: string, offset: number, singleP
     }
     return main;
   }
+  if (input.follow === false) return main;
   let payloads = main.payloads;
   const extraLists = await walkListPages(input, payloads, budget);
   payloads = payloads.concat(extraLists);
@@ -427,7 +426,7 @@ async function readFolderWalk(
     offset = next;
     nextOffset = next;
     if (singlePage) break;
-    if (input.sleep) await input.sleep(VAULT_PAGE_GAP_MS);
+    if (input.sleep) await input.sleep(vaultPageWaitMs(Math.random()));
   }
   if (hasMore && pages >= VAULT_WALK_CAP) {
     console.info(`[fanlink:vault] corte tope lista=${vaultFolderMark(listId)} offset=${nextOffset}`);
@@ -508,7 +507,7 @@ async function fillFolderFromAll(
     const next = followingOffset(body, offset, count);
     if (next <= offset) break;
     offset = next;
-    if (input.sleep) await input.sleep(VAULT_PAGE_GAP_MS);
+    if (input.sleep) await input.sleep(vaultPageWaitMs(Math.random()));
   }
   console.info(`[fanlink:vault] carpeta=${vaultFolderMark(listId)} respaldo=todos n=${items.length}`);
   return thumbs;
@@ -538,9 +537,38 @@ async function walkListPages(input: WalkInput, payloads: readonly unknown[], bud
     await persistVaultRead(input.sql, input.creatorId, read.payloads, { listId: "all", offset: 0 });
     body = listsBody(read.payloads);
     console.info(`[fanlink:vault] listas offset=${offset} n=${listCount(body)} hasMore=${explicitHasMore(body) ? "si" : "no"}`);
-    if (input.sleep) await input.sleep(VAULT_PAGE_GAP_MS);
+    if (input.sleep) await input.sleep(vaultPageWaitMs(Math.random()));
   }
   return extra;
+}
+
+/** Una página cada 3 s, con jitter, y solo la creadora que acaba de abrir. */
+export function continueVaultSlowly(input: WalkInput & { listId: string; offset: number }): void {
+  const ticket = beginVaultTail(input.creatorId);
+  void runVaultTail(ticket, input);
+}
+
+async function runVaultTail(ticket: number, input: WalkInput & { listId: string; offset: number }): Promise<void> {
+  let offset = input.offset;
+  try {
+    for (let page = 0; page < VAULT_WALK_CAP && vaultTailLive(ticket); page += 1) {
+      const wait = vaultPageWaitMs(Math.random());
+      if (input.sleep) await input.sleep(wait);
+      else await new Promise((resolve) => setTimeout(resolve, wait));
+      if (!vaultTailLive(ticket)) return;
+      let walked: VaultWalk;
+      try {
+        walked = await walkVault({ ...input, offset, singlePage: true, follow: false, background: false });
+      } catch {
+        return;
+      }
+      if (walked.retryAfterMs > 0 || walked.status === 429 || !walked.hasMore) return;
+      if (walked.nextOffset <= offset) return;
+      offset = walked.nextOffset;
+    }
+  } finally {
+    finishVaultTail(ticket);
+  }
 }
 
 function vaultDeps(input: WalkInput): { fetch: typeof fetch; now: () => number; accountId?: string; sleep?: (ms: number) => Promise<void> } {

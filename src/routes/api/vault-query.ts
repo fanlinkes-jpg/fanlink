@@ -8,7 +8,8 @@ import { accountCreatorIds } from "../../../server/of-sessions/http/vault-accoun
 import { fetchSignedVault } from "../../../server/of-sessions/sync/of-chat-api.ts";
 import { persistVaultRead } from "../../../server/of-sessions/sync/vault-store.ts";
 import { rememberVaultThumbs } from "../../../server/of-sessions/sync/vault-thumbs.ts";
-import { walkVault } from "../../../server/of-sessions/sync/vault-walk.ts";
+import { vaultTailBusy } from "../../../server/of-sessions/sync/vault-pace.ts";
+import { continueVaultSlowly, walkVault } from "../../../server/of-sessions/sync/vault-walk.ts";
 import { openProfileThumbs } from "../../../server/of-sessions/sync/vault-owner.ts";
 
 export const Route = createFileRoute("/api/vault-query")({
@@ -43,7 +44,7 @@ async function refreshVault(sql: Awaited<ReturnType<typeof getSql>>, raw: string
   } catch {
     return;
   }
-  if (!creatorId) return;
+  if (!creatorId || vaultTailBusy(creatorId)) return;
   try {
     const sessions = await getOfSessionManager();
     const account = (await sessions.listAccounts()).find((item) => item.creatorId === creatorId && item.status === "active" && item.hasStorageState);
@@ -58,12 +59,24 @@ async function refreshVault(sql: Awaited<ReturnType<typeof getSql>>, raw: string
       now: () => Date.now(),
       sql,
       sleep,
-      background: true,
+      singlePage: true,
+      follow: false,
+      background: false,
     });
-    void walked.membersSettled.catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : "no se pudo seguir la bóveda";
-      console.info(`[fanlink:vault] fondo ${message.replace(/https?:\/\/\S+/gi, "").slice(0, 120)}`);
-    });
+    if (walked.hasMore && walked.retryAfterMs === 0 && walked.status !== 429) {
+      continueVaultSlowly({
+        creatorId,
+        accountId: account.id,
+        listId: "all",
+        offset: walked.nextOffset,
+        state,
+        fetch,
+        now: () => Date.now(),
+        sql,
+        sleep,
+        follow: false,
+      });
+    }
     console.info(`[fanlink:vault] creator=${creatorId} status=${walked.status ?? "sin"}`);
     if (walked.sessionRejected || walked.signatureRejected || walked.retryAfterMs > 0) return;
     const saved = walked.thumbItems.length > 0 ? walked.thumbItems : walked.items;

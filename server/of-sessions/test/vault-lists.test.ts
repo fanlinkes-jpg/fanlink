@@ -2564,7 +2564,7 @@ for (const header of ["ausente", "0"] as const) {
   });
 }
 
-test("readChatVaultView separa las carpetas y una cortada no tapa el resto", async () => {
+test("abrir la bóveda pide la primera página y no recorre las carpetas", async () => {
   clearSignRulesCache();
   clearVaultWalkCache();
   const db = new PGlite();
@@ -2603,13 +2603,9 @@ test("readChatVaultView separa las carpetas y una cortada no tapa el resto", asy
       access: { role: "owner", perms: ["vault"] },
       sessions: vaultSessions("acc-tanda"),
     });
-    for (let attempt = 0; attempt < 50 && !lines.some((line) => line.includes("tanda siguiente")); attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    assert.equal(lines.some((line) => line.includes("tanda siguiente")), true);
-    for (const id of ids) {
-      assert.equal(seen.some((href) => href.includes(`/vault/lists/${id}/media`)), true);
-    }
+    assert.equal(lines.some((line) => line.includes("tanda siguiente")), false);
+    assert.equal(seen.some((href) => href.includes("list=all")), true);
+    assert.equal(seen.some((href) => /\/vault\/lists\/\d+\/media/.test(href)), false);
   } finally {
     console.info = previous;
     clearSignRulesCache();

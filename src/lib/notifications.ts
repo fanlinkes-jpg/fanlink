@@ -819,13 +819,84 @@ function httpsUrl(value: unknown): string | null {
   return withProtocol;
 }
 
+const NOTICE_PERSON_KEYS = ["user", "fromUser", "relatedUser", "subscriber", "subscriberUser", "author"] as const;
+
 export function noticePeople(record: Record<string, unknown>): Record<string, unknown>[] {
   const people: Record<string, unknown>[] = [];
-  for (const key of ["user", "fromUser", "relatedUser", "subscriber"]) {
-    const value = record[key];
-    if (value && typeof value === "object" && !Array.isArray(value)) people.push(value as Record<string, unknown>);
+  const bags = [record, record.data, record.entity].filter((value): value is Record<string, unknown> => (
+    Boolean(value) && typeof value === "object" && !Array.isArray(value)
+  ));
+  for (const bag of bags) {
+    for (const key of NOTICE_PERSON_KEYS) {
+      const value = bag[key];
+      if (value && typeof value === "object" && !Array.isArray(value)) people.push(value as Record<string, unknown>);
+    }
   }
   return people;
+}
+
+/** Id numérico del fan. Un usuario tipo u7022542 no se convierte en número. */
+export function noticeFanId(record: Record<string, unknown>): string | null {
+  for (const person of noticePeople(record)) {
+    const id = numericId(firstString(person, ["id", "userId", "user_id"]));
+    if (id) return id;
+  }
+  const direct = numericId(firstString(record, ["userId", "user_id", "fanId", "fanKey", "fromUserId", "subscriberId"]));
+  if (direct) return direct;
+  for (const key of NOTICE_PERSON_KEYS) {
+    const id = numericId(record[key]);
+    if (id) return id;
+  }
+  const data = record.data;
+  if (data && typeof data === "object" && !Array.isArray(data)) {
+    const nestedId = noticeFanId(data as Record<string, unknown>);
+    if (nestedId) return nestedId;
+  }
+  return idFromNoticeLinks(record);
+}
+
+export function hashFanId(id: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < id.length; index += 1) {
+    hash ^= id.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+/** Línea de diagnóstico: hash del id y qué campos de foto llegan. Sin URL ni id. */
+export function noticeAvatarTrace(record: Record<string, unknown>): { hash: string | null; campos: string } {
+  const id = noticeFanId(record);
+  const parts: string[] = [];
+  const slots: Array<[string, unknown]> = [
+    ["user", record.user],
+    ["fromUser", record.fromUser],
+    ["subscriber", record.subscriber],
+    ["data", dataPerson(record)],
+  ];
+  for (const [name, value] of slots) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      parts.push(`${name}.avatar:ausente`);
+      parts.push(`${name}.avatarThumbs:ausente`);
+      continue;
+    }
+    const person = value as Record<string, unknown>;
+    parts.push(`${name}.avatar:${avatarFieldKind(person.avatar)}`);
+    parts.push(`${name}.avatarThumbs:${thumbFieldKind(person.avatarThumbs)}`);
+  }
+  parts.push(`enlace:${idFromNoticeLinks(record) ? "id" : "ausente"}`);
+  return { hash: id ? hashFanId(id) : null, campos: parts.join(",") };
+}
+
+export function noticePayloadTraces(value: unknown): string[] {
+  const lines: string[] = [];
+  for (const row of noticeRows(value)) {
+    if (lines.length >= 20) break;
+    if (firstNoticeAvatar(noticePeople(row)) || avatarOf(row)) continue;
+    const trace = noticeAvatarTrace(row);
+    lines.push(`[fanlink:notif] avatar hash=${trace.hash ?? "ausente"} campos=${trace.campos}`);
+  }
+  return lines;
 }
 
 export function firstNoticeAvatar(people: readonly Record<string, unknown>[]): string | null {
@@ -855,15 +926,34 @@ export function usersListPath(ids: readonly string[]): string | null {
 
 export function avatarsFromUserMap(value: unknown): Map<string, string> {
   const map = new Map<string, string>();
-  if (!value || typeof value !== "object" || Array.isArray(value)) return map;
-  for (const [key, row] of Object.entries(value as Record<string, unknown>)) {
-    if (!row || typeof row !== "object" || Array.isArray(row)) continue;
-    const person = row as Record<string, unknown>;
-    const id = /^\d{1,18}$/.test(key) ? key : firstString(person, ["id"]);
-    const url = firstNoticeAvatar([person]);
-    if (id && url) map.set(id, url);
-  }
+  collectDirectoryAvatars(value, null, map, 0);
   return map;
+}
+
+export function directoryAvatarReport(value: unknown): {
+  shape: "mapa" | "lista" | "otro";
+  devueltos: number;
+  conFoto: number;
+  sinFoto: number;
+  sinFotoHashes: string[];
+} {
+  const people = directoryPeople(value);
+  const sinFotoHashes: string[] = [];
+  let conFoto = 0;
+  for (const person of people) {
+    if (avatarOf(person.record)) {
+      conFoto += 1;
+      continue;
+    }
+    if (person.id) sinFotoHashes.push(hashFanId(person.id));
+  }
+  return {
+    shape: directoryShape(value),
+    devueltos: people.length,
+    conFoto,
+    sinFoto: people.length - conFoto,
+    sinFotoHashes,
+  };
 }
 
 export function applyDirectoryAvatars<T extends { fanKey: string | null; avatarUrl?: string | null }>(
@@ -1038,13 +1128,121 @@ function isPending(record: Record<string, unknown>, body: string | null): boolea
 }
 
 function fanOf(record: Record<string, unknown>): { fanKey: string | null; fanName: string | null } {
-  const user = nested(record, ["user", "fromUser", "relatedUser", "subscriber"]);
-  const fanKey = firstString(record, ["userId", "fanId", "fanKey"]) ?? (user ? firstString(user, ["id", "userId"]) : null);
+  const people = noticePeople(record);
+  const user = people[0] ?? null;
+  const fanKey = noticeFanId(record);
   const fanName = (user ? firstString(user, ["name", "displayName"]) : null)
     ?? firstString(record, ["name", "fanName"])
     ?? (user ? firstString(user, ["username"]) : null)
     ?? firstString(record, ["username"]);
   return { fanKey, fanName };
+}
+
+function numericId(value: unknown): string | null {
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) return String(value);
+  if (typeof value === "string" && /^\d{1,18}$/.test(value.trim())) return value.trim();
+  return null;
+}
+
+function idFromNoticeLinks(record: Record<string, unknown>): string | null {
+  const chunks: string[] = [];
+  const text = firstString(record, ["text", "message", "body"]);
+  if (text) chunks.push(text);
+  const pairs = record.replacePairs;
+  if (pairs && typeof pairs === "object" && !Array.isArray(pairs)) {
+    for (const value of Object.values(pairs as Record<string, unknown>)) {
+      if (typeof value === "string") chunks.push(value);
+    }
+  }
+  for (const chunk of chunks) {
+    const profile = /onlyfans\.com\/(\d{4,18})(?:\b|\/|\?|"|')/i.exec(chunk);
+    if (profile?.[1]) return profile[1];
+    const chat = /\/chats\/chat\/(\d{4,18})\b/.exec(chunk);
+    if (chat?.[1]) return chat[1];
+  }
+  return null;
+}
+
+function dataPerson(record: Record<string, unknown>): unknown {
+  const data = record.data;
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+  const bag = data as Record<string, unknown>;
+  return bag.user ?? bag.subscriber ?? bag.fromUser ?? null;
+}
+
+function avatarFieldKind(value: unknown): "url" | "objeto" | "vacio" | "ausente" {
+  if (value == null) return "ausente";
+  if (typeof value === "string") return value.trim() ? "url" : "vacio";
+  if (typeof value === "object") return "objeto";
+  return "vacio";
+}
+
+function thumbFieldKind(value: unknown): string {
+  if (value == null) return "ausente";
+  if (typeof value !== "object" || Array.isArray(value)) return "vacio";
+  const keys = Object.keys(value as Record<string, unknown>).filter((key) => key !== "url").slice(0, 4);
+  return keys.length > 0 ? keys.join("+") : "vacio";
+}
+
+function noticeRows(value: unknown): Record<string, unknown>[] {
+  if (!value || typeof value !== "object") return [];
+  if (Array.isArray(value)) return value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item));
+  const record = value as Record<string, unknown>;
+  const list = record.list ?? record.items ?? record.notifications;
+  if (Array.isArray(list)) return noticeRows(list);
+  return [];
+}
+
+function directoryShape(value: unknown): "mapa" | "lista" | "otro" {
+  if (Array.isArray(value)) return "lista";
+  if (!value || typeof value !== "object") return "otro";
+  const record = value as Record<string, unknown>;
+  if (Array.isArray(record.list) || Array.isArray(record.users) || Array.isArray(record.items)) return "lista";
+  return "mapa";
+}
+
+function directoryPeople(value: unknown): Array<{ id: string | null; record: Record<string, unknown> }> {
+  const people: Array<{ id: string | null; record: Record<string, unknown> }> = [];
+  collectDirectoryPeople(value, null, people, 0);
+  return people;
+}
+
+function collectDirectoryPeople(
+  value: unknown,
+  fallbackId: string | null,
+  people: Array<{ id: string | null; record: Record<string, unknown> }>,
+  depth: number,
+): void {
+  if (!value || typeof value !== "object" || depth > 3 || people.length > 40) return;
+  if (Array.isArray(value)) {
+    for (const item of value) collectDirectoryPeople(item, null, people, depth + 1);
+    return;
+  }
+  const record = value as Record<string, unknown>;
+  const id = numericId(firstString(record, ["id", "userId", "user_id"])) ?? numericId(fallbackId);
+  if (id && (record.avatar != null || record.avatarThumbs != null || record.username != null || record.name != null)) {
+    people.push({ id, record });
+    return;
+  }
+  const nestedList = record.list ?? record.users ?? record.items;
+  if (Array.isArray(nestedList)) {
+    collectDirectoryPeople(nestedList, null, people, depth + 1);
+    return;
+  }
+  for (const [key, child] of Object.entries(record)) {
+    if (!child || typeof child !== "object") continue;
+    collectDirectoryPeople(child, numericId(key) ?? fallbackId, people, depth + 1);
+  }
+}
+
+function collectDirectoryAvatars(value: unknown, fallbackId: string | null, map: Map<string, string>, depth: number): void {
+  const people: Array<{ id: string | null; record: Record<string, unknown> }> = [];
+  collectDirectoryPeople(value, fallbackId, people, depth);
+  for (const person of people) {
+    if (!person.id || map.has(person.id)) continue;
+    const url = avatarOf(person.record);
+    if (url) map.set(person.id, url);
+  }
 }
 
 function unreadFlag(record: Record<string, unknown>): boolean | null {

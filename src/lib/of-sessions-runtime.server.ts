@@ -42,10 +42,10 @@ import { openWorkPage } from "../../server/of-sessions/sessions/work-page.ts";
 import { type VaultFile } from "../../server/of-sessions/sync/vault-listen.ts";
 import { readChatVaultView as readVaultPage, type VaultPageResult, type VaultReadDeps } from "../../server/of-sessions/sync/vault-read.ts";
 import { fetchSignedOnlineFans } from "../../server/of-sessions/sync/online-fans.ts";
-import { fetchOlderChatPage, sessionForApi } from "../../server/of-sessions/sync/of-chat-api.ts";
+import { fetchOlderChatPage, sessionForApi, signedHeaders } from "../../server/of-sessions/sync/of-chat-api.ts";
 import { fetchNotificationList } from "../../server/of-sessions/sync/of-notifications-api.ts";
-import { applyDirectoryAvatars, avatarsFromUserMap, noticeIdsMissingAvatar, noticeTabFresh, ofListType, usersListPath, type NotificationTab } from "@/lib/notifications";
-import { withAccountApi } from "../../server/of-sessions/sync/api-list-pace.ts";
+import { applyDirectoryAvatars, avatarsFromUserMap, directoryAvatarReport, hashFanId, noticeIdsMissingAvatar, noticeTabFresh, ofListType, usersListPath, type NotificationTab } from "@/lib/notifications";
+import { awaitAccountGap, withAccountApi } from "../../server/of-sessions/sync/api-list-pace.ts";
 import { bindSignedViews, listOnlineFansView, markChatOpenedView, readVisibleFanSpendView } from "../../server/of-sessions/sync/signed-views.ts";
 
 export { listOnlineFansView, markChatOpenedView, readVisibleFanSpendView };
@@ -1237,19 +1237,33 @@ export async function ensureNotificationTabView(userId: string, input: { creator
   let items = page.items;
   const missing = noticeIdsMissingAvatar(items.map((item) => ({ fanKey: item.fanKey ?? null, avatarUrl: item.avatarUrl ?? null })));
   const path = usersListPath(missing);
+  if (page.status === 200 && !path) {
+    console.info("[fanlink:notif] avatares lote=no");
+  }
   if (path && page.status === 200) {
     const auth = sessionForApi(state, Date.now());
     if (!("reason" in auth)) {
-      const { loadSignRules } = await import("../../server/of-sessions/sync/of-sign.ts");
-      const { signedHeaders } = await import("../../server/of-sessions/sync/of-chat-api.ts");
       const rules = await loadSignRules(deps.fetch, deps.now());
       const listed = await withAccountApi(account.id, async () => {
-        await (await import("../../server/of-sessions/sync/api-list-pace.ts")).awaitAccountGap(account.id, deps.now, deps.sleep, 1_500);
+        await awaitAccountGap(account.id, deps.now, deps.sleep, 1_500);
         const response = await deps.fetch(`https://onlyfans.com${path}`, { headers: signedHeaders(rules, path, auth, deps.now()) });
-        if (!response.ok) return null;
+        if (!response.ok) {
+          console.info(`[fanlink:notif] avatares lote=si n=${missing.length} status=${response.status} devueltos=0 con-foto=0 sin-foto=0`);
+          return null;
+        }
         return response.json() as Promise<unknown>;
       });
-      if (listed) items = applyDirectoryAvatars(items, avatarsFromUserMap(listed));
+      if (listed) {
+        const report = directoryAvatarReport(listed);
+        console.info(`[fanlink:notif] avatares lote=si n=${missing.length} status=200 devueltos=${report.devueltos} con-foto=${report.conFoto} sin-foto=${report.sinFoto}`);
+        items = applyDirectoryAvatars(items, avatarsFromUserMap(listed));
+        const withoutPhoto = new Set(report.sinFotoHashes);
+        for (const id of missing) {
+          if (items.some((item) => item.fanKey === id && item.avatarUrl)) continue;
+          const hash = hashFanId(id);
+          console.info(`[fanlink:notif] avatar hash=${hash} ${withoutPhoto.has(hash) ? "sin-foto" : "ausente"}`);
+        }
+      }
     }
   }
   if (page.status === 200) {

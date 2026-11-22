@@ -5,6 +5,7 @@ import {
   OF_NOTIFICATION_LIST_TYPES,
   newTagsCountOf,
   ofTabForListType,
+  noticePayloadTraces,
   parseNotificationCounts,
   parseNotificationPayload,
   type OfNotificationListType,
@@ -158,6 +159,7 @@ export async function fetchSignedNotifications(state: StorageStateFile, deps: Si
 
   const listType = plannedListType(deps.accountId);
   const listPage = await request(notificationListPath(listType));
+  if (listPage.ok) logNoticeAvatars(listPage.body);
   routes.push(routeLog("lista", listPage, listPage.ok ? parseNotificationPayload(listPage.body, { accountUserId: auth.userId, listType }).length : 0));
   if (halt(listPage)) return stoppedRead(listPage, [], routes);
 
@@ -230,6 +232,7 @@ export async function fetchNotificationList(
   if (deps.accountId && deps.sleep) await awaitAccountGap(deps.accountId, deps.now, deps.sleep, deps.minGapMs ?? REQUEST_GAP_MS);
   const page = await getJson(deps.fetch, path, signedHeaders(rules, path, auth, deps.now()), deps.now(), "GET");
   if (!page.ok) return { items: [], retryAfterMs: page.retryAfterMs, status: page.status };
+  logNoticeAvatars(page.body);
   return {
     items: parseNotificationPayload(page.body, { accountUserId: auth.userId, listType }),
     retryAfterMs: 0,
@@ -353,6 +356,10 @@ function stoppedRead(page: JsonPage, items: ParsedNotification[], routes: Notifi
     status: page.status,
     retryAfterMs: page.retryAfterMs,
   };
+}
+
+function logNoticeAvatars(body: unknown): void {
+  for (const line of noticePayloadTraces(body)) console.info(line);
 }
 
 function routeLog(route: NotificationRouteName, page: JsonPage, count: number): NotificationRouteLog {
