@@ -2660,6 +2660,98 @@ test("una carpeta cortada varias veces pasa al final y se retoma en el mismo off
   }
 });
 
+test("fetchSignedVault pausa la cuenta ante un 429", async () => {
+  clearSignRulesCache();
+  clearVaultWalkCache();
+  clearAccountPauses();
+  const waits: number[] = [];
+  const now = 1_700_000_000_000;
+  let hits = 0;
+  try {
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const href = String(input);
+      if (href.includes("dynamic-rules")) return Response.json(RULES);
+      hits += 1;
+      if (hits === 1) return new Response("no", { status: 429, headers: { "retry-after": "1" } });
+      return Response.json({ medias: [{ id: 1, type: "photo" }], hasMore: false });
+    }) as typeof fetch;
+    const deps = {
+      fetch: fetchImpl,
+      now: () => now,
+      accountId: "acc-mini",
+      sleep: async (ms: number) => {
+        waits.push(ms);
+      },
+    };
+    const denied = await fetchSignedVault(storedState(), deps, "88590", 0, { includeLists: false });
+    assert.equal(denied.status, 429);
+    assert.equal(denied.retryAfterMs, 1000);
+    const pause = accountPause("acc-mini", now);
+    assert.equal(pause != null && pause.until - now >= 1000, true);
+    await fetchSignedVault(storedState(), deps, "88590", 0, { includeLists: false });
+    assert.equal(waits.some((ms) => ms >= 1000), true);
+    assert.equal(accountPause("acc-otra", now), null);
+  } finally {
+    clearAccountPauses();
+    clearSignRulesCache();
+    clearVaultWalkCache();
+  }
+});
+
+test("un 429 y la pausa devuelven la carpeta con sus medios", async () => {
+  clearSignRulesCache();
+  clearVaultWalkCache();
+  clearAccountPauses();
+  const db = new PGlite();
+  const lines: string[] = [];
+  const previous = console.info;
+  console.info = (line?: unknown) => {
+    lines.push(String(line));
+  };
+  let hits = 0;
+  try {
+    await migrateVault(db);
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const href = String(input);
+      if (href.includes("dynamic-rules")) return Response.json(RULES);
+      if (isVaultListsIndex(href)) {
+        return Response.json({
+          list: [{ id: 88810, type: "custom", name: "Mensajes", photosCount: 2, videosCount: 0, hasMedia: true }],
+          hasMore: false,
+        });
+      }
+      if (href.includes("/vault/lists/88810/media")) {
+        hits += 1;
+        if (hits === 1) return new Response("no", { status: 429, headers: { "retry-after": "1" } });
+        return Response.json({
+          medias: [{ id: 11, type: "photo" }, { id: 12, type: "photo" }],
+          hasMore: false,
+        });
+      }
+      return Response.json({ list: [], hasMore: false });
+    }) as typeof fetch;
+    const view = await readChatVaultView({ creatorId: "3zk7kbr", listId: "88810", offset: 0 }, {
+      fetch: fetchImpl,
+      now: () => 1_700_000_000_000,
+      sql: asSql(db),
+      sleep: async () => undefined,
+      access: { role: "owner", perms: ["vault"] },
+      sessions: vaultSessions("acc-vuelve"),
+    });
+    assert.equal(lines.some((line) => line.includes("pausa lista=") && line.includes("espera=")), true);
+    assert.deepEqual(view.items.map((item) => item.id), ["11", "12"]);
+    assert.equal(view.reason, null);
+    const members = await db.query<{ item_key: string }>("select item_key from of_vault_list_item where list_key = '88810' order by item_key");
+    assert.deepEqual(members.rows.map((row) => row.item_key), ["11", "12"]);
+  } finally {
+    console.info = previous;
+    clearAccountPauses();
+    clearSignRulesCache();
+    clearVaultWalkCache();
+    await db.close();
+  }
+});
+
 function vaultSessions(accountId: string) {
   return {
     listAccounts: async () => [{

@@ -127,6 +127,14 @@ export function VaultBrowser({
     let alive = true;
     setReady(false);
     const folderId = layout === "of" && thumbPage.listId !== "all" ? thumbPage.listId : null;
+    if (layout === "of") {
+      wantedFolder.current = folderId;
+      setQuery((current) => (
+        current.folderId === folderId && current.scope === (folderId ? "carpeta" : "todas")
+          ? current
+          : { ...current, folderId, scope: folderId ? "carpeta" : "todas" }
+      ));
+    }
     const ticket = folderId;
     void queryVaultMirror({
       data: {

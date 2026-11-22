@@ -46,6 +46,23 @@ export function folderGridItems<T extends { id: string; listId?: string | null; 
   return own;
 }
 
+export type VaultFolderMemory = Record<string, string>;
+
+/** Al cambiar de cuenta no se arrastra la carpeta abierta. Vuelve a Toda la bóveda, o a la última de esa cuenta. */
+export function vaultFolderOnAccountChange(
+  memory: VaultFolderMemory,
+  fromCreatorId: string | null,
+  toCreatorId: string | null,
+  openListId: string,
+): { memory: VaultFolderMemory; listId: string } {
+  if (fromCreatorId === toCreatorId) return { memory, listId: openListId.trim() || "all" };
+  const next = { ...memory };
+  if (fromCreatorId) next[fromCreatorId] = openListId.trim() || "all";
+  if (!toCreatorId) return { memory: next, listId: "all" };
+  const saved = next[toCreatorId]?.trim();
+  return { memory: next, listId: saved || "all" };
+}
+
 /** La respuesta de Todos no pinta si ya se abrió otra carpeta. */
 export function ignoreStaleVaultView(wanted: unknown, ticket: unknown): boolean {
   const left = wanted == null ? "" : String(wanted).trim();

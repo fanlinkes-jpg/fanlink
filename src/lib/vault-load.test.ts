@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { folderGridCap, folderGridItems, ignoreStaleVaultView, mergeVaultPage, nextVaultLibrary, sameVaultId, vaultLoadAllowed } from "./vault-load.ts";
+import { folderGridCap, folderGridItems, ignoreStaleVaultView, mergeVaultPage, nextVaultLibrary, sameVaultId, vaultFolderOnAccountChange, vaultLoadAllowed } from "./vault-load.ts";
 
 test("una carpeta entra aunque Todos siga ocupado", () => {
   const busyAll = { busy: true, listId: "all" };
@@ -9,6 +9,16 @@ test("una carpeta entra aunque Todos siga ocupado", () => {
   assert.equal(vaultLoadAllowed({ busy: false, listId: "all" }, { listId: "all", offset: 40 }), true);
   assert.equal(vaultLoadAllowed({ busy: true, listId: "nocturno" }, { listId: "nocturno", offset: 40 }), false);
   assert.equal(vaultLoadAllowed(busyAll, { listId: "nocturno", offset: -1 }), false);
+});
+
+test("al cambiar de cuenta la carpeta no se arrastra", () => {
+  const left = vaultFolderOnAccountChange({}, "jose", "allison", "30436423");
+  assert.equal(left.listId, "all");
+  assert.equal(left.memory.jose, "30436423");
+  const back = vaultFolderOnAccountChange(left.memory, "allison", "jose", "all");
+  assert.equal(back.listId, "30436423");
+  assert.equal(back.memory.allison, "all");
+  assert.equal(vaultFolderOnAccountChange(back.memory, "jose", "jose", "30436423").listId, "30436423");
 });
 
 test("la página siguiente de una carpeta se añade sin repetir", () => {

@@ -5,7 +5,7 @@ import { mergeMessages, mergeThreads, parseChatList, parseChatMessages, parsePre
 import { collectFanSpend } from "./fan-spend.ts";
 import { awaitAccountGap, REQUEST_GAP_MS, withAccountApi } from "./api-list-pace.ts";
 import { accountPause } from "./backoff.ts";
-import { VAULT_RATE_CAP_MS } from "./vault-pace.ts";
+import { pauseVaultRate, VAULT_RATE_CAP_MS } from "./vault-pace.ts";
 import { noteMissingUnread } from "./unread-chats.ts";
 import { usersMeKeepsSession, usersMeVerdict } from "../identity.ts";
 import { loadSignRules, signedUserId, signOnlyfans, type SignRules } from "./of-sign.ts";
@@ -385,7 +385,7 @@ export async function fetchSignedVault(state: StorageStateFile, deps: {
     status = read.status;
     console.info(vaultPageLog({ route: path, status: read.status, count: listCountOf(read.body), hasMore: hasMoreLabelOf(read.body), offset: listSkip, listId: "listas", reason: read.reason }));
     const stopped = stopVaultRead(payloads, read);
-    if (stopped) return stopped;
+    if (stopped) return holdVaultRate(deps, stopped);
     if (read.ok) payloads.push(read.body);
     else return { ...empty, status: read.status, reason: read.reason };
   }
@@ -396,7 +396,7 @@ export async function fetchSignedVault(state: StorageStateFile, deps: {
     let read = await readVaultPath(deps, () => getJson(deps.fetch, primary, signedHeaders(rules, primary, auth, deps.now()), deps.now()));
     logVaultPage(list, primary, read, skip);
     if (read.status === 429 || read.retryAfterMs > 0) {
-      return {
+      return holdVaultRate(deps, {
         payloads,
         status: 429,
         reason: "OnlyFans respondió 429",
@@ -404,7 +404,7 @@ export async function fetchSignedVault(state: StorageStateFile, deps: {
         signatureRejected: false,
         retryAfterMs: read.retryAfterMs > 0 ? read.retryAfterMs : backoffDelayMs(0),
         queryParam,
-      };
+      });
     }
     const listed = folderListedCounts(payloads, list);
     const catalogHasMedia = options?.expectMedia === true || (listed != null && listed.total > 0);
@@ -434,7 +434,7 @@ export async function fetchSignedVault(state: StorageStateFile, deps: {
     }
     status = read.status;
     const stopped = stopVaultRead(payloads, read, queryParam);
-    if (stopped) return stopped;
+    if (stopped) return holdVaultRate(deps, stopped);
     if (read.ok) payloads.push(read.body);
     else return { ...empty, payloads, status: read.status, reason: read.reason, queryParam };
   }
@@ -456,6 +456,13 @@ export async function fetchSignedMediaDetail(state: StorageStateFile, deps: {
   console.info(`[fanlink:vault] video medio=${vaultFolderMark(mediaId)} detalle status=${read.status || "sin"}`);
   if (!read.ok) return { status: read.status, body: null, reason: read.reason };
   return { status: read.status, body: read.body, reason: null };
+}
+
+function holdVaultRate(deps: { accountId?: string; now: () => number }, read: SignedVaultRead): SignedVaultRead {
+  if (deps.accountId && (read.status === 429 || read.retryAfterMs > 0)) {
+    pauseVaultRate(deps.accountId, read.retryAfterMs, deps.now());
+  }
+  return read;
 }
 
 function stopVaultRead(payloads: unknown[], read: JsonPage, queryParam: "list" | "list_id" | null = null): SignedVaultRead | null {

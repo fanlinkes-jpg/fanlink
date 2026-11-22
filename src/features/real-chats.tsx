@@ -12,7 +12,7 @@ import { NOTIFICATION_TABS, TAB_LABEL, isOwnerOnlyKind, tabOf, type Notification
 import { NotificationFanCard } from "@/features/notification-card";
 import { useCrm, type VaultItem } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
-import { mergeVaultPage, vaultLoadAllowed } from "@/lib/vault-load";
+import { mergeVaultPage, vaultFolderOnAccountChange, vaultLoadAllowed } from "@/lib/vault-load";
 import { VAULT_FOLDER_READ_ERROR } from "@/lib/vault-folder-label";
 import { clearOpenThread, peekOpenThread } from "@/lib/open-thread";
 import { useChatFanCards } from "@/lib/use-chat-fan-cards";
@@ -266,6 +266,8 @@ export function RealChatsPage() {
     return pending;
   }
   const [thumbPage, setThumbPage] = useState({ listId: "all", offset: 0 });
+  const vaultMemory = useRef<Record<string, string>>({});
+  const vaultCreator = useRef<string | null>(null);
   const offerPriceId = useRef<string | null>(null);
 
   async function refresh() {
@@ -484,6 +486,17 @@ export function RealChatsPage() {
     },
   });
   const selected = inbox.selected;
+  const vaultAccount = selected?.creatorId ?? null;
+  if (vaultAccount !== vaultCreator.current) {
+    const moved = vaultFolderOnAccountChange(vaultMemory.current, vaultCreator.current, vaultAccount, thumbPage.listId);
+    vaultMemory.current = moved.memory;
+    vaultCreator.current = vaultAccount;
+    if (thumbPage.listId !== moved.listId) {
+      setThumbPage({ listId: moved.listId, offset: 0 });
+      setOfVault([]);
+      vaultPage.current = { listId: moved.listId, offset: 0, busy: false };
+    }
+  }
   const visible = inbox.visible;
   const fanCards = useChatFanCards(visible);
   const spendAsked = useRef("");
