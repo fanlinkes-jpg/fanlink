@@ -43,6 +43,8 @@ import { type VaultFile } from "../../server/of-sessions/sync/vault-listen.ts";
 import { readChatVaultView as readVaultPage, type VaultPageResult, type VaultReadDeps } from "../../server/of-sessions/sync/vault-read.ts";
 import { fetchSignedOnlineFans } from "../../server/of-sessions/sync/online-fans.ts";
 import { fetchOlderChatPage, sessionForApi } from "../../server/of-sessions/sync/of-chat-api.ts";
+import { fetchNotificationList } from "../../server/of-sessions/sync/of-notifications-api.ts";
+import { applyDirectoryAvatars, avatarsFromUserMap, noticeIdsMissingAvatar, noticeTabFresh, ofListType, usersListPath, type NotificationTab } from "@/lib/notifications";
 import { withAccountApi } from "../../server/of-sessions/sync/api-list-pace.ts";
 import { bindSignedViews, listOnlineFansView, markChatOpenedView, readVisibleFanSpendView } from "../../server/of-sessions/sync/signed-views.ts";
 
@@ -1199,6 +1201,68 @@ export async function runFanChatMenuView(userId: string, input: { creatorId: str
   }, { wait: true });
   if (!ran.ok) return { ok: false, reason: "OnlyFans está ocupado con otra lectura.", lists: [] };
   return ran.value;
+}
+
+const noticeTabAt = new Map<string, number>();
+
+export async function ensureNotificationTabView(userId: string, input: { creatorId: string; tab: NotificationTab }): Promise<{ ok: boolean; fresh: boolean }> {
+  const access = await accessFor(userId);
+  if (access.role !== "owner" && !access.perms.includes("mensajes")) {
+    throw new WorkspaceAccessError("No tienes permiso para escribir.");
+  }
+  const listType = ofListType(input.tab);
+  const key = `${input.creatorId}:${listType ?? "all"}`;
+  if (noticeTabFresh(noticeTabAt.get(key) ?? null, Date.now())) return { ok: true, fresh: true };
+  const sessions = await getOfSessionManager();
+  const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
+  if (!account) return { ok: false, fresh: false };
+  let state;
+  try {
+    state = await sessions.readStorageState(account.id);
+  } catch {
+    return { ok: false, fresh: false };
+  }
+  const deps = {
+    fetch: globalThis.fetch,
+    now: () => Date.now(),
+    sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+    minGapMs: 1_500,
+    accountId: account.id,
+  };
+  const page = await withAccountApi(account.id, () => fetchNotificationList(state, deps, listType));
+  if (page.retryAfterMs > 0) {
+    noteAccountBlock(account.id, "429");
+    return { ok: false, fresh: false };
+  }
+  let items = page.items;
+  const missing = noticeIdsMissingAvatar(items.map((item) => ({ fanKey: item.fanKey ?? null, avatarUrl: item.avatarUrl ?? null })));
+  const path = usersListPath(missing);
+  if (path && page.status === 200) {
+    const auth = sessionForApi(state, Date.now());
+    if (!("reason" in auth)) {
+      const { loadSignRules } = await import("../../server/of-sessions/sync/of-sign.ts");
+      const { signedHeaders } = await import("../../server/of-sessions/sync/of-chat-api.ts");
+      const rules = await loadSignRules(deps.fetch, deps.now());
+      const listed = await withAccountApi(account.id, async () => {
+        await (await import("../../server/of-sessions/sync/api-list-pace.ts")).awaitAccountGap(account.id, deps.now, deps.sleep, 1_500);
+        const response = await deps.fetch(`https://onlyfans.com${path}`, { headers: signedHeaders(rules, path, auth, deps.now()) });
+        if (!response.ok) return null;
+        return response.json() as Promise<unknown>;
+      });
+      if (listed) items = applyDirectoryAvatars(items, avatarsFromUserMap(listed));
+    }
+  }
+  if (page.status === 200) {
+    await saveNotificationRead(await getSql(), input.creatorId, {
+      captured: true,
+      status: 200,
+      motivo: "ok",
+      reason: null,
+      items,
+    });
+    noticeTabAt.set(key, Date.now());
+  }
+  return { ok: page.status === 200, fresh: false };
 }
 
 export async function loadOlderMessagesView(userId: string, input: { creatorId: string; threadKey: string }): Promise<{ ok: boolean; hasMore: boolean; retryAfterMs: number }> {

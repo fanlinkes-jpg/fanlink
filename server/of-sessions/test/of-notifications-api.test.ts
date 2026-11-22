@@ -175,12 +175,11 @@ test("cada pestaña con no leídas pide su type y no se mezcla", async () => {
   const third = await read();
   assert.equal([...first.methods, ...second.methods, ...third.methods].every((method) => method === "GET"), true);
   assert.equal(new URL(first.urls[0] ?? "").searchParams.get("type"), null);
-  assert.equal(new URL(second.urls[0] ?? "").searchParams.get("type"), "purchases");
-  assert.equal(new URL(third.urls[0] ?? "").searchParams.get("type"), "tip");
-  assert.equal(second.result.items.every((item) => item.ofType === "purchases"), true);
-  assert.equal(second.result.items[0]?.fanHandle, "arias_crazy1");
-  assert.equal(third.result.items.every((item) => item.ofType === "tip"), true);
-  assert.equal(third.result.items[0]?.fanHandle, "mishellxy");
+  assert.equal(new URL(second.urls[0] ?? "").searchParams.get("type"), "subscribed");
+  assert.equal(new URL(third.urls[0] ?? "").searchParams.get("type"), "purchases");
+  assert.equal(second.result.items.every((item) => item.ofType === "subscribed"), true);
+  assert.equal(third.result.items.every((item) => item.ofType === "purchases"), true);
+  assert.equal(third.result.items[0]?.fanHandle, "arias_crazy1");
   assert.equal(second.result.counts?.tags, 2);
   assert.equal(ofTabListNote({ tab: "tags", unread: 2, listed: 0 })?.includes("2 no leídas"), true);
 });

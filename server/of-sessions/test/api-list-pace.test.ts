@@ -163,7 +163,7 @@ test("la bandeja, el bucle y readChatsNow no pisan el fetch", async () => {
     assert.equal(launches, 0);
     assert.ok(starts.length >= 2, `fetches=${starts.length}`);
     for (let index = 1; index < starts.length; index += 1) {
-      assert.ok(starts[index] - starts[index - 1] >= 300, `${starts[index - 1]}→${starts[index]}`);
+      assert.ok(starts[index] - starts[index - 1] >= 1_500, `${starts[index - 1]}→${starts[index]}`);
     }
   } finally {
     clearSignRulesCache();

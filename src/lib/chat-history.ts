@@ -12,3 +12,17 @@ export function mergeHistoryMessages<T extends { messageKey: string; sentAt: str
 export function scrollAfterPrepend(before: { scrollHeight: number; scrollTop: number }, nextScrollHeight: number): number {
   return before.scrollTop + Math.max(0, nextScrollHeight - before.scrollHeight);
 }
+
+export type ScrollAnchor = { id: string; offset: number };
+
+/** El primer mensaje que asoma, y cuántos px hay de su borde al borde de la lista. */
+export function scrollAnchor(rows: readonly { id: string; top: number; height: number }[], viewportTop: number): ScrollAnchor | null {
+  const visible = rows.find((row) => row.top + row.height > viewportTop + 1);
+  if (!visible) return null;
+  return { id: visible.id, offset: visible.top - viewportTop };
+}
+
+/** Cuánto hay que mover el scroll para que el ancla quede otra vez a `offset` px del borde. */
+export function scrollDeltaForAnchor(anchor: ScrollAnchor, elementTop: number, viewportTop: number): number {
+  return elementTop - viewportTop - anchor.offset;
+}

@@ -91,13 +91,21 @@ export function clearNotificationListPlans(): void {
   listPlans.clear();
 }
 
+/** Todo y cada type, también si el contador de no leídas es 0. */
+export function noticeListQueue(): Array<OfNotificationListType | null> {
+  return [null, ...OF_NOTIFICATION_LIST_TYPES];
+}
+
+export function nextNoticeListType(cursor: number): { type: OfNotificationListType | null; next: number } {
+  const queue = noticeListQueue();
+  return { type: queue[cursor % queue.length] ?? null, next: cursor + 1 };
+}
+
 function plannedListType(accountId: string | undefined): OfNotificationListType | null {
   if (!accountId) return null;
   const plan = listPlans.get(accountId);
-  if (!plan?.counts) return null;
-  const pending = OF_NOTIFICATION_LIST_TYPES.filter((type) => (plan.counts?.[ofTabForListType(type)] ?? 0) > 0);
-  const queue: Array<OfNotificationListType | null> = [null, ...pending];
-  return queue[plan.cursor % queue.length] ?? null;
+  if (!plan) return null;
+  return nextNoticeListType(plan.cursor).type;
 }
 
 function rememberListPlan(accountId: string | undefined, counts: NotificationCounts | null): void {
@@ -206,6 +214,26 @@ export async function fetchSignedNotifications(state: StorageStateFile, deps: Si
     status: listPage.status,
     retryAfterMs: 0,
     avatarUrl,
+  };
+}
+
+/** Una pestaña, un GET. La caché de quien llama decide si hace falta. */
+export async function fetchNotificationList(
+  state: StorageStateFile,
+  deps: SignedNotificationDeps,
+  listType: OfNotificationListType | null,
+): Promise<{ items: ParsedNotification[]; retryAfterMs: number; status: number | null }> {
+  const auth = sessionForApi(state, deps.now());
+  if ("reason" in auth) return { items: [], retryAfterMs: 0, status: null };
+  const rules = deps.rules ?? await loadSignRules(deps.fetch, deps.now());
+  const path = notificationListPath(listType);
+  if (deps.accountId && deps.sleep) await awaitAccountGap(deps.accountId, deps.now, deps.sleep, deps.minGapMs ?? REQUEST_GAP_MS);
+  const page = await getJson(deps.fetch, path, signedHeaders(rules, path, auth, deps.now()), deps.now(), "GET");
+  if (!page.ok) return { items: [], retryAfterMs: page.retryAfterMs, status: page.status };
+  return {
+    items: parseNotificationPayload(page.body, { accountUserId: auth.userId, listType }),
+    retryAfterMs: 0,
+    status: page.status,
   };
 }
 

@@ -7,7 +7,7 @@ import type { OnlineFanRow } from "@/lib/online-fan-row";
 import { unreadChatRow } from "../../server/of-sessions/sync/unread-chats.ts";
 import { inboxPillCounts, matchesInboxPill, tipThreads, type InboxPill } from "../../server/of-sessions/sync/chat-pills.ts";
 import { accountFigure, everyAccountBlocked, SESSION_EXPIRED_LABEL } from "../../server/of-sessions/sync/session-link.ts";
-import { listCreatorNotifications, markCreatorNotificationsRead, type NotificationListItem } from "@/lib/of-notifications";
+import { ensureNoticeTab, listCreatorNotifications, markCreatorNotificationsRead, type NotificationListItem } from "@/lib/of-notifications";
 import { NOTIFICATION_TABS, TAB_LABEL, isOwnerOnlyKind, notesForCreator, noticeFace, notificationReplyLine, noticesForOfTab, ofTabListNote, tabOf, type NotificationCounts, type NotificationTab } from "@/lib/notifications";
 import { NotificationFanCard } from "@/features/notification-card";
 import { useCrm, type VaultItem } from "@/lib/crm";
@@ -43,7 +43,7 @@ import { useInboxSelection } from "@/lib/inbox-selection";
 import { ChatMediaPlayer } from "@/features/chat-media-player";
 import { MediaStrip } from "@/features/media-strip";
 import { bubbleBlocks, bubblePriceLabel } from "@/lib/chat-bubble";
-import { mergeHistoryMessages, scrollAfterPrepend } from "@/lib/chat-history";
+import { mergeHistoryMessages, scrollAnchor, scrollDeltaForAnchor, type ScrollAnchor } from "@/lib/chat-history";
 import { VAULT_THUMB_MISSING, vaultMediaSrc } from "@/lib/chat-media";
 import { VaultBrowser } from "@/features/vault-browser";
 
@@ -203,7 +203,7 @@ function ThreadMessage({ message }: { message: {
     <ChatMediaPlayer key={`${message.messageKey}-${slide.index}`} creatorId={message.creatorId} threadKey={message.threadKey} messageKey={message.messageKey} index={slide.index} kind={slide.kind} compact={layout.layout === "carousel"} />
   ));
   return (
-    <li className={message.fromFan ? "" : "text-right"} data-layout={layout.layout} data-automatic={message.automatic ? "1" : "0"}>
+    <li data-message-id={message.messageKey} className={message.fromFan ? "" : "text-right"} data-layout={layout.layout} data-automatic={message.automatic ? "1" : "0"}>
       {(openSlides.length > 0 || message.body || pay) ? (
       <div className={`inline-block max-w-[70%] rounded-2xl px-3 py-2 text-left text-sm ${message.fromFan ? "bg-[#f4f6fb]" : "bg-[#e7f0ff]"}`}>
         {layout.layout === "carousel" ? <MediaStrip>{players}</MediaStrip> : players}
@@ -333,7 +333,24 @@ export function RealChatsPage() {
   const fileBox = useRef<HTMLInputElement>(null);
   const savedRange = useRef<Range | null>(null);
   const olderLock = useRef(false);
-  const holdScroll = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
+  const scrollMark = useRef<ScrollAnchor | null>(null);
+  function pinThreadScroll(node: HTMLElement) {
+    const rows = [...node.querySelectorAll<HTMLElement>("[data-message-id]")].flatMap((el) => {
+      const id = el.dataset.messageId;
+      if (!id) return [];
+      const rect = el.getBoundingClientRect();
+      return [{ id, top: rect.top, height: rect.height }];
+    });
+    scrollMark.current = scrollAnchor(rows, node.getBoundingClientRect().top);
+  }
+  function restoreThreadScroll(node: HTMLElement) {
+    const mark = scrollMark.current;
+    if (!mark) return;
+    const el = node.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(mark.id)}"]`);
+    if (!el) return;
+    const delta = scrollDeltaForAnchor(mark, el.getBoundingClientRect().top, node.getBoundingClientRect().top);
+    if (Math.abs(delta) > 0.5) node.scrollTop += delta;
+  }
   const [olderBusy, setOlderBusy] = useState(false);
   const [threadHistory, setThreadHistory] = useState<Record<string, { done: boolean; messages: NonNullable<CreatorChatList["messages"]> }>>({});
   const listLock = useRef(false);
@@ -723,9 +740,8 @@ export function RealChatsPage() {
   useLayoutEffect(() => {
     const node = threadBox.current;
     if (!node) return;
-    if (holdScroll.current) {
-      node.scrollTop = scrollAfterPrepend(holdScroll.current, node.scrollHeight);
-      holdScroll.current = null;
+    if (scrollMark.current) {
+      restoreThreadScroll(node);
       stickToBottom.current = false;
       return;
     }
@@ -736,6 +752,15 @@ export function RealChatsPage() {
     if (!stickToBottom.current) return;
     node.scrollTop = node.scrollHeight;
   }, [threadTail, openThread, messages.length]);
+  useEffect(() => {
+    const node = threadBox.current;
+    if (!node || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (scrollMark.current) restoreThreadScroll(node);
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [openThread]);
   const creatorName = creators.find((creator) => creator.id === inboxCreator)?.name ?? "Cuenta";
   const slash = slashQuery(draft);
   const scriptHits = matchScripts(scripts, slash != null ? slash : libraryQuery);
@@ -1168,7 +1193,7 @@ export function RealChatsPage() {
               ref={notesButton}
               type="button"
               className="relative inline-flex items-center gap-1.5 rounded-lg bg-[#1f9d55] px-3 py-1.5 text-xs font-medium text-white"
-              onClick={() => { placeNotes(); setNotesOpen((open) => !open); void loadNotes(); }}
+              onClick={() => { placeNotes(); setNotesOpen((open) => !open); if (inboxCreator) void ensureNoticeTab({ data: { creatorId: inboxCreator, tab: noteFilter } }).catch(() => undefined); void loadNotes(); }}
             >
               <Bell className="h-3.5 w-3.5" />
               Notificaciones
@@ -1182,7 +1207,7 @@ export function RealChatsPage() {
                     <h2 className="text-base font-semibold">Notificaciones</h2>
                     <button type="button" aria-label="Actualizar notificaciones" className="grid h-8 w-8 place-items-center rounded-full text-[#6d7585] hover:bg-[#f4f7ff]" onClick={() => void loadNotes()}><RefreshCw className="h-4 w-4" /></button>
                   </div>
-                  <NoteTabRow filter={noteFilter} counts={noteCounts} onSelect={(id) => { setNoteFilter(id); if (id !== "all") markNotes(panelNotes(notes, inboxCreator, id)); }} />
+                  <NoteTabRow filter={noteFilter} counts={noteCounts} onSelect={(id) => { setNoteFilter(id); if (inboxCreator) void ensureNoticeTab({ data: { creatorId: inboxCreator, tab: id } }).then(() => loadNotes()).catch(() => undefined); if (id !== "all") markNotes(panelNotes(notes, inboxCreator, id)); }} />
                   {ofTabListNote({ tab: noteFilter, unread: noteCounts?.[noteFilter] ?? null, listed: panelNotes(notes, inboxCreator, noteFilter).length }) ? (
                     <p className="px-4 pb-2 text-[11px] text-[#6d7585]">{ofTabListNote({ tab: noteFilter, unread: noteCounts?.[noteFilter] ?? null, listed: panelNotes(notes, inboxCreator, noteFilter).length })}</p>
                   ) : null}
@@ -1410,12 +1435,14 @@ export function RealChatsPage() {
                 ) : null}
               </div>
             ) : null}
-            <ol ref={threadBox} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4" onScroll={(event) => {
+            <div className="relative min-h-0 flex-1">
+            {olderBusy ? <p className="pointer-events-none absolute inset-x-0 top-2 z-10 text-center text-xs text-[#6d7585]">Cargando mensajes anteriores…</p> : null}
+            <ol ref={threadBox} className="h-full space-y-3 overflow-y-auto px-4 py-4" onScroll={(event) => {
               const node = event.currentTarget;
               stickToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80;
               if (node.scrollTop > 24 || !selected || olderLock.current || historyDone) return;
               olderLock.current = true;
-              holdScroll.current = { scrollHeight: node.scrollHeight, scrollTop: node.scrollTop };
+              pinThreadScroll(node);
               setOlderBusy(true);
               const creatorId = selected.creatorId;
               const threadKey = selected.threadKey;
@@ -1436,13 +1463,12 @@ export function RealChatsPage() {
                 }));
                 void refresh();
               }).catch(() => {
-                holdScroll.current = null;
+                scrollMark.current = null;
               }).finally(() => {
                 olderLock.current = false;
                 setOlderBusy(false);
               });
             }}>
-              {olderBusy ? <li className="text-center text-xs text-[#6d7585]">Cargando mensajes anteriores…</li> : null}
               {historyDone ? <li className="text-center text-xs text-[#6d7585]">Inicio de la conversación</li> : null}
               {!selected || (messages.length === 0 && pendingForThread(pendingOut, selected).length === 0 && jobList.every((job) => job.creatorId !== selected.creatorId || job.threadKey !== selected.threadKey)) ? <li className="text-sm text-[#6d7585]">{selected ? "Sin datos" : "Sin sincronizar"}</li> : null}
               {messages.map((message) => (
@@ -1483,6 +1509,7 @@ export function RealChatsPage() {
               ))}
               {messages.some((message) => message.fromFan) && fanTranslation ? <li className="text-[10px] text-[#6d7585]">Traducción: Sin datos</li> : null}
             </ol>
+            </div>
             <form className="relative shrink-0 border-t border-[#e6e8ee] p-2" onSubmit={(event) => event.preventDefault()}>
               {panel && panel !== "guiones" && panel !== "vault" && panel !== "etiqueta" ? (
                 <div role="region" aria-label={panelLabel(panel)} className="absolute inset-x-2 bottom-full z-20 mb-1 max-h-52 overflow-y-auto rounded-xl border border-[#e6e8ee] bg-white p-3 text-sm shadow-lg">

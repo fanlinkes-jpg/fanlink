@@ -30,6 +30,10 @@ import {
   ofListType,
   ofTabListNote,
   ofNoticeTotal,
+  noticeIdsMissingAvatar,
+  usersListPath,
+  applyDirectoryAvatars,
+  noticeTabFresh,
   notificationReplyLine,
   renewStatusLabel,
   tabOf,
@@ -466,6 +470,33 @@ test("cada pestaña usa el type de OnlyFans y no mezcla compras con propinas", (
   assert.equal(live[0]?.ofType, "message");
   assert.deepEqual(noticesForOfTab(live, "promotions").map((row) => row.key), [live[0]?.key]);
   assert.deepEqual(noticesForOfTab(live, "tips"), []);
+});
+
+test("la foto sale del fromUser si el user no la trae, y un lote rellena las que faltan", () => {
+  const parsed = parseNotificationPayload({
+    list: [{
+      id: "sin",
+      type: "subscribed",
+      createdAt: "2026-11-13T10:00:00.000Z",
+      user: { id: 9, username: "u9" },
+      fromUser: { id: 9, avatarThumbs: { c144: "https://cdn.example/u9.jpg" } },
+    }],
+  });
+  assert.equal(parsed[0]?.avatarUrl, "https://cdn.example/u9.jpg");
+  assert.deepEqual(noticeIdsMissingAvatar([
+    { fanKey: "9", avatarUrl: "https://cdn.example/u9.jpg" },
+    { fanKey: "4", avatarUrl: null },
+    { fanKey: "no", avatarUrl: null },
+  ]), ["4"]);
+  assert.equal(usersListPath(["4", "8"]), "/api2/v2/users/list?cl[]=4&cl[]=8");
+  const filled = applyDirectoryAvatars(
+    [{ fanKey: "4", avatarUrl: null }, { fanKey: "8", avatarUrl: "https://cdn.example/keep.jpg" }],
+    new Map([["4", "https://cdn.example/4.jpg"]]),
+  );
+  assert.equal(filled[0]?.avatarUrl, "https://cdn.example/4.jpg");
+  assert.equal(filled[1]?.avatarUrl, "https://cdn.example/keep.jpg");
+  assert.equal(noticeTabFresh(1_000, 1_000 + 44_000), true);
+  assert.equal(noticeTabFresh(1_000, 1_000 + 46_000), false);
 });
 
 test("el badge verde usa el total de OnlyFans, no las no vistas en Fanlink", () => {

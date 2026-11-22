@@ -55,6 +55,14 @@ export type NotificationMarkResult = {
   fanlinkUnread: number | null;
 };
 
+export const ensureNoticeTab = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string; tab: NotificationTab }) => input)
+  .handler(async ({ context, data }) => {
+    const { ensureNotificationTabView } = await import("./of-sessions-runtime.server");
+    return ensureNotificationTabView(context.userId, data);
+  });
+
 export const listCreatorNotifications = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .validator((input: { creatorId: string; cursor?: string | null }) => input)

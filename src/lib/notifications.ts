@@ -796,11 +796,12 @@ function fanCard(record: Record<string, unknown>): {
   postLink: string | null;
   postText: string | null;
 } {
-  const user = nested(record, ["user", "fromUser", "relatedUser", "subscriber"]);
+  const people = noticePeople(record);
+  const user = people[0] ?? null;
   const post = postOf(record);
   return {
     fanHandle: (user ? firstString(user, ["username"]) : null) ?? firstString(record, ["username"]),
-    avatarUrl: (user ? avatarOf(user) : null) ?? avatarOf(record),
+    avatarUrl: firstNoticeAvatar(people) ?? avatarOf(record),
     lists: user ? readFanLists(user) : null,
     renewAuto: (user ? readRenew(user) : null) ?? readRenew(record),
     fanSeenAt: user ? firstTime(user, ["lastSeen"]) : null,
@@ -816,6 +817,70 @@ function httpsUrl(value: unknown): string | null {
   const withProtocol = clean.startsWith("//") ? `https:${clean}` : clean;
   if (!/^https?:\/\//i.test(withProtocol) || withProtocol.length > 400) return null;
   return withProtocol;
+}
+
+export function noticePeople(record: Record<string, unknown>): Record<string, unknown>[] {
+  const people: Record<string, unknown>[] = [];
+  for (const key of ["user", "fromUser", "relatedUser", "subscriber"]) {
+    const value = record[key];
+    if (value && typeof value === "object" && !Array.isArray(value)) people.push(value as Record<string, unknown>);
+  }
+  return people;
+}
+
+export function firstNoticeAvatar(people: readonly Record<string, unknown>[]): string | null {
+  for (const person of people) {
+    const url = avatarOf(person);
+    if (url) return url;
+  }
+  return null;
+}
+
+/** Ids sin foto, para un GET /users/list cacheado. */
+export function noticeIdsMissingAvatar(rows: readonly { fanKey: string | null; avatarUrl: string | null }[]): string[] {
+  const ids: string[] = [];
+  for (const row of rows) {
+    if (row.avatarUrl || !row.fanKey || !/^\d{1,18}$/.test(row.fanKey) || ids.includes(row.fanKey)) continue;
+    ids.push(row.fanKey);
+    if (ids.length >= 20) break;
+  }
+  return ids;
+}
+
+export function usersListPath(ids: readonly string[]): string | null {
+  const clean = ids.filter((id) => /^\d{1,18}$/.test(id)).slice(0, 20);
+  if (clean.length === 0) return null;
+  return `/api2/v2/users/list?${clean.map((id) => `cl[]=${encodeURIComponent(id)}`).join("&")}`;
+}
+
+export function avatarsFromUserMap(value: unknown): Map<string, string> {
+  const map = new Map<string, string>();
+  if (!value || typeof value !== "object" || Array.isArray(value)) return map;
+  for (const [key, row] of Object.entries(value as Record<string, unknown>)) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+    const person = row as Record<string, unknown>;
+    const id = /^\d{1,18}$/.test(key) ? key : firstString(person, ["id"]);
+    const url = firstNoticeAvatar([person]);
+    if (id && url) map.set(id, url);
+  }
+  return map;
+}
+
+export function applyDirectoryAvatars<T extends { fanKey: string | null; avatarUrl?: string | null }>(
+  rows: readonly T[],
+  directory: ReadonlyMap<string, string>,
+): T[] {
+  return rows.map((row) => {
+    if (row.avatarUrl || !row.fanKey) return row;
+    const url = directory.get(row.fanKey);
+    return url ? { ...row, avatarUrl: url } : row;
+  });
+}
+
+export const NOTICE_TAB_TTL_MS = 45_000;
+
+export function noticeTabFresh(fetchedAt: number | null, now: number, ttl = NOTICE_TAB_TTL_MS): boolean {
+  return fetchedAt != null && now - fetchedAt < ttl && now >= fetchedAt;
 }
 
 function avatarOf(user: Record<string, unknown>): string | null {
