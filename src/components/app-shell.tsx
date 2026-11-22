@@ -1,5 +1,6 @@
 import { ClientOnly, Link, useRouterState } from "@tanstack/react-router";
-import { readInboxCreator, resolveInboxCreator } from "@/lib/inbox-scope";
+import { readInboxCreator, resolveInboxCreator, showsCreatorRail, writeInboxCreator } from "@/lib/inbox-scope";
+import { CreatorRail } from "@/components/creator-rail";
 import { bindUiUser, COMPOSER_LANGUAGES, setComposerLanguage, setSfwEnabled, useComposerLanguage, useSfw } from "@/lib/ui-prefs";
 import { useEffect, useState, type ReactNode } from "react";
 import {
@@ -112,12 +113,14 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
     bindUiUser(user?.id ?? null);
   }, [user?.id, isPending]);
 
+  const creatorRail = showsCreatorRail(path);
   const rememberedCreator = typeof window === "undefined" ? null : readInboxCreator(window.localStorage);
   const resolvedCreator = resolveInboxCreator({ requested: creatorId, creators, remembered: rememberedCreator });
   useEffect(() => {
-    if (!path.startsWith("/mensajes") || !resolvedCreator || resolvedCreator === creatorId) return;
-    setCreator(resolvedCreator);
-  }, [path, resolvedCreator, creatorId, setCreator]);
+    if (!creatorRail || !resolvedCreator) return;
+    writeInboxCreator(window.localStorage, resolvedCreator);
+    if (resolvedCreator !== creatorId) setCreator(resolvedCreator);
+  }, [creatorRail, resolvedCreator, creatorId, setCreator]);
   const navRole = navRoleFromAccess(teamAccess);
   const blocks = visibleNavBlocks(navRole, teamAccess);
   const currentOk = canAccessPath(path, navRole, teamAccess);
@@ -133,6 +136,7 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
           mobile={mobile}
           setMobile={setMobile}
           path={path}
+          creatorRail={creatorRail}
           workspaceNotice={workspaceNotice}
           teamAccess={teamAccess}
           blocks={blocks}
@@ -207,6 +211,7 @@ function ShellFrame({
   mobile,
   setMobile,
   path,
+  creatorRail,
   workspaceNotice,
   teamAccess,
   blocks,
@@ -217,6 +222,7 @@ function ShellFrame({
   mobile: boolean;
   setMobile: (value: boolean) => void;
   path: string;
+  creatorRail: boolean;
   workspaceNotice: string | null;
   teamAccess: { displayName: string; devMode: boolean };
   blocks: NavLink[];
@@ -285,14 +291,17 @@ function ShellFrame({
           <span className="min-w-0 flex-1" />
           <HeaderTools devMode={teamAccess.devMode} displayName={teamAccess.displayName} />
         </header>
-        <main className={cn("flex min-h-0 flex-1 flex-col", bleed ? "overflow-hidden" : "overflow-auto pb-16 md:pb-0")}>
-          {workspaceNotice && <p className="shrink-0 bg-amber-50 px-4 py-2 text-xs text-amber-800">{workspaceNotice}</p>}
-          <div className={bleed ? "relative min-h-0 flex-1 overflow-hidden" : "shrink-0"}>
-            {currentOk ? children : (
-              <div className="grid h-full place-items-center p-6 text-center">
-                <p className="text-sm text-muted">{teamAccess.displayName} no tiene acceso a esta sección.</p>
-              </div>
-            )}
+        <main className={cn("flex min-h-0 flex-1", creatorRail ? "overflow-hidden" : bleed ? "flex-col overflow-hidden" : "flex-col overflow-auto pb-16 md:pb-0")}>
+          {creatorRail ? <CreatorRail /> : null}
+          <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col", creatorRail && !bleed ? "overflow-auto pb-16 md:pb-0" : undefined)}>
+            {workspaceNotice && <p className="shrink-0 bg-amber-50 px-4 py-2 text-xs text-amber-800">{workspaceNotice}</p>}
+            <div className={bleed ? "relative min-h-0 flex-1 overflow-hidden" : creatorRail ? "min-h-0" : "shrink-0"}>
+              {currentOk ? children : (
+                <div className="grid h-full place-items-center p-6 text-center">
+                  <p className="text-sm text-muted">{teamAccess.displayName} no tiene acceso a esta sección.</p>
+                </div>
+              )}
+            </div>
           </div>
         </main>
         <nav className="fixed inset-x-0 bottom-0 z-30 flex border-t border-line bg-surface md:hidden">

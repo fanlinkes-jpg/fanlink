@@ -73,6 +73,34 @@ test("las pestañas de creadora caben en 1280 y los badges no se pisan", async (
       }
     }
     await page.screenshot({ path: "/opt/cursor/artifacts/creator-tabs-1280.png" });
+    await column.getByRole("button", { name: "Allison Miller" }).click();
+    const sections = [
+      { path: "/mensajes", shot: "/opt/cursor/artifacts/creadoras-mensajes-1280.png" },
+      { path: "/notificaciones", shot: "/opt/cursor/artifacts/creadoras-operativa-1280.png", link: "Operativa" },
+      { path: "/funciones", shot: "/opt/cursor/artifacts/creadoras-funciones-1280.png", link: "Funciones inteligentes" },
+    ];
+    let firstRows: string[] = [];
+    for (const section of sections) {
+      if (section.link) await page.getByRole("link", { name: section.link }).click();
+      await page.waitForURL(new RegExp(section.path));
+      const rail = page.locator("[data-creator-rail='shared']");
+      await rail.getByRole("button", { name: "Allison Miller" }).waitFor();
+      await rail.getByRole("button", { name: /Jose/ }).getByText("128", { exact: true }).waitFor();
+      await rail.getByRole("button", { name: "Allison Miller" }).getByText("256", { exact: true }).waitFor();
+      const active = rail.locator("[aria-current='true']");
+      assert.equal(await active.getAttribute("data-creator-row"), "allison");
+      assert.equal(await page.locator("[data-creator-rail='shared']").count(), 1);
+      const header = page.locator("header");
+      assert.equal(await header.getByRole("button", { name: "Traducción", exact: true }).count(), 1);
+      assert.equal(await header.getByRole("switch", { name: "SFW" }).count(), 1);
+      assert.equal(await header.locator("[data-creator-row]").count(), 0);
+      assert.equal(await page.getByRole("link", { name: "Mensajes" }).count(), 0);
+      const rows = await rail.locator("[data-creator-row]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-creator-row") ?? ""));
+      if (firstRows.length === 0) firstRows = rows;
+      assert.deepEqual(rows, firstRows);
+      assert.match(await rail.getAttribute("class") ?? "", /\bw-64\b/);
+      await page.screenshot({ path: section.shot });
+    }
     await page.close();
   } finally {
     await browser.close().catch(() => undefined);

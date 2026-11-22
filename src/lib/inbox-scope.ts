@@ -1,5 +1,12 @@
 export const INBOX_CREATOR_KEY = "fanlink.mensajes.creator";
 
+const CREATOR_RAIL_ROOTS = ["/mensajes", "/notificaciones", "/funciones"];
+
+/** Operativa, Mensajes y Funciones inteligentes comparten la columna. */
+export function showsCreatorRail(path: string): boolean {
+  return CREATOR_RAIL_ROOTS.some((root) => path === root || path.startsWith(`${root}/`));
+}
+
 export function readInboxCreator(storage: { getItem: (key: string) => string | null } | null): string | null {
   try {
     return storage?.getItem(INBOX_CREATOR_KEY) ?? null;

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { creatorChipBadges, creatorWithPending, inboxCreators, inboxThreadList, INBOX_CREATOR_KEY, readInboxCreator, rememberInboxCreator, resolveInboxCreator, rowsForCreator, unreadByCreator, visibleCreatorBadges, writeInboxCreator } from "./inbox-scope.ts";
+import { creatorChipBadges, creatorWithPending, inboxCreators, inboxThreadList, INBOX_CREATOR_KEY, readInboxCreator, rememberInboxCreator, resolveInboxCreator, rowsForCreator, showsCreatorRail, unreadByCreator, visibleCreatorBadges, writeInboxCreator } from "./inbox-scope.ts";
 
 const creators = [{ id: "jose" }, { id: "baby" }, { id: "allison" }];
 
@@ -89,6 +89,20 @@ test("sin creadoras en el workspace la lista usa la primera cuenta y no mezcla",
   assert.equal(list.creatorId, "cpreview");
   assert.deepEqual(list.threads.map((thread) => thread.id), ["fan-uno"]);
   assert.deepEqual(inboxCreators([{ id: "jose" }], [{ creatorId: "cpreview" }]).map((creator) => creator.id), ["jose"]);
+});
+
+test("la misma creadora sigue en Operativa, Mensajes y Funciones", () => {
+  const sections = ["/notificaciones", "/mensajes", "/funciones"];
+  for (const path of sections) assert.equal(showsCreatorRail(path), true);
+  assert.equal(showsCreatorRail("/"), false);
+  assert.equal(showsCreatorRail("/administrar"), false);
+  const chosen = resolveInboxCreator({ requested: "allison", creators, remembered: "jose" });
+  assert.equal(chosen, "allison");
+  for (const path of sections) {
+    assert.equal(showsCreatorRail(path), true);
+    assert.equal(resolveInboxCreator({ requested: chosen, creators, remembered: "jose" }), "allison");
+  }
+  assert.equal(resolveInboxCreator({ requested: "all", creators, remembered: chosen }), "allison");
 });
 
 test("la lista de chats solo contiene hilos de la creadora activa", () => {

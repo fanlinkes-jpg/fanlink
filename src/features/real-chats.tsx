@@ -12,9 +12,7 @@ import { NOTIFICATION_TABS, TAB_LABEL, isOwnerOnlyKind, notesForCreator, noticeF
 import { NotificationFanCard } from "@/features/notification-card";
 import { useCrm, type VaultItem } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
-import { creatorChipBadges, inboxCreators, inboxThreadList, readInboxCreator, resolveInboxCreator, rowsForCreator, writeInboxCreator } from "@/lib/inbox-scope";
-import { CreatorColumn } from "@/components/creator-tabs";
-import { useCreatorSessions } from "@/lib/use-creator-sessions";
+import { inboxCreators, inboxThreadList, readInboxCreator, resolveInboxCreator, rowsForCreator, writeInboxCreator } from "@/lib/inbox-scope";
 import { useCreatorNoticeBadges } from "@/lib/use-creator-notice-badges";
 import { COMPOSER_LANGUAGES, setComposerLanguage, useComposerLanguage } from "@/lib/ui-prefs";
 import { SfwMedia } from "@/components/sfw-media";
@@ -271,13 +269,6 @@ export function RealChatsPage() {
   });
   const noticeBadges = useCreatorNoticeBadges(creators.map((creator) => creator.id));
   const noticeCount = inboxCreator ? noticeBadges[inboxCreator] ?? 0 : 0;
-  const { sessions } = useCreatorSessions();
-  const avatars = Object.fromEntries(sessions.map((session) => [session.creatorId, session.avatarUrl]));
-  const creatorChips = creatorChipBadges({
-    threads: data?.threads ?? [],
-    notices: Object.entries(noticeBadges).map(([id, unread]) => ({ creatorId: id, unread })),
-    visibleIds: creators.map((creator) => creator.id),
-  });
   useEffect(() => {
     if (!inboxCreator || inboxCreator === creatorId) return;
     writeInboxCreator(window.localStorage, inboxCreator);
@@ -1114,16 +1105,6 @@ export function RealChatsPage() {
 
   return (
     <div className="absolute inset-0 flex min-h-0 overflow-hidden bg-white text-[#1c2333]">
-      <CreatorColumn
-        creators={creators}
-        creatorId={inboxCreator ?? creatorId}
-        avatars={avatars}
-        badges={creatorChips}
-        onSelect={(id) => {
-          writeInboxCreator(window.localStorage, id);
-          setCreator(id);
-        }}
-      />
       <section className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden border-r border-[#e6e8ee] md:w-[340px] md:shrink-0">
         <div className="shrink-0 space-y-3 border-b border-[#e6e8ee] px-3 py-3">
           <h1 className="truncate text-sm font-semibold uppercase tracking-wide">{creatorName}</h1>

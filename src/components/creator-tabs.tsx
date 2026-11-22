@@ -17,7 +17,7 @@ export function CreatorColumn({
 }) {
   const rows = creators.filter((creator) => creator.id && creator.id !== "all");
   return (
-    <aside className="flex h-full w-64 shrink-0 flex-col border-r border-[#e6e8ee] bg-[#f7f8fa]" aria-label="Creadoras">
+    <aside data-creator-rail="shared" className="flex h-full min-h-0 w-64 shrink-0 flex-col self-stretch border-r border-[#e6e8ee] bg-[#f7f8fa]" aria-label="Creadoras">
       <p className="px-3 py-3 text-xs font-semibold uppercase tracking-wide text-[#6d7585]">Creadoras</p>
       <ul className="min-h-0 flex-1 overflow-y-auto">
         {rows.map((creator) => {
