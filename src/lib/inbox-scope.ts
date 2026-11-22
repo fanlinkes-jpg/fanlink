@@ -54,16 +54,18 @@ export function rememberInboxCreator(id: string | null): string | null {
   return id;
 }
 
-/** Suma de los badges que se pintan. Una cuenta sin chip no entra, aunque el servidor traiga sus hilos. */
-export function visibleUnreadTotal(badges: Readonly<Record<string, number>>, visibleIds: readonly string[]): number {
-  let total = 0;
-  const seen = new Set<string>();
-  for (const id of visibleIds) {
-    if (!id || id === "all" || seen.has(id)) continue;
-    seen.add(id);
-    total += badges[id] ?? 0;
+/** Badges que se pintan. El menú no suma un total, y una cuenta sin chip no tiene badge. */
+export function visibleCreatorBadges(
+  threads: readonly { creatorId: string; unread: number | null }[],
+  visibleIds: readonly string[],
+): Record<string, number> {
+  const counts = unreadByCreator(threads);
+  const visible = new Set(visibleIds.filter((id) => id && id !== "all"));
+  const badges: Record<string, number> = {};
+  for (const [id, count] of Object.entries(counts)) {
+    if (visible.has(id) && count > 0) badges[id] = count;
   }
-  return total;
+  return badges;
 }
 
 /** Chats con no leídos, por creadora. No mezcla cuentas. */

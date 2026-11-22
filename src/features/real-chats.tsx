@@ -4,7 +4,7 @@ import { AtSign, Bell, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock
 import { broadcastOnlineFans, cancelOnlineBroadcast, chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, markChatOpened, readChatVault, readVisibleFanSpend, recordChatOutbound, resolveOnlineOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
 import { OnlineFansPanel, type OnlineBroadcastPayload } from "@/features/online-fans-panel";
 import type { OnlineFanRow } from "@/lib/online-fan-row";
-import { unreadChatRow, unreadTotalFor } from "../../server/of-sessions/sync/unread-chats.ts";
+import { unreadChatRow } from "../../server/of-sessions/sync/unread-chats.ts";
 import { inboxPillCounts, matchesInboxPill, tipThreads, type InboxPill } from "../../server/of-sessions/sync/chat-pills.ts";
 import { accountFigure, everyAccountBlocked, SESSION_EXPIRED_LABEL } from "../../server/of-sessions/sync/session-link.ts";
 import { listCreatorNotifications, markCreatorNotificationsRead, type NotificationListItem } from "@/lib/of-notifications";
@@ -1127,14 +1127,6 @@ export function RealChatsPage() {
             <select value={inboxCreator ?? ""} onChange={(event) => { writeInboxCreator(window.localStorage, event.target.value); setCreator(event.target.value); }} className="h-8 min-w-0 flex-1 rounded-lg border border-[#e6e8ee] px-2 text-xs" aria-label="Bandeja">
               {creators.filter((creator) => creator.id !== "all").map((creator) => <option key={creator.id} value={creator.id}>{creator.name}</option>)}
             </select>
-            <span className="shrink-0 text-[10px] text-[#6d7585]">Más recientes</span>
-            {(() => {
-              if (viewBlocked) return <span className="shrink-0 text-[10px] text-[#8a5a12]">{SESSION_EXPIRED_LABEL}</span>;
-              const total = unreadTotalFor(data ? "ready" : "loading", countedThreads, creatorId);
-              if (total == null) return <span className="shrink-0 text-[10px] text-[#6d7585]" title="Sin datos">Sin datos</span>;
-              if (total === 0) return null;
-              return <span className="shrink-0 rounded-full bg-[#3b6cff] px-1.5 text-[10px] font-semibold text-white" aria-label={`${total} chats sin leer`}>{total}</span>;
-            })()}
           </div>
           <div className="flex gap-2">
             {([

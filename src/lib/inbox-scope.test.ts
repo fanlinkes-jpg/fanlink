@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { creatorWithPending, inboxCreators, inboxThreadList, INBOX_CREATOR_KEY, readInboxCreator, rememberInboxCreator, resolveInboxCreator, rowsForCreator, unreadByCreator, visibleUnreadTotal, writeInboxCreator } from "./inbox-scope.ts";
+import { creatorWithPending, inboxCreators, inboxThreadList, INBOX_CREATOR_KEY, readInboxCreator, rememberInboxCreator, resolveInboxCreator, rowsForCreator, unreadByCreator, visibleCreatorBadges, writeInboxCreator } from "./inbox-scope.ts";
 
 const creators = [{ id: "jose" }, { id: "baby" }, { id: "allison" }];
 
@@ -38,7 +38,7 @@ test("cada creadora tiene su badge y el total no mezcla la vista", () => {
   assert.equal(creatorWithPending(["baby", "allison"], threads), "allison");
 });
 
-test("el total de Mensajes es la suma de los badges visibles", () => {
+test("los no leídos solo están en el badge de cada creadora visible", () => {
   const threads = [
     { creatorId: "jose", unread: 4 },
     { creatorId: "jose", unread: 1 },
@@ -48,14 +48,12 @@ test("el total de Mensajes es la suma de los badges visibles", () => {
     { creatorId: "h0jqunu", unread: 4 },
     { creatorId: "neztlav", unread: 7 },
   ];
-  const visible = ["jose", "baby", "allison"];
-  const badges = unreadByCreator(threads);
-  const total = visibleUnreadTotal(badges, visible);
-  assert.equal(total, visible.reduce((sum, id) => sum + (badges[id] ?? 0), 0));
-  assert.equal(total, 3);
-  assert.equal(badges["9ikis52"], 1);
-  assert.equal(badges.h0jqunu, 1);
-  assert.equal(badges.neztlav, 1);
+  const badges = visibleCreatorBadges(threads, ["jose", "baby", "allison"]);
+  assert.deepEqual(badges, { jose: 2, allison: 1 });
+  assert.equal(Object.hasOwn(badges, "9ikis52"), false);
+  assert.equal(Object.hasOwn(badges, "h0jqunu"), false);
+  assert.equal(Object.hasOwn(badges, "neztlav"), false);
+  assert.equal(unreadByCreator(threads)["9ikis52"], 1);
 });
 
 test("sin creadoras en el workspace la lista usa la primera cuenta y no mezcla", () => {

@@ -1,6 +1,6 @@
 import { ClientOnly, Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { listCreatorChats } from "@/lib/of-sessions";
-import { creatorWithPending, readInboxCreator, resolveInboxCreator, unreadByCreator, visibleUnreadTotal, writeInboxCreator } from "@/lib/inbox-scope";
+import { creatorWithPending, readInboxCreator, resolveInboxCreator, visibleCreatorBadges, writeInboxCreator } from "@/lib/inbox-scope";
 import { useEffect, useState, type ReactNode } from "react";
 import {
   Home,
@@ -119,9 +119,8 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
   }, [user?.id, isPending]);
 
   const chatList = useChatList();
-  const creatorBadges = chatList.status === "ready" ? unreadByCreator(chatList.threads) : {};
   const creatorIds = creators.map((creator) => creator.id).filter((id) => id && id !== "all");
-  const unreadChats = chatList.status === "ready" ? visibleUnreadTotal(creatorBadges, creatorIds) : null;
+  const creatorBadges = chatList.status === "ready" ? visibleCreatorBadges(chatList.threads, creatorIds) : {};
   const rememberedCreator = typeof window === "undefined" ? null : readInboxCreator(window.localStorage);
   const resolvedCreator = resolveInboxCreator({ requested: creatorId, creators, remembered: rememberedCreator });
   useEffect(() => {
@@ -157,7 +156,6 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
           teamAccess={teamAccess}
           blocks={blocks}
           currentOk={currentOk}
-          unreadChats={unreadChats}
           creatorBadges={creatorBadges}
           pendingCreatorId={creatorWithPending(creatorIds, chatList.threads)}
           resolvedCreator={resolvedCreator}
@@ -168,12 +166,6 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
       )}
     </>
   );
-}
-
-function unreadLabel(total: number | null, name: string): string {
-  if (total == null) return `${name}, Sin datos`;
-  if (total > 0) return `${name}, ${total} chats sin leer`;
-  return name;
 }
 
 function useChatList(): { status: "loading" | "error" | "ready"; threads: Array<{ creatorId: string; unread: number | null }> } {
@@ -218,7 +210,6 @@ function ShellFrame({
   teamAccess,
   blocks,
   currentOk,
-  unreadChats,
   creatorBadges,
   pendingCreatorId,
   resolvedCreator,
@@ -241,7 +232,6 @@ function ShellFrame({
   teamAccess: { displayName: string; devMode: boolean };
   blocks: NavLink[];
   currentOk: boolean;
-  unreadChats: number | null;
   creatorBadges: Record<string, number>;
   pendingCreatorId: string | null;
   resolvedCreator: string | null;
@@ -255,20 +245,17 @@ function ShellFrame({
         {blocks.map((block) => {
           const Icon = BLOCK_ICONS[block.id] ?? LayoutGrid;
           const active = pathMatchesNavLink(path, block);
-          const isChat = block.id === "chat";
           return (
             <NavRouteLink
               key={block.id}
               item={block}
-              aria-label={isChat ? unreadLabel(unreadChats, block.label) : block.label}
-              title={isChat && unreadChats == null ? "Sin datos" : undefined}
+              aria-label={block.label}
               className={cn(
-                "relative grid h-10 w-10 place-items-center rounded-xl",
+                "grid h-10 w-10 place-items-center rounded-xl",
                 active ? "bg-[#3b6cff] text-white" : "text-muted hover:bg-raised",
               )}
             >
               <Icon className="h-5 w-5" />
-              {isChat && unreadChats != null && unreadChats > 0 ? <span className="absolute -top-1 -right-1 min-w-4 rounded-full bg-danger px-1 text-[10px] font-semibold text-white">{unreadChats}</span> : null}
             </NavRouteLink>
           );
         })}
@@ -312,8 +299,7 @@ function ShellFrame({
           </button>
           <Link
             to="/mensajes"
-            aria-label={unreadLabel(unreadChats, "Mensajes")}
-            title={unreadChats == null ? "Sin datos" : undefined}
+            aria-label="Mensajes"
             onClick={() => {
               const target = pendingCreatorId ?? resolvedCreator;
               if (!target) return;
@@ -323,7 +309,6 @@ function ShellFrame({
             className={cn("flex shrink-0 items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium", path.startsWith("/mensajes") ? "bg-[#3b6cff] text-white" : "bg-white text-[#1d2433]")}
           >
             Mensajes
-            {unreadChats == null ? <span className="text-[10px] font-semibold opacity-80">Sin datos</span> : unreadChats > 0 ? <span className="rounded-full bg-danger px-1 text-[10px] font-semibold text-white">{unreadChats}</span> : null}
           </Link>
           <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto">
             {creators.map((c) => {

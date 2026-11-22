@@ -9,6 +9,11 @@ export type InboxThread = {
   lastMessageAt: string | null;
 };
 
+/** Orden fijo de la bandeja: el mensaje más reciente arriba. */
+export function inboxByRecent<T extends { lastMessageAt: string | null }>(threads: readonly T[]): T[] {
+  return [...threads].sort((left, right) => (right.lastMessageAt ?? "").localeCompare(left.lastMessageAt ?? ""));
+}
+
 export function arrowIgnored(target: EventTarget | null): boolean {
   if (!target || typeof target !== "object") return false;
   const node = target as { tagName?: string; isContentEditable?: boolean; closest?: (selector: string) => unknown };
@@ -51,7 +56,7 @@ export function useInboxSelection<T extends InboxThread>(input: {
   const onMark = useRef(input.onMark);
   onMark.current = input.onMark;
   const seenMs = input.seenMs ?? MARK_SEEN_MS;
-  const sorted = [...input.threads].sort((left, right) => (right.lastMessageAt ?? "").localeCompare(left.lastMessageAt ?? ""));
+  const sorted = inboxByRecent(input.threads);
   const visible = sorted.filter((thread) => {
     const selected = thread.id === selectedId;
     if (!input.matches(thread) && !selected) return false;
