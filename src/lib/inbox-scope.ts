@@ -52,6 +52,15 @@ export function creatorWithPending(creatorIds: readonly string[], threads: reado
   return creatorIds.find((id) => (counts[id] ?? 0) > 0) ?? null;
 }
 
+/** La lista de /mensajes. «Todas», una URL vieja o un id inválido no mezclan hilos. */
+export function inboxThreadList<T extends { creatorId: string }>(
+  threads: readonly T[],
+  input: { requested: string | null; creators: readonly { id: string }[]; remembered: string | null },
+): { creatorId: string | null; threads: T[] } {
+  const creatorId = resolveInboxCreator(input);
+  return { creatorId, threads: rowsForCreator(threads, creatorId) };
+}
+
 export function rowsForCreator<T extends { creatorId: string }>(rows: readonly T[], creatorId: string | null): T[] {
   if (!creatorId || creatorId === "all") return [];
   return rows.filter((row) => row.creatorId === creatorId);

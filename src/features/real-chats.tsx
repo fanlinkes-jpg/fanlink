@@ -12,8 +12,8 @@ import { NOTIFICATION_TABS, TAB_LABEL, isOwnerOnlyKind, tabOf, type Notification
 import { NotificationFanCard } from "@/features/notification-card";
 import { useCrm, type VaultItem } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
-import { readInboxCreator, resolveInboxCreator, rowsForCreator, writeInboxCreator } from "@/lib/inbox-scope";
-import { mergeVaultPage, vaultFolderOnAccountChange, vaultLoadAllowed, vaultReadApplies } from "@/lib/vault-load";
+import { inboxThreadList, readInboxCreator, resolveInboxCreator, rowsForCreator, writeInboxCreator } from "@/lib/inbox-scope";
+import { chatVaultCanAttach, chatVaultCreator, chatVaultOnThreadChange, mergeVaultPage, vaultFolderOnAccountChange, vaultLoadAllowed, vaultReadApplies } from "@/lib/vault-load";
 import { VAULT_FOLDER_READ_ERROR } from "@/lib/vault-folder-label";
 import { clearOpenThread, peekOpenThread } from "@/lib/open-thread";
 import { useChatFanCards } from "@/lib/use-chat-fan-cards";
@@ -279,6 +279,7 @@ export function RealChatsPage() {
   const [thumbPage, setThumbPage] = useState({ listId: "all", offset: 0 });
   const vaultMemory = useRef<Record<string, string>>({});
   const vaultCreator = useRef<string | null>(null);
+  const vaultThread = useRef<string | null>(null);
   const offerPriceId = useRef<string | null>(null);
 
   async function refresh() {
@@ -465,7 +466,11 @@ export function RealChatsPage() {
     setOnlineOpen(false);
   }
 
-  const threads = rowsForCreator(data?.threads ?? [], inboxCreator);
+  const threads = inboxThreadList(data?.threads ?? [], {
+    requested: creatorId,
+    creators,
+    remembered: typeof window === "undefined" ? null : readInboxCreator(window.localStorage),
+  }).threads;
   const accountMessages = rowsForCreator(data?.messages ?? [], inboxCreator);
   const scopeIds = inboxCreator ? [inboxCreator] : [];
   const sessionRows = rowsForCreator(data?.accounts ?? [], inboxCreator);
@@ -490,12 +495,19 @@ export function RealChatsPage() {
     },
   });
   const selected = inbox.selected;
-  const vaultAccount = selected?.creatorId ?? null;
-  if (vaultAccount !== vaultCreator.current) {
-    const moved = vaultFolderOnAccountChange(vaultMemory.current, vaultCreator.current, vaultAccount, thumbPage.listId);
+  const threadVaultId = selected ? `${selected.creatorId}:${selected.threadKey}` : null;
+  if (threadVaultId !== vaultThread.current) {
+    const nextCreator = chatVaultCreator(selected);
+    const moved = vaultFolderOnAccountChange(vaultMemory.current, vaultCreator.current, nextCreator, thumbPage.listId);
+    const restarted = chatVaultOnThreadChange({
+      previousThreadId: vaultThread.current,
+      nextThreadId: threadVaultId,
+      generation: vaultGen.current,
+    });
     vaultMemory.current = moved.memory;
-    vaultCreator.current = vaultAccount;
-    vaultGen.current += 1;
+    vaultCreator.current = nextCreator;
+    vaultThread.current = threadVaultId;
+    vaultGen.current = restarted.generation;
     vaultPending.current = null;
     vaultPage.current = { listId: moved.listId, offset: 0, busy: false };
     setOfVault([]);
@@ -626,7 +638,8 @@ export function RealChatsPage() {
   const scriptHits = matchScripts(scripts, slash != null ? slash : libraryQuery);
   const showScripts = panel === "guiones" || slash != null;
   const realSend = selected != null && sendCreators.includes(selected.creatorId);
-  const vaultItems = rowsForCreator(vault, selected?.creatorId ?? inboxCreator);
+  const threadCreator = chatVaultCreator(selected);
+  const vaultItems = rowsForCreator(vault, threadCreator);
   const tagCreators = creators.filter((creator) => creator.id !== selected?.creatorId && creator.handle.trim() !== "");
 
   function toggle(next: ComposerPanel) {
@@ -917,6 +930,7 @@ export function RealChatsPage() {
   }
 
   function attachVault(item: { id: string; title: string; withId?: string | null; withTitle?: string | null; seconds?: number | null; offerLabel?: string | null; dateLabel?: string | null }) {
+    if (!chatVaultCanAttach(vaultCreator.current, threadCreator)) return;
     const pieces = [{ id: item.id, title: item.title, seconds: item.seconds ?? null, offerLabel: item.offerLabel ?? null, dateLabel: item.dateLabel ?? null }];
     if (item.withId && item.withId !== item.id) pieces.push({ id: item.withId, title: item.withTitle || "Vídeo de pago", seconds: null, offerLabel: null, dateLabel: null });
     const free = !(draftPrice != null && draftPrice > 0);
@@ -1362,7 +1376,7 @@ export function RealChatsPage() {
                     textSize={textSize}
                     ofVault={ofVault}
                     vaultReload={vaultReload}
-                    creatorId={selected?.creatorId ?? creatorId}
+                    creatorId={threadCreator ?? ""}
                     fanKey={selected?.fanKey ?? null}
                     onReadVault={() => void loadOfVault()}
                     onVault={attachVault}
@@ -1387,7 +1401,7 @@ export function RealChatsPage() {
                       textSize={textSize}
                       ofVault={ofVault}
                       vaultReload={vaultReload}
-                      creatorId={selected?.creatorId ?? creatorId}
+                      creatorId={threadCreator ?? ""}
                       fanKey={selected?.fanKey ?? null}
                       onReadVault={() => void loadOfVault()}
                       onVault={attachVault}
@@ -1416,7 +1430,7 @@ export function RealChatsPage() {
                     textSize={textSize}
                     ofVault={ofVault}
                     vaultReload={vaultReload}
-                    creatorId={selected?.creatorId ?? creatorId}
+                    creatorId={threadCreator ?? ""}
                     fanKey={selected?.fanKey ?? null}
                     onReadVault={() => void loadOfVault()}
                     onVault={attachVault}

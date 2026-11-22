@@ -63,6 +63,28 @@ export function vaultFolderOnAccountChange(
   return { memory: next, listId: saved || "all" };
 }
 
+/** La bóveda abierta desde un hilo solo es de esa creadora. No hay otra cuenta que elegir. */
+export function chatVaultCreator(thread: { creatorId: string } | null): string | null {
+  const id = thread?.creatorId.trim() ?? "";
+  if (!id || id === "all") return null;
+  return id;
+}
+
+/** Si el hilo cambia, la lectura anterior no vale y la bóveda pasa a la creadora nueva. */
+export function chatVaultOnThreadChange(input: {
+  previousThreadId: string | null;
+  nextThreadId: string | null;
+  generation: number;
+}): { generation: number; reset: boolean } {
+  if (input.previousThreadId === input.nextThreadId) return { generation: input.generation, reset: false };
+  return { generation: input.generation + 1, reset: true };
+}
+
+/** No se adjunta un medio que no sea de la creadora del hilo. */
+export function chatVaultCanAttach(threadCreatorId: string | null, itemCreatorId: string | null): boolean {
+  return threadCreatorId != null && itemCreatorId === threadCreatorId;
+}
+
 /** Una respuesta de otra cuenta o de una lectura ya sustituida no se pinta, ni en miniaturas ni en «más». */
 export function vaultReadApplies(input: {
   generation: number;

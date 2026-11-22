@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { folderGridCap, folderGridItems, ignoreStaleVaultView, mergeVaultPage, nextVaultLibrary, sameVaultId, vaultFolderOnAccountChange, vaultLoadAllowed, vaultQueryFolderOnCreatorChange, vaultReadApplies } from "./vault-load.ts";
+import { chatVaultCanAttach, chatVaultCreator, chatVaultOnThreadChange, folderGridCap, folderGridItems, ignoreStaleVaultView, mergeVaultPage, nextVaultLibrary, sameVaultId, vaultFolderOnAccountChange, vaultLoadAllowed, vaultQueryFolderOnCreatorChange, vaultReadApplies } from "./vault-load.ts";
 
 test("una carpeta entra aunque Todos siga ocupado", () => {
   const busyAll = { busy: true, listId: "all" };
@@ -44,6 +44,27 @@ test("la respuesta tardía de A no se pinta después de cambiar a B", () => {
   assert.equal(late.id === "medio-de-jose" && vaultReadApplies({
     generation: 1,
     currentGeneration: 2,
+    requestCreatorId: "jose",
+    activeCreatorId: "allison",
+  }), false);
+});
+
+test("la bóveda del hilo queda fijada a su creadora y se reinicia si el hilo cambia", () => {
+  assert.equal(chatVaultCreator({ creatorId: "allison" }), "allison");
+  assert.equal(chatVaultCreator({ creatorId: "all" }), null);
+  assert.equal(chatVaultCreator(null), null);
+  const jose = "jose:hilo-1";
+  const allison = "allison:hilo-2";
+  const moved = chatVaultOnThreadChange({ previousThreadId: jose, nextThreadId: allison, generation: 4 });
+  assert.equal(moved.reset, true);
+  assert.equal(moved.generation, 5);
+  assert.equal(chatVaultOnThreadChange({ previousThreadId: allison, nextThreadId: allison, generation: 5 }).reset, false);
+  assert.equal(chatVaultCanAttach("allison", "allison"), true);
+  assert.equal(chatVaultCanAttach("allison", "jose"), false);
+  assert.equal(chatVaultCanAttach(null, "allison"), false);
+  assert.equal(vaultReadApplies({
+    generation: 4,
+    currentGeneration: moved.generation,
     requestCreatorId: "jose",
     activeCreatorId: "allison",
   }), false);
