@@ -18,6 +18,24 @@ export function writeInboxCreator(storage: { setItem: (key: string, value: strin
   }
 }
 
+/** Creadoras de la bandeja. Si el workspace no tiene ninguna, valen las cuentas de OnlyFans. */
+export function inboxCreators(
+  workspace: readonly { id: string }[],
+  accounts: readonly { creatorId: string }[],
+): { id: string }[] {
+  const assigned = workspace.map((creator) => creator.id).filter((id) => id && id !== "all");
+  if (assigned.length > 0) return assigned.map((id) => ({ id }));
+  const seen = new Set<string>();
+  const fallback: { id: string }[] = [];
+  for (const account of accounts) {
+    const id = account.creatorId.trim();
+    if (!id || id === "all" || seen.has(id)) continue;
+    seen.add(id);
+    fallback.push({ id });
+  }
+  return fallback;
+}
+
 /** La bandeja de Mensajes nunca es «Todas». La última creadora usada gana; si no, la primera. */
 export function resolveInboxCreator(input: {
   requested: string | null;

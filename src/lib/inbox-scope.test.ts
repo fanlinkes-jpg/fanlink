@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { creatorWithPending, inboxThreadList, INBOX_CREATOR_KEY, readInboxCreator, rememberInboxCreator, resolveInboxCreator, rowsForCreator, unreadByCreator, writeInboxCreator } from "./inbox-scope.ts";
+import { creatorWithPending, inboxCreators, inboxThreadList, INBOX_CREATOR_KEY, readInboxCreator, rememberInboxCreator, resolveInboxCreator, rowsForCreator, unreadByCreator, writeInboxCreator } from "./inbox-scope.ts";
 
 const creators = [{ id: "jose" }, { id: "baby" }, { id: "allison" }];
 
@@ -36,6 +36,19 @@ test("cada creadora tiene su badge y el total no mezcla la vista", () => {
   assert.deepEqual(unreadByCreator(threads), { jose: 1, allison: 1 });
   assert.equal(creatorWithPending(["jose", "baby", "allison"], threads), "jose");
   assert.equal(creatorWithPending(["baby", "allison"], threads), "allison");
+});
+
+test("sin creadoras en el workspace la lista usa la primera cuenta y no mezcla", () => {
+  const threads = [
+    { creatorId: "cpreview", id: "fan-uno" },
+    { creatorId: "otra", id: "ajeno" },
+  ];
+  const scope = inboxCreators([], [{ creatorId: "cpreview" }, { creatorId: "otra" }]);
+  assert.deepEqual(scope.map((creator) => creator.id), ["cpreview", "otra"]);
+  const list = inboxThreadList(threads, { requested: "all", creators: scope, remembered: null });
+  assert.equal(list.creatorId, "cpreview");
+  assert.deepEqual(list.threads.map((thread) => thread.id), ["fan-uno"]);
+  assert.deepEqual(inboxCreators([{ id: "jose" }], [{ creatorId: "cpreview" }]).map((creator) => creator.id), ["jose"]);
 });
 
 test("la lista de chats solo contiene hilos de la creadora activa", () => {

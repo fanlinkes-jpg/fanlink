@@ -12,7 +12,7 @@ import { NOTIFICATION_TABS, TAB_LABEL, isOwnerOnlyKind, tabOf, type Notification
 import { NotificationFanCard } from "@/features/notification-card";
 import { useCrm, type VaultItem } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
-import { inboxThreadList, readInboxCreator, resolveInboxCreator, rowsForCreator, writeInboxCreator } from "@/lib/inbox-scope";
+import { inboxCreators, inboxThreadList, readInboxCreator, resolveInboxCreator, rowsForCreator, writeInboxCreator } from "@/lib/inbox-scope";
 import { chatVaultCanAttach, chatVaultCreator, chatVaultOnThreadChange, mergeVaultPage, vaultFolderOnAccountChange, vaultLoadAllowed, vaultReadApplies } from "@/lib/vault-load";
 import { VAULT_FOLDER_READ_ERROR } from "@/lib/vault-folder-label";
 import { clearOpenThread, peekOpenThread } from "@/lib/open-thread";
@@ -192,16 +192,6 @@ export function RealChatsPage() {
   const creators = useCrm((s) => s.creators);
   const creatorId = useCrm((s) => s.creatorId);
   const setCreator = useCrm((s) => s.setCreator);
-  const inboxCreator = resolveInboxCreator({
-    requested: creatorId,
-    creators,
-    remembered: typeof window === "undefined" ? null : readInboxCreator(window.localStorage),
-  });
-  useEffect(() => {
-    if (!inboxCreator || inboxCreator === creatorId) return;
-    writeInboxCreator(window.localStorage, inboxCreator);
-    setCreator(inboxCreator);
-  }, [inboxCreator, creatorId, setCreator]);
   const crmFans = useCrm((s) => s.fans);
   const scripts = useCrm((s) => s.scripts);
   const vault = useCrm((s) => s.vault);
@@ -209,6 +199,18 @@ export function RealChatsPage() {
   const teamAccess = useCrm((s) => s.teamAccess);
   const user = useCurrentUser();
   const [data, setData] = useState<CreatorChatList | null>(null);
+  const rememberedInbox = typeof window === "undefined" ? null : readInboxCreator(window.localStorage);
+  const inboxScope = inboxCreators(creators, data?.accounts ?? []);
+  const inboxCreator = resolveInboxCreator({
+    requested: creatorId,
+    creators: inboxScope,
+    remembered: rememberedInbox,
+  });
+  useEffect(() => {
+    if (!inboxCreator || inboxCreator === creatorId) return;
+    writeInboxCreator(window.localStorage, inboxCreator);
+    setCreator(inboxCreator);
+  }, [inboxCreator, creatorId, setCreator]);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [filter, setFilter] = useState<InboxPill>("todos");
@@ -468,8 +470,8 @@ export function RealChatsPage() {
 
   const threads = inboxThreadList(data?.threads ?? [], {
     requested: creatorId,
-    creators,
-    remembered: typeof window === "undefined" ? null : readInboxCreator(window.localStorage),
+    creators: inboxScope,
+    remembered: rememberedInbox,
   }).threads;
   const accountMessages = rowsForCreator(data?.messages ?? [], inboxCreator);
   const scopeIds = inboxCreator ? [inboxCreator] : [];
