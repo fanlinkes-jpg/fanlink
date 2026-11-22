@@ -21,21 +21,21 @@ test("las pestañas de creadora caben en 1280 y los badges no se pisan", async (
     await waitForServer(`http://127.0.0.1:${port}/mensajes`);
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
     await page.goto(`http://127.0.0.1:${port}/mensajes`, { waitUntil: "domcontentloaded" });
-    const tabs = page.getByRole("tablist", { name: "Creadoras" });
-    await tabs.getByRole("tab", { name: "Allison Miller" }).waitFor();
-    await tabs.getByRole("tab", { name: /Jose/ }).getByText("128", { exact: true }).waitFor();
-    await tabs.getByRole("tab", { name: "Allison Miller" }).getByText("256", { exact: true }).waitFor();
-    assert.equal(await tabs.getByRole("tab", { name: "9ikis52" }).count(), 0);
-    const layout = await tabs.evaluate((node) => {
-      const box = node.getBoundingClientRect();
+    const column = page.getByRole("complementary", { name: "Creadoras" });
+    await column.getByRole("button", { name: "Allison Miller" }).waitFor();
+    await column.getByRole("button", { name: /Jose/ }).getByText("128", { exact: true }).waitFor();
+    await column.getByRole("button", { name: "Allison Miller" }).getByText("256", { exact: true }).waitFor();
+    assert.equal(await column.getByRole("button", { name: "9ikis52" }).count(), 0);
+    assert.equal(await page.getByRole("link", { name: "Mensajes" }).count(), 0);
+    assert.equal(await page.getByRole("combobox", { name: "Bandeja" }).count(), 0);
+    const layout = await column.locator("ul").evaluate((node) => {
       const badges = [...node.querySelectorAll("[data-badge]")].map((badge) => {
         const rect = badge.getBoundingClientRect();
         return { text: badge.textContent, left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
       });
-      return { scroll: node.scrollWidth > node.clientWidth + 1, width: box.width, badges };
+      return { scroll: node.scrollHeight > node.clientHeight + 1, badges };
     });
     assert.equal(layout.scroll, true);
-    assert.ok(layout.width < 1280);
     for (let index = 0; index < layout.badges.length; index += 1) {
       for (let other = index + 1; other < layout.badges.length; other += 1) {
         const left = layout.badges[index];
@@ -65,7 +65,9 @@ async function seed(dir: string): Promise<void> {
     await pg.exec(await readFile(path.join(folder, name), "utf8"));
     await pg.query("insert into _migrations (name) values ($1) on conflict do nothing", [name]);
   }
-  const creators = ["Jose", "Baby Rabbit", "Allison Miller", "Elena Vargas del Río", "Nora Castillo", "Claudia Fernandez"].map((name, index) => ({
+  const names = ["Jose", "Baby Rabbit", "Allison Miller", "Elena Vargas del Río", "Nora Castillo", "Claudia Fernandez"];
+  for (let extra = 7; extra <= 24; extra += 1) names.push(`Creadora ${extra} Modelo`);
+  const creators = names.map((name, index) => ({
     id: name === "Jose" ? "jose" : name === "Allison Miller" ? "allison" : `c${index}`,
     name,
     handle: `@${name.split(" ")[0]?.toLowerCase()}`,

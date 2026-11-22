@@ -1,8 +1,5 @@
 import { ClientOnly, Link, useNavigate, useRouterState } from "@tanstack/react-router";
-import { listCreatorChats } from "@/lib/of-sessions";
-import { creatorChipBadges, creatorWithPending, readInboxCreator, resolveInboxCreator, writeInboxCreator } from "@/lib/inbox-scope";
-import { useCreatorNoticeBadges } from "@/lib/use-creator-notice-badges";
-import { CreatorTabs } from "@/components/creator-tabs";
+import { readInboxCreator, resolveInboxCreator } from "@/lib/inbox-scope";
 import { useEffect, useState, type ReactNode } from "react";
 import {
   Home,
@@ -21,7 +18,6 @@ import {
 import { Toaster } from "sonner";
 import { cn } from "@/lib/cn";
 import { useCrm } from "@/lib/crm";
-import { useCreatorSessions } from "@/lib/use-creator-sessions";
 import {
   canAccessPath,
   navRoleFromAccess,
@@ -119,22 +115,12 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
     chatSendSession.bindUser(user?.id ?? null, { pending: isPending });
   }, [user?.id, isPending]);
 
-  const chatList = useChatList();
-  const creatorIds = creators.map((creator) => creator.id).filter((id) => id && id !== "all");
-  const noticeBadges = useCreatorNoticeBadges(creatorIds);
-  const creatorChips = creatorChipBadges({
-    threads: chatList.status === "ready" ? chatList.threads : [],
-    notices: Object.entries(noticeBadges).map(([creatorId, unread]) => ({ creatorId, unread })),
-    visibleIds: creatorIds,
-  });
   const rememberedCreator = typeof window === "undefined" ? null : readInboxCreator(window.localStorage);
   const resolvedCreator = resolveInboxCreator({ requested: creatorId, creators, remembered: rememberedCreator });
   useEffect(() => {
     if (!path.startsWith("/mensajes") || !resolvedCreator || resolvedCreator === creatorId) return;
     setCreator(resolvedCreator);
   }, [path, resolvedCreator, creatorId, setCreator]);
-  const { sessions } = useCreatorSessions();
-  const avatars = Object.fromEntries(sessions.map((session) => [session.creatorId, session.avatarUrl]));
   const navRole = navRoleFromAccess(teamAccess);
   const blocks = visibleNavBlocks(navRole, teamAccess);
   const currentOk = canAccessPath(path, navRole, teamAccess);
@@ -151,9 +137,6 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
           setMobile={setMobile}
           path={path}
           navigate={navigate}
-          creators={creators}
-          creatorId={creatorId}
-          setCreator={setCreator}
           query={query}
           setQuery={setQuery}
           translate={translate}
@@ -162,40 +145,12 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
           teamAccess={teamAccess}
           blocks={blocks}
           currentOk={currentOk}
-          creatorChips={creatorChips}
-          pendingCreatorId={creatorWithPending(creatorIds, chatList.threads)}
-          resolvedCreator={resolvedCreator}
-          avatars={avatars}
         >
           {children}
         </ShellFrame>
       )}
     </>
   );
-}
-
-function useChatList(): { status: "loading" | "error" | "ready"; threads: Array<{ creatorId: string; unread: number | null }> } {
-  const [state, setState] = useState<{ status: "loading" | "error" | "ready"; threads: Array<{ creatorId: string; unread: number | null }> }>({
-    status: "loading",
-    threads: [],
-  });
-  useEffect(() => {
-    let stop = false;
-    const pull = () => {
-      void listCreatorChats().then((list) => {
-        if (!stop) setState({ status: "ready", threads: list.threads });
-      }).catch(() => {
-        if (!stop) setState({ status: "error", threads: [] });
-      });
-    };
-    pull();
-    const timer = window.setInterval(pull, 15_000);
-    return () => {
-      stop = true;
-      window.clearInterval(timer);
-    };
-  }, []);
-  return state;
 }
 
 function ShellFrame({
@@ -205,9 +160,6 @@ function ShellFrame({
   setMobile,
   path,
   navigate,
-  creators,
-  creatorId,
-  setCreator,
   query,
   setQuery,
   translate,
@@ -216,10 +168,6 @@ function ShellFrame({
   teamAccess,
   blocks,
   currentOk,
-  creatorChips,
-  pendingCreatorId,
-  resolvedCreator,
-  avatars,
 }: {
   children: ReactNode;
   bleed?: boolean;
@@ -227,9 +175,6 @@ function ShellFrame({
   setMobile: (value: boolean) => void;
   path: string;
   navigate: ReturnType<typeof useNavigate>;
-  creators: Array<{ id: string; name: string; hue: number }>;
-  creatorId: string;
-  setCreator: (id: string) => void;
   query: string;
   setQuery: (value: string) => void;
   translate: boolean;
@@ -238,10 +183,6 @@ function ShellFrame({
   teamAccess: { displayName: string; devMode: boolean };
   blocks: NavLink[];
   currentOk: boolean;
-  creatorChips: Record<string, { messages: number; notices: number }>;
-  pendingCreatorId: string | null;
-  resolvedCreator: string | null;
-  avatars: Record<string, string | null>;
 }) {
 
   return (
@@ -303,29 +244,7 @@ function ShellFrame({
           <button className="rounded-md p-2 md:hidden" onClick={() => setMobile(true)} aria-label="Abrir menú">
             <Menu className="h-4 w-4" />
           </button>
-          <Link
-            to="/mensajes"
-            aria-label="Mensajes"
-            onClick={() => {
-              const target = pendingCreatorId ?? resolvedCreator;
-              if (!target) return;
-              writeInboxCreator(window.localStorage, target);
-              setCreator(target);
-            }}
-            className={cn("flex shrink-0 items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium", path.startsWith("/mensajes") ? "bg-[#3b6cff] text-white" : "bg-white text-[#1d2433]")}
-          >
-            Mensajes
-          </Link>
-          <CreatorTabs
-            creators={creators}
-            creatorId={creatorId}
-            avatars={avatars}
-            badges={creatorChips}
-            onSelect={(id) => {
-              writeInboxCreator(window.localStorage, id);
-              setCreator(id);
-            }}
-          />
+          <span className="min-w-0 flex-1" />
           <span className="hidden max-w-40 truncate rounded-lg bg-white/10 px-2 py-1 text-xs md:inline" title={teamAccess.devMode ? "Modo local de un solo operador" : teamAccess.displayName}>
             {teamAccess.displayName}
           </span>
