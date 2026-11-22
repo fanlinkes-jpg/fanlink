@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import test from "node:test";
+import { writeEncryptedSession } from "../crypto.ts";
+import type { StorageStateFile } from "../sessions/storage-state.ts";
+import { AccountStore } from "../store/account-store.ts";
 import { vaultListMediaPath, vaultMediaPath, vaultPageLog } from "../sync/of-chat-api.ts";
-import { assertProbeFileSafe, folderProbePaths, folderProbeVerdict, pickSmallVideoFolder, probeExpectedCount, probePageContinues, readProbeFolders, sanitizeVaultShape, vaultListLines } from "../sync/vault-probe.ts";
+import { assertProbeFileSafe, executeSubfolderCheck, folderProbePaths, folderProbeVerdict, pickSmallVideoFolder, probeExpectedCount, probePageContinues, readProbeFolders, sanitizeVaultShape, vaultListLines } from "../sync/vault-probe.ts";
+import { removeDir, tempDataDir, TEST_SESSION_KEY } from "./helpers.ts";
 import { VAULT_LISTS_FIXTURE } from "./fixtures/vault-of-shape.ts";
 import { mediaAcceptHeader, vaultPlayerLog } from "../sync/media-bytes.ts";
 import { boundVaultOffset, VAULT_OFFSET_CAP } from "../sync/vault-walk.ts";
@@ -127,3 +133,82 @@ test("el sondeo guarda la forma y no un secreto", () => {
   assert.equal(line.includes("28619188"), false);
   assert.equal(line.includes("CUARTETO"), false);
 });
+
+test("executeSubfolderCheck solo hace GET, se corta en 40 y no imprime secretos", async () => {
+  const dataDir = await tempDataDir();
+  const secret = "sess-subcarpeta-secreta";
+  const name = "Carpeta secreta";
+  const lines: string[] = [];
+  const calls: Array<{ method: string; url: string; sign: string }> = [];
+  let waits = 0;
+  try {
+    await mkdir(path.join(dataDir, "sessions"));
+    const store = new AccountStore(path.join(dataDir, "accounts.json"));
+    await store.init();
+    const account = await store.create("Prueba", "3zk7kbr");
+    await writeEncryptedSession(path.join(dataDir, "sessions", `${account.id}.json`), probeState(secret), TEST_SESSION_KEY);
+    await executeSubfolderCheck({
+      account: "3zk7kbr",
+      env: { FANLINK_SESSION_KEY: TEST_SESSION_KEY.toString("base64"), FANLINK_DATA_DIR: dataDir },
+      now: () => 1_700_000_000_000,
+      pause: async () => {
+        waits += 1;
+      },
+      stdout: (row) => lines.push(row),
+      fetch: (async (input: unknown, init?: RequestInit) => {
+        const href = String(input);
+        const headers = new Headers(init?.headers);
+        calls.push({ method: init?.method ?? "GET", url: href, sign: headers.get("sign") ?? "" });
+        if (href.includes("dynamic-rules")) {
+          return Response.json({
+            static_param: "param",
+            format: "1:{}:{:x}:2",
+            checksum_indexes: [0, 1],
+            checksum_constants: [5, 5],
+            checksum_constant: 10,
+            app_token: "token",
+            remove_headers: ["user-id"],
+          });
+        }
+        const url = new URL(href);
+        if (url.pathname.endsWith("/vault/lists")) {
+          return Response.json({
+            list: [
+              { id: 88002, type: "custom", name },
+              { id: 99001, type: "posts", name: "Publicaciones" },
+            ],
+            hasMore: false,
+          });
+        }
+        if (url.pathname.endsWith("/vault/lists/88002/media")) {
+          return Response.json({ medias: [{ id: 1, type: "photo" }], hasMore: true });
+        }
+        return new Response("no", { status: 404 });
+      }) as typeof fetch,
+    });
+  } finally {
+    await removeDir(dataDir);
+  }
+  assert.equal(calls.every((call) => call.method === "GET"), true);
+  assert.equal(calls.some((call) => call.url.includes("/vault/lists/99001/media")), false);
+  assert.equal(calls.filter((call) => call.url.includes("/vault/lists/88002/media")).length, 40);
+  assert.equal(waits, 41);
+  const printed = lines.join("\n");
+  assert.match(printed, /paginas=40/);
+  assert.match(printed, /medios=40/);
+  assert.equal(printed.includes(secret), false);
+  assert.equal(printed.includes(name), false);
+  assert.equal(printed.includes("88002"), false);
+  assert.equal(printed.includes("sign"), false);
+  assert.equal(calls.some((call) => call.sign !== "" && printed.includes(call.sign)), false);
+});
+
+function probeState(secret: string): StorageStateFile {
+  return {
+    cookies: [
+      { name: "auth_id", value: "42", domain: ".onlyfans.com", path: "/", expires: -1, httpOnly: true, secure: true, sameSite: "Lax" },
+      { name: "sess", value: secret, domain: ".onlyfans.com", path: "/", expires: -1, httpOnly: true, secure: true, sameSite: "Lax" },
+    ],
+    origins: [{ origin: "https://onlyfans.com", localStorage: [{ name: "bcTokenSha", value: "huella-probe" }] }],
+  };
+}

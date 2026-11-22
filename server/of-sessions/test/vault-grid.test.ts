@@ -157,6 +157,10 @@ test("el panel real del chat monta VaultBrowser con tarjetas cuadradas", async (
     assert.ok(postedBox.y >= cardBox.y + cardBox.height - 1, `Publicado solapa la imagen ${postedBox.y}/${cardBox.y + cardBox.height}`);
     assert.ok(sentBox.y >= cardBox.y + cardBox.height - 1, `Enviado solapa la imagen ${sentBox.y}`);
     assert.ok(ppvBox.y >= ppvCard.y + ppvCard.height - 1, `PPV solapa la imagen ${ppvBox.y}`);
+    const gratisCard = await panel.locator("[data-vault-card]").nth(3).boundingBox();
+    const gratisBox = await panel.getByText("Gratis", { exact: true }).boundingBox();
+    assert.ok(gratisCard && gratisBox);
+    assert.ok(gratisBox.y >= gratisCard.y + gratisCard.height - 1, `Gratis solapa la imagen ${gratisBox.y}`);
     assert.equal(await panel.getByText("Sin datos", { exact: true }).count(), 0);
     assert.equal(await panel.getByText("Sin miniatura").count(), 0);
     const until = Date.now() + 5_000;
@@ -405,7 +409,7 @@ function vaultView(folderId: string | null = null) {
       { ...card, id: "m1", title: "foto", kind: "foto", seconds: null, folder: "B/G LA DUCHA", listId: "ducha", listIds: ["ducha"], sentCount: 2, sent: true, priceLabel: "Free", posted: true, offerLabel: null, dateLabel: "2 ene 26" },
       { ...card, id: "m2", title: "clip", kind: "video", seconds: 12, folder: "B/G LA DUCHA", listId: "ducha", listIds: ["ducha"], sentCount: null, sent: null, priceLabel: "$5.00", posted: null, offerLabel: "$5.00", dateLabel: "3 ene 26" },
       { ...card, id: "m3", title: "otra", kind: "foto", seconds: null, folder: "B/G LA DUCHA", listId: "ducha", listIds: ["ducha"], sentCount: null, sent: false, priceLabel: "Sin datos", posted: false, offerLabel: null, dateLabel: null },
-      { ...card, id: "m4", title: "mas", kind: "foto", seconds: null, folder: null, listId: null, listIds: [], sentCount: null, sent: null, priceLabel: "Sin datos", posted: null, offerLabel: null, dateLabel: null },
+      { ...card, id: "m4", title: "mas", kind: "foto", seconds: null, folder: null, listId: null, listIds: [], sentCount: null, sent: null, priceLabel: "Free", posted: null, offerLabel: null, dateLabel: null },
       ...Array.from({ length: 36 }, (_, index) => ({
         ...card,
         id: `m${index + 5}`,

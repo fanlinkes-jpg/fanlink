@@ -895,6 +895,7 @@ test("un drm=si en Chrome sigue el DASH, la licencia y un solo manifiesto", asyn
     }
     if (href.includes("/dash/a.mpd")) {
       manifestGets += 1;
+      assert.equal(new Headers(init?.headers).has("range"), false);
       if (href.startsWith("https://onlyfans.com/")) {
         assert.match(cookie, /sess=/);
         return new Response(null, { status: 302, headers: { location: "https://cdn3.onlyfans.com/dash/a.mpd?ok=1" } });

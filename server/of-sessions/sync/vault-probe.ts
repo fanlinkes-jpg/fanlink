@@ -492,6 +492,11 @@ export async function executeSubfolderCheck(input: {
   }
 }
 
+/**
+ * Solo custom y las que declaran padre. posts, stories, messages y streams
+ * no son subcarpetas de la bóveda: pedirlas sumaría GET firmados que el panel
+ * ya cubre con Toda la bóveda. Ver LEEME, «Licencia Widevine y carpetas».
+ */
 function isCheckedFolder(row: Record<string, unknown>): boolean {
   const id = row.id;
   if (typeof id !== "number" && typeof id !== "string") return false;

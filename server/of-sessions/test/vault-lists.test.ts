@@ -5,14 +5,14 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { clearAccountChatPace } from "../sync/api-list-pace.ts";
-import { fetchSignedVault } from "../sync/of-chat-api.ts";
-import { clearSignRulesCache } from "../sync/of-sign.ts";
+import { fetchSignedVault, sessionForApi, signedHeaders, vaultListMediaPath } from "../sync/of-chat-api.ts";
+import { clearSignRulesCache, parseSignRules } from "../sync/of-sign.ts";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
 import type { ReadSql } from "../sync/store.ts";
 import { folderColumnView, vaultFolderLabel } from "../../../src/lib/vault-folder-label.ts";
 import { emptyVaultQuery } from "../sync/vault-filter.ts";
 import { queryVaultForActor } from "../sync/vault-query.ts";
-import { clearVaultWalkCache, walkVault } from "../sync/vault-walk.ts";
+import { clearVaultWalkCache, VAULT_WALK_CAP, walkVault } from "../sync/vault-walk.ts";
 import { VAULT_LISTS_FIXTURE, VAULT_MEDIA_ALL_FIXTURE, VAULT_MEDIA_FOLDER_FIXTURE } from "./fixtures/vault-of-shape.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -1055,6 +1055,51 @@ test("una carpeta vacía pagina Todos si el espejo aún no tiene sus medios", as
   }
 });
 
+test("hasMore siempre true se corta en 40 páginas", async () => {
+  clearSignRulesCache();
+  clearVaultWalkCache();
+  const db = new PGlite();
+  const lines: string[] = [];
+  const previous = console.info;
+  console.info = (line?: unknown) => {
+    lines.push(String(line));
+  };
+  let mediaPages = 0;
+  try {
+    for (const file of ["0037_vault_mirror.sql", "0038_vault_fan_filter.sql", "0040_vault_full_tags.sql", "0042_vault_paid_with.sql", "0044_vault_thumb_page.sql", "0050_vault_list_counts.sql", "0051_vault_list_media.sql"]) {
+      await db.exec(await readFile(path.join(root, "migrations", file), "utf8"));
+    }
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const href = String(input);
+      if (href.includes("dynamic-rules")) return Response.json(RULES);
+      if (isVaultListsIndex(href)) return Response.json({ list: [], hasMore: false });
+      const url = new URL(href);
+      if (!url.pathname.endsWith("/vault/media")) return Response.json({ list: [], hasMore: false });
+      mediaPages += 1;
+      const offset = Number(url.searchParams.get("offset") ?? "0");
+      return Response.json({ list: [{ id: offset + 1, type: "photo" }], hasMore: true });
+    }) as typeof fetch;
+    const walked = await walkVault({
+      creatorId: "3zk7kbr",
+      state: storedState(),
+      fetch: fetchImpl,
+      now: () => 1_700_000_000_000,
+      sql: asSql(db),
+      sleep: async () => undefined,
+    });
+    assert.equal(mediaPages, VAULT_WALK_CAP);
+    assert.equal(walked.items.length, VAULT_WALK_CAP);
+    assert.equal(walked.hasMore, true);
+    assert.equal(lines.some((line) => line.includes("corte tope")), true);
+    assert.equal(lines.some((line) => line.includes("paginas=40")), true);
+  } finally {
+    console.info = previous;
+    clearSignRulesCache();
+    clearVaultWalkCache();
+    await db.close();
+  }
+});
+
 function isVaultListsIndex(href: string): boolean {
   try {
     return new URL(href).pathname.endsWith("/vault/lists");
@@ -1077,7 +1122,12 @@ test("una subcarpeta pagina lists/{id}/media y no se queda en paginas=0", async 
     for (const file of ["0037_vault_mirror.sql", "0038_vault_fan_filter.sql", "0040_vault_full_tags.sql", "0042_vault_paid_with.sql", "0044_vault_thumb_page.sql", "0050_vault_list_counts.sql", "0051_vault_list_media.sql"]) {
       await db.exec(await readFile(path.join(root, "migrations", file), "utf8"));
     }
-    const fetchImpl = (async (input: RequestInfo | URL) => {
+    const now = 1_700_000_000_000;
+    const rules = parseSignRules(RULES);
+    assert.ok(rules);
+    const auth = sessionForApi(storedState(), now);
+    assert.equal("cookie" in auth, true);
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const href = String(input);
       seen.push(href);
       if (href.includes("dynamic-rules")) return Response.json(RULES);
@@ -1091,6 +1141,14 @@ test("una subcarpeta pagina lists/{id}/media y no se queda en paginas=0", async 
       if (url.pathname.endsWith("/vault/media")) return Response.json({ list: [], hasMore: false });
       if (!url.pathname.endsWith("/vault/lists/88002/media")) return Response.json({ list: [], hasMore: false });
       const offset = Number(url.searchParams.get("offset") ?? "0");
+      const path = `${url.pathname}${url.search}`;
+      assert.equal(path, vaultListMediaPath("88002", offset));
+      assert.equal("reason" in auth, false);
+      if (!("reason" in auth)) {
+        const signed = signedHeaders(rules, path, auth, now);
+        assert.equal(new Headers(init?.headers).get("sign"), signed.sign);
+        assert.equal(new Headers(init?.headers).get("time"), signed.time);
+      }
       assert.equal(url.searchParams.get("list"), "88002");
       assert.equal(url.searchParams.get("field"), "recent");
       assert.equal(url.searchParams.get("sort"), "desc");
@@ -1110,7 +1168,7 @@ test("una subcarpeta pagina lists/{id}/media y no se queda en paginas=0", async 
       creatorId: "3zk7kbr",
       state: storedState(),
       fetch: fetchImpl,
-      now: () => 1_700_000_000_000,
+      now: () => now,
       sql: asSql(db),
       sleep: async () => undefined,
       listId: "88002",
