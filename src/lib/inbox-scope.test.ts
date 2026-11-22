@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { creatorWithPending, inboxCreators, inboxThreadList, INBOX_CREATOR_KEY, readInboxCreator, rememberInboxCreator, resolveInboxCreator, rowsForCreator, unreadByCreator, visibleCreatorBadges, writeInboxCreator } from "./inbox-scope.ts";
+import { creatorChipBadges, creatorWithPending, inboxCreators, inboxThreadList, INBOX_CREATOR_KEY, readInboxCreator, rememberInboxCreator, resolveInboxCreator, rowsForCreator, unreadByCreator, visibleCreatorBadges, writeInboxCreator } from "./inbox-scope.ts";
 
 const creators = [{ id: "jose" }, { id: "baby" }, { id: "allison" }];
 
@@ -54,6 +54,28 @@ test("los no leídos solo están en el badge de cada creadora visible", () => {
   assert.equal(Object.hasOwn(badges, "h0jqunu"), false);
   assert.equal(Object.hasOwn(badges, "neztlav"), false);
   assert.equal(unreadByCreator(threads)["9ikis52"], 1);
+});
+
+test("cada pestaña tiene su badge rojo y su badge verde", () => {
+  const threads = [
+    { creatorId: "jose", unread: 2 },
+    { creatorId: "jose", unread: 1 },
+    { creatorId: "allison", unread: 0 },
+    { creatorId: "9ikis52", unread: 8 },
+  ];
+  const notices = [
+    { creatorId: "jose", unread: 0 },
+    { creatorId: "allison", unread: 128 },
+    { creatorId: "h0jqunu", unread: 40 },
+    { creatorId: "neztlav", unread: 7 },
+  ];
+  const badges = creatorChipBadges({ threads, notices, visibleIds: ["jose", "allison", "baby"] });
+  assert.deepEqual(badges.jose, { messages: 2, notices: 0 });
+  assert.deepEqual(badges.allison, { messages: 0, notices: 128 });
+  assert.equal(badges.baby, undefined);
+  assert.equal(Object.hasOwn(badges, "9ikis52"), false);
+  assert.equal(Object.hasOwn(badges, "h0jqunu"), false);
+  assert.equal(Object.hasOwn(badges, "neztlav"), false);
 });
 
 test("sin creadoras en el workspace la lista usa la primera cuenta y no mezcla", () => {

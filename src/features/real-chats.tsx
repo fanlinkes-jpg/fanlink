@@ -13,6 +13,7 @@ import { NotificationFanCard } from "@/features/notification-card";
 import { useCrm, type VaultItem } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
 import { inboxCreators, inboxThreadList, readInboxCreator, resolveInboxCreator, rowsForCreator, writeInboxCreator } from "@/lib/inbox-scope";
+import { useCreatorNoticeBadges } from "@/lib/use-creator-notice-badges";
 import { chatVaultCanAttach, chatVaultCreator, chatVaultOnThreadChange, mergeVaultPage, vaultFolderOnAccountChange, vaultLoadAllowed, vaultReadApplies } from "@/lib/vault-load";
 import { VAULT_FOLDER_READ_ERROR } from "@/lib/vault-folder-label";
 import { clearOpenThread, peekOpenThread } from "@/lib/open-thread";
@@ -203,6 +204,8 @@ export function RealChatsPage() {
     creators: inboxScope,
     remembered: rememberedInbox,
   });
+  const noticeBadges = useCreatorNoticeBadges(creators.map((creator) => creator.id));
+  const noticeCount = inboxCreator ? noticeBadges[inboxCreator] ?? 0 : 0;
   useEffect(() => {
     if (!inboxCreator || inboxCreator === creatorId) return;
     writeInboxCreator(window.localStorage, inboxCreator);
@@ -1068,6 +1071,7 @@ export function RealChatsPage() {
             >
               <Bell className="h-3.5 w-3.5" />
               Notificaciones
+              {noticeCount > 0 ? <span className="min-w-5 rounded-full bg-white px-1 text-center text-[10px] font-semibold tabular-nums text-[#1f9d55]" aria-label={`${noticeCount} notificaciones`}>{noticeCount}</span> : null}
             </button>
             {notesOpen ? createPortal(
               <>

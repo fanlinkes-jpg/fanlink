@@ -54,6 +54,32 @@ export function rememberInboxCreator(id: string | null): string | null {
   return id;
 }
 
+export type CreatorChipBadge = { messages: number; notices: number };
+
+/** Rojo y verde de cada pestaña. Una cuenta sin chip no entra, y no hay un total mezclado. */
+export function creatorChipBadges(input: {
+  threads: readonly { creatorId: string; unread: number | null }[];
+  notices: readonly { creatorId: string; unread: number | null }[];
+  visibleIds: readonly string[];
+}): Record<string, CreatorChipBadge> {
+  const visible = new Set(input.visibleIds.filter((id) => id && id !== "all"));
+  const messages = unreadByCreator(input.threads);
+  const notices = new Map<string, number>();
+  for (const row of input.notices) {
+    if (!visible.has(row.creatorId) || notices.has(row.creatorId)) continue;
+    if (row.unread == null || row.unread <= 0) continue;
+    notices.set(row.creatorId, row.unread);
+  }
+  const badges: Record<string, CreatorChipBadge> = {};
+  for (const id of visible) {
+    const messageCount = messages[id] ?? 0;
+    const noticeCount = notices.get(id) ?? 0;
+    if (messageCount <= 0 && noticeCount <= 0) continue;
+    badges[id] = { messages: messageCount, notices: noticeCount };
+  }
+  return badges;
+}
+
 /** Badges que se pintan. El menú no suma un total, y una cuenta sin chip no tiene badge. */
 export function visibleCreatorBadges(
   threads: readonly { creatorId: string; unread: number | null }[],

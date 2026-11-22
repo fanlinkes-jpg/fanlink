@@ -1,6 +1,8 @@
 import { ClientOnly, Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { listCreatorChats } from "@/lib/of-sessions";
-import { creatorWithPending, readInboxCreator, resolveInboxCreator, visibleCreatorBadges, writeInboxCreator } from "@/lib/inbox-scope";
+import { creatorChipBadges, creatorWithPending, readInboxCreator, resolveInboxCreator, writeInboxCreator } from "@/lib/inbox-scope";
+import { useCreatorNoticeBadges } from "@/lib/use-creator-notice-badges";
+import { CreatorTabs } from "@/components/creator-tabs";
 import { useEffect, useState, type ReactNode } from "react";
 import {
   Home,
@@ -18,7 +20,6 @@ import {
 } from "lucide-react";
 import { Toaster } from "sonner";
 import { cn } from "@/lib/cn";
-import { CreatorMark } from "@/components/creator-mark";
 import { useCrm } from "@/lib/crm";
 import { useCreatorSessions } from "@/lib/use-creator-sessions";
 import {
@@ -120,7 +121,12 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
 
   const chatList = useChatList();
   const creatorIds = creators.map((creator) => creator.id).filter((id) => id && id !== "all");
-  const creatorBadges = chatList.status === "ready" ? visibleCreatorBadges(chatList.threads, creatorIds) : {};
+  const noticeBadges = useCreatorNoticeBadges(creatorIds);
+  const creatorChips = creatorChipBadges({
+    threads: chatList.status === "ready" ? chatList.threads : [],
+    notices: Object.entries(noticeBadges).map(([creatorId, unread]) => ({ creatorId, unread })),
+    visibleIds: creatorIds,
+  });
   const rememberedCreator = typeof window === "undefined" ? null : readInboxCreator(window.localStorage);
   const resolvedCreator = resolveInboxCreator({ requested: creatorId, creators, remembered: rememberedCreator });
   useEffect(() => {
@@ -156,7 +162,7 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
           teamAccess={teamAccess}
           blocks={blocks}
           currentOk={currentOk}
-          creatorBadges={creatorBadges}
+          creatorChips={creatorChips}
           pendingCreatorId={creatorWithPending(creatorIds, chatList.threads)}
           resolvedCreator={resolvedCreator}
           avatars={avatars}
@@ -210,7 +216,7 @@ function ShellFrame({
   teamAccess,
   blocks,
   currentOk,
-  creatorBadges,
+  creatorChips,
   pendingCreatorId,
   resolvedCreator,
   avatars,
@@ -232,7 +238,7 @@ function ShellFrame({
   teamAccess: { displayName: string; devMode: boolean };
   blocks: NavLink[];
   currentOk: boolean;
-  creatorBadges: Record<string, number>;
+  creatorChips: Record<string, { messages: number; notices: number }>;
   pendingCreatorId: string | null;
   resolvedCreator: string | null;
   avatars: Record<string, string | null>;
@@ -310,29 +316,16 @@ function ShellFrame({
           >
             Mensajes
           </Link>
-          <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto">
-            {creators.map((c) => {
-              const unread = creatorBadges[c.id] ?? 0;
-              const active = creatorId === c.id;
-              return (
-                <button
-                  key={c.id}
-                  onClick={() => {
-                    writeInboxCreator(window.localStorage, c.id);
-                    setCreator(c.id);
-                  }}
-                  className={cn(
-                    "flex shrink-0 items-center gap-2 rounded-lg px-2 py-1 text-xs",
-                    active ? "bg-white text-[#1d2433]" : "bg-white/10",
-                  )}
-                >
-                  <CreatorMark name={c.name} hue={c.hue} avatarUrl={avatars[c.id]} />
-                  <span className="max-w-24 truncate">{c.name}</span>
-                  {unread > 0 ? <span className="rounded-full bg-danger px-1 text-[10px] text-white" aria-label={`${unread} chats sin leer`}>{unread}</span> : null}
-                </button>
-              );
-            })}
-          </div>
+          <CreatorTabs
+            creators={creators}
+            creatorId={creatorId}
+            avatars={avatars}
+            badges={creatorChips}
+            onSelect={(id) => {
+              writeInboxCreator(window.localStorage, id);
+              setCreator(id);
+            }}
+          />
           <span className="hidden max-w-40 truncate rounded-lg bg-white/10 px-2 py-1 text-xs md:inline" title={teamAccess.devMode ? "Modo local de un solo operador" : teamAccess.displayName}>
             {teamAccess.displayName}
           </span>
