@@ -138,6 +138,92 @@ export function chatterVisibleKinds(): NotificationKind[] {
   return NOTIFICATION_KINDS.filter((kind) => !isOwnerOnlyKind(kind));
 }
 
+/** Pestañas del popover de Infloww. OnlyFans agrupa lo que no es suscripción, propina ni compra. */
+export const INFLOWW_PANEL_TABS = ["subscriptions", "tips", "purchases", "onlyfans"] as const;
+export type InflowwPanelTab = (typeof INFLOWW_PANEL_TABS)[number];
+
+export const INFLOWW_TAB_LABEL: Record<InflowwPanelTab, string> = {
+  subscriptions: "Suscripciones",
+  tips: "Propinas",
+  purchases: "Compras",
+  onlyfans: "OnlyFans",
+};
+
+export function inflowwTabOf(kind: NotificationKind): InflowwPanelTab {
+  switch (kind) {
+    case "subscription":
+    case "renewal":
+      return "subscriptions";
+    case "tip":
+      return "tips";
+    case "ppv":
+      return "purchases";
+    case "like":
+    case "comment":
+    case "tag":
+    case "mention":
+    case "promotion":
+    case "message":
+    case "system":
+    case "agency":
+    case "other":
+      return "onlyfans";
+    default: {
+      const exhaustive: never = kind;
+      return exhaustive;
+    }
+  }
+}
+
+/** Contador de la pestaña. Null si OnlyFans no mandó ninguna cifra de ese grupo. */
+export function inflowwTabCount(counts: NotificationCounts | null, tab: InflowwPanelTab): number | null {
+  if (!counts) return null;
+  if (tab !== "onlyfans") return counts[tab];
+  const parts = [counts.tags, counts.comments, counts.mentions, counts.likes, counts.promotions, counts.onlyfans];
+  const present = parts.filter((item): item is number => item != null);
+  if (present.length === 0) return null;
+  return present.reduce((total, item) => total + item, 0);
+}
+
+export function notesForCreator<T extends { creatorId: string }>(rows: readonly T[], creatorId: string | null): T[] {
+  if (!creatorId || creatorId === "all") return [];
+  return rows.filter((row) => row.creatorId === creatorId);
+}
+
+export function renewStatusLabel(value: boolean | null | undefined): string | null {
+  if (value == null) return null;
+  return value ? "Renew On" : "Renew Off";
+}
+
+/** El primer mensaje del equipo a ese fan, posterior al aviso, con el nombre del remitente. */
+export function notificationReplyLine(input: {
+  creatorId: string;
+  fanKey: string | null;
+  occurredAt: string | null;
+  messages: readonly {
+    creatorId: string;
+    fanKey: string | null;
+    fromFan: boolean;
+    sentAt: string;
+    authorName: string | null;
+    automatic?: boolean | null;
+  }[];
+}): string | null {
+  if (!input.creatorId || input.creatorId === "all" || !input.fanKey || !input.occurredAt) return null;
+  const noticeAt = Date.parse(input.occurredAt);
+  if (Number.isNaN(noticeAt)) return null;
+  const replies = input.messages.filter((message) => {
+    if (message.creatorId !== input.creatorId || message.fanKey !== input.fanKey) return false;
+    if (message.fromFan || message.automatic) return false;
+    const name = message.authorName?.trim();
+    if (!name) return false;
+    const sentAt = Date.parse(message.sentAt);
+    return !Number.isNaN(sentAt) && sentAt > noticeAt;
+  }).sort((left, right) => left.sentAt.localeCompare(right.sentAt));
+  const author = replies[0]?.authorName?.trim();
+  return author ? `${author} respondió a la notificación` : null;
+}
+
 export function tabOf(kind: NotificationKind): NotificationTab {
   switch (kind) {
     case "subscription":

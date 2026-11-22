@@ -8,7 +8,7 @@ import { unreadChatRow } from "../../server/of-sessions/sync/unread-chats.ts";
 import { inboxPillCounts, matchesInboxPill, tipThreads, type InboxPill } from "../../server/of-sessions/sync/chat-pills.ts";
 import { accountFigure, everyAccountBlocked, SESSION_EXPIRED_LABEL } from "../../server/of-sessions/sync/session-link.ts";
 import { listCreatorNotifications, markCreatorNotificationsRead, type NotificationListItem } from "@/lib/of-notifications";
-import { NOTIFICATION_TABS, TAB_LABEL, isOwnerOnlyKind, tabOf, type NotificationCounts, type NotificationKind, type NotificationTab } from "@/lib/notifications";
+import { INFLOWW_PANEL_TABS, INFLOWW_TAB_LABEL, inflowwTabCount, inflowwTabOf, isOwnerOnlyKind, notesForCreator, notificationReplyLine, type InflowwPanelTab, type NotificationCounts } from "@/lib/notifications";
 import { NotificationFanCard } from "@/features/notification-card";
 import { useCrm, type VaultItem } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
@@ -59,16 +59,13 @@ function madridClock(value: string): string {
 
 type NoteRow = NotificationListItem & { creatorId: string };
 
-function noteMatches(kind: string, filter: NotificationTab): boolean {
-  if (isOwnerOnlyKind(kind as NotificationKind)) return false;
-  if (filter === "all") return true;
-  return tabOf(kind as NotificationKind) === filter;
+function panelNotes(rows: NoteRow[] | null, creatorId: string | null, tab: InflowwPanelTab): NoteRow[] {
+  return notesForCreator(rows ?? [], creatorId).filter((item) => !isOwnerOnlyKind(item.kind) && inflowwTabOf(item.kind) === tab);
 }
 
-function noteBadge(counts: NotificationCounts | null, tab: NotificationTab): string {
-  if (!counts) return "";
-  const value = counts[tab];
-  return value == null ? " · Sin datos" : ` ${value}`;
+function noteBadge(counts: NotificationCounts | null, tab: InflowwPanelTab): string {
+  const value = inflowwTabCount(counts, tab);
+  return value == null || value <= 0 ? "" : ` ${value}`;
 }
 
 function FanLink({ item, href, copied, onCopy }: { item: string; href: string | null; copied: boolean; onCopy: (href: string) => void }) {
@@ -236,7 +233,7 @@ export function RealChatsPage() {
   const [fanActionError, setFanActionError] = useState<string | null>(null);
   const [fanLists, setFanLists] = useState<Array<{ name: string; on: boolean }>>([]);
   const [notesOpen, setNotesOpen] = useState(false);
-  const [noteFilter, setNoteFilter] = useState<NotificationTab>("all");
+  const [noteFilter, setNoteFilter] = useState<InflowwPanelTab>("subscriptions");
   const [notes, setNotes] = useState<NoteRow[] | null>(null);
   const [noteCounts, setNoteCounts] = useState<NotificationCounts | null>(null);
   const [noteNotice, setNoteNotice] = useState<string | null>(null);
@@ -1080,38 +1077,42 @@ export function RealChatsPage() {
                     <h2 className="text-base font-semibold">Notificaciones</h2>
                     <button type="button" aria-label="Actualizar notificaciones" className="grid h-8 w-8 place-items-center rounded-full text-[#6d7585] hover:bg-[#f4f7ff]" onClick={() => void loadNotes()}><RefreshCw className="h-4 w-4" /></button>
                   </div>
-                  <div className="flex flex-wrap gap-2 px-4 pb-3">
-                    {NOTIFICATION_TABS.map((id) => {
+                  <div className="flex gap-2 overflow-x-auto px-4 pb-3">
+                    {INFLOWW_PANEL_TABS.map((id) => {
                       const on = noteFilter === id;
-                      const label = TAB_LABEL[id];
                       return (
-                        <button key={id} type="button" onClick={() => { setNoteFilter(id); if (id !== "all") markNotes((notes ?? []).filter((item) => noteMatches(item.kind, id))); }} className={`rounded-full px-3 py-1.5 text-sm ${on ? "bg-[#e7f3ff] text-[#1890d4]" : "bg-[#f2f3f5] text-[#3c4456]"}`}>
-                          {label}{noteBadge(noteCounts, id)}
+                        <button key={id} type="button" onClick={() => { setNoteFilter(id); markNotes(panelNotes(notes, inboxCreator, id)); }} className={`shrink-0 rounded-full px-3 py-1.5 text-sm ${on ? "bg-[#e7f3ff] text-[#1890d4]" : "bg-[#f2f3f5] text-[#3c4456]"}`}>
+                          {INFLOWW_TAB_LABEL[id]}{noteBadge(noteCounts, id)}
                         </button>
                       );
                     })}
                   </div>
-                  <ul className="min-h-0 flex-1 overflow-y-auto">
-                    {noteNotice ? <li className="px-4 py-6 text-sm text-[#8a5a12]">{noteNotice}</li> : null}
-                    {notes == null && !noteNotice ? <li className="px-4 py-6 text-sm text-[#6d7585]">Sin datos</li> : null}
-                    {notes != null && !noteNotice && notes.filter((item) => noteMatches(item.kind, noteFilter)).length === 0 ? <li className="px-4 py-6 text-sm text-[#6d7585]">Sin notificaciones</li> : null}
-                    {(notes ?? []).filter((item) => noteMatches(item.kind, noteFilter)).map((item) => {
-                      const thread = (data?.threads ?? []).find((row) => row.creatorId === item.creatorId && (
+                  <ul className="min-h-0 flex-1 divide-y divide-[#eceff3] overflow-y-auto px-4">
+                    {noteNotice ? <li className="py-6 text-sm text-[#8a5a12]">{noteNotice}</li> : null}
+                    {notes == null && !noteNotice ? <li className="py-6 text-sm text-[#6d7585]">Sin datos</li> : null}
+                    {notes != null && !noteNotice && panelNotes(notes, inboxCreator, noteFilter).length === 0 ? <li className="py-6 text-sm text-[#6d7585]">Sin notificaciones</li> : null}
+                    {panelNotes(notes, inboxCreator, noteFilter).map((item) => {
+                      const thread = notesForCreator(data?.threads ?? [], inboxCreator).find((row) => row.creatorId === item.creatorId && (
                         (item.threadKey != null && row.threadKey === item.threadKey)
                         || (item.fanKey != null && (row.fanKey === item.fanKey || row.threadKey === item.fanKey || row.fanHandle?.replace(/^@/, "") === item.fanKey))
                       ));
                       const handle = item.fanHandle ?? thread?.fanHandle?.replace(/^@/, "") ?? null;
-                      const lists = item.lists ?? thread?.lists?.filter(Boolean) ?? null;
                       const renew = item.renewAuto ?? thread?.renewAuto ?? null;
                       const avatar = item.avatarUrl ?? thread?.avatarUrl ?? null;
+                      const reply = notificationReplyLine({
+                        creatorId: item.creatorId,
+                        fanKey: item.fanKey,
+                        occurredAt: item.occurredAt,
+                        messages: accountMessages,
+                      });
                       return (
-                        <li key={`${item.creatorId}:${item.key}`} className="border-b border-[#eef0f3] px-4 py-3">
+                        <li key={`${item.creatorId}:${item.key}`}>
                           <NotificationFanCard
                             item={item}
                             handle={handle}
                             avatarUrl={avatar}
-                            lists={lists}
                             renew={renew}
+                            reply={reply}
                             onChat={thread ? () => openNote(item) : undefined}
                           />
                         </li>

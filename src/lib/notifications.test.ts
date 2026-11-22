@@ -22,6 +22,11 @@ import {
   spanishNotificationText,
   relativeNotificationWhen,
   redactedNotificationUrl,
+  inflowwTabCount,
+  inflowwTabOf,
+  notesForCreator,
+  notificationReplyLine,
+  renewStatusLabel,
   tabOf,
   unreadCount,
   canReadCreatorNotifications,
@@ -358,6 +363,76 @@ test("un comentario guarda el texto y la publicación si vienen", () => {
   ]) {
     assert.equal(onlyfansPostLink(hostile), null, hostile);
   }
+});
+
+test("el panel mapea suscripciones, propinas, compras y el resto a OnlyFans", () => {
+  assert.equal(inflowwTabOf("subscription"), "subscriptions");
+  assert.equal(inflowwTabOf("renewal"), "subscriptions");
+  assert.equal(inflowwTabOf("tip"), "tips");
+  assert.equal(inflowwTabOf("ppv"), "purchases");
+  assert.equal(inflowwTabOf("like"), "onlyfans");
+  assert.equal(inflowwTabOf("comment"), "onlyfans");
+  assert.equal(inflowwTabOf("tag"), "onlyfans");
+  assert.equal(inflowwTabOf("mention"), "onlyfans");
+  assert.equal(inflowwTabOf("promotion"), "onlyfans");
+  assert.equal(inflowwTabOf("message"), "onlyfans");
+  assert.equal(inflowwTabOf("system"), "onlyfans");
+  const counts = {
+    all: 20,
+    subscriptions: 4,
+    purchases: 2,
+    tips: null,
+    tags: 1,
+    comments: 3,
+    mentions: null,
+    likes: 5,
+    promotions: 0,
+    onlyfans: 6,
+  };
+  assert.equal(inflowwTabCount(counts, "subscriptions"), 4);
+  assert.equal(inflowwTabCount(counts, "purchases"), 2);
+  assert.equal(inflowwTabCount(counts, "tips"), null);
+  assert.equal(inflowwTabCount(counts, "onlyfans"), 15);
+  assert.equal(renewStatusLabel(true), "Renew On");
+  assert.equal(renewStatusLabel(false), "Renew Off");
+  assert.equal(renewStatusLabel(null), null);
+});
+
+test("el panel solo enseña avisos de la creadora activa y la respuesta es de su remitente", () => {
+  const notes = [
+    { creatorId: "jose", key: "j" },
+    { creatorId: "allison", key: "a" },
+    { creatorId: "9ikis52", key: "x" },
+  ];
+  assert.deepEqual(notesForCreator(notes, "jose").map((row) => row.key), ["j"]);
+  assert.deepEqual(notesForCreator(notes, "all"), []);
+  assert.deepEqual(notesForCreator(notes, null), []);
+  const messages = [
+    { creatorId: "allison", fanKey: "7", fromFan: false, sentAt: "2026-11-14T12:05:00.000Z", authorName: "Elena", automatic: false },
+    { creatorId: "jose", fanKey: "7", fromFan: true, sentAt: "2026-11-14T12:10:00.000Z", authorName: "Fan", automatic: false },
+    { creatorId: "jose", fanKey: "7", fromFan: false, sentAt: "2026-11-14T11:00:00.000Z", authorName: "Antes", automatic: false },
+    { creatorId: "jose", fanKey: "7", fromFan: false, sentAt: "2026-11-14T12:30:00.000Z", authorName: "Marta", automatic: true },
+    { creatorId: "jose", fanKey: "7", fromFan: false, sentAt: "2026-11-14T13:00:00.000Z", authorName: "  ", automatic: false },
+    { creatorId: "jose", fanKey: "7", fromFan: false, sentAt: "2026-11-14T14:00:00.000Z", authorName: "Luis", automatic: false },
+  ];
+  assert.equal(notificationReplyLine({
+    creatorId: "jose",
+    fanKey: "7",
+    occurredAt: "2026-11-14T12:00:00.000Z",
+    messages,
+  }), "Luis respondió a la notificación");
+  assert.equal(notificationReplyLine({
+    creatorId: "allison",
+    fanKey: "7",
+    occurredAt: "2026-11-14T12:00:00.000Z",
+    messages,
+  }), "Elena respondió a la notificación");
+  assert.equal(notificationReplyLine({
+    creatorId: "jose",
+    fanKey: null,
+    occurredAt: "2026-11-14T12:00:00.000Z",
+    messages,
+  }), null);
 });
 
 test("lastSeen de hace días no cuenta como reciente", () => {
