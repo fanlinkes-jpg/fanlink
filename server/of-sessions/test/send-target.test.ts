@@ -4,9 +4,33 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { chromium } from "playwright";
-import { boxRemainder, composeChat, createPendingNet, isMessageWrite, sendRouteWarning } from "../send/compose.ts";
+import { boxRemainder, composeChat, createPendingNet, isMessageWrite, messageIdFromCaptured, sendRouteWarning } from "../send/compose.ts";
 import { navigationNote, pruneSendFailures, publicChatUrl, readFooterNodes, threadIdKind, writeSendFailure } from "../send/targets.ts";
 import { startFixture } from "./fixture-site.ts";
+
+test("el POST del mensaje lee el objeto suelto y una lista no lo confunde", () => {
+  const request = {
+    threadKey: "28022478",
+    fanKey: "28022478",
+    accountUserId: "42",
+    body: "hola",
+    priceCents: null,
+  };
+  const single = JSON.stringify({
+    id: 900,
+    createdAt: "2026-11-22T23:37:00.000Z",
+    text: "hola",
+    fromUser: { id: 42 },
+    isMine: true,
+  });
+  assert.equal(messageIdFromCaptured(single, request, true), "900");
+  assert.equal(messageIdFromCaptured(single, request, false), null);
+  const listed = JSON.stringify({
+    list: [{ id: 901, createdAt: "2026-11-22T23:39:00.000Z", text: "hola", fromUser: { id: 42 }, isMine: true }],
+  });
+  assert.equal(messageIdFromCaptured(listed, request, false), "901");
+  assert.equal(isMessageWrite("POST", "https://onlyfans.com/api2/v2/chats/28022478/messages"), true);
+});
 
 test("el id del hilo es el withUser y la url pública no lleva query", () => {
   assert.equal(threadIdKind("28022478", "28022478"), "withUser");

@@ -98,6 +98,7 @@ type SendInput = {
   body: string;
   priceCents: number | null;
   vaultItemIds?: string[];
+  previewIds?: string[];
   tagHandle?: string | null;
   clientId?: string | null;
 };
@@ -149,7 +150,8 @@ export async function sendChatMessageView(
   const vaultItemIds = replay
     ? await listOutboundMediaIds(sql, replay.id)
     : (input.vaultItemIds ?? []).map((item) => item.trim()).filter(Boolean);
-  const planned = await prepareVaultSend(sql, creatorId, vaultItemIds);
+  const previewIds = (input.previewIds ?? []).map((item) => item.trim()).filter((item) => vaultItemIds.includes(item));
+  const planned = await prepareVaultSend(sql, creatorId, vaultItemIds, previewIds);
   if (!planned.ok) return { sent: false, reason: planned.reason, messageId: null };
   const id = clientId ?? crypto.randomUUID();
   const claimKey = sendClaimKey({

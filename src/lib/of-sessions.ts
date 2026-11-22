@@ -187,6 +187,7 @@ export type CreatorChatList = {
     stale: boolean;
     errorReason: string | null;
     dedupeKey: string | null;
+    matchedMessageKey?: string | null;
   }>;
   notes: Array<{
     creatorId: string;
@@ -441,6 +442,7 @@ export const sendChatMessage = createServerFn({ method: "POST" })
     body: string;
     priceCents: number | null;
     vaultItemIds?: string[];
+    previewIds?: string[];
     tagHandle?: string | null;
     clientId?: string;
   }) => input)

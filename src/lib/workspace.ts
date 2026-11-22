@@ -83,7 +83,37 @@ export const saveWorkspace = createServerFn({ method: "POST" })
       reason: "conflict" as const,
       version: result.version,
       state: result.state as SharedSlice | null,
+      updatedBy: result.updatedBy,
     };
+  });
+
+export const adoptStaffDisplayName = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { displayName: string }) => input)
+  .handler(async ({ context, data }) => {
+    const { getSql } = await import("@/lib/db");
+    const { adoptStaffName, ensureStaff } = await import("@/lib/workspace-store");
+    const { DEV_USER_ID, authConfigured } = await import("@/lib/auth/verify.server");
+    const sql = await getSql();
+    const devMode = !authConfigured && context.userId === DEV_USER_ID;
+    await ensureStaff(sql, context.userId, devMode);
+    const adopted = await adoptStaffName(sql, context.userId, data.displayName);
+    const access = await ensureStaff(sql, context.userId, devMode);
+    return { displayName: adopted ?? access.displayName, access };
+  });
+
+export const saveStaffDisplayName = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { displayName: string }) => input)
+  .handler(async ({ context, data }) => {
+    const { getSql } = await import("@/lib/db");
+    const { ensureStaff, setOwnDisplayName } = await import("@/lib/workspace-store");
+    const { DEV_USER_ID, authConfigured } = await import("@/lib/auth/verify.server");
+    const sql = await getSql();
+    const devMode = !authConfigured && context.userId === DEV_USER_ID;
+    await ensureStaff(sql, context.userId, devMode);
+    const displayName = await setOwnDisplayName(sql, context.userId, data.displayName);
+    return { displayName, access: await ensureStaff(sql, context.userId, devMode) };
   });
 
 export const updateStaffAccess = createServerFn({ method: "POST" })

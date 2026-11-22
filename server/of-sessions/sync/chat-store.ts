@@ -895,6 +895,35 @@ export async function listPendingOutbounds(
   }));
 }
 
+/** Emparejes recientes: el cliente quita la copia «Pendiente de confirmar» con este id. */
+export async function listRecentMatches(
+  sql: ReadSql,
+  creatorIds: string[],
+): Promise<Array<{ id: string; creatorId: string; threadKey: string | null; matchedMessageKey: string }>> {
+  if (!creatorIds.length) return [];
+  const filter = creatorIds.map((_, index) => `$${index + 1}`).join(", ");
+  const rows = await sql.query<{
+    id: string;
+    creator_id: string;
+    thread_key: string | null;
+    matched_message_key: string | null;
+  }>(
+    `select id, creator_id, thread_key, matched_message_key
+     from of_chat_outbound
+     where creator_id in (${filter})
+       and matched_message_key is not null
+       and created_at > now() - interval '6 hours'
+     order by created_at desc
+     limit 40`,
+    creatorIds,
+  );
+  return rows.flatMap((row) => (
+    row.matched_message_key
+      ? [{ id: row.id, creatorId: row.creator_id, threadKey: row.thread_key, matchedMessageKey: row.matched_message_key }]
+      : []
+  ));
+}
+
 export async function markOutboundSent(sql: ReadSql, id: string, messageId: string): Promise<void> {
   await sql.query(
     `update of_chat_outbound

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { historyAdvance, olderChatMessagesPath, pageFinished } from "../../server/of-sessions/sync/history.ts";
-import { mergeHistoryMessages, scrollAfterPrepend, scrollAnchor, scrollDeltaForAnchor } from "./chat-history.ts";
+import { mergeHistoryMessages, rememberThreadMessages, scrollAfterPrepend, scrollAnchor, scrollDeltaForAnchor } from "./chat-history.ts";
 
 test("la página antigua usa el id del mensaje más viejo y hasMore cierra el hilo", () => {
   const path = olderChatMessagesPath("482191", "104");
@@ -52,4 +52,13 @@ test("el histórico no repite un mensaje y el scroll no salta", () => {
   assert.deepEqual(anchor, { id: "b", offset: 10 });
   assert.equal(scrollDeltaForAnchor(anchor!, 400, 90), 300);
   assert.equal(scrollDeltaForAnchor(anchor!, 100, 90), 0);
+  const seen = rememberThreadMessages(
+    [{ messageKey: "1", sentAt: "2026-01-01T00:00:00.000Z" }],
+    [{ messageKey: "9", sentAt: "2026-03-01T00:00:00.000Z" }],
+  );
+  assert.deepEqual(seen.messages.map((message) => message.messageKey), ["1", "9"]);
+  assert.equal(seen.changed, true);
+  const same = rememberThreadMessages(seen.messages, [seen.messages[0]!]);
+  assert.equal(same.changed, false);
+  assert.equal(same.messages.length, 2);
 });
