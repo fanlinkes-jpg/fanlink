@@ -25,7 +25,7 @@ const RULES = {
   remove_headers: ["user-id"],
 };
 
-test("veinte hilos abiertos se quedan cerca de 150 peticiones por minuto", async () => {
+test("veinte hilos abiertos se quedan en unas 40 peticiones por minuto", async () => {
   clearSignRulesCache();
   clearAccountChatPace();
   clearFanSpendCache();
@@ -65,8 +65,8 @@ test("veinte hilos abiertos se quedan cerca de 150 peticiones por minuto", async
     }
     now += OPEN_PULL_MS;
   }
-  assert.ok(requests <= 170, `peticiones=${requests}`);
-  assert.ok(requests >= 120, `peticiones=${requests}`);
+  assert.ok(requests <= 55, `peticiones=${requests}`);
+  assert.ok(requests >= 30, `peticiones=${requests}`);
   clearSignRulesCache();
   clearAccountChatPace();
 });

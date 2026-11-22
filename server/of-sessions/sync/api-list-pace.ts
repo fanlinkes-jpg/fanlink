@@ -59,11 +59,14 @@ export function rememberChatPace(accountId: string, pace: ChatPace): void {
 
 /** Separa las peticiones de una cuenta aunque vengan de llamadas distintas. */
 export async function awaitAccountGap(accountId: string, now: () => number, sleep: (ms: number) => Promise<void>, gapMs = REQUEST_GAP_MS): Promise<void> {
-  const current = now();
-  const prev = lastRequestAt.get(accountId) ?? 0;
-  const slot = Math.max(current, prev + gapMs);
+  const gap = Math.max(gapMs, REQUEST_GAP_MS);
+  const wall = now();
+  const prev = lastRequestAt.get(accountId);
+  const logicalNow = prev == null ? wall : Math.max(wall, prev);
+  const earliest = prev == null ? wall : prev + gap;
+  const slot = Math.max(logicalNow, earliest);
   lastRequestAt.set(accountId, slot);
-  const wait = slot - current;
+  const wait = slot - logicalNow;
   if (wait > 0) await sleep(wait);
 }
 

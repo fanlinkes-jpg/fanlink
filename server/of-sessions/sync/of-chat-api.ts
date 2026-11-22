@@ -355,7 +355,7 @@ function publicVaultRoute(route: string, listId: string): string {
 export async function fetchSignedVault(state: StorageStateFile, deps: {
   fetch: typeof fetch;
   now: () => number;
-  /** Misma cola que el chat: una petición firmada a la vez y 300 ms entre ellas. */
+  /** Misma cola que el chat: una petición firmada a la vez, con el hueco de la cuenta. */
   accountId?: string;
   sleep?: (ms: number) => Promise<void>;
 }, listId = "all", offset = 0, options?: VaultFetchOptions): Promise<SignedVaultRead> {

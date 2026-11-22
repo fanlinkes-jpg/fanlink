@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { PGlite } from "@electric-sql/pglite";
-import { clearAccountChatPace } from "../sync/api-list-pace.ts";
+import { clearAccountChatPace, REQUEST_GAP_MS } from "../sync/api-list-pace.ts";
 import { accountPause, clearAccountPauses } from "../sync/backoff.ts";
 import { fetchSignedVault, sessionForApi, signedHeaders, vaultListMediaPath } from "../sync/of-chat-api.ts";
 import { clearSignRulesCache, parseSignRules } from "../sync/of-sign.ts";
@@ -475,7 +475,7 @@ test("dos lecturas de la misma cuenta esperan el hueco y no salen a la vez", asy
     ]);
     assert.equal(max, 1);
     assert.equal(waits.length > 0, true);
-    assert.equal(waits.every((ms) => ms > 0 && ms <= 300), true);
+    assert.equal(waits.every((ms) => ms > 0 && ms <= REQUEST_GAP_MS), true);
   } finally {
     clearSignRulesCache();
     clearAccountChatPace();
@@ -2437,7 +2437,7 @@ test("Retry-After inválido o enorme se queda en el tope y no pasa a otra cuenta
     assert.equal(waits.some((ms) => ms >= 1000), true);
     waits.length = 0;
     await walkVault({ ...deps, accountId: "acc-otra", listId: "88062" });
-    assert.equal(waits.some((ms) => ms >= 1000), false);
+    assert.equal(waits.some((ms) => ms > REQUEST_GAP_MS), false);
   } finally {
     clearAccountPauses();
     clearSignRulesCache();

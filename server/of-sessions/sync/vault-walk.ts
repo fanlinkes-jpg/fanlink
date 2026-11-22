@@ -1,5 +1,6 @@
 import type { StorageStateFile } from "../sessions/storage-state.ts";
 import { VAULT_FOLDER_READ_ERROR } from "../../../src/lib/vault-folder-label.ts";
+import { REQUEST_GAP_MS } from "./api-list-pace.ts";
 import { backoffDelayMs } from "./backoff.ts";
 import { fetchSignedVault, vaultPageReason, VAULT_MEDIA_LIMIT, type SignedVaultRead } from "./of-chat-api.ts";
 import type { ReadSql } from "./store.ts";
@@ -7,8 +8,11 @@ import { folderMediaCap, mediaStateHits, mergeVaultList, parseVaultBundle, vault
 import { clearVaultPace, folderCursorState, forgetFolderCursor, listMediaDown, noteListMediaDown, pauseVaultRate, recordFolderRead, rememberFolderCursor, rememberFolderCut, shareFolderRead, VAULT_FOLDER_BATCH, VAULT_FOLDER_CUT_PASSES, VAULT_FOLDER_GAP_MS } from "./vault-pace.ts";
 import { finishListMembers, listMemberCount, mirroredFolderItems, persistVaultRead, storedFolderCounts } from "./vault-store.ts";
 
-/** Pausa entre páginas. Más lenta que el chat: la bóveda pesa. */
-export const VAULT_PAGE_GAP_MS = 800;
+/**
+ * Pausa entre páginas de la bóveda. Cabe el hueco de la cuenta dos veces,
+ * para que una carpeta abierta cuele su página antes de la siguiente de Todos.
+ */
+export const VAULT_PAGE_GAP_MS = REQUEST_GAP_MS * 2 + 500;
 /** Páginas de una sola lista. 40 × 40 cubre una bóveda de más de mil medios. */
 export const VAULT_WALK_CAP = 40;
 /** Páginas en total. La lista «all» tiene que poder terminar antes de las carpetas. */
