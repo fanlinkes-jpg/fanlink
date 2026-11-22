@@ -1721,17 +1721,19 @@ export function RealChatsPage() {
                   event.target.value = "";
                 }}
               />
-              <div role="toolbar" aria-label="Herramientas del mensaje" className="relative z-50 mt-2 flex items-center gap-1">
-                <ToolButton label="Add media" title="Add media · Añadir archivo" onClick={() => fileBox.current?.click()}><ImagePlus className="h-6 w-6" /></ToolButton>
-                <ToolButton label="GIF" title="GIF" active={panel === "gif"} onClick={() => toggle("gif")}><span className="text-[13px] font-bold leading-none">GIF</span></ToolButton>
-                <ToolButton label="Add from media vault" title="Add from media vault · Añadir del vault" active={panel === "vault"} onClick={() => { if (panel === "vault") setPanel(null); else void loadOfVault(); }}><FolderOpen className="h-6 w-6" /></ToolButton>
-                <ToolButton label="Schedule your message" title="Schedule your message · Programar tu mensaje" active={dialog === "programar"} onClick={() => { setPanel(null); setDialog((current) => current === "programar" ? null : "programar"); }}><Clock className="h-6 w-6" /></ToolButton>
-                <ToolButton label="Price" title="Price · Precio" active={dialog === "precio"} onClick={() => { setPanel(null); setDialog((current) => current === "precio" ? null : "precio"); }}><DollarSign className="h-6 w-6" /></ToolButton>
-                <ToolButton label="Tag other creator" title="Tag other creator · Etiquetar otra creadora" active={panel === "etiqueta"} onClick={() => toggle("etiqueta")}><AtSign className="h-6 w-6" /></ToolButton>
-                <ToolButton label="Format text" title="Format text · Formato de texto" active={panel === "formato"} onClick={() => toggle("formato")}><Type className="h-6 w-6" /></ToolButton>
-                <ToolButton label="Emojis" title="Emojis" active={panel === "emojis"} onClick={() => toggle("emojis")}><Smile className="h-6 w-6" /></ToolButton>
-                <ToolButton label="Translation" title="Translation · Traducción" active={panel === "traduccion"} onClick={() => toggle("traduccion")}><Languages className="h-6 w-6" /></ToolButton>
-                <button type="button" disabled={!realSend || !draft.trim()} title={realSend ? "Enviar" : "Envío real desactivado en esta cuenta"} aria-label="Enviar" onClick={() => commitSend("Enter", false, false)} className="ml-auto grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#3b6cff] text-white disabled:opacity-60"><Send className="h-5 w-5" /></button>
+              <div role="toolbar" aria-label="Herramientas del mensaje" className="relative z-50 mt-2 flex min-w-0 items-center gap-1">
+                <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto [scrollbar-width:none]">
+                <ToolButton label="Add media" title="Add media · Añadir archivo" onClick={() => fileBox.current?.click()}><ImagePlus className="h-5 w-5" /></ToolButton>
+                <ToolButton label="GIF" title="GIF" active={panel === "gif"} onClick={() => toggle("gif")}><span className="text-[11px] font-bold leading-none">GIF</span></ToolButton>
+                <ToolButton label="Add from media vault" title="Add from media vault · Añadir del vault" active={panel === "vault"} onClick={() => { if (panel === "vault") setPanel(null); else void loadOfVault(); }}><FolderOpen className="h-5 w-5" /></ToolButton>
+                <ToolButton label="Schedule your message" title="Schedule your message · Programar tu mensaje" active={dialog === "programar"} onClick={() => { setPanel(null); setDialog((current) => current === "programar" ? null : "programar"); }}><Clock className="h-5 w-5" /></ToolButton>
+                <ToolButton label="Price" title="Price · Precio" active={dialog === "precio"} onClick={() => { setPanel(null); setDialog((current) => current === "precio" ? null : "precio"); }}><DollarSign className="h-5 w-5" /></ToolButton>
+                <ToolButton label="Tag other creator" title="Tag other creator · Etiquetar otra creadora" active={panel === "etiqueta"} onClick={() => toggle("etiqueta")}><AtSign className="h-5 w-5" /></ToolButton>
+                <ToolButton label="Format text" title="Format text · Formato de texto" active={panel === "formato"} onClick={() => toggle("formato")}><Type className="h-5 w-5" /></ToolButton>
+                <ToolButton label="Emojis" title="Emojis" active={panel === "emojis"} onClick={() => toggle("emojis")}><Smile className="h-5 w-5" /></ToolButton>
+                <ToolButton label="Translation" title="Translation · Traducción" active={panel === "traduccion"} onClick={() => toggle("traduccion")}><Languages className="h-5 w-5" /></ToolButton>
+                </div>
+                <button type="button" disabled={!realSend || !draft.trim()} title={realSend ? "Enviar" : "Envío real desactivado en esta cuenta"} aria-label="Enviar" onClick={() => commitSend("Enter", false, false)} className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-primary text-primary-fg disabled:opacity-60"><Send className="h-5 w-5" /></button>
               </div>
             </form>
         </div>
@@ -2015,7 +2017,12 @@ function ComposerPanelBody({
           {reading ? <p className="px-4 py-2 text-sm text-[#8a96a3]">Leyendo la bóveda de OnlyFans…</p> : null}
           {creatorId && creatorId !== "all" ? (
             <VaultBrowser layout="of" creatorId={creatorId} fanKey={fanKey} reloadToken={vaultReload} thumbPage={thumbPage} pageItems={ofVault} reading={reading} onAttach={onVault} onClose={onClose} onMore={onVaultMore} onOpenFolder={onOpenFolder} />
-          ) : <p className="p-4 text-sm text-[#8a96a3]">Sin datos</p>}
+          ) : (
+            <div className="p-4">
+              <p className="text-sm text-[#8a96a3]">Sin datos</p>
+              <button type="button" className="mt-3 text-sm font-semibold" onClick={onClose}>Cerrar</button>
+            </div>
+          )}
         </div>
       );
     }
@@ -2132,7 +2139,7 @@ function ComposerPanelBody({
 
 function ToolButton({ label, title, onClick, children, active = false }: { label: string; title: string; onClick: () => void; children: ReactNode; active?: boolean }) {
   return (
-    <button type="button" aria-label={label} title={title} aria-pressed={active} onClick={onClick} className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg ${active ? "bg-[#e7f0ff] text-[#2456c7]" : "text-[#1c2333] hover:bg-[#f3f4f6]"}`}>
+    <button type="button" aria-label={label} title={title} aria-pressed={active} onClick={onClick} className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg ${active ? "bg-selection text-primary" : "text-fg hover:bg-raised"}`}>
       {children}
     </button>
   );
