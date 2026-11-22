@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { browserVideoType, choosePlayableVideo, drmManifestUrl, drmPlaybackChoice, parseVaultBundle, resolveDetailPlayback, stampVaultList, vaultDetailRow, videoContainer, videoDetailHold, videoDrmLine, videoFlagLine, videoFormatHold, videoHoldPayload, videoHoldText, videoShapeLine } from "../sync/vault-model.ts";
-import { describePlaylist, drmLicenseEnabled, forwardDrmLicense, hlsMediaResponse, hlsSegmentType, openDrmManifest, paceLicense, playVaultHlsDetail, protectedVideoHold, readBoundedPlaylist } from "../sync/vault-hls.ts";
+import { describePlaylist, drmLicenseEnabled, forwardDrmLicense, hlsMediaResponse, hlsSegmentType, LICENSE_BODY_MAX, licenseMethodStatus, openDrmManifest, paceLicense, playVaultHlsDetail, protectedVideoHold, readBoundedPlaylist } from "../sync/vault-hls.ts";
 import { fetchSignedMediaDetail, vaultMediaDetailPath } from "../sync/of-chat-api.ts";
 import { clearSignRulesCache } from "../sync/of-sign.ts";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
@@ -854,16 +854,19 @@ test("un drm=si en Chrome sigue el DASH, la licencia y un solo manifiesto", asyn
   };
   assert.equal(drmPlaybackChoice(detail)?.kind, "dash");
   assert.equal(drmLicenseEnabled(), true);
-  const mpd = `<?xml version="1.0"?><MPD><Period><AdaptationSet><ContentProtection schemeIdUri="urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"><dashif:Laurl>https://onlyfans.com/api2/v2/drm/license</dashif:Laurl></ContentProtection><Representation id="720" bandwidth="800000"><BaseURL>https://cdn3.onlyfans.com/dash/720/</BaseURL><SegmentTemplate media="seg-$Number$.m4s" initialization="init.mp4"/></Representation></AdaptationSet></Period></MPD>`;
+  const mpd = `<?xml version="1.0"?><MPD xmlns:cenc="urn:mpeg:cenc:2013" xmlns:ms="urn:microsoft"><Period><AdaptationSet><ContentProtection schemeIdUri="urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"><cenc:pssh>AAAA</cenc:pssh></ContentProtection><ContentProtection schemeIdUri="urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95"><ms:laurl>https://license.pallycon.com/ri/licenseManager.do</ms:laurl></ContentProtection><Representation id="240" bandwidth="200000"><BaseURL>240/file.mp4</BaseURL><SegmentBase indexRange="100-200"><Initialization range="0-99"/></SegmentBase></Representation><Representation id="720" bandwidth="800000"><BaseURL>https://cdn3.onlyfans.com/dash/720/file.mp4</BaseURL><SegmentBase indexRange="100-200"><Initialization range="0-99"/></SegmentBase></Representation></AdaptationSet></Period></MPD>`;
   const ftyp = Uint8Array.from([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70]);
   let manifestGets = 0;
   let segmentCookie = "";
+  let segmentRange = "";
   let licensePosts = 0;
+  const licenseHeadersSeen: { current: Headers | null } = { current: null };
   const fetchImpl = (async (input: unknown, init?: RequestInit) => {
     const href = String(input);
     const cookie = new Headers(init?.headers).get("cookie") ?? "";
     if (init?.method === "POST") {
       licensePosts += 1;
+      licenseHeadersSeen.current = new Headers(init.headers);
       return new Response("license-ok", { status: 200 });
     }
     if (href.includes("/dash/a.mpd")) {
@@ -876,9 +879,10 @@ test("un drm=si en Chrome sigue el DASH, la licencia y un solo manifiesto", asyn
       assert.match(cookie, /CloudFront-Policy=/);
       return new Response(mpd, { status: 200, headers: { "content-type": "application/dash+xml" } });
     }
-    if (href.includes("seg-1.m4s") || href.includes("init.mp4")) {
+    if (href.includes("file.mp4")) {
       segmentCookie = cookie;
-      return new Response(ftyp, { status: 206, headers: { "content-type": "video/mp4", "content-range": "bytes 0-7/8", "content-length": "8" } });
+      segmentRange = new Headers(init?.headers).get("range") ?? "";
+      return new Response(ftyp, { status: 206, headers: { "content-type": "video/mp4", "content-range": "bytes 0-99/400", "content-length": "8" } });
     }
     return new Response("no", { status: 404 });
   }) as typeof fetch;
@@ -894,23 +898,29 @@ test("un drm=si en Chrome sigue el DASH, la licencia y un solo manifiesto", asyn
     assert.equal(manifest.includes("cdn3.onlyfans.com"), false);
     assert.equal(manifest.includes("sek"), false);
     assert.match(manifest, /variant=licencia/);
-    const media = /media="([^"]+)"/.exec(manifest)?.[1] ?? "";
-    const target = new URL(media.replace("$Number$", "1"));
+    assert.equal(manifest.includes("license.pallycon.com"), false);
+    assert.equal(manifest.includes("cdn3.onlyfans.com"), false);
+    const bases = [...manifest.matchAll(/<BaseURL>([^<]+)<\/BaseURL>/g)].map((item) => (item[1] ?? "").replace(/&amp;/g, "&"));
+    assert.equal(bases.length >= 2, true);
+    assert.ok(bases.every((item) => item.includes("variant=hls")));
+    const target = new URL(bases[0] ?? "");
     const segment = await hlsMediaResponse({
       creatorId: target.searchParams.get("creatorId") ?? "",
       mediaId: target.searchParams.get("mediaId") ?? "",
       ticket: target.searchParams.get("k") ?? "",
-      segment: "",
+      segment: target.searchParams.get("s") ?? "",
       base: target.searchParams.get("b"),
       path: target.searchParams.get("p"),
-      range: null,
+      range: "bytes=0-99",
     }, fetchImpl);
     assert.equal(segment.status, 206);
-    assert.equal(segment.headers.get("content-range"), "bytes 0-7/8");
+    assert.equal(segment.headers.get("content-range"), "bytes 0-99/400");
+    assert.equal(segmentRange, "bytes=0-99");
+    assert.equal(boundedVideoRange("bytes=0-8000000"), "bytes=0-8000000");
     assert.equal(hasFtyp(new Uint8Array(await segment.arrayBuffer())), true);
     assert.match(segmentCookie, /CloudFront-Policy=/);
     assert.equal(segmentCookie.includes("sess"), false);
-    const licenseUrl = new URL(/>(https?:\/\/[^<]*variant=licencia[^<]*)</.exec(manifest)?.[1] ?? media);
+    const licenseUrl = new URL((/>(https?:\/\/[^<]*variant=licencia[^<]*)</.exec(manifest)?.[1] ?? bases[0] ?? "").replace(/&amp;/g, "&"));
     const license = await forwardDrmLicense({
       creatorId: licenseUrl.searchParams.get("creatorId") ?? "",
       mediaId: licenseUrl.searchParams.get("mediaId") ?? "",
@@ -922,6 +932,44 @@ test("un drm=si en Chrome sigue el DASH, la licencia y un solo manifiesto", asyn
     }, fetchImpl);
     assert.equal(license.status, 200);
     assert.equal(licensePosts, 1);
+    const apiMpd = `<?xml version="1.0"?><MPD><Period><AdaptationSet><ContentProtection schemeIdUri="urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95"><laurl>https://onlyfans.com/api2/v2/drm/license</laurl></ContentProtection><Representation id="1"><BaseURL>https://cdn3.onlyfans.com/dash/720/file.mp4</BaseURL></Representation></AdaptationSet></Period></MPD>`;
+    const apiFetch = (async (input: unknown, init?: RequestInit) => {
+      const href = String(input);
+      if (init?.method === "POST") {
+        licenseHeadersSeen.current = new Headers(init.headers);
+        return new Response("license-ok", { status: 200 });
+      }
+      if (href.includes("/dash/b.mpd")) return new Response(apiMpd, { status: 200, headers: { "content-type": "application/dash+xml" } });
+      return fetchImpl(input as string, init);
+    }) as typeof fetch;
+    const apiManifest = await openDrmManifest({
+      ...detail,
+      id: 25,
+      files: { full: { url: null }, drm: { manifest: { dash: "https://onlyfans.com/dash/b.mpd" }, signature: detail.files.drm.signature } },
+    }, apiFetch, async () => undefined, { creatorId: "u1fpdnp", mediaId: "25", sessionCookie: "sess=ok", origin: "https://fanlink.local" });
+    assert.ok(apiManifest);
+    const apiLicense = new URL((/>(https?:\/\/[^<]*variant=licencia[^<]*)</.exec(apiManifest)?.[1] ?? "").replace(/&amp;/g, "&"));
+    const signed = await forwardDrmLicense({
+      creatorId: apiLicense.searchParams.get("creatorId") ?? "",
+      mediaId: apiLicense.searchParams.get("mediaId") ?? "",
+      ticket: apiLicense.searchParams.get("k") ?? "",
+      segment: apiLicense.searchParams.get("s") ?? "",
+      body: new TextEncoder().encode("challenge"),
+      contentType: "application/octet-stream",
+      sign: async () => ({ sign: "firmado", time: "1", "user-id": "n", cookie: "sess=ok", "x-bc": "huella", accept: "application/json" }),
+    }, apiFetch);
+    assert.equal(signed.status, 200);
+    assert.equal(licenseHeadersSeen.current?.get("sign"), "firmado");
+    assert.equal(licenseHeadersSeen.current?.get("x-bc"), "huella");
+    const unsigned = await forwardDrmLicense({
+      creatorId: apiLicense.searchParams.get("creatorId") ?? "",
+      mediaId: apiLicense.searchParams.get("mediaId") ?? "",
+      ticket: apiLicense.searchParams.get("k") ?? "",
+      segment: apiLicense.searchParams.get("s") ?? "",
+      body: new TextEncoder().encode("challenge"),
+      contentType: "application/octet-stream",
+    }, apiFetch);
+    assert.equal(unsigned.status, 502);
     const redirectOnly = await forwardDrmLicense({
       creatorId: licenseUrl.searchParams.get("creatorId") ?? "",
       mediaId: licenseUrl.searchParams.get("mediaId") ?? "",
@@ -949,6 +997,9 @@ test("un drm=si en Chrome sigue el DASH, la licencia y un solo manifiesto", asyn
       paceLicense("u1fpdnp", async () => { waits += 1; }),
     ]);
     assert.equal(waits, 2);
+    assert.equal(licenseMethodStatus("GET", 0), 405);
+    assert.equal(licenseMethodStatus("POST", LICENSE_BODY_MAX + 1), 413);
+    assert.equal(licenseMethodStatus("POST", 32), null);
     assert.equal(await readBoundedPlaylist("http://cdn2.onlyfans.com/a.m3u8", async () => { throw new Error("http"); }), null);
   } finally {
     if (previous === undefined) delete process.env.FANLINK_ENABLE_DRM_LICENSE;

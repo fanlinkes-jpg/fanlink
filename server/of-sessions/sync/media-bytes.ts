@@ -12,7 +12,7 @@ export const VIDEO_FETCH_TIMEOUT_MS = 20_000;
  */
 export const VIDEO_OPEN_BYTES = 2 * 1024 * 1024;
 
-/** Acota cualquier Range a una ventana de 2 MiB a partir de su inicio. */
+/** Un `bytes=N-` abierto se queda en 2 MiB. Un rango con fin (DASH) se sirve entero. */
 export function boundedVideoRange(range: string | null | undefined): string {
   const header = mediaRangeHeader(range ?? null);
   const cap = VIDEO_OPEN_BYTES;
@@ -20,9 +20,7 @@ export function boundedVideoRange(range: string | null | undefined): string {
   const match = /^bytes=(\d+)-(\d*)$/.exec(header);
   if (!match) return `bytes=0-${cap - 1}`;
   const start = Number(match[1]);
-  const end = match[2] === "" ? null : Number(match[2]);
-  const maxEnd = start + cap - 1;
-  if (end == null || end > maxEnd) return `bytes=${start}-${maxEnd}`;
+  if (match[2] === "") return `bytes=${start}-${start + cap - 1}`;
   return header;
 }
 

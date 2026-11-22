@@ -178,6 +178,7 @@ export default defineConfig(({ command, isPreview }) => ({
     strictPort: true,
   },
   resolve: { tsconfigPaths: true },
+  ssr: { external: ["dashjs", "hls.js"] },
   plugins: [
     pgliteBootstrapPlugin(),
     liveViewPlugin(),

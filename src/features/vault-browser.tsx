@@ -435,7 +435,9 @@ export function VaultBrowser({
           {items.map((item) => (
             <article key={item.id} className="rounded border border-[#e6e8ee] p-2 text-[11px]">
               {item.kind === "video" ? (
-                <video controls preload="none" src={vaultMediaSrc(creatorId, item.id, "full")} className="mb-1 h-24 w-full rounded bg-black" />
+                <button type="button" className="mb-1 block w-full" aria-label={`Ver ${item.title}`} onClick={() => setPreview(item)}>
+                  <VaultStill creatorId={creatorId} mediaId={item.id} className="h-24 w-full rounded object-cover" listId={thumbPage.listId} offset={thumbPage.offset} />
+                </button>
               ) : (
                 <VaultStill creatorId={creatorId} mediaId={item.id} className="mb-1 h-16 w-full rounded object-cover" listId={thumbPage.listId} offset={thumbPage.offset} />
               )}
@@ -463,6 +465,20 @@ export function VaultBrowser({
             </article>
           ))}
         </div>
+        {preview ? (
+          <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-6" role="dialog" aria-label="Vista previa">
+            <button type="button" className="absolute inset-0" aria-label="Cerrar vista previa" onClick={() => setPreview(null)} />
+            <div className="relative z-10 flex h-[80vh] w-[80vw] items-center justify-center">
+              {preview.kind === "video" ? (
+                <VaultPlayback src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} />
+              ) : preview.kind === "audio" ? (
+                <audio controls className="w-full" src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} />
+              ) : (
+                <img alt={preview.title} className="h-full w-full object-contain" src={vaultMediaSrc(creatorId, preview.id, "full", thumbPage)} />
+              )}
+            </div>
+          </div>
+        ) : null}
       </section>
     </div>
   );
@@ -570,7 +586,7 @@ function VaultPlayback({ src }: { src: string }) {
     setReady(false);
     if (!src || !video) return;
     const controller = new AbortController();
-    let blobUrl: string | null = null;
+    let removeFairPlay: (() => void) | null = null;
     void fetch(src, {
       signal: controller.signal,
       headers: { Range: "bytes=0-1" },
@@ -586,21 +602,30 @@ function VaultPlayback({ src }: { src: string }) {
         return;
       }
       if (type.includes("dash")) {
-        await response.body?.cancel().catch(() => undefined);
+        const text = await response.text();
         if (cancelled) return;
+        if (typeof window === "undefined") return;
         const dashjs = await import("dashjs");
         if (cancelled) return;
         const player = dashjs.MediaPlayer().create();
         hls = player;
-        player.initialize(video, src, true);
-        (player as { updateSettings: (value: object) => void }).updateSettings({ streaming: { bufferTimeAtTopQuality: 12 } });
-        player.on("error", (event: { error?: { code?: number; message?: string } }) => {
-          reportPlaybackError(src, { tipo: "dash", detalle: event.error?.message ?? "error", fatal: true, codigo: event.error?.code ?? null });
+        const license = widevineServer(text);
+        if (license) player.setProtectionData({ "com.widevine.alpha": { serverURL: license } });
+        player.updateSettings({ streaming: { buffer: { bufferTimeAtTopQuality: 12, bufferTimeAtTopQualityLongForm: 12 } } });
+        let reset = false;
+        player.on("error", (event: { error?: { code?: number | string; message?: string } }) => {
+          const code = typeof event.error?.code === "number" ? event.error.code : null;
+          reportPlaybackError(src, { tipo: "dash", detalle: event.error?.message ?? "error", fatal: true, codigo: code });
+          if (!reset) {
+            reset = true;
+            player.reset();
+          }
           if (cancelled) return;
           setNote("No se ha podido cargar el vídeo");
           setOpenVault(false);
           setState("error");
         });
+        player.initialize(video, src, true);
         setReady(true);
         return;
       }
@@ -609,7 +634,7 @@ function VaultPlayback({ src }: { src: string }) {
         if (cancelled) return;
         if (video.canPlayType("application/vnd.apple.mpegurl")) {
           const keyUri = /#EXT-X-KEY:[^\n]*URI="([^"]+)"/.exec(text)?.[1] ?? "";
-          if (keyUri.includes("variant=licencia")) hookFairPlay(video, keyUri);
+          if (keyUri.includes("variant=licencia")) removeFairPlay = hookFairPlay(video, keyUri);
           video.src = src;
           setReady(true);
           return;
@@ -655,8 +680,8 @@ function VaultPlayback({ src }: { src: string }) {
     return () => {
       cancelled = true;
       controller.abort();
+      removeFairPlay?.();
       hls?.destroy();
-      if (blobUrl) URL.revokeObjectURL(blobUrl);
       video.pause();
       video.removeAttribute("src");
       video.load();
@@ -693,7 +718,20 @@ function VaultPlayback({ src }: { src: string }) {
   );
 }
 
-function hookFairPlay(video: HTMLVideoElement, licenseUrl: string): void {
+function widevineServer(text: string): string {
+  const doc = new DOMParser().parseFromString(text, "text/xml");
+  for (const node of doc.getElementsByTagName("*")) {
+    if (!(node.getAttribute("schemeIdUri") ?? "").includes("edef8ba9")) continue;
+    for (const child of node.getElementsByTagName("*")) {
+      if ((child.localName || "").toLowerCase() !== "laurl") continue;
+      const value = child.textContent?.trim() ?? "";
+      if (value.includes("variant=licencia")) return value;
+    }
+  }
+  return "";
+}
+
+function hookFairPlay(video: HTMLVideoElement, licenseUrl: string): () => void {
   const onEncrypted = (event: Event) => {
     const encrypted = event as MediaEncryptedEvent;
     const initData = encrypted.initData;
@@ -704,6 +742,8 @@ function hookFairPlay(video: HTMLVideoElement, licenseUrl: string): void {
         videoCapabilities: [{ contentType: "application/vnd.apple.mpegurl" }],
       }]);
       const keys = await access.createMediaKeys();
+      const certificate = await fetch(licenseUrl, { headers: { accept: "application/octet-stream" } }).then((response) => response.ok ? response.arrayBuffer() : null).catch(() => null);
+      if (certificate) await keys.setServerCertificate(certificate);
       await video.setMediaKeys(keys);
       const session = keys.createSession();
       session.addEventListener("message", (message) => {
@@ -716,6 +756,7 @@ function hookFairPlay(video: HTMLVideoElement, licenseUrl: string): void {
     })().catch(() => undefined);
   };
   video.addEventListener("encrypted", onEncrypted);
+  return () => video.removeEventListener("encrypted", onEncrypted);
 }
 
 function reportPlaybackError(src: string, fields: { tipo: string; detalle: string; fatal: boolean; codigo: number | null }): void {

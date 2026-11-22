@@ -9,7 +9,7 @@ import { readSessionMediaResult, videoBytesAccepted, videoFollowUp } from "../..
 import { accountCreatorIds } from "../../../server/of-sessions/http/vault-accounts.ts";
 import { fetchSignedMediaDetail, fetchSignedVault, sessionForApi, signedHeaders } from "../../../server/of-sessions/sync/of-chat-api.ts";
 import { choosePlayableVideo, drmPlaybackChoice, parseVaultBundle, resolveDetailPlayback, vaultDetailRow, vaultFolderMark, videoContainer, videoFlagLine, videoFormatHold, videoHoldPayload } from "../../../server/of-sessions/sync/vault-model.ts";
-import { describePlaylist, drmLicenseEnabled, forwardDrmLicense, hlsMediaResponse, LICENSE_BODY_MAX, openDrmManifest, paceLicense, protectedVideoHold, readBoundedPlaylist } from "../../../server/of-sessions/sync/vault-hls.ts";
+import { describePlaylist, drmLicenseEnabled, forwardDrmLicense, hlsMediaResponse, LICENSE_BODY_MAX, licenseMethodStatus, openDrmManifest, paceLicense, protectedVideoHold, readBoundedPlaylist } from "../../../server/of-sessions/sync/vault-hls.ts";
 import { loadSignRules } from "../../../server/of-sessions/sync/of-sign.ts";
 import { loadFreshPreview, normalizeVaultOffset, reloadVaultPreview, signedUrlExpired } from "../../../server/of-sessions/sync/vault-thumbs.ts";
 import { openProfileThumbs } from "../../../server/of-sessions/sync/vault-owner.ts";
@@ -38,7 +38,8 @@ export const Route = createFileRoute("/api/vault-media")({
             return new Response(protectedVideoHold(), { status: 409, headers: { "content-type": "application/json; charset=utf-8" } });
           }
           const body = await readCappedBody(request, LICENSE_BODY_MAX);
-          if (!body) return new Response("Sin datos", { status: 413 });
+          const decision = licenseMethodStatus("POST", body?.byteLength ?? LICENSE_BODY_MAX + 1);
+          if (!body || decision) return new Response("Sin datos", { status: decision ?? 413 });
           await paceLicense(creatorId, (ms) => new Promise((resolve) => setTimeout(resolve, ms)));
           return forwardDrmLicense({
             creatorId,
@@ -76,7 +77,7 @@ async function vaultMediaGet(request: Request): Promise<Response> {
     const sql = access.sql;
     const url = new URL(request.url);
     const rawEarly = url.searchParams.get("variant");
-    if (rawEarly === "licencia") return new Response("Sin datos", { status: 405 });
+    if (rawEarly === "licencia") return new Response("Sin datos", { status: licenseMethodStatus("GET", 0) ?? 405 });
     if (rawEarly === "hls") {
       const creatorId = url.searchParams.get("creatorId") ?? "";
       if (!creatorAllowed({ userId: access.userId, role: access.role, perms: access.perms, creatorIds: access.creatorIds }, creatorId)) {

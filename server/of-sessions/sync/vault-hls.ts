@@ -1,3 +1,4 @@
+import { DOMParser, XMLSerializer, type Element as XmlElement } from "@xmldom/xmldom";
 import { BROWSER_FINGERPRINT } from "../sessions/browser-factory.ts";
 import { nextMediaUrl } from "./history.ts";
 import { boundedVideoRange } from "./media-bytes.ts";
@@ -14,6 +15,12 @@ export function drmLicenseEnabled(env: NodeJS.ProcessEnv = process.env): boolean
 
 export function protectedVideoHold(): string {
   return JSON.stringify({ texto: "Vídeo protegido", abrir: false });
+}
+
+export function licenseMethodStatus(method: string, bytes: number): 405 | 413 | null {
+  if (method !== "POST") return 405;
+  if (bytes > LICENSE_BODY_MAX) return 413;
+  return null;
 }
 
 const licenseQueue = new Map<string, Promise<void>>();
@@ -107,7 +114,8 @@ function ticketFor(id: string, creatorId: string, mediaId: string): Ticket | nul
 
 function bindTarget(ticketId: string, absolute: string, variant: "hls" | "licencia"): string | null {
   const ticket = tickets.get(ticketId);
-  if (!ticket || !hlsHostAllowed(absolute)) return null;
+  const allowed = variant === "licencia" ? licenseUrlAllowed(absolute) : hlsHostAllowed(absolute);
+  if (!ticket || !allowed) return null;
   const segment = opaqueId();
   ticket.urls.set(segment, absolute);
   const params = new URLSearchParams({
@@ -143,7 +151,7 @@ function bindDashFile(ticketId: string, absolute: string): string | null {
     `mediaId=${encodeURIComponent(ticket.mediaId)}`,
     `k=${ticketId}`,
     `b=${baseId}`,
-    `p=${file}`,
+    `p=${encodeURIComponent(file)}`,
   ].join("&");
   const path = `/api/vault-media?${query}`;
   return ticket.origin ? `${ticket.origin}${path}` : path;
@@ -172,30 +180,31 @@ export function rewriteHlsManifest(body: string, base: string, ticketId: string)
   }).filter((line) => line !== "").join("\n");
 }
 
-export function rewriteMpd(body: string, base: string, ticketId: string): string {
-  const baseUrl = /<BaseURL>([^<]+)<\/BaseURL>/i.exec(body)?.[1]?.trim();
-  const root = baseUrl ? new URL(baseUrl, base).toString() : base;
-  const swap = (raw: string, license: boolean) => {
-    try {
-      const absolute = new URL(raw, root).toString();
-      if (absolute.includes("$")) return bindDashFile(ticketId, absolute) ?? raw;
-      return bindTarget(ticketId, absolute, license ? "licencia" : "hls") ?? raw;
-    } catch {
-      return raw;
-    }
-  };
-  return body
-    .replace(/<BaseURL>[^<]*<\/BaseURL>/gi, "<BaseURL></BaseURL>")
-    .replace(/<(?:[A-Za-z0-9]+:)?Laurl[^>]*>([^<]+)<\/(?:[A-Za-z0-9]+:)?Laurl>/g, (line, url: string) => line.replace(url, swap(url.trim(), true)))
-    .replace(/\b(media|initialization|sourceURL)="([^"]+)"/g, (line, _name: string, url: string) => line.replace(url, swap(url, false)));
+export function rewriteMpd(body: string, base: string, ticketId: string): string | null {
+  let doc: ReturnType<DOMParser["parseFromString"]>;
+  try {
+    doc = new DOMParser().parseFromString(body, "text/xml");
+  } catch {
+    return null;
+  }
+  const root = doc.documentElement;
+  if (!root || localTag(root) === "parsererror") return null;
+  const failed = { value: false };
+  rewriteDashNode(root, base, ticketId, failed);
+  if (failed.value) return null;
+  copyWidevineLicense(doc, failed);
+  if (failed.value) return null;
+  return new XMLSerializer().serializeToString(doc);
 }
 
 /** Forma de la lista, sin URLs ni firmas. */
 export function describePlaylist(body: string): string {
-  const rewritten = (body.match(/[?&]k=/g) ?? []).length;
+  const rewritten = (body.match(/k=/g) ?? []).length;
   if (body.includes("<MPD") || body.trimStart().startsWith("<")) {
     const variants = (body.match(/<Representation\b/g) ?? []).length;
-    const segments = (body.match(/<SegmentTemplate\b/g) ?? []).length + (body.match(/<S\b/g) ?? []).length;
+    const templates = (body.match(/<SegmentTemplate\b/g) ?? []).length;
+    const bases = (body.match(/<BaseURL\b/gi) ?? []).length;
+    const segments = templates + (body.match(/<S\b/g) ?? []).length + (templates === 0 ? bases : 0);
     const widevine = body.includes("edef8ba9-79d6-4ace-a3c8-27dcd51d21ed");
     return `lista=dash variantes=${variants} segmentos=${segments} key=${widevine ? "widevine" : "no"} formato=${widevine ? "edef8ba9" : "no"} reescritas=${rewritten}`;
   }
@@ -301,16 +310,18 @@ export async function forwardDrmLicense(input: {
   if (!drmLicenseEnabled()) return new Response(protectedVideoHold(), { status: 409, headers: { "content-type": "application/json; charset=utf-8" } });
   const ticket = ticketFor(input.ticket, input.creatorId, input.mediaId);
   const absolute = ticket?.urls.get(input.segment);
-  if (!ticket || !absolute || !hlsHostAllowed(absolute)) return new Response("Sin datos", { status: 404 });
+  if (!ticket || !absolute || !licenseUrlAllowed(absolute)) return new Response("Sin datos", { status: 404 });
   try {
     const headers = await licenseHeaders(absolute, ticket, input.contentType, input.sign);
-    const response = await fetchFollowing(absolute, {
+    if (!headers) return new Response("Sin datos", { status: 502 });
+    const followed = await fetchFollowing(absolute, {
       method: "POST",
       headers,
       body: input.body,
       signal: input.signal,
     }, fetchImpl, ticket);
-    if (!response) return new Response("Sin datos", { status: 502 });
+    if (!followed) return new Response("Sin datos", { status: 502 });
+    const response = followed.response;
     console.info(`[fanlink:vault] reproductor hls tipo=licencia firma=${ticket.cdnCookie || ticket.sessionCookie ? "si" : "no"}`);
     const type = (response.headers.get("content-type") ?? "application/octet-stream").split(";")[0] ?? "application/octet-stream";
     return new Response(response.body, {
@@ -321,7 +332,7 @@ export async function forwardDrmLicense(input: {
       },
     });
   } catch (error) {
-    if (isClientAbort(error)) return new Response(null, { status: 499 });
+    if (input.signal?.aborted && isClientAbort(error)) return new Response(null, { status: 499 });
     return new Response("Sin datos", { status: 502 });
   }
 }
@@ -365,7 +376,8 @@ async function serveHlsTarget(ticketId: string, absolute: string, fetchImpl: typ
       signal,
     }, fetchImpl, ticket);
     if (!fetched) return { status: 502, contentType: "", contentRange: null, contentLength: null, body: null, stream: null };
-    response = fetched;
+    response = fetched.response;
+    absolute = fetched.url;
   } catch (error) {
     if (signal?.aborted && isClientAbort(error)) return { status: 499, contentType: "", contentRange: null, contentLength: null, body: null, stream: null };
     return { status: 0, contentType: "", contentRange: null, contentLength: null, body: null, stream: null };
@@ -383,6 +395,7 @@ async function serveHlsTarget(ticketId: string, absolute: string, fetchImpl: typ
     }
     if (path.endsWith(".mpd") || text.trimStart().startsWith("<MPD") || text.includes("<MPD")) {
       const rewritten = rewriteMpd(text, absolute, ticketId);
+      if (!rewritten) return { status: 502, contentType: "", contentRange: null, contentLength: null, body: null, stream: null };
       console.info(`[fanlink:vault] reproductor hls tipo=dash ${describePlaylist(rewritten)} firma=${ticket.cdnCookie ? "si" : "no"} origen=${vaultFolderMark(absolute)}`);
       return { status: 200, contentType: "application/dash+xml", contentRange: null, contentLength: null, body: new TextEncoder().encode(rewritten), stream: null };
     }
@@ -433,6 +446,7 @@ function upstreamHeaders(absolute: string, ticket: Ticket, accept: string, range
 function cookieFor(absolute: string, ticket: Ticket): string {
   try {
     const host = new URL(absolute).hostname.toLowerCase();
+    if (host.endsWith(".pallycon.com")) return "";
     if (host === "onlyfans.com" || host === "www.onlyfans.com") return ticket.sessionCookie;
   } catch {
     return "";
@@ -440,38 +454,41 @@ function cookieFor(absolute: string, ticket: Ticket): string {
   return ticket.cdnCookie;
 }
 
-async function licenseHeaders(absolute: string, ticket: Ticket, contentType: string, sign?: (pathWithQuery: string) => Promise<Record<string, string> | null>): Promise<Record<string, string>> {
+async function licenseHeaders(absolute: string, ticket: Ticket, contentType: string, sign?: (pathWithQuery: string) => Promise<Record<string, string> | null>): Promise<Record<string, string> | null> {
   const url = new URL(absolute);
-  if (url.pathname.includes("/api2/") && sign) {
-    const signed = await sign(`${url.pathname}${url.search}`);
-    if (signed) return { ...signed, "content-type": contentType };
+  if (url.pathname.includes("/api2/")) {
+    const signed = sign ? await sign(`${url.pathname}${url.search}`) : null;
+    if (!signed?.sign || !signed["x-bc"]) return null;
+    return { ...signed, "content-type": contentType };
   }
   const headers = upstreamHeaders(absolute, ticket, contentType);
   headers["content-type"] = contentType;
   return headers;
 }
 
-async function fetchFollowing(absolute: string, init: { method: string; headers: Record<string, string>; body?: Uint8Array; signal?: AbortSignal }, fetchImpl: typeof fetch, ticket: Ticket): Promise<Response | null> {
+async function fetchFollowing(absolute: string, init: { method: string; headers: Record<string, string>; body?: Uint8Array; signal?: AbortSignal }, fetchImpl: typeof fetch, ticket: Ticket): Promise<{ response: Response; url: string } | null> {
   const signal = init.signal ? AbortSignal.any([AbortSignal.timeout(20_000), init.signal]) : AbortSignal.timeout(20_000);
   const body = init.body ? init.body.buffer.slice(init.body.byteOffset, init.body.byteOffset + init.body.byteLength) as ArrayBuffer : undefined;
-  let response = await fetchImpl(absolute, {
+  let current = absolute;
+  let response = await fetchImpl(current, {
     method: init.method,
     headers: init.headers,
     body,
     redirect: "manual",
     signal,
   });
-  if (init.method === "POST" || response.status < 300 || response.status >= 400) return response;
-  const next = nextMediaUrl(absolute, response.headers.get("location"));
+  if (init.method === "POST" || response.status < 300 || response.status >= 400) return { response, url: current };
+  const next = nextMediaUrl(current, response.headers.get("location"));
   await response.body?.cancel().catch(() => undefined);
   if (!next) return null;
-  response = await fetchImpl(next, {
+  current = next;
+  response = await fetchImpl(current, {
     method: "GET",
-    headers: upstreamHeaders(next, ticket, init.headers.accept ?? "*/*", init.headers.range),
+    headers: upstreamHeaders(current, ticket, init.headers.accept ?? "*/*", init.headers.range),
     redirect: "manual",
     signal,
   });
-  return response;
+  return { response, url: current };
 }
 
 function hlsHostAllowed(raw: string): boolean {
@@ -516,6 +533,127 @@ async function readCapped(response: Response, limit: number): Promise<Uint8Array
     offset += chunk.byteLength;
   }
   return body;
+}
+
+function licenseHost(host: string): boolean {
+  return host === "pallycon.com" || host.endsWith(".pallycon.com");
+}
+
+function licenseUrlAllowed(raw: string): boolean {
+  if (hlsHostAllowed(raw)) return true;
+  try {
+    const url = new URL(raw);
+    return url.protocol === "https:" && licenseHost(url.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+function localTag(node: XmlElement): string {
+  return (node.localName || node.nodeName || "").replace(/^.*:/, "").toLowerCase();
+}
+
+function elementChildren(node: XmlElement): XmlElement[] {
+  const children: XmlElement[] = [];
+  for (let index = 0; index < node.childNodes.length; index += 1) {
+    const child = node.childNodes[index];
+    if (child && child.nodeType === 1) children.push(child as XmlElement);
+  }
+  return children;
+}
+
+function rewriteDashNode(element: XmlElement, inherited: string, ticketId: string, failed: { value: boolean }): void {
+  if (failed.value) return;
+  const children = elementChildren(element);
+  const bases = children.filter((child) => localTag(child) === "baseurl");
+  let nextBase = inherited;
+  if (bases.length > 0) {
+    const originals: string[] = [];
+    for (const node of bases) {
+      const raw = (node.textContent || "").trim();
+      if (!raw) continue;
+      let absolute = "";
+      try {
+        absolute = new URL(raw, inherited).toString();
+      } catch {
+        failed.value = true;
+        return;
+      }
+      originals.push(absolute);
+      const proxy = bindTarget(ticketId, absolute, "hls");
+      if (!proxy) {
+        failed.value = true;
+        return;
+      }
+      node.textContent = proxy;
+    }
+    const first = originals[0] ?? "";
+    if (first && !/\.(mp4|m4s|cmfv|cmfa|m4v)(?:$|\?)/i.test(first)) nextBase = first;
+  }
+  for (const child of children) {
+    const tag = localTag(child);
+    if (tag === "baseurl") continue;
+    if (tag === "laurl") {
+      const raw = (child.textContent || "").trim();
+      if (!raw) continue;
+      let absolute = "";
+      try {
+        absolute = new URL(raw, inherited).toString();
+      } catch {
+        failed.value = true;
+        return;
+      }
+      const proxy = bindTarget(ticketId, absolute, "licencia");
+      if (!proxy) {
+        failed.value = true;
+        return;
+      }
+      child.textContent = proxy;
+      continue;
+    }
+    if (tag === "segmenttemplate") {
+      for (const attr of ["media", "initialization"]) {
+        const raw = child.getAttribute(attr);
+        if (!raw) continue;
+        let absolute = "";
+        try {
+          absolute = new URL(raw, nextBase).toString();
+        } catch {
+          failed.value = true;
+          return;
+        }
+        const proxy = absolute.includes("$") ? bindDashFile(ticketId, absolute) : bindTarget(ticketId, absolute, "hls");
+        if (!proxy) {
+          failed.value = true;
+          return;
+        }
+        child.setAttribute(attr, proxy);
+      }
+    }
+    rewriteDashNode(child, nextBase, ticketId, failed);
+    if (failed.value) return;
+  }
+}
+
+function copyWidevineLicense(doc: ReturnType<DOMParser["parseFromString"]>, failed: { value: boolean }): void {
+  if (failed.value || !doc.documentElement) return;
+  const protections: XmlElement[] = [];
+  const stack = [doc.documentElement];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!node) continue;
+    if (localTag(node) === "contentprotection") protections.push(node);
+    stack.push(...elementChildren(node));
+  }
+  const widevine = protections.find((node) => (node.getAttribute("schemeIdUri") ?? "").includes("edef8ba9"));
+  if (!widevine) return;
+  const own = elementChildren(widevine).find((node) => localTag(node) === "laurl" && (node.textContent || "").includes("variant=licencia"));
+  if (own) return;
+  const donor = protections.flatMap((node) => elementChildren(node)).find((node) => localTag(node) === "laurl" && (node.textContent || "").includes("variant=licencia"));
+  if (!donor?.textContent) return;
+  const copy = doc.createElement("Laurl");
+  copy.textContent = donor.textContent.trim();
+  widevine.appendChild(copy);
 }
 
 function resolveTicketTarget(ticket: Ticket | null, segment: string, base: string | null, path: string | null): string | null {
