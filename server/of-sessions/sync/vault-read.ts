@@ -56,6 +56,7 @@ export async function readChatVaultView(
   const offset = input.offset ?? 0;
   const now = deps.now ?? (() => Date.now());
   const epoch = deps.sessions.sessionGeneration?.(account.id);
+  const paced = list === "all" && offset === 0;
   const walked = await walkVault({
     creatorId: input.creatorId,
     listId: list,
@@ -67,13 +68,30 @@ export async function readChatVaultView(
     accountId: account.id,
     sleep: deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
     singlePage: list !== "all",
+    background: paced,
   });
+  if (paced) {
+    void walked.membersSettled.catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : "no se pudo seguir la bóveda";
+      console.info(`[fanlink:vault] fondo ${message.replace(/https?:\/\/\S+/gi, "").slice(0, 120)}`);
+    });
+  }
   console.info(`[fanlink:vault] creator=${input.creatorId} status=${walked.status ?? "sin"}`);
+  if ((walked.status === 429 || walked.retryAfterMs > 0) && !walked.sessionRejected && !walked.signatureRejected) {
+    const saved = walked.thumbItems.length > 0 ? walked.thumbItems : walked.items;
+    if (saved.length > 0) await rememberPageThumbs({ ...deps, now }, account.id, input.creatorId, saved, state, list, offset);
+    return {
+      items: walked.items.map((item) => ({ id: item.id, title: item.title, kind: item.kind })),
+      reason: walked.items.length === 0 ? "OnlyFans respondió 429" : null,
+      hasMore: true,
+      nextOffset: walked.nextOffset,
+      cached: false,
+    };
+  }
   const blocked = vaultAuthReason(walked);
   if (blocked && walked.items.length === 0) {
     if (walked.sessionRejected) await deps.sessions.noteRouteRejection?.(account.id, walked.reason, epoch)?.catch(() => undefined);
     if (walked.signatureRejected) noteAccountBlock(account.id, "400");
-    if (walked.retryAfterMs > 0) noteAccountBlock(account.id, "429");
     return { items: [], reason: blocked, hasMore: false, nextOffset: offset, cached: false };
   }
   const saved = walked.thumbItems.length > 0 ? walked.thumbItems : walked.items;

@@ -2453,6 +2453,243 @@ test("el atajo de 10 minutos no pasa a otra cuenta", async () => {
   }
 });
 
+for (const header of ["ausente", "0"] as const) {
+  test(`readChatVaultView pausa un 429 con Retry-After ${header}`, async () => {
+    clearSignRulesCache();
+    clearVaultWalkCache();
+    clearAccountPauses();
+    const db = new PGlite();
+    const seen: string[] = [];
+    const waits: number[] = [];
+    const lines: string[] = [];
+    const previous = console.info;
+    console.info = (line?: unknown) => {
+      lines.push(String(line));
+    };
+    try {
+      await migrateVault(db);
+      await db.query(
+        `insert into of_vault_item (creator_id, item_key, title, kind, list_key) values ('3zk7kbr', 'viejo', 'Viejo', 'photo', '88580')`,
+      );
+      await db.query(
+        `insert into of_vault_list (creator_id, list_key, name, photos_count, videos_count, synced_at) values ('3zk7kbr', '88580', 'Cortada', 2, 0, '2026-01-01T00:00:00.000Z'), ('3zk7kbr', '88581', 'Siguiente', 1, 0, '2026-01-01T00:00:00.000Z')`,
+      );
+      await db.query(
+        `insert into of_vault_list_item (creator_id, list_key, item_key) values ('3zk7kbr', '88580', 'viejo')`,
+      );
+      const fetchImpl = (async (input: RequestInfo | URL) => {
+        const href = String(input);
+        seen.push(href);
+        if (href.includes("dynamic-rules")) return Response.json(RULES);
+        if (isVaultListsIndex(href)) {
+          return Response.json({
+            list: [
+              { id: 88580, type: "custom", name: "Cortada", photosCount: 2, videosCount: 0, hasMedia: true },
+              { id: 88581, type: "custom", name: "Siguiente", photosCount: 1, videosCount: 0, hasMedia: true },
+            ],
+            hasMore: false,
+          });
+        }
+        if (href.includes("/vault/lists/88580/media")) {
+          return new Response("no", { status: 429, headers: header === "0" ? { "retry-after": "0" } : undefined });
+        }
+        if (href.includes("/vault/lists/88581/media")) return Response.json({ medias: [{ id: 81, type: "photo" }], hasMore: false });
+        if (href.includes("name=")) return Response.json({ medias: [{ id: 99, type: "photo" }], hasMore: false });
+        return Response.json({ list: [], hasMore: false });
+      }) as typeof fetch;
+      const deps = {
+        fetch: fetchImpl,
+        now: () => 1_700_000_000_000,
+        sql: asSql(db),
+        sleep: async (ms: number) => {
+          waits.push(ms);
+        },
+        access: { role: "owner" as const, perms: ["vault"] },
+        sessions: vaultSessions("acc-pausa"),
+      };
+      const view = await readChatVaultView({ creatorId: "3zk7kbr", listId: "88580", offset: 0 }, deps);
+      assert.equal(view.hasMore, true);
+      assert.equal(view.reason, "OnlyFans respondió 429");
+      assert.equal(view.items.length, 0);
+      assert.equal(lines.some((line) => /pausa lista=.*espera=\d+/.test(line) && Number(line.match(/espera=(\d+)/)?.[1] ?? "0") >= 11_000), true);
+      assert.equal(seen.some((href) => href.includes("name=")), false);
+      assert.equal(waits.some((ms) => ms >= 11_000), true);
+      const members = await db.query<{ item_key: string }>("select item_key from of_vault_list_item where list_key = '88580'");
+      assert.equal(members.rows.some((row) => row.item_key === "viejo"), true);
+      const panel = await queryVaultForActor(asSql(db), { userId: "dueña", role: "owner", perms: ["vault"] }, {
+        creatorId: "3zk7kbr",
+        remember: false,
+        query: { ...emptyVaultQuery(), folderId: "88580", scope: "carpeta" },
+      });
+      assert.equal(panel.payload.notice, VAULT_FOLDER_STALE);
+      assert.equal(panel.payload.items.some((item) => item.id === "viejo"), true);
+      waits.length = 0;
+      await readChatVaultView({ creatorId: "3zk7kbr", listId: "88581", offset: 0 }, deps);
+      assert.equal(waits.some((ms) => ms >= 11_000), true);
+    } finally {
+      console.info = previous;
+      clearAccountPauses();
+      clearSignRulesCache();
+      clearVaultWalkCache();
+      await db.close();
+    }
+  });
+}
+
+test("readChatVaultView separa las carpetas y una cortada no tapa el resto", async () => {
+  clearSignRulesCache();
+  clearVaultWalkCache();
+  const db = new PGlite();
+  const seen: string[] = [];
+  const lines: string[] = [];
+  const previous = console.info;
+  console.info = (line?: unknown) => {
+    lines.push(String(line));
+  };
+  const ids = [88700, 88701, 88702, 88703, 88704, 88705, 88706];
+  try {
+    await migrateVault(db);
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const href = String(input);
+      seen.push(href);
+      if (href.includes("dynamic-rules")) return Response.json(RULES);
+      if (isVaultListsIndex(href)) {
+        return Response.json({
+          list: ids.map((id) => ({ id, type: "custom", name: "C", photosCount: 1, videosCount: 0, hasMedia: true })),
+          hasMore: false,
+        });
+      }
+      const url = new URL(href);
+      if (url.pathname.endsWith("/vault/media") && url.searchParams.get("list") === "all") {
+        return Response.json({ list: [{ id: 1, type: "photo" }], hasMore: false });
+      }
+      const folder = ids.find((id) => url.pathname.endsWith(`/vault/lists/${id}/media`));
+      if (folder) return Response.json({ medias: [{ id: folder, type: "photo" }], hasMore: false });
+      return Response.json({ list: [], hasMore: false });
+    }) as typeof fetch;
+    await readChatVaultView({ creatorId: "3zk7kbr" }, {
+      fetch: fetchImpl,
+      now: () => 1_700_000_000_000,
+      sql: asSql(db),
+      sleep: async () => undefined,
+      access: { role: "owner", perms: ["vault"] },
+      sessions: vaultSessions("acc-tanda"),
+    });
+    for (let attempt = 0; attempt < 50 && !lines.some((line) => line.includes("tanda siguiente")); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(lines.some((line) => line.includes("tanda siguiente")), true);
+    for (const id of ids) {
+      assert.equal(seen.some((href) => href.includes(`/vault/lists/${id}/media`)), true);
+    }
+  } finally {
+    console.info = previous;
+    clearSignRulesCache();
+    clearVaultWalkCache();
+    await db.close();
+  }
+});
+
+test("una carpeta cortada varias veces pasa al final y se retoma en el mismo offset", async () => {
+  clearSignRulesCache();
+  clearVaultWalkCache();
+  clearAccountPauses();
+  const db = new PGlite();
+  const seen: string[] = [];
+  try {
+    await migrateVault(db);
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const href = String(input);
+      seen.push(href);
+      if (href.includes("dynamic-rules")) return Response.json(RULES);
+      if (isVaultListsIndex(href)) {
+        return Response.json({
+          list: [
+            { id: 88600, type: "custom", name: "Antes", photosCount: 1, videosCount: 0, hasMedia: true },
+            { id: 88601, type: "custom", name: "Cortada", photosCount: 80, videosCount: 0, hasMedia: true },
+            { id: 88602, type: "custom", name: "Despues", photosCount: 1, videosCount: 0, hasMedia: true },
+          ],
+          hasMore: false,
+        });
+      }
+      const url = new URL(href);
+      if (url.pathname.endsWith("/vault/media") && url.searchParams.get("list") === "all") {
+        return Response.json({ list: [{ id: 1, type: "photo" }], hasMore: false });
+      }
+      if (url.pathname.endsWith("/vault/lists/88600/media") || url.pathname.endsWith("/vault/lists/88602/media")) {
+        return Response.json({ medias: [{ id: 1, type: "photo" }], hasMore: false });
+      }
+      if (url.pathname.endsWith("/vault/lists/88601/media")) {
+        const offset = Number(url.searchParams.get("offset") ?? "0");
+        if (offset === 0) return Response.json({ medias: Array.from({ length: 40 }, (_, index) => ({ id: index + 1, type: "photo" })), hasMore: true });
+        return new Response("no", { status: 429, headers: { "retry-after": "1" } });
+      }
+      return Response.json({ list: [], hasMore: false });
+    }) as typeof fetch;
+    const base = {
+      creatorId: "3zk7kbr",
+      accountId: "acc-corte",
+      state: storedState(),
+      fetch: fetchImpl,
+      now: () => 1_700_000_000_000,
+      sql: asSql(db),
+      sleep: async () => undefined,
+      background: true,
+    };
+    const first = await walkVault(base);
+    await first.membersSettled;
+    assert.equal(seen.some((href) => href.includes("/vault/lists/88602/media")), false);
+    const secondMark = seen.length;
+    const second = await walkVault(base);
+    await second.membersSettled;
+    const secondFolders = seen.slice(secondMark).filter((href) => /\/vault\/lists\/\d+\/media/.test(href));
+    assert.equal(secondFolders[0]?.includes("/vault/lists/88601/media"), true);
+    assert.equal(secondFolders[0]?.includes("offset=40"), true);
+    const thirdMark = seen.length;
+    const third = await walkVault(base);
+    await third.membersSettled;
+    const thirdFolders = seen.slice(thirdMark).filter((href) => /\/vault\/lists\/\d+\/media/.test(href));
+    assert.equal(thirdFolders[0]?.includes("/vault/lists/88602/media"), true);
+    const resumed = thirdFolders.findIndex((href) => href.includes("/vault/lists/88601/media") && href.includes("offset=40"));
+    assert.equal(resumed > 0, true);
+  } finally {
+    clearAccountPauses();
+    clearSignRulesCache();
+    clearVaultWalkCache();
+    await db.close();
+  }
+});
+
+function vaultSessions(accountId: string) {
+  return {
+    listAccounts: async () => [{
+      id: accountId,
+      creatorId: "3zk7kbr",
+      label: "Prueba",
+      status: "active" as const,
+      loginInProgress: false,
+      sessionRejected: false,
+      hasStorageState: true,
+      connection: "live" as const,
+      identityState: "unavailable" as const,
+      identityLabel: null,
+      identityHandle: null,
+      identityName: null,
+      identityUserId: null,
+      identityCheckedAt: null,
+      identityReason: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      lastCheckedAt: null,
+      lastError: null,
+    } satisfies Account],
+    readStorageState: async () => storedState(),
+    borrowProfile: async () => {
+      throw new Error("no");
+    },
+  };
+}
+
 async function migrateVault(db: PGlite): Promise<void> {
   for (const file of ["0037_vault_mirror.sql", "0038_vault_fan_filter.sql", "0040_vault_full_tags.sql", "0042_vault_paid_with.sql", "0044_vault_thumb_page.sql", "0050_vault_list_counts.sql", "0051_vault_list_media.sql", "0054_vault_list_members.sql"]) {
     await db.exec(await readFile(path.join(root, "migrations", file), "utf8"));

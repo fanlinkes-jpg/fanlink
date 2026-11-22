@@ -8,6 +8,8 @@ export const VAULT_RATE_CAP_MS = 2 * 60 * 1000;
 export const VAULT_FOLDER_GAP_MS = 2_500;
 /** Carpetas por tanda. El resto sigue después del hueco, no las 92 seguidas. */
 export const VAULT_FOLDER_BATCH = 6;
+/** Veces que una carpeta puede seguir cortada antes de pasar al final de la vuelta. */
+export const VAULT_FOLDER_CUT_PASSES = 2;
 
 const listDownUntil = new Map<string, number>();
 const folderFlights = new Map<string, Promise<unknown>>();
@@ -17,6 +19,7 @@ type FolderCursor = {
   /** null: la carpeta ya se leyó y la siguiente vuelta empieza en la de después. Un número: hay que retomarla en ese offset. */
   resumeOffset: number | null;
   listKey: string;
+  cuts: number;
 };
 
 const folderCursor = new Map<string, FolderCursor>();
@@ -66,12 +69,19 @@ export function forgetFolderCursor(creatorId: string): void {
 
 /** La carpeta se leyó entera. La vuelta siguiente sigue por la de después. */
 export function rememberFolderCursor(creatorId: string, listId: string, listKey: string): void {
-  folderCursor.set(creatorId, { id: listId, resumeOffset: null, listKey });
+  folderCursor.set(creatorId, { id: listId, resumeOffset: null, listKey, cuts: 0 });
 }
 
 /** Un 429 dejó la carpeta a medias. La vuelta siguiente empieza aquí, en el mismo offset. */
-export function rememberFolderCut(creatorId: string, listId: string, offset: number, listKey: string): void {
-  folderCursor.set(creatorId, { id: listId, resumeOffset: offset, listKey });
+export function rememberFolderCut(creatorId: string, listId: string, offset: number, listKey: string | null): void {
+  const prev = folderCursor.get(creatorId);
+  const cuts = prev?.id === listId ? prev.cuts + 1 : 1;
+  folderCursor.set(creatorId, {
+    id: listId,
+    resumeOffset: offset,
+    listKey: listKey ?? prev?.listKey ?? "",
+    cuts,
+  });
 }
 
 export function pauseVaultRate(accountId: string, retryAfterMs: number, now: number): number {

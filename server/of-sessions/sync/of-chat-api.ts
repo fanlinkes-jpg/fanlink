@@ -395,6 +395,17 @@ export async function fetchSignedVault(state: StorageStateFile, deps: {
     queryParam = "list";
     let read = await readVaultPath(deps, () => getJson(deps.fetch, primary, signedHeaders(rules, primary, auth, deps.now()), deps.now()));
     logVaultPage(list, primary, read, skip);
+    if (read.status === 429 || read.retryAfterMs > 0) {
+      return {
+        payloads,
+        status: 429,
+        reason: "OnlyFans respondió 429",
+        sessionRejected: false,
+        signatureRejected: false,
+        retryAfterMs: read.retryAfterMs > 0 ? read.retryAfterMs : backoffDelayMs(0),
+        queryParam,
+      };
+    }
     const listed = folderListedCounts(payloads, list);
     const catalogHasMedia = options?.expectMedia === true || (listed != null && listed.total > 0);
     const emptyCounted = read.ok && mediaCountOf(read.body) === 0 && catalogHasMedia;
@@ -454,8 +465,16 @@ function stopVaultRead(payloads: unknown[], read: JsonPage, queryParam: "list" |
   if (read.signatureRejected) {
     return { payloads, status: 400, reason: "OnlyFans ha rechazado la firma", sessionRejected: false, signatureRejected: true, retryAfterMs: 0, queryParam };
   }
-  if (read.retryAfterMs > 0) {
-    return { payloads, status: 429, reason: "OnlyFans respondió 429", sessionRejected: false, signatureRejected: false, retryAfterMs: read.retryAfterMs, queryParam };
+  if (read.status === 429 || read.retryAfterMs > 0) {
+    return {
+      payloads,
+      status: 429,
+      reason: "OnlyFans respondió 429",
+      sessionRejected: false,
+      signatureRejected: false,
+      retryAfterMs: read.retryAfterMs > 0 ? read.retryAfterMs : backoffDelayMs(0),
+      queryParam,
+    };
   }
   return null;
 }
@@ -738,8 +757,10 @@ function messageCursor(body: unknown): string | null {
 
 function retryAfterMs(response: Response, nowMs: number): number {
   const header = response.headers.get("retry-after")?.trim() ?? "";
-  if (/^\d+$/.test(header)) return Math.min(Number(header) * 1000, MAX_RETRY_MS);
-  if (/[a-z]/i.test(header)) {
+  if (/^\d+$/.test(header)) {
+    const seconds = Number(header);
+    if (seconds > 0) return Math.min(seconds * 1000, MAX_RETRY_MS);
+  } else if (/[a-z]/i.test(header)) {
     const at = Date.parse(header);
     if (Number.isFinite(at) && at > nowMs) return Math.min(at - nowMs, MAX_RETRY_MS);
   }

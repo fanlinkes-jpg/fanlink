@@ -184,7 +184,7 @@ function vaultNotice(
     const mark = folderReadMark(creatorId, query.folderId);
     const open = lists.find((folder) => folder.id === query.folderId);
     const total = (open?.photos ?? 0) + (open?.videos ?? 0) + (open?.gifs ?? 0) + (open?.audios ?? 0);
-    if (shown > 0 && (mark === "fallo" || mark === "parcial" || total > shown)) return VAULT_FOLDER_STALE;
+    if (mark === "parcial" || (shown > 0 && (mark === "fallo" || total > shown))) return VAULT_FOLDER_STALE;
   }
   if (shown === 0 && folderCountsUnread(query, lists)) return VAULT_FOLDER_READ_ERROR;
   return shown === 0 ? "Sin datos" : null;
