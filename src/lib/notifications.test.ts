@@ -22,8 +22,8 @@ import {
   spanishNotificationText,
   relativeNotificationWhen,
   redactedNotificationUrl,
-  inflowwTabCount,
-  inflowwTabOf,
+  NOTIFICATION_KINDS,
+  NOTIFICATION_TABS,
   notesForCreator,
   notificationReplyLine,
   renewStatusLabel,
@@ -365,34 +365,34 @@ test("un comentario guarda el texto y la publicación si vienen", () => {
   }
 });
 
-test("el panel mapea suscripciones, propinas, compras y el resto a OnlyFans", () => {
-  assert.equal(inflowwTabOf("subscription"), "subscriptions");
-  assert.equal(inflowwTabOf("renewal"), "subscriptions");
-  assert.equal(inflowwTabOf("tip"), "tips");
-  assert.equal(inflowwTabOf("ppv"), "purchases");
-  assert.equal(inflowwTabOf("like"), "onlyfans");
-  assert.equal(inflowwTabOf("comment"), "onlyfans");
-  assert.equal(inflowwTabOf("tag"), "onlyfans");
-  assert.equal(inflowwTabOf("mention"), "onlyfans");
-  assert.equal(inflowwTabOf("promotion"), "onlyfans");
-  assert.equal(inflowwTabOf("message"), "onlyfans");
-  assert.equal(inflowwTabOf("system"), "onlyfans");
-  const counts = {
-    all: 20,
-    subscriptions: 4,
-    purchases: 2,
-    tips: null,
-    tags: 1,
-    comments: 3,
-    mentions: null,
-    likes: 5,
-    promotions: 0,
-    onlyfans: 6,
-  };
-  assert.equal(inflowwTabCount(counts, "subscriptions"), 4);
-  assert.equal(inflowwTabCount(counts, "purchases"), 2);
-  assert.equal(inflowwTabCount(counts, "tips"), null);
-  assert.equal(inflowwTabCount(counts, "onlyfans"), 15);
+test("cada categoría de OnlyFans tiene su pestaña y no mezcla tipos", () => {
+  assert.deepEqual([...NOTIFICATION_TABS], [
+    "all",
+    "subscriptions",
+    "purchases",
+    "tips",
+    "tags",
+    "comments",
+    "mentions",
+    "likes",
+    "promotions",
+    "onlyfans",
+  ]);
+  const rows = NOTIFICATION_KINDS.map((kind) => ({ kind }));
+  for (const tab of NOTIFICATION_TABS) {
+    if (tab === "all") continue;
+    const kinds = rows.filter((row) => tabOf(row.kind) === tab).map((row) => row.kind);
+    assert.ok(kinds.length > 0, tab);
+    for (const kind of kinds) assert.equal(tabOf(kind), tab);
+  }
+  assert.deepEqual(rows.filter((row) => tabOf(row.kind) === "likes").map((row) => row.kind), ["like"]);
+  assert.deepEqual(rows.filter((row) => tabOf(row.kind) === "comments").map((row) => row.kind), ["comment"]);
+  assert.deepEqual(rows.filter((row) => tabOf(row.kind) === "tags").map((row) => row.kind), ["tag"]);
+  assert.deepEqual(rows.filter((row) => tabOf(row.kind) === "mentions").map((row) => row.kind), ["mention"]);
+  assert.deepEqual(rows.filter((row) => tabOf(row.kind) === "tips").map((row) => row.kind), ["tip"]);
+  assert.notEqual(tabOf("like"), tabOf("comment"));
+  assert.notEqual(tabOf("like"), "onlyfans");
+  assert.notEqual(tabOf("tag"), "onlyfans");
   assert.equal(renewStatusLabel(true), "Renew On");
   assert.equal(renewStatusLabel(false), "Renew Off");
   assert.equal(renewStatusLabel(null), null);

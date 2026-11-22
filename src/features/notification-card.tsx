@@ -1,6 +1,6 @@
-import { Bell, DollarSign, Heart, MessageCircle, ShoppingBag } from "lucide-react";
+import { AtSign, Bell, DollarSign, Heart, Megaphone, MessageCircle, MessageSquare, ShoppingBag, Tag, ThumbsUp } from "lucide-react";
 import type { NotificationListItem } from "@/lib/of-notifications";
-import { inflowwTabOf, isRecentFan, notificationStamp, renewStatusLabel, spanishNotificationText } from "@/lib/notifications";
+import { isRecentFan, notificationStamp, renewStatusLabel, spanishNotificationText, tabOf, type NotificationTab } from "@/lib/notifications";
 
 export function NotificationFanCard({
   item,
@@ -28,7 +28,7 @@ export function NotificationFanCard({
   const renewText = renewStatusLabel(renew);
   const canChat = Boolean(onChat) && Boolean(item.fanKey || item.threadKey);
   const initial = (name ?? user ?? "?").slice(0, 1).toUpperCase();
-  const TypeIcon = typeIcon(inflowwTabOf(item.kind));
+  const TypeIcon = typeIcon(tabOf(item.kind));
   return (
     <article className="flex gap-3 py-3 text-sm">
       <span className="relative h-10 w-10 shrink-0">
@@ -70,14 +70,26 @@ export function NotificationFanCard({
   );
 }
 
-function typeIcon(tab: "subscriptions" | "tips" | "purchases" | "onlyfans") {
+function typeIcon(tab: NotificationTab) {
   switch (tab) {
+    case "all":
+      return Bell;
     case "subscriptions":
       return Heart;
-    case "tips":
-      return DollarSign;
     case "purchases":
       return ShoppingBag;
+    case "tips":
+      return DollarSign;
+    case "tags":
+      return Tag;
+    case "comments":
+      return MessageSquare;
+    case "mentions":
+      return AtSign;
+    case "likes":
+      return ThumbsUp;
+    case "promotions":
+      return Megaphone;
     case "onlyfans":
       return Bell;
     default: {

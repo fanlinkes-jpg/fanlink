@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { AtSign, Bell, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, RefreshCw, ScrollText, Send, Type } from "lucide-react";
+import { AtSign, Bell, ChevronLeft, ChevronRight, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, RefreshCw, ScrollText, Send, Type } from "lucide-react";
 import { broadcastOnlineFans, cancelOnlineBroadcast, chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, markChatOpened, readChatVault, readVisibleFanSpend, recordChatOutbound, resolveOnlineOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
 import { OnlineFansPanel, type OnlineBroadcastPayload } from "@/features/online-fans-panel";
 import type { OnlineFanRow } from "@/lib/online-fan-row";
@@ -8,7 +8,7 @@ import { unreadChatRow } from "../../server/of-sessions/sync/unread-chats.ts";
 import { inboxPillCounts, matchesInboxPill, tipThreads, type InboxPill } from "../../server/of-sessions/sync/chat-pills.ts";
 import { accountFigure, everyAccountBlocked, SESSION_EXPIRED_LABEL } from "../../server/of-sessions/sync/session-link.ts";
 import { listCreatorNotifications, markCreatorNotificationsRead, type NotificationListItem } from "@/lib/of-notifications";
-import { INFLOWW_PANEL_TABS, INFLOWW_TAB_LABEL, inflowwTabCount, inflowwTabOf, isOwnerOnlyKind, notesForCreator, notificationReplyLine, type InflowwPanelTab, type NotificationCounts } from "@/lib/notifications";
+import { NOTIFICATION_TABS, TAB_LABEL, isOwnerOnlyKind, notesForCreator, notificationReplyLine, tabOf, type NotificationCounts, type NotificationTab } from "@/lib/notifications";
 import { NotificationFanCard } from "@/features/notification-card";
 import { useCrm, type VaultItem } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
@@ -60,13 +60,74 @@ function madridClock(value: string): string {
 
 type NoteRow = NotificationListItem & { creatorId: string };
 
-function panelNotes(rows: NoteRow[] | null, creatorId: string | null, tab: InflowwPanelTab): NoteRow[] {
-  return notesForCreator(rows ?? [], creatorId).filter((item) => !isOwnerOnlyKind(item.kind) && inflowwTabOf(item.kind) === tab);
+function panelNotes(rows: NoteRow[] | null, creatorId: string | null, tab: NotificationTab): NoteRow[] {
+  return notesForCreator(rows ?? [], creatorId).filter((item) => {
+    if (isOwnerOnlyKind(item.kind)) return false;
+    if (tab === "all") return true;
+    return tabOf(item.kind) === tab;
+  });
 }
 
-function noteBadge(counts: NotificationCounts | null, tab: InflowwPanelTab): string {
-  const value = inflowwTabCount(counts, tab);
+function noteBadge(counts: NotificationCounts | null, tab: NotificationTab): string {
+  const value = counts?.[tab];
   return value == null || value <= 0 ? "" : ` ${value}`;
+}
+
+function NoteTabRow({
+  filter,
+  counts,
+  onSelect,
+}: {
+  filter: NotificationTab;
+  counts: NotificationCounts | null;
+  onSelect: (id: NotificationTab) => void;
+}) {
+  const scroller = useRef<HTMLDivElement>(null);
+  const [edges, setEdges] = useState({ left: false, right: false });
+  const measure = () => {
+    const node = scroller.current;
+    if (!node) return;
+    setEdges({
+      left: node.scrollLeft > 4,
+      right: node.scrollLeft + node.clientWidth < node.scrollWidth - 4,
+    });
+  };
+  useLayoutEffect(() => {
+    measure();
+  }, [counts]);
+  const nudge = (direction: -1 | 1) => {
+    scroller.current?.scrollBy({ left: direction * 180, behavior: "smooth" });
+  };
+  return (
+    <div className="relative">
+      {edges.left ? (
+        <>
+          <div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-10 bg-gradient-to-r from-white to-transparent" />
+          <button type="button" aria-label="Pestañas anteriores" className="absolute top-0 left-0 z-20 grid h-8 w-8 place-items-center text-[#3c4456]" onClick={() => nudge(-1)}>
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+        </>
+      ) : null}
+      <div ref={scroller} onScroll={measure} className="flex gap-2 overflow-x-auto px-4 pb-3 [scrollbar-width:none]">
+        {NOTIFICATION_TABS.map((id) => {
+          const on = filter === id;
+          return (
+            <button key={id} type="button" onClick={() => onSelect(id)} className={`shrink-0 rounded-full px-3 py-1.5 text-sm whitespace-nowrap ${on ? "bg-[#e7f3ff] text-[#1890d4]" : "bg-[#f2f3f5] text-[#3c4456]"}`}>
+              {TAB_LABEL[id]}{noteBadge(counts, id)}
+            </button>
+          );
+        })}
+      </div>
+      {edges.right ? (
+        <>
+          <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-10 bg-gradient-to-l from-white to-transparent" />
+          <button type="button" aria-label="Pestañas siguientes" className="absolute top-0 right-0 z-20 grid h-8 w-8 place-items-center text-[#3c4456]" onClick={() => nudge(1)}>
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </>
+      ) : null}
+    </div>
+  );
 }
 
 function FanLink({ item, href, copied, onCopy }: { item: string; href: string | null; copied: boolean; onCopy: (href: string) => void }) {
@@ -236,7 +297,7 @@ export function RealChatsPage() {
   const [fanActionError, setFanActionError] = useState<string | null>(null);
   const [fanLists, setFanLists] = useState<Array<{ name: string; on: boolean }>>([]);
   const [notesOpen, setNotesOpen] = useState(false);
-  const [noteFilter, setNoteFilter] = useState<InflowwPanelTab>("subscriptions");
+  const [noteFilter, setNoteFilter] = useState<NotificationTab>("all");
   const [notes, setNotes] = useState<NoteRow[] | null>(null);
   const [noteCounts, setNoteCounts] = useState<NotificationCounts | null>(null);
   const [noteNotice, setNoteNotice] = useState<string | null>(null);
@@ -1081,16 +1142,7 @@ export function RealChatsPage() {
                     <h2 className="text-base font-semibold">Notificaciones</h2>
                     <button type="button" aria-label="Actualizar notificaciones" className="grid h-8 w-8 place-items-center rounded-full text-[#6d7585] hover:bg-[#f4f7ff]" onClick={() => void loadNotes()}><RefreshCw className="h-4 w-4" /></button>
                   </div>
-                  <div className="flex gap-2 overflow-x-auto px-4 pb-3">
-                    {INFLOWW_PANEL_TABS.map((id) => {
-                      const on = noteFilter === id;
-                      return (
-                        <button key={id} type="button" onClick={() => { setNoteFilter(id); markNotes(panelNotes(notes, inboxCreator, id)); }} className={`shrink-0 rounded-full px-3 py-1.5 text-sm ${on ? "bg-[#e7f3ff] text-[#1890d4]" : "bg-[#f2f3f5] text-[#3c4456]"}`}>
-                          {INFLOWW_TAB_LABEL[id]}{noteBadge(noteCounts, id)}
-                        </button>
-                      );
-                    })}
-                  </div>
+                  <NoteTabRow filter={noteFilter} counts={noteCounts} onSelect={(id) => { setNoteFilter(id); if (id !== "all") markNotes(panelNotes(notes, inboxCreator, id)); }} />
                   <ul className="min-h-0 flex-1 divide-y divide-[#eceff3] overflow-y-auto px-4">
                     {noteNotice ? <li className="py-6 text-sm text-[#8a5a12]">{noteNotice}</li> : null}
                     {notes == null && !noteNotice ? <li className="py-6 text-sm text-[#6d7585]">Sin datos</li> : null}
