@@ -3,7 +3,7 @@ import { VAULT_FOLDER_READ_ERROR } from "../../../src/lib/vault-folder-label.ts"
 import { fetchSignedVault, vaultPageReason, VAULT_MEDIA_LIMIT, type SignedVaultRead } from "./of-chat-api.ts";
 import type { ReadSql } from "./store.ts";
 import { folderMediaCap, mediaStateHits, mergeVaultList, parseVaultBundle, vaultAllList, vaultFolderMark, vaultKeyNames, vaultMediaMatching, vaultPayloadKind, type VaultFile, type VaultList } from "./vault-model.ts";
-import { clearVaultPace, listMediaDown, noteListMediaDown, pauseVaultRate, recordFolderRead, VAULT_FOLDER_BATCH, VAULT_FOLDER_GAP_MS, withFolderRead } from "./vault-pace.ts";
+import { clearVaultPace, folderCursorOf, listMediaDown, noteListMediaDown, pauseVaultRate, recordFolderRead, rememberFolderCursor, shareFolderRead, VAULT_FOLDER_BATCH, VAULT_FOLDER_GAP_MS } from "./vault-pace.ts";
 import { finishListMembers, listMemberCount, mirroredFolderItems, persistVaultRead, storedFolderCounts } from "./vault-store.ts";
 
 /** Pausa entre páginas. Más lenta que el chat: la bóveda pesa. */
@@ -67,12 +67,20 @@ export async function walkVault(input: WalkInput & { listId?: string; offset?: n
   const pending = inflight.get(flight);
   if (pending) return pending;
   const run = runWalk(input, listId, offset, input.singlePage === true).then((main) => {
-    inflight.delete(flight);
-    if (main.cached) return main;
+    if (main.cached) {
+      inflight.delete(flight);
+      return main;
+    }
     const walk = publicWalk(main);
     if (main.needsFullMembers) {
+      inflight.delete(flight);
       walk.membersSettled = walkVault({ ...input, listId, offset: 0, singlePage: false }).then(() => undefined, () => undefined);
+      return walk;
     }
+    const finished = walk.membersSettled.finally(() => {
+      if (inflight.get(flight) === run) inflight.delete(flight);
+    });
+    walk.membersSettled = finished;
     return walk;
   }).catch((error: unknown) => {
     inflight.delete(flight);
@@ -117,33 +125,41 @@ async function runWalk(input: WalkInput, listId: string, offset: number, singleP
 
 type PageWalk = VaultWalk & { payloads: unknown[]; needsFullMembers: boolean };
 
+function rotateFolders(creatorId: string, folders: readonly VaultList[]): VaultList[] {
+  const last = folderCursorOf(creatorId);
+  if (!last) return [...folders];
+  const at = folders.findIndex((folder) => folder.id === last);
+  if (at < 0) return [...folders];
+  return [...folders.slice(at + 1), ...folders.slice(0, at + 1)];
+}
+
 async function walkFolders(input: WalkInput, folders: readonly VaultList[], budget: { left: number }, main: PageWalk): Promise<void> {
   const pace = input.accountId || input.creatorId;
-  let seen = 0;
-  for (const folder of folders) {
+  const ordered = input.background ? rotateFolders(input.creatorId, folders) : [...folders];
+  let readThisBatch = 0;
+  for (const folder of ordered) {
     const counted = (folder.photos ?? 0) + (folder.videos ?? 0) + (folder.gifs ?? 0) + (folder.audios ?? 0) > 0;
     if (budget.left <= 0 && !counted) {
       console.info(`[fanlink:vault] corte presupuesto listas=${folders.length}`);
       main.hasMore = true;
       break;
     }
-    if (input.background && seen >= VAULT_FOLDER_BATCH) {
-      main.hasMore = true;
-      console.info(`[fanlink:vault] corte tanda listas=${seen}`);
-      break;
-    }
-    if (!input.background) {
-      const cachedFolder = fresh(input.creatorId, folder.id, input.now());
-      if (cachedFolder && cachedFolder.items.length > 0) {
-        console.info(`[fanlink:vault] cache lista=${vaultFolderMark(folder.id)} medios=guardada`);
-        continue;
-      }
+    const cachedFolder = fresh(input.creatorId, folder.id, input.now());
+    if (cachedFolder && cachedFolder.items.length > 0) {
+      console.info(`[fanlink:vault] cache lista=${vaultFolderMark(folder.id)} medios=guardada`);
+      if (input.background) rememberFolderCursor(input.creatorId, folder.id);
+      continue;
     }
     logList(folder);
     if (folder.hasMedia === false && folder.type !== "custom") continue;
-    if (input.background && seen > 0 && input.sleep) await input.sleep(VAULT_FOLDER_GAP_MS);
+    if (input.background && readThisBatch >= VAULT_FOLDER_BATCH) {
+      readThisBatch = 0;
+      console.info(`[fanlink:vault] tanda siguiente lista=${vaultFolderMark(folder.id)}`);
+      if (input.sleep) await input.sleep(VAULT_FOLDER_GAP_MS);
+    }
     const child = await walkOne(input, folder.id, 0, false, budget, true, folder.name);
-    seen += 1;
+    readThisBatch += 1;
+    if (input.background) rememberFolderCursor(input.creatorId, folder.id);
     if (child.hasMore) main.hasMore = true;
     if (child.sessionRejected || child.signatureRejected) {
       main.hasMore = true;
@@ -170,7 +186,7 @@ async function walkOne(
   listName: string | null = null,
   singlePage = false,
 ): Promise<PageWalk> {
-  return withFolderRead(input.creatorId, listId, () => readFolderWalk(input, listId, start, includeLists, budget, store, listName, singlePage));
+  return shareFolderRead(input.creatorId, listId, () => readFolderWalk(input, listId, start, includeLists, budget, store, listName, singlePage));
 }
 
 async function readFolderWalk(

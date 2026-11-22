@@ -737,12 +737,11 @@ function messageCursor(body: unknown): string | null {
 }
 
 function retryAfterMs(response: Response, nowMs: number): number {
-  const header = response.headers.get("retry-after");
-  if (header) {
-    const seconds = Number(header);
-    if (Number.isFinite(seconds) && seconds >= 0) return Math.min(Math.round(seconds * 1000), MAX_RETRY_MS);
+  const header = response.headers.get("retry-after")?.trim() ?? "";
+  if (/^\d+$/.test(header)) return Math.min(Number(header) * 1000, MAX_RETRY_MS);
+  if (/[a-z]/i.test(header)) {
     const at = Date.parse(header);
-    if (Number.isFinite(at)) return Math.min(Math.max(0, at - nowMs), MAX_RETRY_MS);
+    if (Number.isFinite(at) && at > nowMs) return Math.min(at - nowMs, MAX_RETRY_MS);
   }
   return backoffDelayMs(0);
 }

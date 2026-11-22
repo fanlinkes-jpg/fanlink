@@ -2077,9 +2077,11 @@ test("el fondo separa carpetas y una lectura completa quita el medio borrado o m
   clearSignRulesCache();
   clearVaultWalkCache();
   const db = new PGlite();
-  const waits: number[] = [];
   try {
     await migrateVault(db);
+    await db.query(
+      `insert into of_vault_list_item (creator_id, list_key, item_key) values ('3zk7kbr', '88046', '9'), ('3zk7kbr', '88046', '2')`,
+    );
     const fetchImpl = (async (input: RequestInfo | URL) => {
       const href = String(input);
       if (href.includes("dynamic-rules")) return Response.json(RULES);
@@ -2106,17 +2108,225 @@ test("el fondo separa carpetas y una lectura completa quita el medio borrado o m
       fetch: fetchImpl,
       now: () => 1_700_000_000_000,
       sql: asSql(db),
+      sleep: async () => undefined,
+      background: true,
+    });
+    await walked.membersSettled;
+    const inA = await db.query<{ item_key: string }>("select item_key from of_vault_list_item where list_key = '88046' order by item_key");
+    const inB = await db.query<{ item_key: string }>("select item_key from of_vault_list_item where list_key = '88047' order by item_key");
+    assert.deepEqual(inA.rows.map((row) => row.item_key), ["1"]);
+    assert.deepEqual(inB.rows.map((row) => row.item_key), ["2"]);
+  } finally {
+    clearSignRulesCache();
+    clearVaultWalkCache();
+    await db.close();
+  }
+});
+
+test("el fondo sigue después de la sexta carpeta y no repite las ya leídas", async () => {
+  clearSignRulesCache();
+  clearVaultWalkCache();
+  const db = new PGlite();
+  const seen: string[] = [];
+  const waits: number[] = [];
+  const ids = [88100, 88101, 88102, 88103, 88104, 88105, 88106, 88107];
+  try {
+    await migrateVault(db);
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const href = String(input);
+      seen.push(href);
+      if (href.includes("dynamic-rules")) return Response.json(RULES);
+      if (isVaultListsIndex(href)) {
+        return Response.json({
+          list: ids.map((id) => ({ id, type: "custom", name: "C", photosCount: 1, videosCount: 0, hasMedia: true })),
+          hasMore: false,
+        });
+      }
+      const url = new URL(href);
+      if (url.pathname.endsWith("/vault/media") && url.searchParams.get("list") === "all") {
+        return Response.json({ list: [{ id: 1, type: "photo" }], hasMore: false });
+      }
+      const folder = ids.find((id) => url.pathname.endsWith(`/vault/lists/${id}/media`));
+      if (folder) return Response.json({ medias: [{ id: folder, type: "photo" }], hasMore: false });
+      return Response.json({ list: [], hasMore: false });
+    }) as typeof fetch;
+    const base = {
+      creatorId: "3zk7kbr",
+      state: storedState(),
+      fetch: fetchImpl,
+      now: () => 1_700_000_000_000,
+      sql: asSql(db),
       sleep: async (ms: number) => {
         waits.push(ms);
       },
       background: true,
-    });
+    };
+    const walked = await walkVault(base);
     await walked.membersSettled;
+    for (const id of ids) {
+      assert.equal(seen.filter((href) => href.includes(`/vault/lists/${id}/media`)).length, 1);
+    }
     assert.equal(waits.some((ms) => ms >= VAULT_FOLDER_GAP_MS), true);
-    const inA = await db.query<{ item_key: string }>("select item_key from of_vault_list_item where list_key = '88046'");
-    const inB = await db.query<{ item_key: string }>("select item_key from of_vault_list_item where list_key = '88047'");
-    assert.deepEqual(inA.rows.map((row) => row.item_key), ["1"]);
-    assert.deepEqual(inB.rows.map((row) => row.item_key), ["2"]);
+    const before = seen.filter((href) => href.includes("/vault/lists/88100/media")).length;
+    const again = await walkVault(base);
+    await again.membersSettled;
+    assert.equal(seen.filter((href) => href.includes("/vault/lists/88100/media")).length, before);
+  } finally {
+    clearSignRulesCache();
+    clearVaultWalkCache();
+    await db.close();
+  }
+});
+
+test("abrir una carpeta a mano reutiliza el recorrido de fondo", async () => {
+  clearSignRulesCache();
+  clearVaultWalkCache();
+  const db = new PGlite();
+  let folderGets = 0;
+  let listGets = 0;
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  try {
+    await migrateVault(db);
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const href = String(input);
+      if (href.includes("dynamic-rules")) return Response.json(RULES);
+      if (isVaultListsIndex(href)) {
+        listGets += 1;
+        return Response.json({
+          list: [{ id: 88050, type: "custom", name: "Abierta", photosCount: 1, videosCount: 0, hasMedia: true }],
+          hasMore: false,
+        });
+      }
+      const url = new URL(href);
+      if (url.pathname.endsWith("/vault/media") && url.searchParams.get("list") === "all") {
+        return Response.json({ list: [{ id: 1, type: "photo" }], hasMore: false });
+      }
+      if (url.pathname.endsWith("/vault/lists/88050/media")) {
+        folderGets += 1;
+        if (folderGets === 1) await gate;
+        return Response.json({ medias: [{ id: 1, type: "photo" }], hasMore: false });
+      }
+      return Response.json({ list: [], hasMore: false });
+    }) as typeof fetch;
+    const base = {
+      creatorId: "3zk7kbr",
+      state: storedState(),
+      fetch: fetchImpl,
+      now: () => 1_700_000_000_000,
+      sql: asSql(db),
+      sleep: async () => undefined,
+    };
+    const background = walkVault({ ...base, background: true });
+    for (let attempt = 0; attempt < 50 && folderGets < 1; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(folderGets, 1);
+    const opened = walkVault({ ...base, listId: "88050" });
+    const again = walkVault({ ...base, background: true });
+    release();
+    await Promise.all([background.then((walk) => walk.membersSettled), opened, again.then((walk) => walk.membersSettled)]);
+    assert.equal(folderGets, 1);
+    assert.equal(listGets, 1);
+  } finally {
+    release();
+    clearSignRulesCache();
+    clearVaultWalkCache();
+    await db.close();
+  }
+});
+
+test("Retry-After inválido o enorme se queda en el tope y no pasa a otra cuenta", async () => {
+  clearSignRulesCache();
+  clearVaultWalkCache();
+  clearAccountPauses();
+  const db = new PGlite();
+  const now = 1_700_000_000_000;
+  const waits: number[] = [];
+  let huge = 0;
+  try {
+    await migrateVault(db);
+    const one = async (header: string) => {
+      const fetchImpl = (async (input: RequestInfo | URL) => {
+        if (String(input).includes("dynamic-rules")) return Response.json(RULES);
+        return new Response("no", { status: 429, headers: { "retry-after": header } });
+      }) as typeof fetch;
+      const read = await fetchSignedVault(storedState(), { fetch: fetchImpl, now: () => now }, "all", 0, { includeLists: false });
+      assert.equal(read.signatureRejected, false);
+      assert.equal(read.retryAfterMs > 0 && read.retryAfterMs <= 120_000, true);
+    };
+    await one("-5");
+    await one("no-es-fecha");
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const href = String(input);
+      if (href.includes("dynamic-rules")) return Response.json(RULES);
+      if (isVaultListsIndex(href)) return Response.json({ list: [{ id: 88060, type: "custom", name: "Tope", photosCount: 1, videosCount: 0, hasMedia: true }], hasMore: false });
+      if (href.includes("/vault/lists/88060/media")) {
+        huge += 1;
+        if (huge === 1) return new Response("no", { status: 429, headers: { "retry-after": "999999" } });
+        return Response.json({ medias: [{ id: 1, type: "photo" }], hasMore: false });
+      }
+      if (href.includes("/vault/lists/88061/media")) return Response.json({ medias: [{ id: 2, type: "photo" }], hasMore: false });
+      if (href.includes("/vault/lists/88062/media")) return Response.json({ medias: [{ id: 3, type: "photo" }], hasMore: false });
+      return Response.json({ list: [], hasMore: false });
+    }) as typeof fetch;
+    const deps = {
+      creatorId: "3zk7kbr",
+      state: storedState(),
+      fetch: fetchImpl,
+      now: () => now,
+      sql: asSql(db),
+      sleep: async (ms: number) => {
+        waits.push(ms);
+      },
+    };
+    await walkVault({ ...deps, accountId: "acc-tope", listId: "88060" });
+    assert.equal(waits.includes(120_000), true);
+    assert.equal(waits.every((ms) => ms <= 120_000), true);
+    waits.length = 0;
+    await walkVault({ ...deps, accountId: "acc-tope", listId: "88061" });
+    assert.equal(waits.some((ms) => ms >= 1000), true);
+    waits.length = 0;
+    await walkVault({ ...deps, accountId: "acc-otra", listId: "88062" });
+    assert.equal(waits.some((ms) => ms >= 1000), false);
+  } finally {
+    clearAccountPauses();
+    clearSignRulesCache();
+    clearVaultWalkCache();
+    await db.close();
+  }
+});
+
+test("el atajo de 10 minutos no pasa a otra cuenta", async () => {
+  clearSignRulesCache();
+  clearVaultWalkCache();
+  const db = new PGlite();
+  const seen: string[] = [];
+  try {
+    await migrateVault(db);
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const href = String(input);
+      seen.push(href);
+      if (href.includes("dynamic-rules")) return Response.json(RULES);
+      if (isVaultListsIndex(href)) return Response.json({ list: [], hasMore: false });
+      if (href.includes("/vault/lists/88070/media")) return new Response("no", { status: 500 });
+      if (href.includes("list=88070")) return Response.json({ medias: [{ id: 1, type: "photo" }], hasMore: false });
+      if (href.includes("/vault/lists/88071/media")) return Response.json({ medias: [{ id: 2, type: "photo" }], hasMore: false });
+      return new Response("no", { status: 404 });
+    }) as typeof fetch;
+    const deps = {
+      state: storedState(),
+      fetch: fetchImpl,
+      now: () => 1_700_000_000_000,
+      sql: asSql(db),
+      sleep: async () => undefined,
+    };
+    await walkVault({ ...deps, creatorId: "3zk7kbr", accountId: "acc-a", listId: "88070" });
+    seen.length = 0;
+    await walkVault({ ...deps, creatorId: "u1fpdnp", accountId: "acc-b", listId: "88071" });
+    assert.equal(seen.some((href) => href.includes("/vault/lists/88071/media")), true);
   } finally {
     clearSignRulesCache();
     clearVaultWalkCache();

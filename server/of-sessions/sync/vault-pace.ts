@@ -10,8 +10,9 @@ export const VAULT_FOLDER_GAP_MS = 2_500;
 export const VAULT_FOLDER_BATCH = 6;
 
 const listDownUntil = new Map<string, number>();
-const folderTails = new Map<string, Promise<unknown>>();
+const folderFlights = new Map<string, Promise<unknown>>();
 const readMarks = new Map<string, "ok" | "fallo" | "parcial">();
+const folderCursor = new Map<string, string>();
 
 export function noteListMediaDown(accountKey: string, now: number): void {
   listDownUntil.set(accountKey, now + LIST_MEDIA_DOWN_MS);
@@ -34,14 +35,25 @@ export function folderReadMark(creatorId: string, listId: string): "ok" | "fallo
   return readMarks.get(`${creatorId}\n${listId}`) ?? null;
 }
 
-/** Una lectura de esa carpeta a la vez. La siguiente espera; no lanza otro GET en paralelo. */
-export function withFolderRead<T>(creatorId: string, listId: string, run: () => Promise<T>): Promise<T> {
+/** La apertura manual reutiliza la lectura que ya va, no espera a que termine para empezar otra. */
+export function shareFolderRead<T>(creatorId: string, listId: string, run: () => Promise<T>): Promise<T> {
   if (!listId || listId === "all") return run();
   const key = `${creatorId}\n${listId}`;
-  const prev = folderTails.get(key) ?? Promise.resolve();
-  const next = prev.then(run, run);
-  folderTails.set(key, next.then(() => undefined, () => undefined));
+  const pending = folderFlights.get(key);
+  if (pending) return pending as Promise<T>;
+  const next = run().finally(() => {
+    if (folderFlights.get(key) === next) folderFlights.delete(key);
+  });
+  folderFlights.set(key, next);
   return next;
+}
+
+export function folderCursorOf(creatorId: string): string | null {
+  return folderCursor.get(creatorId) ?? null;
+}
+
+export function rememberFolderCursor(creatorId: string, listId: string): void {
+  folderCursor.set(creatorId, listId);
 }
 
 export function pauseVaultRate(accountId: string, retryAfterMs: number, now: number): number {
@@ -52,6 +64,7 @@ export function pauseVaultRate(accountId: string, retryAfterMs: number, now: num
 
 export function clearVaultPace(): void {
   listDownUntil.clear();
-  folderTails.clear();
+  folderFlights.clear();
   readMarks.clear();
+  folderCursor.clear();
 }

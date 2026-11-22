@@ -60,7 +60,10 @@ async function refreshVault(sql: Awaited<ReturnType<typeof getSql>>, raw: string
       sleep,
       background: true,
     });
-    void walked.membersSettled;
+    void walked.membersSettled.catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : "no se pudo seguir la bóveda";
+      console.info(`[fanlink:vault] fondo ${message.replace(/https?:\/\/\S+/gi, "").slice(0, 120)}`);
+    });
     console.info(`[fanlink:vault] creator=${creatorId} status=${walked.status ?? "sin"}`);
     if (walked.sessionRejected || walked.signatureRejected || walked.retryAfterMs > 0) return;
     const saved = walked.thumbItems.length > 0 ? walked.thumbItems : walked.items;
