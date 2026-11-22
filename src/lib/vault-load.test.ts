@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { folderGridCap, folderGridItems, ignoreStaleVaultView, mergeVaultPage, nextVaultLibrary, sameVaultId, vaultFolderOnAccountChange, vaultLoadAllowed } from "./vault-load.ts";
+import { folderGridCap, folderGridItems, ignoreStaleVaultView, mergeVaultPage, nextVaultLibrary, sameVaultId, vaultFolderOnAccountChange, vaultLoadAllowed, vaultQueryFolderOnCreatorChange, vaultReadApplies } from "./vault-load.ts";
 
 test("una carpeta entra aunque Todos siga ocupado", () => {
   const busyAll = { busy: true, listId: "all" };
@@ -19,6 +19,39 @@ test("al cambiar de cuenta la carpeta no se arrastra", () => {
   assert.equal(back.listId, "30436423");
   assert.equal(back.memory.allison, "all");
   assert.equal(vaultFolderOnAccountChange(back.memory, "jose", "jose", "30436423").listId, "30436423");
+});
+
+test("la respuesta tardía de A no se pinta después de cambiar a B", () => {
+  const late = { id: "medio-de-jose", title: "Mensajes" };
+  assert.equal(vaultReadApplies({
+    generation: 1,
+    currentGeneration: 2,
+    requestCreatorId: "jose",
+    activeCreatorId: "allison",
+  }), false);
+  assert.equal(vaultReadApplies({
+    generation: 2,
+    currentGeneration: 2,
+    requestCreatorId: "jose",
+    activeCreatorId: "allison",
+  }), false);
+  assert.equal(vaultReadApplies({
+    generation: 2,
+    currentGeneration: 2,
+    requestCreatorId: "allison",
+    activeCreatorId: "allison",
+  }), true);
+  assert.equal(late.id === "medio-de-jose" && vaultReadApplies({
+    generation: 1,
+    currentGeneration: 2,
+    requestCreatorId: "jose",
+    activeCreatorId: "allison",
+  }), false);
+});
+
+test("la página de bóveda suelta la carpeta al cambiar de creadora", () => {
+  assert.equal(vaultQueryFolderOnCreatorChange("jose", "allison", "mensajes"), null);
+  assert.equal(vaultQueryFolderOnCreatorChange("allison", "allison", "mensajes"), "mensajes");
 });
 
 test("la página siguiente de una carpeta se añade sin repetir", () => {

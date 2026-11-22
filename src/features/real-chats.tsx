@@ -12,7 +12,7 @@ import { NOTIFICATION_TABS, TAB_LABEL, isOwnerOnlyKind, tabOf, type Notification
 import { NotificationFanCard } from "@/features/notification-card";
 import { useCrm, type VaultItem } from "@/lib/crm";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
-import { mergeVaultPage, vaultFolderOnAccountChange, vaultLoadAllowed } from "@/lib/vault-load";
+import { mergeVaultPage, vaultFolderOnAccountChange, vaultLoadAllowed, vaultReadApplies } from "@/lib/vault-load";
 import { VAULT_FOLDER_READ_ERROR } from "@/lib/vault-folder-label";
 import { clearOpenThread, peekOpenThread } from "@/lib/open-thread";
 import { useChatFanCards } from "@/lib/use-chat-fan-cards";
@@ -491,10 +491,12 @@ export function RealChatsPage() {
     const moved = vaultFolderOnAccountChange(vaultMemory.current, vaultCreator.current, vaultAccount, thumbPage.listId);
     vaultMemory.current = moved.memory;
     vaultCreator.current = vaultAccount;
-    if (thumbPage.listId !== moved.listId) {
+    vaultGen.current += 1;
+    vaultPending.current = null;
+    vaultPage.current = { listId: moved.listId, offset: 0, busy: false };
+    setOfVault([]);
+    if (thumbPage.listId !== moved.listId || thumbPage.offset !== 0) {
       setThumbPage({ listId: moved.listId, offset: 0 });
-      setOfVault([]);
-      vaultPage.current = { listId: moved.listId, offset: 0, busy: false };
     }
   }
   const visible = inbox.visible;
@@ -804,12 +806,19 @@ export function RealChatsPage() {
     vaultPending.current = null;
     const generation = vaultGen.current + 1;
     vaultGen.current = generation;
+    const requestCreatorId = selected.creatorId;
     if (offset === 0 && listId !== vaultPage.current.listId) setOfVault([]);
     vaultPage.current = { listId, offset, busy: true };
     setVaultReading(true);
+    const stillCurrent = () => vaultReadApplies({
+      generation,
+      currentGeneration: vaultGen.current,
+      requestCreatorId,
+      activeCreatorId: vaultCreator.current,
+    });
     try {
-      const result = await readChatVault({ data: { creatorId: selected.creatorId, threadKey: selected.threadKey, listId, offset } });
-      if (generation !== vaultGen.current) return;
+      const result = await readChatVault({ data: { creatorId: requestCreatorId, threadKey: selected.threadKey, listId, offset } });
+      if (!stillCurrent()) return;
       setOfVault((current) => offset === 0 ? result.items : mergeVaultPage(current, result.items));
       setVaultReload((value) => value + 1);
       setThumbPage({ listId, offset });
@@ -818,12 +827,12 @@ export function RealChatsPage() {
       if (offset === 0 && result.items.length === 0 && listId === "all") setError(result.reason ?? "La bóveda de OnlyFans ha llegado vacía.");
       if (offset === 0 && result.items.length === 0 && listId !== "all" && result.reason === VAULT_FOLDER_READ_ERROR) setError(result.reason);
     } catch (err) {
-      if (generation !== vaultGen.current) return;
+      if (!stillCurrent()) return;
       vaultPage.current = { listId, offset, busy: false };
       if (offset === 0) setOfVault([]);
       setError(sessionErrorText(err));
     } finally {
-      if (generation === vaultGen.current) {
+      if (stillCurrent()) {
         setVaultReading(false);
         const pending = takeVaultPending();
         if (pending) void loadOfVault(pending.listId, pending.offset);

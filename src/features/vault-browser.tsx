@@ -3,7 +3,7 @@ import { queryVaultMirror } from "@/lib/of-sessions";
 import { VAULT_THUMB_MISSING, vaultMediaSrc } from "@/lib/chat-media";
 import { VAULT_CARD_FRAME, VAULT_CARD_IMAGE } from "@/lib/vault-card-frame";
 import { folderColumnView, type FolderCover } from "@/lib/vault-folder-label";
-import { folderGridCap, folderGridItems, ignoreStaleVaultView, nextVaultLibrary, sameVaultId } from "@/lib/vault-load";
+import { folderGridCap, folderGridItems, ignoreStaleVaultView, nextVaultLibrary, sameVaultId, vaultQueryFolderOnCreatorChange } from "@/lib/vault-load";
 import { VAULT_GRID_CLASS } from "@/lib/vault-grid";
 import { vaultSentPill, vaultUsageText } from "@/lib/vault-usage";
 import { VAULT_FILTER_DEBOUNCE_MS } from "@/lib/vault-debounce";
@@ -122,11 +122,22 @@ export function VaultBrowser({
   const [preview, setPreview] = useState<VaultCard | null>(null);
   const [hoverId, setHoverId] = useState<string | null>(null);
   const wantedFolder = useRef<string | null>(null);
+  const seenCreator = useRef(creatorId);
 
   useEffect(() => {
     let alive = true;
     setReady(false);
+    const creatorChanged = seenCreator.current !== creatorId;
+    const previousCreator = seenCreator.current;
+    seenCreator.current = creatorId;
     const folderId = layout === "of" && thumbPage.listId !== "all" ? thumbPage.listId : null;
+    if (layout !== "of" && creatorChanged) {
+      setQuery((current) => {
+        const nextFolder = vaultQueryFolderOnCreatorChange(previousCreator, creatorId, current.folderId);
+        if (nextFolder === current.folderId && current.scope === "todas") return current;
+        return { ...current, folderId: nextFolder, scope: "todas" };
+      });
+    }
     if (layout === "of") {
       wantedFolder.current = folderId;
       setQuery((current) => (
@@ -147,7 +158,10 @@ export function VaultBrowser({
     }).then((payload) => {
       if (!alive || ignoreStaleVaultView(wantedFolder.current, ticket)) return;
       const view = payload as VaultPayload;
-      if (layout !== "of") setQuery({ ...EMPTY_QUERY, ...(view.query ?? {}) });
+      if (layout !== "of") {
+        const restored = { ...EMPTY_QUERY, ...(view.query ?? {}) };
+        setQuery(creatorChanged ? { ...restored, folderId: null, scope: "todas" } : restored);
+      }
       applyView(view);
       setReady(true);
     }).catch(() => {

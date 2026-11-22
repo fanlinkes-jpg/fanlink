@@ -63,6 +63,24 @@ export function vaultFolderOnAccountChange(
   return { memory: next, listId: saved || "all" };
 }
 
+/** Una respuesta de otra cuenta o de una lectura ya sustituida no se pinta, ni en miniaturas ni en «más». */
+export function vaultReadApplies(input: {
+  generation: number;
+  currentGeneration: number;
+  requestCreatorId: string;
+  activeCreatorId: string | null;
+}): boolean {
+  return input.generation === input.currentGeneration
+    && input.activeCreatorId != null
+    && input.requestCreatorId === input.activeCreatorId;
+}
+
+/** La página de bóveda no conserva la carpeta de la creadora anterior. */
+export function vaultQueryFolderOnCreatorChange(fromCreatorId: string, toCreatorId: string, folderId: string | null): string | null {
+  if (fromCreatorId === toCreatorId) return folderId;
+  return null;
+}
+
 /** La respuesta de Todos no pinta si ya se abrió otra carpeta. */
 export function ignoreStaleVaultView(wanted: unknown, ticket: unknown): boolean {
   const left = wanted == null ? "" : String(wanted).trim();
