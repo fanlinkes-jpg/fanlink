@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { creatorWithPending, inboxCreators, inboxThreadList, INBOX_CREATOR_KEY, readInboxCreator, rememberInboxCreator, resolveInboxCreator, rowsForCreator, unreadByCreator, writeInboxCreator } from "./inbox-scope.ts";
+import { creatorWithPending, inboxCreators, inboxThreadList, INBOX_CREATOR_KEY, readInboxCreator, rememberInboxCreator, resolveInboxCreator, rowsForCreator, unreadByCreator, visibleUnreadTotal, writeInboxCreator } from "./inbox-scope.ts";
 
 const creators = [{ id: "jose" }, { id: "baby" }, { id: "allison" }];
 
@@ -36,6 +36,26 @@ test("cada creadora tiene su badge y el total no mezcla la vista", () => {
   assert.deepEqual(unreadByCreator(threads), { jose: 1, allison: 1 });
   assert.equal(creatorWithPending(["jose", "baby", "allison"], threads), "jose");
   assert.equal(creatorWithPending(["baby", "allison"], threads), "allison");
+});
+
+test("el total de Mensajes es la suma de los badges visibles", () => {
+  const threads = [
+    { creatorId: "jose", unread: 4 },
+    { creatorId: "jose", unread: 1 },
+    { creatorId: "allison", unread: 2 },
+    { creatorId: "baby", unread: 0 },
+    { creatorId: "9ikis52", unread: 9 },
+    { creatorId: "h0jqunu", unread: 4 },
+    { creatorId: "neztlav", unread: 7 },
+  ];
+  const visible = ["jose", "baby", "allison"];
+  const badges = unreadByCreator(threads);
+  const total = visibleUnreadTotal(badges, visible);
+  assert.equal(total, visible.reduce((sum, id) => sum + (badges[id] ?? 0), 0));
+  assert.equal(total, 3);
+  assert.equal(badges["9ikis52"], 1);
+  assert.equal(badges.h0jqunu, 1);
+  assert.equal(badges.neztlav, 1);
 });
 
 test("sin creadoras en el workspace la lista usa la primera cuenta y no mezcla", () => {

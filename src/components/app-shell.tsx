@@ -1,7 +1,6 @@
 import { ClientOnly, Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { listCreatorChats } from "@/lib/of-sessions";
-import { unreadTotalFor } from "../../server/of-sessions/sync/unread-chats.ts";
-import { creatorWithPending, readInboxCreator, resolveInboxCreator, unreadByCreator, writeInboxCreator } from "@/lib/inbox-scope";
+import { creatorWithPending, readInboxCreator, resolveInboxCreator, unreadByCreator, visibleUnreadTotal, writeInboxCreator } from "@/lib/inbox-scope";
 import { useEffect, useState, type ReactNode } from "react";
 import {
   Home,
@@ -120,9 +119,9 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
   }, [user?.id, isPending]);
 
   const chatList = useChatList();
-  const unreadChats = unreadTotalFor(chatList.status, chatList.threads, "all");
   const creatorBadges = chatList.status === "ready" ? unreadByCreator(chatList.threads) : {};
-  const creatorIds = creators.map((creator) => creator.id);
+  const creatorIds = creators.map((creator) => creator.id).filter((id) => id && id !== "all");
+  const unreadChats = chatList.status === "ready" ? visibleUnreadTotal(creatorBadges, creatorIds) : null;
   const rememberedCreator = typeof window === "undefined" ? null : readInboxCreator(window.localStorage);
   const resolvedCreator = resolveInboxCreator({ requested: creatorId, creators, remembered: rememberedCreator });
   useEffect(() => {
