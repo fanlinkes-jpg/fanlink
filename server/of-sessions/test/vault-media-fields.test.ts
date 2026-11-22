@@ -3,8 +3,8 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { PGlite } from "@electric-sql/pglite";
-import { browserVideoType, choosePlayableVideo, drmManifestUrl, parseVaultBundle, resolveDetailPlayback, stampVaultList, vaultDetailRow, videoContainer, videoDetailHold, videoDrmLine, videoFlagLine, videoFormatHold, videoHoldPayload, videoHoldText, videoShapeLine } from "../sync/vault-model.ts";
-import { forwardDrmLicense, hlsMediaResponse, hlsSegmentType, playVaultHlsDetail, readBoundedPlaylist } from "../sync/vault-hls.ts";
+import { browserVideoType, choosePlayableVideo, drmManifestUrl, drmPlaybackChoice, parseVaultBundle, resolveDetailPlayback, stampVaultList, vaultDetailRow, videoContainer, videoDetailHold, videoDrmLine, videoFlagLine, videoFormatHold, videoHoldPayload, videoHoldText, videoShapeLine } from "../sync/vault-model.ts";
+import { describePlaylist, drmLicenseEnabled, forwardDrmLicense, hlsMediaResponse, hlsSegmentType, openDrmManifest, paceLicense, playVaultHlsDetail, protectedVideoHold, readBoundedPlaylist } from "../sync/vault-hls.ts";
 import { fetchSignedMediaDetail, vaultMediaDetailPath } from "../sync/of-chat-api.ts";
 import { clearSignRulesCache } from "../sync/of-sign.ts";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
@@ -231,9 +231,12 @@ test("cada Ver deja una línea y la descarga de un vídeo se aborta a los 20 s",
   assert.equal(vers.length, 1);
   assert.equal(vers[0]?.includes("v9"), false);
   assert.equal(vers[0]?.includes("http"), false);
-  const aborted = abortResponse({ name: "AbortError", message: "aborted", cause: { code: "ECONNRESET" } });
+  const closed = new AbortController();
+  closed.abort();
+  const aborted = abortResponse({ name: "AbortError", message: "aborted", cause: { code: "ECONNRESET" } }, closed.signal);
   assert.equal(aborted?.status, 499);
-  assert.equal(abortResponse(new Error("otra cosa")), null);
+  assert.equal(abortResponse({ code: "ECONNRESET" }), null);
+  assert.equal(abortResponse(new Error("otra cosa"), closed.signal), null);
   assert.equal(VIDEO_FETCH_TIMEOUT_MS, 20_000);
   const original = AbortSignal.timeout;
   let armed = 0;
@@ -657,7 +660,7 @@ test("un detalle con convertedToVideo=no se reproduce por HLS y no abre OnlyFans
   try {
     const played = await playVaultHlsDetail(detail, fetchImpl, async () => {
       pauses += 1;
-    }, { creatorId: "u1fpdnp", mediaId: "24", sessionCookie: "sess=ok" });
+    }, { creatorId: "u1fpdnp", mediaId: "24", sessionCookie: "sess=ok", origin: "https://fanlink.local" });
     assert.ok(played);
     assert.equal(pauses, 1);
     assert.equal(played.manifest.includes("cdn"), false);
@@ -687,6 +690,7 @@ test("un detalle con convertedToVideo=no se reproduce por HLS y no abre OnlyFans
     assert.equal(licenseUri.includes("sek"), false);
     assert.match(licenseUri, /variant=licencia/);
     const licenseUrl = new URL(licenseUri, "https://fanlink.local");
+    process.env.FANLINK_ENABLE_DRM_LICENSE = "true";
     const license = await forwardDrmLicense({
       creatorId: licenseUrl.searchParams.get("creatorId") ?? "",
       mediaId: licenseUrl.searchParams.get("mediaId") ?? "",
@@ -695,6 +699,7 @@ test("un detalle con convertedToVideo=no se reproduce por HLS y no abre OnlyFans
       body: new TextEncoder().encode("widevine-challenge"),
       contentType: "application/octet-stream",
     }, fetchImpl);
+    delete process.env.FANLINK_ENABLE_DRM_LICENSE;
     assert.equal(license.status, 200);
     assert.equal(await license.text(), "license-ok");
     assert.equal(licenseBody, "widevine-challenge");
@@ -723,7 +728,9 @@ test("un detalle con convertedToVideo=no se reproduce por HLS y no abre OnlyFans
     assert.equal(viewerBody.includes("cdn2"), false);
     assert.equal(viewerBody.startsWith("#EXTM3U"), true);
     const joined = logs.join("\n");
-    assert.match(joined, /reproductor hls tipo=manifest firma=si/);
+    assert.match(joined, /reproductor hls tipo=manifest lista=master/);
+    assert.match(joined, /reproductor hls tipo=manifest lista=media/);
+    assert.match(joined, /firma=si/);
     assert.match(joined, /reproductor hls tipo=segmento firma=si/);
     assert.match(joined, /reproductor hls tipo=licencia firma=si/);
     assert.equal(joined.includes("sek"), false);
@@ -822,6 +829,143 @@ test("un original con ftyp qt se sirve como video/mp4 porque Chrome no reproduce
   const body = await held.text();
   assert.equal(body.includes("sek"), false);
   assert.equal(JSON.parse(body).abrir, true);
+});
+
+test("un drm=si en Chrome sigue el DASH, la licencia y un solo manifiesto", async () => {
+  const previous = process.env.FANLINK_ENABLE_DRM_LICENSE;
+  process.env.FANLINK_ENABLE_DRM_LICENSE = "true";
+  const detail = {
+    id: 24,
+    type: "video",
+    convertedToVideo: false,
+    canView: true,
+    hasError: false,
+    isReady: true,
+    files: {
+      full: { url: null },
+      drm: {
+        manifest: {
+          hls: "https://cdn3.onlyfans.com/hls/a.m3u8",
+          dash: "https://onlyfans.com/dash/a.mpd",
+        },
+        signature: { dash: { "CloudFront-Policy": "sek", "CloudFront-Signature": "sigvalue", "CloudFront-Key-Pair-Id": "keypair" } },
+      },
+    },
+  };
+  assert.equal(drmPlaybackChoice(detail)?.kind, "dash");
+  assert.equal(drmLicenseEnabled(), true);
+  const mpd = `<?xml version="1.0"?><MPD><Period><AdaptationSet><ContentProtection schemeIdUri="urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"><dashif:Laurl>https://onlyfans.com/api2/v2/drm/license</dashif:Laurl></ContentProtection><Representation id="720" bandwidth="800000"><BaseURL>https://cdn3.onlyfans.com/dash/720/</BaseURL><SegmentTemplate media="seg-$Number$.m4s" initialization="init.mp4"/></Representation></AdaptationSet></Period></MPD>`;
+  const ftyp = Uint8Array.from([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70]);
+  let manifestGets = 0;
+  let segmentCookie = "";
+  let licensePosts = 0;
+  const fetchImpl = (async (input: unknown, init?: RequestInit) => {
+    const href = String(input);
+    const cookie = new Headers(init?.headers).get("cookie") ?? "";
+    if (init?.method === "POST") {
+      licensePosts += 1;
+      return new Response("license-ok", { status: 200 });
+    }
+    if (href.includes("/dash/a.mpd")) {
+      manifestGets += 1;
+      if (href.startsWith("https://onlyfans.com/")) {
+        assert.match(cookie, /sess=/);
+        return new Response(null, { status: 302, headers: { location: "https://cdn3.onlyfans.com/dash/a.mpd?ok=1" } });
+      }
+      assert.equal(cookie.includes("sess"), false);
+      assert.match(cookie, /CloudFront-Policy=/);
+      return new Response(mpd, { status: 200, headers: { "content-type": "application/dash+xml" } });
+    }
+    if (href.includes("seg-1.m4s") || href.includes("init.mp4")) {
+      segmentCookie = cookie;
+      return new Response(ftyp, { status: 206, headers: { "content-type": "video/mp4", "content-range": "bytes 0-7/8", "content-length": "8" } });
+    }
+    return new Response("no", { status: 404 });
+  }) as typeof fetch;
+  try {
+    const first = openDrmManifest(detail, fetchImpl, async () => undefined, { creatorId: "u1fpdnp", mediaId: "24", sessionCookie: "sess=ok", origin: "https://fanlink.local" });
+    const second = openDrmManifest(detail, fetchImpl, async () => undefined, { creatorId: "u1fpdnp", mediaId: "24", sessionCookie: "sess=ok", origin: "https://fanlink.local" });
+    const [manifest] = await Promise.all([first, second]);
+    assert.ok(manifest);
+    assert.equal(manifestGets, 2);
+    assert.match(describePlaylist(manifest), /lista=dash/);
+    assert.match(describePlaylist(manifest), /key=widevine/);
+    assert.match(describePlaylist(manifest), /formato=edef8ba9/);
+    assert.equal(manifest.includes("cdn3.onlyfans.com"), false);
+    assert.equal(manifest.includes("sek"), false);
+    assert.match(manifest, /variant=licencia/);
+    const media = /media="([^"]+)"/.exec(manifest)?.[1] ?? "";
+    const target = new URL(media.replace("$Number$", "1"));
+    const segment = await hlsMediaResponse({
+      creatorId: target.searchParams.get("creatorId") ?? "",
+      mediaId: target.searchParams.get("mediaId") ?? "",
+      ticket: target.searchParams.get("k") ?? "",
+      segment: "",
+      base: target.searchParams.get("b"),
+      path: target.searchParams.get("p"),
+      range: null,
+    }, fetchImpl);
+    assert.equal(segment.status, 206);
+    assert.equal(segment.headers.get("content-range"), "bytes 0-7/8");
+    assert.equal(hasFtyp(new Uint8Array(await segment.arrayBuffer())), true);
+    assert.match(segmentCookie, /CloudFront-Policy=/);
+    assert.equal(segmentCookie.includes("sess"), false);
+    const licenseUrl = new URL(/>(https?:\/\/[^<]*variant=licencia[^<]*)</.exec(manifest)?.[1] ?? media);
+    const license = await forwardDrmLicense({
+      creatorId: licenseUrl.searchParams.get("creatorId") ?? "",
+      mediaId: licenseUrl.searchParams.get("mediaId") ?? "",
+      ticket: licenseUrl.searchParams.get("k") ?? "",
+      segment: licenseUrl.searchParams.get("s") ?? "",
+      body: new TextEncoder().encode("challenge"),
+      contentType: "application/octet-stream",
+      sign: async (path) => ({ sign: "firmado", time: "1", "user-id": "n", cookie: "sess=ok", "x-bc": "huella", accept: "application/json", path }),
+    }, fetchImpl);
+    assert.equal(license.status, 200);
+    assert.equal(licensePosts, 1);
+    const redirectOnly = await forwardDrmLicense({
+      creatorId: licenseUrl.searchParams.get("creatorId") ?? "",
+      mediaId: licenseUrl.searchParams.get("mediaId") ?? "",
+      ticket: licenseUrl.searchParams.get("k") ?? "",
+      segment: licenseUrl.searchParams.get("s") ?? "",
+      body: new TextEncoder().encode("challenge"),
+      contentType: "application/octet-stream",
+    }, (async () => new Response(null, { status: 302, headers: { location: "https://cdn3.onlyfans.com/steal" } })) as typeof fetch);
+    assert.equal(redirectOnly.status, 302);
+    delete process.env.FANLINK_ENABLE_DRM_LICENSE;
+    assert.equal(drmLicenseEnabled(), false);
+    assert.equal(JSON.parse(protectedVideoHold()).texto, "Vídeo protegido");
+    const blocked = await forwardDrmLicense({
+      creatorId: "u1fpdnp",
+      mediaId: "24",
+      ticket: "no",
+      segment: "no",
+      body: new Uint8Array(),
+      contentType: "application/octet-stream",
+    }, fetchImpl);
+    assert.equal(blocked.status, 409);
+    let waits = 0;
+    await Promise.all([
+      paceLicense("u1fpdnp", async () => { waits += 1; }),
+      paceLicense("u1fpdnp", async () => { waits += 1; }),
+    ]);
+    assert.equal(waits, 2);
+    assert.equal(await readBoundedPlaylist("http://cdn2.onlyfans.com/a.m3u8", async () => { throw new Error("http"); }), null);
+  } finally {
+    if (previous === undefined) delete process.env.FANLINK_ENABLE_DRM_LICENSE;
+    else process.env.FANLINK_ENABLE_DRM_LICENSE = previous;
+  }
+});
+
+test("un 416 del mp4 se reenvía", async () => {
+  const previous = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(null, { status: 416, headers: { "content-range": "bytes */8", "content-type": "video/mp4" } })) as typeof fetch;
+  try {
+    const served = await fetchVaultMedia("https://cdn2.onlyfans.com/files/big.mp4", { accept: "video/*", range: "bytes=9-10" }, true);
+    assert.equal(served.status, 416);
+    assert.equal("contentRange" in served ? served.contentRange : "", "bytes */8");
+  } finally {
+    globalThis.fetch = previous;
+  }
 });
 
 function asSql(db: PGlite): ReadSql {

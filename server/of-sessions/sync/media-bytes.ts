@@ -108,6 +108,15 @@ export function mediaRangeHeader(range: string | null | undefined): string | nul
 
 /** El cuerpo sigue siendo un stream. No se lee entero aquí. */
 export function mediaFromFetchResponse(response: Response): MediaBytes | null {
+  if (response.status === 416) {
+    return {
+      status: 416,
+      body: new Uint8Array(),
+      contentType: response.headers.get("content-type") ?? "video/mp4",
+      contentRange: response.headers.get("content-range"),
+      contentLength: 0,
+    };
+  }
   if (response.status !== 200 && response.status !== 206) return null;
   if (!response.body) return null;
   const length = response.headers.get("content-length");
@@ -258,6 +267,10 @@ async function loadMedia(target: string, headers: Record<string, string>, expect
       if (expectVideo && headerTimeout?.aborted && !client?.aborted) console.info("[fanlink:vault] reproductor error motivo=timeout");
       return { status: 0 };
     }
+  }
+  if (response.status === 416) {
+    const ranged = mediaFromFetchResponse(response);
+    if (ranged) return ranged;
   }
   if (!response.ok && response.status !== 206) {
     await response.body?.cancel().catch(() => undefined);

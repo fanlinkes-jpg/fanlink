@@ -3,13 +3,14 @@ import { authConfigured, DEV_USER_ID, requireUserId, UnauthorizedError } from "@
 import { getSql } from "@/lib/db";
 import { getOfSessionManager } from "@/lib/of-sessions-runtime.server";
 import { ensureStaff } from "@/lib/workspace-store";
-import { abortResponse, handleVaultMedia, noteVaultPlayRequest } from "../../../server/of-sessions/http/vault-http.ts";
+import { abortResponse, handleVaultMedia, isClientAbort, noteVaultPlayRequest, playbackDebugLine } from "../../../server/of-sessions/http/vault-http.ts";
 import { creatorAllowed } from "../../../server/of-sessions/sync/vault-query.ts";
 import { readSessionMediaResult, videoBytesAccepted, videoFollowUp } from "../../../server/of-sessions/sync/media-bytes.ts";
 import { accountCreatorIds } from "../../../server/of-sessions/http/vault-accounts.ts";
-import { fetchSignedMediaDetail, fetchSignedVault, sessionForApi } from "../../../server/of-sessions/sync/of-chat-api.ts";
-import { choosePlayableVideo, drmManifestUrl, parseVaultBundle, resolveDetailPlayback, vaultDetailRow, vaultFolderMark, videoContainer, videoFlagLine, videoFormatHold, videoHoldPayload } from "../../../server/of-sessions/sync/vault-model.ts";
-import { forwardDrmLicense, hlsMediaResponse, openHlsManifest, readBoundedPlaylist } from "../../../server/of-sessions/sync/vault-hls.ts";
+import { fetchSignedMediaDetail, fetchSignedVault, sessionForApi, signedHeaders } from "../../../server/of-sessions/sync/of-chat-api.ts";
+import { choosePlayableVideo, drmPlaybackChoice, parseVaultBundle, resolveDetailPlayback, vaultDetailRow, vaultFolderMark, videoContainer, videoFlagLine, videoFormatHold, videoHoldPayload } from "../../../server/of-sessions/sync/vault-model.ts";
+import { describePlaylist, drmLicenseEnabled, forwardDrmLicense, hlsMediaResponse, LICENSE_BODY_MAX, openDrmManifest, paceLicense, protectedVideoHold, readBoundedPlaylist } from "../../../server/of-sessions/sync/vault-hls.ts";
+import { loadSignRules } from "../../../server/of-sessions/sync/of-sign.ts";
 import { loadFreshPreview, normalizeVaultOffset, reloadVaultPreview, signedUrlExpired } from "../../../server/of-sessions/sync/vault-thumbs.ts";
 import { openProfileThumbs } from "../../../server/of-sessions/sync/vault-owner.ts";
 import { playbackUrl, reuseOrRefreshVideo, saveVaultPreview, storedVaultMediaUrls, storedVaultPage, VIDEO_DETAIL_PAUSE_MS } from "../../../server/of-sessions/sync/vault-store.ts";
@@ -21,23 +22,36 @@ export const Route = createFileRoute("/api/vault-media")({
       POST: async ({ request }) => {
         try {
           const url = new URL(request.url);
+          if (url.searchParams.get("variant") === "debug") {
+            await vaultAccess();
+            const line = playbackDebugLine(await request.json().catch(() => null));
+            if (line) console.info(line);
+            return new Response(null, { status: 204 });
+          }
           if (url.searchParams.get("variant") !== "licencia") return new Response("Sin datos", { status: 404 });
           const access = await vaultAccess();
           const creatorId = url.searchParams.get("creatorId") ?? "";
           if (!creatorAllowed({ userId: access.userId, role: access.role, perms: access.perms, creatorIds: access.creatorIds }, creatorId)) {
             return new Response("Sin datos", { status: 403 });
           }
+          if (!drmLicenseEnabled()) {
+            return new Response(protectedVideoHold(), { status: 409, headers: { "content-type": "application/json; charset=utf-8" } });
+          }
+          const body = await readCappedBody(request, LICENSE_BODY_MAX);
+          if (!body) return new Response("Sin datos", { status: 413 });
+          await paceLicense(creatorId, (ms) => new Promise((resolve) => setTimeout(resolve, ms)));
           return forwardDrmLicense({
             creatorId,
             mediaId: url.searchParams.get("mediaId") ?? "",
             ticket: url.searchParams.get("k") ?? "",
             segment: url.searchParams.get("s") ?? "",
-            body: new Uint8Array(await request.arrayBuffer()),
+            body,
             contentType: request.headers.get("content-type") ?? "application/octet-stream",
             signal: request.signal,
+            sign: (path) => signLicense(creatorId, path),
           }, fetch);
         } catch (error) {
-          const aborted = abortResponse(error);
+          const aborted = abortResponse(error, request.signal);
           if (aborted) return aborted;
           if (error instanceof UnauthorizedError) return new Response("Unauthorized", { status: 401 });
           throw error;
@@ -62,7 +76,8 @@ async function vaultMediaGet(request: Request): Promise<Response> {
     const sql = access.sql;
     const url = new URL(request.url);
     const rawEarly = url.searchParams.get("variant");
-    if (rawEarly === "hls" || rawEarly === "licencia") {
+    if (rawEarly === "licencia") return new Response("Sin datos", { status: 405 });
+    if (rawEarly === "hls") {
       const creatorId = url.searchParams.get("creatorId") ?? "";
       if (!creatorAllowed({ userId: access.userId, role: access.role, perms: access.perms, creatorIds: access.creatorIds }, creatorId)) {
         return new Response("Sin datos", { status: 403 });
@@ -72,6 +87,8 @@ async function vaultMediaGet(request: Request): Promise<Response> {
         mediaId: url.searchParams.get("mediaId") ?? "",
         ticket: url.searchParams.get("k") ?? "",
         segment: url.searchParams.get("s") ?? "",
+        base: url.searchParams.get("b"),
+        path: url.searchParams.get("p"),
         range: request.headers.get("range"),
         signal: request.signal,
       }, fetch);
@@ -97,7 +114,7 @@ async function vaultMediaGet(request: Request): Promise<Response> {
               now: Date.now(),
               force: pause,
               pause: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-              loadDetail: () => loadMediaDetail(creatorId, mediaId),
+              loadDetail: () => loadMediaDetail(creatorId, mediaId, new URL(request.url).origin),
             });
             if (again.hls) {
               hlsManifest = again.hls;
@@ -135,7 +152,8 @@ async function vaultMediaGet(request: Request): Promise<Response> {
             },
             fetchBytes: async (target, range, signal) => {
               if (hlsManifest) {
-                return { status: 200, body: new TextEncoder().encode(hlsManifest), contentType: "application/vnd.apple.mpegurl" };
+                const dash = hlsManifest.includes("<MPD") || hlsManifest.includes("<BaseURL");
+                return { status: 200, body: new TextEncoder().encode(hlsManifest), contentType: dash ? "application/dash+xml" : "application/vnd.apple.mpegurl" };
               }
               if (expectVideo && videoContainer({ url: target }) === "avi") {
                 hold = aviHold();
@@ -177,7 +195,7 @@ async function vaultMediaGet(request: Request): Promise<Response> {
             },
           });
   } catch (error) {
-    const aborted = abortResponse(error);
+    const aborted = abortResponse(error, request.signal);
     if (aborted) return aborted;
     if (error instanceof UnauthorizedError) return new Response("Unauthorized", { status: 401 });
     throw error;
@@ -207,7 +225,7 @@ function rememberHold(creatorId: string, mediaId: string, text: string): void {
   videoHolds.set(`${creatorId}\n${mediaId}`, { at: Date.now(), text });
 }
 
-async function loadMediaDetail(creatorId: string, mediaId: string): Promise<{ url: string | null; hold: string; hls: string | null }> {
+async function loadMediaDetail(creatorId: string, mediaId: string, origin: string): Promise<{ url: string | null; hold: string; hls: string | null }> {
   const sessions = await getOfSessionManager();
   const account = (await sessions.listAccounts()).find((item) => item.creatorId === creatorId && item.status === "active" && item.hasStorageState);
   if (!account) return { url: null, hold: "Vídeo no disponible", hls: null };
@@ -221,14 +239,26 @@ async function loadMediaDetail(creatorId: string, mediaId: string): Promise<{ ur
   }, mediaId);
   const row = vaultDetailRow(read.body);
   const flags = row ? videoFlagLine(row) : "convertedToVideo=ausente canView=ausente hasError=ausente isReady=ausente";
-  const manifest = row && !choosePlayableVideo(row) ? drmManifestUrl(row) : null;
-  if (row && manifest && /\.m3u8(?:$|\?)/i.test(manifest)) {
-    const text = await openHlsManifest(row, fetch, () => new Promise((resolve) => setTimeout(resolve, VIDEO_DETAIL_PAUSE_MS)), {
-      creatorId,
-      mediaId,
-      sessionCookie: "cookie" in auth ? auth.cookie : "",
-    });
-    console.info(`[fanlink:vault] video medio=${vaultFolderMark(mediaId)} detalle=${text ? "hls" : "sin-url"} tipo=lista status=${read.status ?? "sin"} ${flags}`.slice(0, 360));
+  const choice = row && !choosePlayableVideo(row) ? drmPlaybackChoice(row) : null;
+  if (row && choice && !drmLicenseEnabled()) {
+    console.info(`[fanlink:vault] video medio=${vaultFolderMark(mediaId)} detalle=protegido lista=${choice.kind} status=${read.status ?? "sin"} ${flags}`.slice(0, 360));
+    return { url: null, hold: protectedVideoHold(), hls: null };
+  }
+  if (row && choice) {
+    const scope = { creatorId, mediaId, sessionCookie: "cookie" in auth ? auth.cookie : "", origin };
+    console.info(`[fanlink:vault] video medio=${vaultFolderMark(mediaId)} detalle=pidiendo lista=${choice.kind} status=${read.status ?? "sin"} ${flags}`.slice(0, 360));
+    let text: string | null = null;
+    try {
+      text = await openDrmManifest(row, fetch, () => new Promise((resolve) => setTimeout(resolve, VIDEO_DETAIL_PAUSE_MS)), scope);
+    } catch (error) {
+      if (isClientAbort(error)) {
+        console.info(`[fanlink:vault] video medio=${vaultFolderMark(mediaId)} detalle=abort lista=${choice.kind} status=${read.status ?? "sin"}`.slice(0, 360));
+        return { url: null, hold: "", hls: null };
+      }
+      throw error;
+    }
+    const shape = text ? describePlaylist(text) : "";
+    console.info(`[fanlink:vault] video medio=${vaultFolderMark(mediaId)} detalle=${text ? choice.kind : "sin-url"} ${shape} tipo=lista status=${read.status ?? "sin"} ${flags}`.slice(0, 360));
     if (text) return { url: null, hold: "", hls: text };
     return { url: null, hold: JSON.stringify(videoHoldPayload(read.status, row)), hls: null };
   }
@@ -305,4 +335,39 @@ async function profileThumbs(creatorId: string) {
   const account = (await sessions.listAccounts()).find((item) => item.creatorId === creatorId && item.status === "active" && item.hasStorageState);
   if (!account) return null;
   return openProfileThumbs(sessions, account.id);
+}
+
+async function readCappedBody(request: Request, limit: number): Promise<Uint8Array | null> {
+  if (!request.body) return new Uint8Array();
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const step = await reader.read();
+    if (step.done) break;
+    total += step.value.byteLength;
+    if (total > limit) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(step.value);
+  }
+  const body = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return body;
+}
+
+async function signLicense(creatorId: string, pathWithQuery: string): Promise<Record<string, string> | null> {
+  const sessions = await getOfSessionManager();
+  const account = (await sessions.listAccounts()).find((item) => item.creatorId === creatorId && item.status === "active" && item.hasStorageState);
+  if (!account) return null;
+  const state = await sessions.readStorageState(account.id);
+  const auth = sessionForApi(state, Date.now());
+  if ("reason" in auth) return null;
+  const rules = await loadSignRules(fetch, Date.now());
+  return signedHeaders(rules, pathWithQuery, auth, Date.now());
 }

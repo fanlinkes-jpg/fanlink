@@ -16,6 +16,35 @@ export function mediaLogLine(creatorId: string, messageKey: string): string | nu
   return `[fanlink:media] creator=${vaultFolderMark(creatorId)} message=${vaultFolderMark(messageKey)}`;
 }
 
+/** Un solo `[fanlink:media]` por medio aunque «Ver» repita la petición. */
+export function takeMediaLog(creatorId: string, mediaId: string): string | null {
+  const line = mediaLogLine(creatorId, mediaId);
+  if (!line) return null;
+  const key = `media\n${creatorId}\n${mediaId}`;
+  const now = Date.now();
+  if (now - (playNotes.get(key) ?? 0) < PLAY_NOTE_MS) return null;
+  playNotes.set(key, now);
+  return line;
+}
+
+export function playbackDebugLine(body: unknown): string | null {
+  if (!body || typeof body !== "object") return null;
+  const record = body as Record<string, unknown>;
+  const tipo = safePlaybackToken(record.tipo);
+  const detalle = safePlaybackToken(record.detalle);
+  if (!tipo && !detalle) return null;
+  const fatal = record.fatal === true || record.fatal === "si" ? "si" : "no";
+  const codigo = typeof record.codigo === "number" && Number.isInteger(record.codigo) ? String(record.codigo) : "no";
+  const medio = typeof record.mediaId === "string" ? vaultFolderMark(record.mediaId) : "no";
+  return `[fanlink:vault] reproductor error medio=${medio} tipo=${tipo || "no"} detalle=${detalle || "no"} fatal=${fatal} codigo=${codigo}`;
+}
+
+function safePlaybackToken(value: unknown): string {
+  if (typeof value !== "string") return "";
+  if (/https?:|onlyfans|cloudfront|cookie|policy|signature/i.test(value)) return "oculto";
+  return value.replace(/[^A-Za-z0-9._:-]/g, "").slice(0, 60);
+}
+
 const playNotes = new Map<string, number>();
 const PLAY_NOTE_MS = 4_000;
 
@@ -51,8 +80,8 @@ export function isClientAbort(error: unknown): boolean {
   return isClientAbort(record.cause);
 }
 
-export function abortResponse(error: unknown): Response | null {
-  if (!isClientAbort(error)) return null;
+export function abortResponse(error: unknown, signal?: AbortSignal): Response | null {
+  if (!signal?.aborted || !isClientAbort(error)) return null;
   return new Response(null, { status: 499 });
 }
 
@@ -105,7 +134,7 @@ export async function handleVaultMedia(request: Request, deps: {
   const mediaId = url.searchParams.get("mediaId") ?? "";
   const rawVariant = url.searchParams.get("variant");
   const variant = rawVariant === "full" || rawVariant === "clip" ? rawVariant : "preview";
-  const mediaLine = mediaLogLine(creatorId, mediaId);
+  const mediaLine = takeMediaLog(creatorId, mediaId);
   if (mediaLine) deps.log?.(mediaLine);
   if (!creatorId || !mediaId) return new Response("Sin datos", { status: 404 });
   if (!creatorAllowed(actor, creatorId)) return new Response("Sin datos", { status: 403 });
@@ -207,7 +236,7 @@ async function streamMedia(
   const length = bytes.contentLength ?? bytes.body?.byteLength ?? null;
   const headers = new Headers({
     "content-type": bytes.contentType || "application/octet-stream",
-    "cache-control": !range && bytes.status === 200 && !bytes.contentType.includes("mpegurl") ? "private, max-age=300" : "private, no-store",
+    "cache-control": !range && bytes.status === 200 && !bytes.contentType.includes("mpegurl") && !bytes.contentType.includes("dash") ? "private, max-age=300" : "private, no-store",
     "x-content-type-options": "nosniff",
     "accept-ranges": "bytes",
   });

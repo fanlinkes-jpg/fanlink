@@ -481,6 +481,17 @@ function drmHostAllowed(value: string): boolean {
   }
 }
 
+/** Chrome pide el DASH. El HLS queda si no hay mpd. */
+export function drmPlaybackChoice(row: Record<string, unknown>): { kind: "dash" | "hls"; url: string } | null {
+  const manifest = nested(nested(nested(row.files)?.drm)?.manifest);
+  if (!manifest) return null;
+  const dash = textOf(manifest.dash);
+  if (dash && drmHostAllowed(dash)) return { kind: "dash", url: dash };
+  const hls = textOf(manifest.hls);
+  if (hls && drmHostAllowed(hls) && /\.m3u8(?:$|\?)/i.test(hls)) return { kind: "hls", url: hls };
+  return null;
+}
+
 /** El manifiesto HLS/DASH, si el detalle no trae mp4. No incluye la firma. */
 export function drmManifestUrl(row: Record<string, unknown>): string | null {
   const manifest = nested(nested(nested(row.files)?.drm)?.manifest);

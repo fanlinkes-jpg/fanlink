@@ -585,10 +585,31 @@ function VaultPlayback({ src }: { src: string }) {
         setState("error");
         return;
       }
+      if (type.includes("dash")) {
+        await response.body?.cancel().catch(() => undefined);
+        if (cancelled) return;
+        const dashjs = await import("dashjs");
+        if (cancelled) return;
+        const player = dashjs.MediaPlayer().create();
+        hls = player;
+        player.initialize(video, src, true);
+        (player as { updateSettings: (value: object) => void }).updateSettings({ streaming: { bufferTimeAtTopQuality: 12 } });
+        player.on("error", (event: { error?: { code?: number; message?: string } }) => {
+          reportPlaybackError(src, { tipo: "dash", detalle: event.error?.message ?? "error", fatal: true, codigo: event.error?.code ?? null });
+          if (cancelled) return;
+          setNote("No se ha podido cargar el vídeo");
+          setOpenVault(false);
+          setState("error");
+        });
+        setReady(true);
+        return;
+      }
       if (type.includes("mpegurl")) {
         const text = await response.text();
         if (cancelled) return;
         if (video.canPlayType("application/vnd.apple.mpegurl")) {
+          const keyUri = /#EXT-X-KEY:[^\n]*URI="([^"]+)"/.exec(text)?.[1] ?? "";
+          if (keyUri.includes("variant=licencia")) hookFairPlay(video, keyUri);
           video.src = src;
           setReady(true);
           return;
@@ -601,15 +622,15 @@ function VaultPlayback({ src }: { src: string }) {
           setState("error");
           return;
         }
-        blobUrl = URL.createObjectURL(new Blob([text], { type: "application/vnd.apple.mpegurl" }));
         const player = new Hls({ emeEnabled: true, maxBufferLength: 10, maxMaxBufferLength: 20 });
         hls = player;
-        player.loadSource(blobUrl);
+        player.loadSource(src);
         player.attachMedia(video);
         player.on(Hls.Events.MANIFEST_PARSED, () => {
           if (!cancelled) setReady(true);
         });
         player.on(Hls.Events.ERROR, (_event, data) => {
+          reportPlaybackError(src, { tipo: data.type, detalle: data.details, fatal: data.fatal === true, codigo: null });
           if (!data.fatal || cancelled) return;
           setNote("No se ha podido cargar el vídeo");
           setOpenVault(false);
@@ -662,6 +683,7 @@ function VaultPlayback({ src }: { src: string }) {
         className={ready ? "h-full w-full bg-black object-contain" : "hidden"}
         onCanPlay={() => setState("ok")}
         onError={() => {
+          reportPlaybackError(src, { tipo: "video", detalle: "media", fatal: true, codigo: node.current?.error?.code ?? null });
           setNote("No se ha podido cargar el vídeo");
           setOpenVault(false);
           setState("error");
@@ -669,6 +691,47 @@ function VaultPlayback({ src }: { src: string }) {
       />
     </>
   );
+}
+
+function hookFairPlay(video: HTMLVideoElement, licenseUrl: string): void {
+  const onEncrypted = (event: Event) => {
+    const encrypted = event as MediaEncryptedEvent;
+    const initData = encrypted.initData;
+    if (!initData) return;
+    void (async () => {
+      const access = await navigator.requestMediaKeySystemAccess("com.apple.fps.1_0", [{
+        initDataTypes: [encrypted.initDataType || "sinf"],
+        videoCapabilities: [{ contentType: "application/vnd.apple.mpegurl" }],
+      }]);
+      const keys = await access.createMediaKeys();
+      await video.setMediaKeys(keys);
+      const session = keys.createSession();
+      session.addEventListener("message", (message) => {
+        const payload = (message as MediaKeyMessageEvent).message;
+        void fetch(licenseUrl, { method: "POST", body: payload }).then(async (license) => {
+          await session.update(await license.arrayBuffer());
+        }).catch(() => undefined);
+      });
+      await session.generateRequest(encrypted.initDataType || "skd", initData);
+    })().catch(() => undefined);
+  };
+  video.addEventListener("encrypted", onEncrypted);
+}
+
+function reportPlaybackError(src: string, fields: { tipo: string; detalle: string; fatal: boolean; codigo: number | null }): void {
+  const mediaId = (() => {
+    try {
+      return new URL(src, "http://127.0.0.1").searchParams.get("mediaId") ?? "";
+    } catch {
+      return "";
+    }
+  })();
+  const body = { mediaId, tipo: fields.tipo, detalle: fields.detalle, fatal: fields.fatal, codigo: fields.codigo };
+  void fetch("/api/vault-media?variant=debug", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  }).catch(() => undefined);
 }
 
 function readPlaybackHold(raw: string): { texto: string; abrir: boolean } {
