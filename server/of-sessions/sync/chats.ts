@@ -206,6 +206,24 @@ export function parseChatMessages(
   return mergeMessages([], rows);
 }
 
+/**
+ * La respuesta de POST /chats/{id}/messages es un objeto, no una lista.
+ * `walk` solo entra en listas, así que el id del envío se lee aquí.
+ */
+export function parseWrittenMessage(
+  value: unknown,
+  threadKey: string,
+  fanKey: string | null,
+  accountId: string | null = null,
+): ChatMessage[] {
+  const direct: ChatMessage[] = [];
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const message = messageFrom(value as Record<string, unknown>, threadKey, fanKey, accountId, "page");
+    if (message) direct.push(message);
+  }
+  return mergeMessages(direct, parseChatMessages(value, threadKey, fanKey, accountId));
+}
+
 export function applyAccountId(
   threads: ChatThread[],
   messages: ChatMessage[],

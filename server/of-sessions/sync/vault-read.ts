@@ -78,7 +78,7 @@ export async function readChatVaultView(
     const saved = walked.thumbItems.length > 0 ? walked.thumbItems : walked.items;
     if (saved.length > 0) await rememberPageThumbs({ ...deps, now }, account.id, input.creatorId, saved, state, list, offset);
     return {
-      items: walked.items.map((item) => ({ id: item.id, title: item.title, kind: item.kind })),
+      items: walked.items.map((item) => ({ id: item.id, title: item.title ?? "", kind: item.kind })),
       reason: walked.items.length === 0 ? "OnlyFans respondió 429" : null,
       hasMore: true,
       nextOffset: walked.nextOffset,
@@ -98,7 +98,7 @@ export async function readChatVaultView(
   }
   await rememberPageThumbs({ ...deps, now }, account.id, input.creatorId, saved, state, list, offset);
   return {
-    items: walked.items.map((item) => ({ id: item.id, title: item.title, kind: item.kind })),
+    items: walked.items.map((item) => ({ id: item.id, title: item.title ?? "", kind: item.kind })),
     reason: null,
     hasMore: walked.hasMore,
     nextOffset: walked.nextOffset,

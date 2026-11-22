@@ -200,6 +200,20 @@ export function createChatSendSession(options?: {
       setJobs(next);
       pump();
     },
+    /** El servidor ya casó el envío: la copia local toma ese id y deja de decir pendiente. */
+    noteMatches(matches: readonly { clientId: string; messageId: string }[]) {
+      if (matches.length === 0) return;
+      const byId = new Map(matches.map((match) => [match.clientId, match.messageId]));
+      let changed = false;
+      const next = jobs.map((job) => {
+        const messageId = byId.get(job.clientId);
+        if (!messageId || (job.state !== "awaiting" && job.state !== "sent")) return job;
+        if (job.messageId === messageId && job.state === "sent" && job.reason == null) return job;
+        changed = true;
+        return { ...job, state: "sent" as const, messageId, reason: null };
+      });
+      if (changed) setJobs(next);
+    },
     noteFailure(clientId: string, reason: string) {
       if (!jobs.some((job) => job.clientId === clientId)) return;
       patch(clientId, { state: "error", reason });

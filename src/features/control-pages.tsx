@@ -7,7 +7,7 @@ import { messageValue, useCrm, type Platform, type Role } from "@/lib/crm";
 import { CONNECTION_LABEL, IDENTITY_STATE_LABEL, SESSION_STATUS_LABEL, sessionActionLabel, type SessionStatus } from "@/lib/of-sessions";
 import { SESSION_EXPIRED_LABEL, signedReadsBlocked } from "../../server/of-sessions/sync/session-link.ts";
 import { hasPerm } from "@/lib/access-policy";
-import { listTeam, updateStaffAccess, updateStaffAlert } from "@/lib/workspace";
+import { listTeam, saveStaffDisplayName, updateStaffAccess, updateStaffAlert } from "@/lib/workspace";
 import { useCreatorSessions } from "@/lib/use-creator-sessions";
 import { useOfReads } from "@/lib/use-of-reads";
 import type { CreatorEarningView, CreatorReadView } from "@/lib/of-sessions";
@@ -1087,6 +1087,33 @@ function AlertFields({
   );
 }
 
+function OwnName({ name }: { name: string }) {
+  const [value, setValue] = useState(name);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => setValue(name), [name]);
+  return (
+    <form
+      className="mt-3 flex flex-wrap items-end gap-2"
+      onSubmit={(event) => {
+        event.preventDefault();
+        const next = value.trim();
+        if (!next || next === name) return;
+        setBusy(true);
+        void saveStaffDisplayName({ data: { displayName: next } }).then((result) => {
+          const access = useCrm.getState().teamAccess;
+          if (access) useCrm.setState({ teamAccess: { ...access, displayName: result.displayName } });
+        }).catch(() => undefined).finally(() => setBusy(false));
+      }}
+    >
+      <label className="text-xs text-muted">
+        Nombre en el chat
+        <input aria-label="Nombre en el chat" value={value} onChange={(event) => setValue(event.target.value)} maxLength={80} className="mt-1 block h-8 w-48 rounded-md border border-line px-2 text-sm text-[#1c2333]" />
+      </label>
+      <button type="submit" disabled={busy || !value.trim()} className="rounded-md border border-line px-2 py-1 text-xs">Guardar nombre</button>
+    </form>
+  );
+}
+
 function TeamAccessPanel({ creatorIds }: { creatorIds: string[] }) {
   const access = useCrm((s) => s.teamAccess);
   const [staff, setStaff] = useState<Array<{ userId: string; displayName: string; role: "owner" | "member"; perms: string[]; creatorIds: string[]; phone: string | null; alertsEnabled: boolean; quietMinutes: number }>>([]);
@@ -1134,6 +1161,7 @@ function TeamAccessPanel({ creatorIds }: { creatorIds: string[] }) {
   return (
     <Panel title="Acceso del servidor">
       <p className="text-sm">Sesión autenticada: {access.displayName}. {access.role === "owner" ? "Dueña" : "Miembro"}.</p>
+      <OwnName name={access.displayName} />
       {access.devMode && (
         <p className="mt-2 text-sm text-[#8a5a12]">Modo local de un solo operador, solo en localhost. No separa a varias personas.</p>
       )}

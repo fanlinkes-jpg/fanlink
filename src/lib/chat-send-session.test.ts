@@ -118,3 +118,17 @@ test("sin envío real no se encola y se dice el motivo", () => {
   assert.equal(opened, 0);
   assert.equal(session.shouldWarn(), false);
 });
+
+test("un envío casado deja el id y sale de pendiente", async () => {
+  const session = createChatSendSession({ uuid: () => "id-1" });
+  session.setTransport(async () => ({ sent: false, reason: "Pendiente de confirmar", messageId: null }));
+  session.submit({ ...draft, realSend: true, now: 1_000 });
+  await session.whenIdle();
+  assert.equal(session.getJobs()[0]?.state, "awaiting");
+  assert.equal(session.getJobs()[0]?.messageId, null);
+  session.noteMatches([{ clientId: "id-1", messageId: "900" }]);
+  assert.equal(session.getJobs()[0]?.state, "sent");
+  assert.equal(session.getJobs()[0]?.messageId, "900");
+  session.noteMatches([{ clientId: "id-1", messageId: "900" }]);
+  assert.equal(session.getJobs().length, 1);
+});

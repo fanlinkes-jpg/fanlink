@@ -8,6 +8,17 @@ export function mergeHistoryMessages<T extends { messageKey: string; sentAt: str
   return [...map.values()].sort((left, right) => left.sentAt.localeCompare(right.sentAt) || left.messageKey.localeCompare(right.messageKey));
 }
 
+/** Lo ya visto en el hilo abierto se queda. Una página nueva no borra el resto. */
+export function rememberThreadMessages<T extends { messageKey: string; sentAt: string }>(
+  current: readonly T[],
+  incoming: readonly T[],
+): { messages: T[]; changed: boolean } {
+  const messages = mergeHistoryMessages(current, incoming);
+  const previous = new Map(current.map((message) => [message.messageKey, message]));
+  const changed = messages.length !== current.length || messages.some((message) => previous.get(message.messageKey) !== message);
+  return { messages, changed };
+}
+
 /** Al anteponer mensajes, el que se veía sigue en el mismo sitio. */
 export function scrollAfterPrepend(before: { scrollHeight: number; scrollTop: number }, nextScrollHeight: number): number {
   return before.scrollTop + Math.max(0, nextScrollHeight - before.scrollHeight);

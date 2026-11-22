@@ -1,9 +1,9 @@
 import type { BrowserContext, Locator, Page } from "playwright";
 import { openWorkPage } from "../sessions/work-page.ts";
 import { closeIfIdle } from "../live/pages.ts";
-import { chatPageUrl, parseChatMessages } from "../sync/chats.ts";
+import { chatPageUrl, parseChatMessages, parseWrittenMessage } from "../sync/chats.ts";
 import { confirmedOwnMessage, humanTypeDelay, publicSendReason } from "./gate.ts";
-import { attachmentsConfirmed, vaultPieceMatch, type ShownVaultPiece, type VaultSendPiece } from "./vault-piece.ts";
+import { attachmentsConfirmed, vaultPieceMatch, vaultTitleForMatch, type ShownVaultPiece, type VaultSendPiece } from "./vault-piece.ts";
 import {
   COMPOSER_SELECTORS,
   MESSAGE_LIST_SELECTOR,
@@ -94,7 +94,7 @@ export type ComposeResult = {
  */
 export async function composeChat(context: BrowserContext, request: ComposeRequest): Promise<ComposeResult> {
   const page = await openWorkPage(context);
-  const payloads: string[] = [];
+  const payloads: CapturedPayload[] = [];
   const pending = createPendingNet();
   const messagePosts: Array<{ status: number | null }> = [];
   const postOf = new Map<object, { status: number | null }>();
@@ -121,23 +121,26 @@ export async function composeChat(context: BrowserContext, request: ComposeReque
     trackNet(-1, request);
   });
   page.on("close", () => pending.reset());
-  const onResponse = (response: { url(): string; status(): number; text(): Promise<string>; request?: () => object }) => {
-    const post = response.request ? postOf.get(response.request()) : undefined;
+  const onResponse = (response: { url(): string; status(): number; text(): Promise<string>; request?: () => { url(): string; method(): string } }) => {
+    const request = response.request?.();
+    const post = request ? postOf.get(request) : undefined;
     if (post && post.status == null) post.status = response.status();
     if (response.status() < 200 || response.status() >= 300) return;
     const path = pathOf(response.url());
     if (!path.includes("message") && !path.includes("chat")) return;
-    payloads.push("");
+    const write = request != null && isMessageWrite(request.method(), request.url());
+    payloads.push({ text: "", write });
     const index = payloads.length - 1;
     void response.text().then((text) => {
-      if (text.length <= 1_500_000) payloads[index] = text;
+      const captured = payloads[index];
+      if (captured && text.length <= 1_500_000) captured.text = text;
     }).catch(() => undefined);
   };
   page.on("response", onResponse);
   page.on("websocket", (socket) => {
     socket.on("framereceived", (frame) => {
       const payload = typeof frame.payload === "string" ? frame.payload : frame.payload.toString("utf8");
-      if (payload.length <= 1_500_000) payloads.push(payload);
+      if (payload.length <= 1_500_000) payloads.push({ text: payload, write: false });
     });
   });
   const net = {
@@ -207,6 +210,7 @@ export async function composeChat(context: BrowserContext, request: ComposeReque
       result = await giveUp(attached.reason);
       return result;
     }
+    await markFreePreviews(page, request.vaultPieces ?? [], request.priceCents);
     confirmedIds = attached.ids;
     if (request.scheduleAt) {
       const schedule = page.locator("[data-fanlink-schedule], button[aria-label='Schedule your message'], button[aria-label='Programar tu mensaje']").first();
@@ -353,6 +357,8 @@ async function logBox(label: string, box: Locator, body: string, send: Locator |
 
 type SendWatch = { kind: "id"; id: string } | { kind: "visto" } | { kind: "no" };
 
+type CapturedPayload = { text: string; write: boolean };
+
 type PostNet = {
   postOpen: () => boolean;
   postStatus: () => number | null;
@@ -363,7 +369,7 @@ type PostNet = {
 async function watchSend(
   _box: Locator,
   page: Page,
-  payloads: string[],
+  payloads: CapturedPayload[],
   from: number,
   request: ComposeRequest,
   beforeDom: number,
@@ -398,7 +404,7 @@ async function finishAttempt(
   first: SendWatch,
   box: Locator,
   page: Page,
-  payloads: string[],
+  payloads: CapturedPayload[],
   from: number,
   request: ComposeRequest,
   beforeDom: number,
@@ -468,34 +474,51 @@ async function bubblePhase(page: Page, beforeDom: number, body: string): Promise
 async function clickMissed(
   box: Locator,
   page: Page,
-  payloads: string[],
+  payloads: CapturedPayload[],
   from: number,
   request: ComposeRequest,
   beforeDom: number,
   networkOpen: () => boolean,
 ): Promise<boolean> {
   const drain = Date.now() + 20_000;
-  while (Date.now() < drain && (networkOpen() || payloads.slice(from).some((item) => item === ""))) {
+  while (Date.now() < drain && (networkOpen() || payloads.slice(from).some((item) => item.text === ""))) {
     if (idFromPayloads(payloads, from, request)) return false;
     await delay(100);
   }
   if (idFromPayloads(payloads, from, request)) return false;
-  if (networkOpen() || payloads.slice(from).some((item) => item === "")) return false;
+  if (networkOpen() || payloads.slice(from).some((item) => item.text === "")) return false;
   const needle = request.body.trim();
-  if (needle && payloads.slice(from).some((item) => item.includes(needle))) return false;
+  if (needle && payloads.slice(from).some((item) => item.text.includes(needle))) return false;
   if (!(await boxText(box)).trim()) return false;
   const dom = await messageCount(page);
   if (dom > beforeDom && await threadHasBody(page, request.body)) return false;
   return true;
 }
 
-function idFromPayloads(payloads: string[], from: number, request: ComposeRequest): string | null {
+function idFromPayloads(payloads: CapturedPayload[], from: number, request: ComposeRequest): string | null {
   for (const payload of payloads.slice(from)) {
-    if (!payload) continue;
-    const id = messageIdFromPayload(payload, request);
+    if (!payload.text) continue;
+    const id = messageIdFromCaptured(payload.text, request, payload.write);
     if (id) return id;
   }
   return null;
+}
+
+/** El POST del mensaje trae un objeto. El resto de respuestas siguen siendo listas. */
+export function messageIdFromCaptured(
+  payload: string,
+  request: Pick<ComposeRequest, "threadKey" | "fanKey" | "accountUserId" | "body" | "priceCents">,
+  write: boolean,
+): string | null {
+  try {
+    const parsed = JSON.parse(payload) as unknown;
+    const messages = write
+      ? parseWrittenMessage(parsed, request.threadKey, request.fanKey, request.accountUserId)
+      : parseChatMessages(parsed, request.threadKey, request.fanKey, request.accountUserId);
+    return confirmedOwnMessage(messages, request.body, request.priceCents)?.messageId ?? null;
+  } catch {
+    return null;
+  }
 }
 
 async function threadHasBody(page: Page, body: string): Promise<boolean> {
@@ -504,15 +527,6 @@ async function threadHasBody(page: Page, body: string): Promise<boolean> {
   return page.locator(".b-chat__item, .b-chat__message").evaluateAll((nodes, expected) => (
     nodes.some((node) => (node.textContent ?? "").includes(expected))
   ), needle).catch(() => false);
-}
-
-function messageIdFromPayload(payload: string, request: ComposeRequest): string | null {
-  try {
-    const messages = parseChatMessages(JSON.parse(payload) as unknown, request.threadKey, request.fanKey, request.accountUserId);
-    return confirmedOwnMessage(messages, request.body, request.priceCents)?.messageId ?? null;
-  } catch {
-    return null;
-  }
 }
 
 function pathOf(raw: string): string {
@@ -556,6 +570,16 @@ function delay(ms: number): Promise<void> {
 const VAULT_PIECE = "[data-vault-piece], [data-vault-id], [data-media-id]";
 const ATTACHMENT = "[data-fanlink-attachment], [data-attachment-id]";
 
+/** Con precio, la pieza gratis es la vista previa. La de pago se queda cerrada. */
+async function markFreePreviews(page: Page, pieces: readonly VaultSendPiece[], priceCents: number | null): Promise<void> {
+  if (priceCents == null || priceCents <= 0) return;
+  for (const piece of pieces) {
+    if (piece.free !== true) continue;
+    const button = page.locator(`[data-fanlink-preview="${piece.id}"]`).first();
+    if (await button.count()) await button.click().catch(() => undefined);
+  }
+}
+
 /** Abre la bóveda, señala cada pieza por id o por carpeta y no pulsa Send si falta alguna. */
 async function attachVaultPieces(page: Page, pieces: readonly VaultSendPiece[]): Promise<{ ok: true; ids: string[] } | { ok: false; reason: string }> {
   if (pieces.length === 0) return { ok: true, ids: [] };
@@ -578,7 +602,7 @@ async function attachVaultPieces(page: Page, pieces: readonly VaultSendPiece[]):
 
 function pieceShown(piece: VaultSendPiece, item: ShownVaultPiece, how: "id" | "folder"): boolean {
   if (how === "id") return item.id === piece.id;
-  return item.title.trim() === piece.title && foldPiece(item.folder ?? "") === foldPiece(piece.folder ?? "");
+  return vaultTitleForMatch(item.title) === vaultTitleForMatch(piece.title) && foldPiece(item.folder ?? "") === foldPiece(piece.folder ?? "");
 }
 
 function foldPiece(value: string): string {
