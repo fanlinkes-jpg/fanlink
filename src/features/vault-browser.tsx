@@ -101,7 +101,7 @@ export function VaultBrowser({
 }: {
   creatorId: string;
   fanKey: string | null;
-  onAttach?: (item: { id: string; title: string; withId?: string | null; withTitle?: string | null; seconds?: number | null; offerLabel?: string | null; dateLabel?: string | null }) => void;
+  onAttach?: (item: { id: string; title: string; creatorId?: string | null; withId?: string | null; withTitle?: string | null; withCreatorId?: string | null; seconds?: number | null; offerLabel?: string | null; dateLabel?: string | null }) => void;
   reloadToken?: number;
   layout?: "full" | "of";
   onClose?: () => void;
@@ -359,6 +359,7 @@ export function VaultBrowser({
                 onAttach?.({
                   id: item.id,
                   title: item.title,
+                  creatorId,
                   seconds: item.seconds,
                   offerLabel: item.offerLabel ?? null,
                   dateLabel: item.dateLabel ?? null,
@@ -484,7 +485,7 @@ export function VaultBrowser({
                 className="mt-1 rounded border border-[#e6e8ee] px-2 py-1 disabled:opacity-40"
                 onClick={() => {
                   const other = items.find((row) => row.id === item.packageWithId);
-                  onAttach?.({ id: item.id, title: item.title, withId: item.packageWithId, withTitle: other?.title ?? null });
+                  onAttach?.({ id: item.id, title: item.title, creatorId, withId: item.packageWithId, withTitle: other?.title ?? null, withCreatorId: creatorId });
                 }}
               >
                 {item.blocked ? "NO VENDER" : "Adjuntar"}

@@ -16,7 +16,7 @@ import { inboxCreators, inboxThreadList, readInboxCreator, resolveInboxCreator, 
 import { useCreatorNoticeBadges } from "@/lib/use-creator-notice-badges";
 import { COMPOSER_LANGUAGES, setComposerLanguage, useComposerLanguage } from "@/lib/ui-prefs";
 import { SfwMedia } from "@/components/sfw-media";
-import { chatVaultCanAttach, chatVaultCreator, chatVaultOnThreadChange, mergeVaultPage, vaultFolderOnAccountChange, vaultLoadAllowed, vaultReadApplies } from "@/lib/vault-load";
+import { acceptedVaultPieces, chatVaultCreator, chatVaultOnThreadChange, mergeVaultPage, vaultFolderOnAccountChange, vaultLoadAllowed, vaultReadApplies } from "@/lib/vault-load";
 import { VAULT_FOLDER_READ_ERROR } from "@/lib/vault-folder-label";
 import { clearOpenThread, peekOpenThread } from "@/lib/open-thread";
 import { useChatFanCards } from "@/lib/use-chat-fan-cards";
@@ -1057,10 +1057,14 @@ export function RealChatsPage() {
     setPanel(null);
   }
 
-  function attachVault(item: { id: string; title: string; withId?: string | null; withTitle?: string | null; seconds?: number | null; offerLabel?: string | null; dateLabel?: string | null }) {
-    if (!chatVaultCanAttach(vaultCreator.current, threadCreator)) return;
-    const pieces = [{ id: item.id, title: item.title, seconds: item.seconds ?? null, offerLabel: item.offerLabel ?? null, dateLabel: item.dateLabel ?? null }];
-    if (item.withId && item.withId !== item.id) pieces.push({ id: item.withId, title: item.withTitle || "Vídeo de pago", seconds: null, offerLabel: null, dateLabel: null });
+  function attachVault(item: { id: string; title: string; creatorId?: string | null; withId?: string | null; withTitle?: string | null; withCreatorId?: string | null; seconds?: number | null; offerLabel?: string | null; dateLabel?: string | null }) {
+    const pieces = acceptedVaultPieces(threadCreator, [
+      { id: item.id, title: item.title, creatorId: item.creatorId ?? null, seconds: item.seconds ?? null, offerLabel: item.offerLabel ?? null, dateLabel: item.dateLabel ?? null },
+      ...(item.withId && item.withId !== item.id
+        ? [{ id: item.withId, title: item.withTitle || "Vídeo de pago", creatorId: item.withCreatorId ?? item.creatorId ?? null, seconds: null, offerLabel: null, dateLabel: null }]
+        : []),
+    ]);
+    if (pieces.length === 0) return;
     const free = !(draftPrice != null && draftPrice > 0);
     setAttachments((current) => {
       const next = [...current];

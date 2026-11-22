@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chatVaultCanAttach, chatVaultCreator, chatVaultOnThreadChange, folderGridCap, folderGridItems, ignoreStaleVaultView, mergeVaultPage, nextVaultLibrary, sameVaultId, vaultFolderOnAccountChange, vaultLoadAllowed, vaultQueryFolderOnCreatorChange, vaultReadApplies } from "./vault-load.ts";
+import { acceptedVaultPieces, chatVaultCanAttach, chatVaultCreator, chatVaultOnThreadChange, folderGridCap, folderGridItems, ignoreStaleVaultView, mergeVaultPage, nextVaultLibrary, sameVaultId, vaultFolderOnAccountChange, vaultLoadAllowed, vaultQueryFolderOnCreatorChange, vaultReadApplies } from "./vault-load.ts";
 
 test("una carpeta entra aunque Todos siga ocupado", () => {
   const busyAll = { busy: true, listId: "all" };
@@ -65,6 +65,12 @@ test("la bóveda del hilo queda fijada a su creadora y se reinicia si el hilo ca
   assert.equal(chatVaultCanAttach("allison", "allison"), true);
   assert.equal(chatVaultCanAttach("allison", "jose"), false);
   assert.equal(chatVaultCanAttach(null, "allison"), false);
+  const kept = acceptedVaultPieces("allison", [
+    { id: "propia", creatorId: "allison" },
+    { id: "ajena", creatorId: "jose" },
+    { id: "sin", creatorId: null },
+  ]);
+  assert.deepEqual(kept.map((item) => item.id), ["propia"]);
   assert.equal(vaultReadApplies({
     generation: 4,
     currentGeneration: moved.generation,

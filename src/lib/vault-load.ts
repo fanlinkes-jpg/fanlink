@@ -87,6 +87,14 @@ export function chatVaultCanAttach(threadCreatorId: string | null, itemCreatorId
   return threadCreatorId != null && itemCreatorId === threadCreatorId;
 }
 
+/** Cada pieza se mira sola. Una de otra creadora no entra, aunque las demás sí. */
+export function acceptedVaultPieces<T extends { creatorId?: string | null }>(
+  threadCreatorId: string | null,
+  items: readonly T[],
+): T[] {
+  return items.filter((item) => chatVaultCanAttach(threadCreatorId, item.creatorId ?? null));
+}
+
 /** Una respuesta de otra cuenta o de una lectura ya sustituida no se pinta, ni en miniaturas ni en «más». */
 export function vaultReadApplies(input: {
   generation: number;
