@@ -577,10 +577,7 @@ function isCheckedFolder(row: Record<string, unknown>, wanted: string | null): b
 }
 
 function folderHasCatalogMedia(row: Record<string, unknown>): boolean {
-  return ["photosCount", "photos", "videosCount", "videos"].some((key) => {
-    const value = row[key];
-    return typeof value === "number" && Number.isFinite(value) && value > 0;
-  });
+  return folderMediaTotal(row) > 0;
 }
 
 function folderMediaTotal(row: Record<string, unknown>): number {

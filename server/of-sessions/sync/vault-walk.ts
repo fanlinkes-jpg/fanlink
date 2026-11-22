@@ -164,7 +164,7 @@ async function walkOne(
       break;
     }
     if (budget.left > 0) budget.left -= 1;
-    const expectMedia = listId !== "all" && ((counts?.photos ?? 0) > 0 || (counts?.videos ?? 0) > 0);
+    const expectMedia = listId !== "all" && ((counts?.photos ?? 0) > 0 || (counts?.videos ?? 0) > 0 || (counts?.gifs ?? 0) > 0 || (counts?.audios ?? 0) > 0);
     let read = await readVaultPage(input, listId, offset, includeLists && pages === 0, listName, expectMedia);
     let tries = 0;
     while (pages === 0 && shouldRetryFolder(read) && tries < 2) {

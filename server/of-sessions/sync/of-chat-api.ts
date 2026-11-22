@@ -255,7 +255,7 @@ export type VaultFetchOptions = {
   listOffset?: number;
   /** Nombre de la carpeta. Solo entra en la URL de reintento; no se escribe en el log. */
   listName?: string | null;
-  /** El catálogo de esta carpeta trae fotos o vídeos. Un 200 vacío prueba la otra URL. */
+  /** El catálogo trae fotos, vídeos, GIF o audios. Un 200 vacío prueba la otra URL. */
   expectMedia?: boolean;
 }
 
@@ -392,7 +392,7 @@ export async function fetchSignedVault(state: StorageStateFile, deps: {
     let read = await readVaultPath(deps, () => getJson(deps.fetch, primary, signedHeaders(rules, primary, auth, deps.now()), deps.now()));
     logVaultPage(list, primary, read, skip);
     const listed = folderListedCounts(payloads, list);
-    const catalogHasMedia = options?.expectMedia === true || (listed != null && (listed.photos > 0 || listed.videos > 0));
+    const catalogHasMedia = options?.expectMedia === true || (listed != null && listed.total > 0);
     const emptyCounted = read.ok && mediaCountOf(read.body) === 0 && catalogHasMedia;
     if (list !== "all" && mediaCountOf(read.body) === 0 && (clientFolderMiss(read) || emptyCounted)) {
       const folderName = options?.listName?.trim() || nameFromLists(payloads, list);
@@ -486,7 +486,7 @@ function logVaultPage(list: string, route: string, read: JsonPage, offset: numbe
   }));
 }
 
-function folderListedCounts(payloads: readonly unknown[], listId: string): { photos: number; videos: number } | null {
+function folderListedCounts(payloads: readonly unknown[], listId: string): { total: number } | null {
   for (const payload of payloads) {
     if (!payload || typeof payload !== "object") continue;
     const raw = payload as Record<string, unknown>;
@@ -496,7 +496,11 @@ function folderListedCounts(payloads: readonly unknown[], listId: string): { pho
       if (!row || typeof row !== "object") continue;
       const item = row as Record<string, unknown>;
       if (String(item.id) !== listId) continue;
-      return { photos: countField(item.photosCount ?? item.photos), videos: countField(item.videosCount ?? item.videos) };
+      const total = countField(item.photosCount ?? item.photos)
+        + countField(item.videosCount ?? item.videos)
+        + countField(item.gifsCount ?? item.gifs)
+        + countField(item.audiosCount ?? item.audios);
+      return { total };
     }
   }
   return null;
@@ -508,7 +512,10 @@ function countField(value: unknown): number {
 
 function folderMediaRoute(pathWithQuery: string): boolean {
   const path = pathWithQuery.split("?")[0] ?? "";
-  return /^\/api2\/v2\/vault\/lists\/[^/]+\/media$/.test(path);
+  if (/^\/api2\/v2\/vault\/lists\/[^/]+\/media$/.test(path)) return true;
+  if (path !== "/api2/v2/vault/media") return false;
+  const list = new URLSearchParams(pathWithQuery.split("?")[1] ?? "").get("list");
+  return list != null && list !== "" && list !== "all";
 }
 
 function nameFromLists(payloads: readonly unknown[], listId: string): string | null {

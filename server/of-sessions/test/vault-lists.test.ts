@@ -1429,6 +1429,11 @@ test("un 400 de lists/id/media es un error de carpeta y no pausa la cuenta", asy
   clearVaultWalkCache();
   clearAccountPauses();
   const db = new PGlite();
+  const lines: string[] = [];
+  const previous = console.info;
+  console.info = (line?: unknown) => {
+    lines.push(String(line));
+  };
   try {
     await migrateVault(db);
     const fetchImpl = (async (input: RequestInfo | URL) => {
@@ -1488,8 +1493,100 @@ test("un 400 de lists/id/media es un error de carpeta y no pausa la cuenta", asy
     assert.equal(view.reason, VAULT_FOLDER_READ_ERROR);
     assert.equal(view.items.length, 0);
     assert.equal(accountPause("acc-carpeta-400"), null);
+    const firma = lines.filter((line) => line.includes("rechazó la firma"));
+    assert.equal(firma.length, 1);
+    assert.match(firma[0] ?? "", /list=todos/);
+    const folderLines = lines.filter((line) => line.includes("pagina ") && line.includes("status=400") && !line.includes("list=todos"));
+    assert.equal(folderLines.length >= 2, true);
+    assert.equal(folderLines.every((line) => line.includes("respondió 400")), true);
   } finally {
+    console.info = previous;
     clearAccountPauses();
+    clearSignRulesCache();
+    clearVaultWalkCache();
+    await db.close();
+  }
+});
+
+test("una carpeta vacía hace un solo GET", async () => {
+  clearSignRulesCache();
+  clearVaultWalkCache();
+  const db = new PGlite();
+  const seen: string[] = [];
+  try {
+    await migrateVault(db);
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const href = String(input);
+      seen.push(href);
+      if (href.includes("dynamic-rules")) return Response.json(RULES);
+      if (isVaultListsIndex(href)) {
+        return Response.json({
+          list: [{ id: 88030, type: "custom", name: "Vacia", photosCount: 0, videosCount: 0, gifsCount: 0, audiosCount: 0, hasMedia: false }],
+          hasMore: false,
+        });
+      }
+      if (new URL(href).pathname.endsWith("/vault/lists/88030/media")) return Response.json({ medias: [], hasMore: false });
+      return Response.json({ medias: [{ id: 99, type: "photo" }], hasMore: false });
+    }) as typeof fetch;
+    const walked = await walkVault({
+      creatorId: "3zk7kbr",
+      state: storedState(),
+      fetch: fetchImpl,
+      now: () => 1_700_000_000_000,
+      sql: asSql(db),
+      sleep: async () => undefined,
+      listId: "88030",
+    });
+    assert.equal(walked.items.length, 0);
+    assert.equal(walked.signatureRejected, false);
+    const folderGets = seen.filter((href) => href.includes("88030"));
+    assert.equal(folderGets.length, 1);
+    assert.equal(folderGets[0]?.includes("/vault/lists/88030/media"), true);
+    assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("list=88030")), false);
+  } finally {
+    clearSignRulesCache();
+    clearVaultWalkCache();
+    await db.close();
+  }
+});
+
+test("un catálogo solo con audio prueba la otra URL", async () => {
+  clearSignRulesCache();
+  clearVaultWalkCache();
+  const db = new PGlite();
+  const seen: string[] = [];
+  try {
+    await migrateVault(db);
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const href = String(input);
+      seen.push(href);
+      if (href.includes("dynamic-rules")) return Response.json(RULES);
+      if (isVaultListsIndex(href)) {
+        return Response.json({
+          list: [{ id: 88031, type: "custom", name: "Audio", photosCount: 0, videosCount: 0, gifsCount: 0, audiosCount: 1, hasMedia: true }],
+          hasMore: false,
+        });
+      }
+      const url = new URL(href);
+      if (url.pathname.endsWith("/vault/lists/88031/media")) return Response.json({ medias: [], hasMore: false });
+      if (url.pathname.endsWith("/vault/media") && url.searchParams.get("list") === "88031") {
+        return Response.json({ medias: [{ id: 41, type: "audio" }], hasMore: false });
+      }
+      return Response.json({ medias: [], hasMore: false });
+    }) as typeof fetch;
+    const walked = await walkVault({
+      creatorId: "3zk7kbr",
+      state: storedState(),
+      fetch: fetchImpl,
+      now: () => 1_700_000_000_000,
+      sql: asSql(db),
+      sleep: async () => undefined,
+      listId: "88031",
+    });
+    assert.deepEqual(walked.items.map((item) => item.id), ["41"]);
+    assert.equal(seen.filter((href) => href.includes("/vault/lists/88031/media")).length, 1);
+    assert.equal(seen.some((href) => href.includes("/vault/media") && href.includes("list=88031")), true);
+  } finally {
     clearSignRulesCache();
     clearVaultWalkCache();
     await db.close();
