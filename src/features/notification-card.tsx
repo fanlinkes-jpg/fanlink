@@ -1,7 +1,7 @@
 import { AtSign, Bell, DollarSign, Heart, Megaphone, MessageCircle, MessageSquare, ShoppingBag, Tag, ThumbsUp } from "lucide-react";
 import { SfwMedia } from "@/components/sfw-media";
 import type { NotificationListItem } from "@/lib/of-notifications";
-import { isRecentFan, notificationStamp, renewStatusLabel, spanishNotificationText, tabOf, type NotificationTab } from "@/lib/notifications";
+import { isRecentFan, messageLinkSpans, notificationStamp, renewStatusLabel, spanishNotificationText, tabOf, type NotificationTab } from "@/lib/notifications";
 
 export function NotificationFanCard({
   item,
@@ -11,6 +11,7 @@ export function NotificationFanCard({
   reply = null,
   onChat,
   onMark,
+  onMessage,
 }: {
   item: NotificationListItem;
   handle: string | null;
@@ -20,6 +21,7 @@ export function NotificationFanCard({
   reply?: string | null;
   onChat?: () => void;
   onMark?: () => void;
+  onMessage?: () => void;
 }) {
   const name = item.fanName?.trim() || null;
   const user = handle?.replace(/^@/, "").trim() || null;
@@ -60,7 +62,7 @@ export function NotificationFanCard({
             {recent ? <span className="rounded bg-[#e7f8ef] px-1.5 py-0.5 text-[#1a7f45]">Reciente (últimas 24 h)</span> : null}
           </p>
         ) : null}
-        {text ? <p className="mt-1 text-[#1c2333]">{text}</p> : null}
+        {text ? <p className="mt-1 text-[#1c2333]">{messageParts(text, item.messageRef ?? null, onMessage)}</p> : null}
         {stamp ? <p className="mt-1 text-xs text-[#8b909a]">{stamp}</p> : null}
         {reply ? <p className="mt-1 text-xs text-[#1f9d55]">{reply}</p> : null}
         {onMark ? (
@@ -69,6 +71,14 @@ export function NotificationFanCard({
       </div>
     </article>
   );
+}
+
+function messageParts(text: string, messageRef: string | null, onMessage?: () => void) {
+  return messageLinkSpans(text, onMessage ? messageRef : null).map((part, index) => (
+    part.link
+      ? <button key={index} type="button" className="text-[#2456c7] underline" onClick={onMessage}>{part.text}</button>
+      : <span key={index}>{part.text}</span>
+  ));
 }
 
 function typeIcon(tab: NotificationTab) {

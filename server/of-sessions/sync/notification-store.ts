@@ -57,13 +57,16 @@ export async function saveNotificationRead(
        last_http_status = coalesce(excluded.last_http_status, of_notification_sync.last_http_status)`,
     [creatorId, syncedAt, failed ? 1 : 0, failed ? "error" : "ok", motivo, read.counts ? JSON.stringify(read.counts) : null, read.status ?? null],
   );
+  const keepRef = await hasNotificationColumn(sql, "message_ref");
   for (const item of read.items) {
     await sql.query(
       `insert into of_notification (
          creator_id, notification_key, kind, body, fan_key, fan_name, thread_key,
          amount_cents, occurred_at, pending, first_seen_at, synced_at, origin, of_unread,
          fan_handle, avatar_url, fan_lists, renew_auto, fan_seen_at, post_ref, post_link, post_text, of_type
-       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+         ${keepRef ? ", message_ref" : ""}
+       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
+         ${keepRef ? ", $24" : ""})
        on conflict (creator_id, notification_key) do update set
          kind = case
            when of_notification.kind in ('agency', 'other')
@@ -91,7 +94,8 @@ export async function saveNotificationRead(
          post_ref = coalesce(excluded.post_ref, of_notification.post_ref),
          post_link = coalesce(excluded.post_link, of_notification.post_link),
          post_text = coalesce(excluded.post_text, of_notification.post_text),
-         of_type = coalesce(excluded.of_type, of_notification.of_type)`,
+         of_type = coalesce(excluded.of_type, of_notification.of_type)
+         ${keepRef ? ", message_ref = coalesce(excluded.message_ref, of_notification.message_ref)" : ""}`,
       [
         creatorId,
         item.key,
@@ -116,6 +120,7 @@ export async function saveNotificationRead(
         item.postLink ?? null,
         item.postText ?? null,
         item.ofType ?? null,
+        ...(keepRef ? [item.messageRef ?? null] : []),
       ],
     );
   }
@@ -196,11 +201,12 @@ export async function listNotificationRows(
     post_link: string | null;
     post_text: string | null;
     of_type: string | null;
+    message_ref: string | null;
   }>(
     `select n.notification_key, n.kind, n.body, n.fan_key, n.fan_name, n.thread_key,
             n.amount_cents, n.occurred_at, n.pending, s.seen_at, n.of_unread,
             n.fan_handle, n.avatar_url, n.fan_lists, n.renew_auto, n.fan_seen_at, n.post_ref,
-            n.post_link, n.post_text, n.of_type
+            n.post_link, n.post_text, n.of_type${await hasNotificationColumn(sql, "message_ref") ? ", n.message_ref" : ""}
      from of_notification n
      left join of_notification_seen s
        on s.creator_id = n.creator_id
@@ -239,6 +245,7 @@ export async function listNotificationRows(
         postLink: row.post_link,
         postText: row.post_text,
         ofType: row.of_type,
+        messageRef: row.message_ref ?? null,
       },
     ];
   });
@@ -353,6 +360,7 @@ export async function notificationPageFor(
           postLink: row.postLink ?? null,
           postText: row.postText ?? null,
           ofType: row.ofType ?? null,
+          messageRef: row.messageRef ?? null,
           labels,
         },
       ];
@@ -382,6 +390,7 @@ export type NotificationListRow = {
   postLink: string | null;
   postText: string | null;
   ofType: string | null;
+  messageRef: string | null;
   labels: NonNullable<ReturnType<typeof notificationLabels>>;
 };
 
@@ -549,6 +558,14 @@ export async function markNotificationsSeen(
     [creatorId, clean, userId, now.toISOString()],
   );
   return rows.length;
+}
+
+async function hasNotificationColumn(sql: NotificationSql, column: string): Promise<boolean> {
+  const rows = await sql.query<{ column_name: string }>(
+    "select column_name from information_schema.columns where table_name = 'of_notification' and column_name = $1",
+    [column],
+  );
+  return rows.length > 0;
 }
 
 function asIso(value: Date | string | null): string | null {

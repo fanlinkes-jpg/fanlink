@@ -895,6 +895,35 @@ export async function listPendingOutbounds(
   }));
 }
 
+/** Emparejes recientes: el cliente quita la copia «Pendiente de confirmar» con este id. */
+export async function listRecentMatches(
+  sql: ReadSql,
+  creatorIds: string[],
+): Promise<Array<{ id: string; creatorId: string; threadKey: string | null; matchedMessageKey: string }>> {
+  if (!creatorIds.length) return [];
+  const filter = creatorIds.map((_, index) => `$${index + 1}`).join(", ");
+  const rows = await sql.query<{
+    id: string;
+    creator_id: string;
+    thread_key: string | null;
+    matched_message_key: string | null;
+  }>(
+    `select id, creator_id, thread_key, matched_message_key
+     from of_chat_outbound
+     where creator_id in (${filter})
+       and matched_message_key is not null
+       and created_at > now() - interval '6 hours'
+     order by created_at desc
+     limit 40`,
+    creatorIds,
+  );
+  return rows.flatMap((row) => (
+    row.matched_message_key
+      ? [{ id: row.id, creatorId: row.creator_id, threadKey: row.thread_key, matchedMessageKey: row.matched_message_key }]
+      : []
+  ));
+}
+
 export async function markOutboundSent(sql: ReadSql, id: string, messageId: string): Promise<void> {
   await sql.query(
     `update of_chat_outbound
@@ -1181,6 +1210,31 @@ export async function readOutboundClaim(sql: ReadSql, id: string): Promise<Outbo
     ofMessageKey: row.of_message_key,
     matchedMessageKey: row.matched_message_key,
   };
+}
+
+/** Si ese dedupe_key ya salió, reintentar no abre otro envío. */
+export async function sentMessageForDedupe(sql: ReadSql, creatorId: string, dedupeKey: string): Promise<string | null> {
+  const columns = await sql.query<{ column_name: string }>(
+    "select column_name from information_schema.columns where table_name = 'of_chat_outbound' and column_name = 'dedupe_key'",
+  );
+  if (columns.length === 0) return null;
+  const rows = await sql.query<{ of_message_key: string | null; matched_message_key: string | null }>(
+    `select of_message_key, matched_message_key from of_chat_outbound
+     where creator_id = $1 and dedupe_key = $2
+       and (of_message_key is not null or matched_message_key is not null or coalesce(status, '') = 'sent')
+     order by created_at desc
+     limit 1`,
+    [creatorId, dedupeKey],
+  );
+  return rows[0]?.of_message_key ?? rows[0]?.matched_message_key ?? null;
+}
+
+export async function rememberDedupeKey(sql: ReadSql, id: string, dedupeKey: string): Promise<void> {
+  const columns = await sql.query<{ column_name: string }>(
+    "select column_name from information_schema.columns where table_name = 'of_chat_outbound' and column_name = 'dedupe_key'",
+  );
+  if (columns.length === 0) return;
+  await sql.query("update of_chat_outbound set dedupe_key = $2 where id = $1", [id, dedupeKey]);
 }
 
 /** Inserta una sola vez. Si el id ya existe, no pisa la fila. */

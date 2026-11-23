@@ -64,10 +64,12 @@ export function paymentLabel(message: { fromFan: boolean; priceCents: number | n
   return message.purchased ? `${money} pagado` : `${money} no pagado`;
 }
 
+/** Como Infloww: el nombre en su caja, junto a la hora. No se pasa a mayúsculas. */
 export function authorLabel(name: string | null, automatic: boolean | null): string {
   if (automatic) return "Mensaje automático";
-  if (!name) return "Cuenta";
-  return name.toLocaleUpperCase("es-ES");
+  const clean = name?.replace(/\s+/g, " ").trim() ?? "";
+  if (!clean) return "Cuenta";
+  return clean;
 }
 
 /**

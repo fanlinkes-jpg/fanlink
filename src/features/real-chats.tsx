@@ -10,6 +10,8 @@ import { accountFigure, everyAccountBlocked, SESSION_EXPIRED_LABEL } from "../..
 import { ensureNoticeTab, listCreatorNotifications, markCreatorNotificationsRead, type NotificationListItem } from "@/lib/of-notifications";
 import { NOTIFICATION_TABS, TAB_LABEL, isOwnerOnlyKind, notesForCreator, noticeFace, notificationReplyLine, noticesForOfTab, ofTabListNote, tabOf, type NotificationCounts, type NotificationTab } from "@/lib/notifications";
 import { NotificationFanCard } from "@/features/notification-card";
+import { PurchaseMessageDialog } from "@/features/purchase-message-dialog";
+import { purchaseComposeDraft } from "@/lib/purchase-detail";
 import { useCrm, type VaultItem } from "@/lib/crm";
 import { chatSyncLabel, headerSyncLabel, type ChatSyncInput } from "@/lib/chat-sync-label";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
@@ -25,7 +27,7 @@ import { chatFanCardFor, fanCardTransactions } from "@/lib/chat-fan-cards";
 import { FanInsights } from "@/features/fan-insights";
 import { MessagePriceDialog } from "@/features/message-price-dialog";
 import { FULL_EMOJIS, QUICK_EMOJIS, TEXT_COLORS, authorLabel, matchScripts, mentionToken, slashQuery, wrapSelection } from "@/lib/composer-tools";
-import { pendingForThread } from "@/lib/pending-thread";
+import { confirmedMatches, pendingForThread, unmatchedPending } from "@/lib/pending-thread";
 import { chatSendSession } from "@/lib/chat-send-session";
 import { useCurrentUser } from "@/lib/auth/use-current-user";
 import {
@@ -44,7 +46,7 @@ import { useInboxSelection } from "@/lib/inbox-selection";
 import { ChatMediaPlayer } from "@/features/chat-media-player";
 import { MediaStrip } from "@/features/media-strip";
 import { bubbleBlocks, bubblePriceLabel } from "@/lib/chat-bubble";
-import { mergeHistoryMessages, scrollAnchor, scrollDeltaForAnchor, type ScrollAnchor } from "@/lib/chat-history";
+import { mergeHistoryMessages, rememberThreadMessages, scrollAnchor, scrollDeltaForAnchor, type ScrollAnchor } from "@/lib/chat-history";
 import { VAULT_THUMB_MISSING, vaultMediaSrc } from "@/lib/chat-media";
 import { VaultBrowser } from "@/features/vault-browser";
 
@@ -160,6 +162,19 @@ function readChatMarks(): { hidden: string[]; muted: string[] } {
   }
 }
 
+function keepThread<T extends { messageKey: string; sentAt: string }>(
+  current: Record<string, { done: boolean; messages: T[] }>,
+  key: string,
+  incoming: readonly T[],
+  done: boolean | null,
+): Record<string, { done: boolean; messages: T[] }> {
+  const prev = current[key];
+  const remembered = rememberThreadMessages(prev?.messages ?? [], incoming);
+  const nextDone = done == null ? prev?.done === true : done;
+  if (prev && !remembered.changed && prev.done === nextDone) return current;
+  return { ...current, [key]: { done: nextDone, messages: remembered.messages } };
+}
+
 function threadMark(creatorId: string, threadKey: string): string {
   return `${creatorId}:${threadKey}`;
 }
@@ -239,7 +254,7 @@ function OutboundBubbleView({
   return (
     <li className="text-right">
       <div className="inline-block max-w-[70%] rounded-2xl bg-[#e7f0ff] px-3 py-2 text-left text-sm">
-        {job.vault.length > 0 ? <p className="text-[10px] text-[#6d7585]">{job.vault.map((item) => item.name).join(", ")}</p> : null}
+        {job.vault.length > 0 ? <VaultThumbRow creatorId={job.creatorId} pieces={job.vault} /> : null}
         {job.body ? <p>{job.body}</p> : null}
       </div>
       {job.priceLabel ? <p className="mt-1 text-[10px] text-[#6d7585]">Precio {job.priceLabel}</p> : null}
@@ -314,6 +329,7 @@ export function RealChatsPage() {
   const [notes, setNotes] = useState<NoteRow[] | null>(null);
   const [noteCounts, setNoteCounts] = useState<NotificationCounts | null>(null);
   const [noteNotice, setNoteNotice] = useState<string | null>(null);
+  const [purchaseNote, setPurchaseNote] = useState<NoteRow | null>(null);
   const notesButton = useRef<HTMLButtonElement>(null);
   const [notesPos, setNotesPos] = useState({ top: 0, left: 0 });
   const [discountPercent, setDiscountPercent] = useState("10");
@@ -323,7 +339,7 @@ export function RealChatsPage() {
   const [priceLabel, setPriceLabel] = useState<string | null>(null);
   const [sendCreators, setSendCreators] = useState<string[]>([]);
   const jobList = useSyncExternalStore(chatSendSession.subscribe, chatSendSession.getJobs, chatSendSession.getJobs);
-  const [pendingOut, setPendingOut] = useState<Array<{ id: string; creatorId: string; threadKey: string; body: string; scheduledAt: string | null; authorName: string | null; authorId: string | null; priceCents: number | null; vault: Array<{ id: string; name: string }>; status: "pending" | "error" | "sending"; stale: boolean; errorReason: string | null; dedupeKey: string | null }>>([]);
+  const [pendingOut, setPendingOut] = useState<Array<{ id: string; creatorId: string; threadKey: string; body: string; scheduledAt: string | null; authorName: string | null; authorId: string | null; priceCents: number | null; vault: Array<{ id: string; name: string }>; status: "pending" | "error" | "sending"; stale: boolean; errorReason: string | null; dedupeKey: string | null; matchedMessageKey: string | null }>>([]);
   const [scheduleAt, setScheduleAt] = useState("");
   const [panel, setPanel] = useState<ComposerPanel>(null);
   const [dialog, setDialog] = useState<"precio" | "programar" | null>(null);
@@ -397,10 +413,12 @@ export function RealChatsPage() {
           stale: item.stale,
           errorReason: item.errorReason,
           dedupeKey: item.dedupeKey,
+          matchedMessageKey: item.matchedMessageKey ?? null,
         }] : []
       ));
       pendingRef.current = nextPending;
       setPendingOut(nextPending);
+      chatSendSession.noteMatches(confirmedMatches(nextPending));
       setError(null);
     } catch (err) {
       setError(sessionErrorText(err));
@@ -733,12 +751,33 @@ export function RealChatsPage() {
     let stop = false;
     void readThreadHistory({ data: { creatorId: selected.creatorId, threadKey: selected.threadKey } }).then((page) => {
       if (stop) return;
-      setThreadHistory((current) => ({ ...current, [key]: { done: page.done, messages: page.messages as NonNullable<CreatorChatList["messages"]> } }));
+      setThreadHistory((current) => keepThread(current, key, page.messages as NonNullable<CreatorChatList["messages"]>, page.done));
     }).catch(() => undefined);
     return () => {
       stop = true;
     };
   }, [selected?.creatorId, selected?.threadKey]);
+  useEffect(() => {
+    if (!historyKey) return;
+    const live = (data?.messages ?? []).filter((message) => message.creatorId === selected?.creatorId && message.threadKey === selected?.threadKey);
+    setThreadHistory((current) => keepThread(current, historyKey, live, null));
+  }, [historyKey, data?.messages, selected?.creatorId, selected?.threadKey]);
+  const confirmMark = `${jobList.map((job) => job.state === "sent" || job.state === "awaiting" ? `${job.clientId}:${job.state}:${job.messageId ?? ""}` : "").join()}|${pendingOut.map((item) => item.matchedMessageKey ? `${item.id}:${item.matchedMessageKey}` : "").join()}`;
+  useEffect(() => {
+    if (!selected || confirmMark === "|") return;
+    const key = `${selected.creatorId}:${selected.threadKey}`;
+    const creatorId = selected.creatorId;
+    const threadKey = selected.threadKey;
+    if (threadBox.current && !stickToBottom.current) pinThreadScroll(threadBox.current);
+    let stop = false;
+    void readThreadHistory({ data: { creatorId, threadKey } }).then((page) => {
+      if (stop) return;
+      setThreadHistory((current) => keepThread(current, key, page.messages as NonNullable<CreatorChatList["messages"]>, page.done));
+    }).catch(() => undefined);
+    return () => {
+      stop = true;
+    };
+  }, [confirmMark, selected?.creatorId, selected?.threadKey]);
   useLayoutEffect(() => {
     const node = threadBox.current;
     if (!node) return;
@@ -1060,22 +1099,29 @@ export function RealChatsPage() {
   }
 
   function attachVault(item: { id: string; title: string; creatorId?: string | null; withId?: string | null; withTitle?: string | null; withCreatorId?: string | null; seconds?: number | null; offerLabel?: string | null; dateLabel?: string | null }) {
+    const paired = Boolean(item.withId && item.withId !== item.id);
     const pieces = acceptedVaultPieces(threadCreator, [
       { id: item.id, title: item.title, creatorId: item.creatorId ?? null, seconds: item.seconds ?? null, offerLabel: item.offerLabel ?? null, dateLabel: item.dateLabel ?? null },
-      ...(item.withId && item.withId !== item.id
-        ? [{ id: item.withId, title: item.withTitle || "Vídeo de pago", creatorId: item.withCreatorId ?? item.creatorId ?? null, seconds: null, offerLabel: null, dateLabel: null }]
+      ...(paired
+        ? [{ id: item.withId ?? "", title: item.withTitle || "", creatorId: item.withCreatorId ?? item.creatorId ?? null, seconds: null, offerLabel: null, dateLabel: null }]
         : []),
     ]);
     if (pieces.length === 0) return;
-    const free = !(draftPrice != null && draftPrice > 0);
+    const priced = draftPrice != null && draftPrice > 0;
     setAttachments((current) => {
       const next = [...current];
       for (const piece of pieces) {
         if (next.some((file) => file.id === `vault-${piece.id}`)) continue;
-        next.push({ id: `vault-${piece.id}`, url: null, name: piece.title, kind: "vault" as const, free, seconds: piece.seconds, offerLabel: piece.offerLabel, dateLabel: piece.dateLabel });
+        const paidHalf = paired && piece.id === item.withId;
+        const free = paidHalf ? false : paired ? true : !priced;
+        next.push({ id: `vault-${piece.id}`, url: null, name: vaultPieceName(piece.title), kind: "vault" as const, free, seconds: piece.seconds, offerLabel: piece.offerLabel, dateLabel: piece.dateLabel });
       }
       return next;
     });
+    if (paired && !priced && item.withId) {
+      offerPriceId.current = `vault-${item.withId}`;
+      setDialog("precio");
+    }
     setPanel(null);
   }
 
@@ -1250,6 +1296,7 @@ export function RealChatsPage() {
                             renew={face.renewAuto}
                             reply={reply}
                             onChat={thread ? () => openNote(item) : undefined}
+                            onMessage={item.kind === "ppv" && item.messageRef ? () => setPurchaseNote(item) : undefined}
                           />
                         </li>
                       );
@@ -1258,6 +1305,30 @@ export function RealChatsPage() {
                 </div>
               </>,
               document.body,
+            ) : null}
+            {purchaseNote?.messageRef ? (
+              <PurchaseMessageDialog
+                creatorId={purchaseNote.creatorId}
+                creatorName={creators.find((creator) => creator.id === purchaseNote.creatorId)?.name ?? "Cuenta"}
+                fanKey={purchaseNote.fanKey}
+                threadKey={purchaseNote.threadKey}
+                messageRef={purchaseNote.messageRef}
+                onClose={() => setPurchaseNote(null)}
+                onCompose={(mode) => {
+                  const thread = (data?.threads ?? []).find((row) => row.creatorId === purchaseNote.creatorId && (
+                    (purchaseNote.threadKey != null && row.threadKey === purchaseNote.threadKey)
+                    || (purchaseNote.fanKey != null && (row.fanKey === purchaseNote.fanKey || row.threadKey === purchaseNote.fanKey))
+                  ));
+                  if (thread) chooseThread(thread);
+                  const draftText = purchaseComposeDraft(mode, scripts.map((script) => ({ body: script.steps[0]?.text ?? "" })));
+                  setPurchaseNote(null);
+                  setNotesOpen(false);
+                  requestAnimationFrame(() => {
+                    if (draftText.text) replaceDraft(draftText.text);
+                    draftBox.current?.focus();
+                  });
+                }}
+              />
             ) : null}
           </div>
           <div className="flex gap-2">
@@ -1463,10 +1534,12 @@ export function RealChatsPage() {
               };
               void pull().then(async (page) => {
                 const stored = await readThreadHistory({ data: { creatorId, threadKey } }).catch(() => null);
-                setThreadHistory((current) => ({
-                  ...current,
-                  [key]: { done: stored?.done ?? !page.hasMore, messages: (stored?.messages ?? current[key]?.messages ?? []) as NonNullable<CreatorChatList["messages"]> },
-                }));
+                setThreadHistory((current) => keepThread(
+                  current,
+                  key,
+                  (stored?.messages ?? []) as NonNullable<CreatorChatList["messages"]>,
+                  stored?.done ?? !page.hasMore,
+                ));
                 void refresh();
               }).catch(() => {
                 scrollMark.current = null;
@@ -1476,16 +1549,16 @@ export function RealChatsPage() {
               });
             }}>
               {historyDone ? <li className="text-center text-xs text-[#6d7585]">Inicio de la conversación</li> : null}
-              {!selected || (messages.length === 0 && pendingForThread(pendingOut, selected).length === 0 && jobList.every((job) => job.creatorId !== selected.creatorId || job.threadKey !== selected.threadKey)) ? <li className="text-sm text-[#6d7585]">{selected ? "Sin datos" : syncPhaseLabel(syncPhase)}</li> : null}
+              {!selected || (messages.length === 0 && pendingForThread(unmatchedPending(pendingOut), selected).length === 0 && jobList.every((job) => job.creatorId !== selected.creatorId || job.threadKey !== selected.threadKey)) ? <li className="text-sm text-[#6d7585]">{selected ? "Sin datos" : syncPhaseLabel(syncPhase)}</li> : null}
               {messages.map((message) => (
                 <ThreadMessage key={message.messageKey} message={message} />
               ))}
-              {pendingBesideLocal(pendingForThread(pendingOut, selected), jobList).map((item) => {
+              {pendingBesideLocal(pendingForThread(unmatchedPending(pendingOut), selected), jobList).map((item) => {
                 const recovered = draftFromPending(item);
                 const mine = item.authorId != null && item.authorId === user?.id;
                 return (
                   <li key={item.id} className="text-right">
-                    {item.vault.length > 0 ? <p className="text-[10px] text-[#6d7585]">{item.vault.map((piece) => piece.name).join(", ")}</p> : null}
+                    {item.vault.length > 0 ? <VaultThumbRow creatorId={item.creatorId} pieces={item.vault} /> : null}
                     <p className="inline-block max-w-[70%] rounded-2xl border border-dashed border-[#c5cad6] px-3 py-2 text-sm">{item.body}</p>
                     {recovered.priceLabel ? <p className="mt-1 text-[10px] text-[#6d7585]">Precio {recovered.priceLabel}</p> : null}
                     <p className="mt-1 text-[10px] text-[#8a5a12]">{item.status === "error" ? bubbleCaption("error", item.errorReason) : pendingCaption(item)}</p>
@@ -1887,6 +1960,21 @@ type ComposerPanel = "guiones" | "vault" | "gif" | "etiqueta" | "formato" | "tra
 
 type PendingFile = { id: string; url: string | null; name: string; kind: "image" | "video" | "vault"; free?: boolean; seconds?: number | null; offerLabel?: string | null; dateLabel?: string | null };
 
+function vaultPieceName(title: string): string {
+  const clean = title.replace(/\s+/g, " ").trim();
+  return !clean || clean === "Sin datos" ? "" : clean;
+}
+
+function VaultThumbRow({ creatorId, pieces }: { creatorId: string; pieces: Array<{ id: string; name: string }> }) {
+  return (
+    <span className="mb-1 flex justify-end gap-1">
+      {pieces.map((piece) => (
+        <img key={piece.id} alt="" src={vaultMediaSrc(creatorId, piece.id)} className="h-16 w-12 rounded object-cover" />
+      ))}
+    </span>
+  );
+}
+
 function VaultOfferThumb({
   creatorId,
   mediaId,
@@ -1912,7 +2000,7 @@ function VaultOfferThumb({
   return (
     <figure className="relative h-28 w-24 shrink-0 overflow-hidden rounded-xl bg-[#d7dee8]">
       {broken || !creatorId ? (
-        <span className="grid h-full w-full place-items-center px-1 text-center text-[10px] text-[#5c6570]">{broken ? VAULT_THUMB_MISSING : name}</span>
+        <span className="grid h-full w-full place-items-center px-1 text-center text-[10px] text-[#5c6570]">{vaultPieceName(name) || VAULT_THUMB_MISSING}</span>
       ) : (
         <img src={vaultMediaSrc(creatorId, mediaId)} alt="" className="h-full w-full object-cover" onError={() => setBroken(true)} />
       )}

@@ -7,7 +7,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { emptyWorkspace, type TeamAccess, type WorkspaceSlice } from "./access-policy.ts";
-import { commitWorkspace, ensureStaff, setCreatorGrant, setStaffPerms } from "./workspace-store.ts";
+import { adoptStaffName, commitWorkspace, ensureStaff, setCreatorGrant, setOwnDisplayName, setStaffPerms } from "./workspace-store.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -41,6 +41,7 @@ test("dos clientes no se pisan: la versión vieja pierde", async () => {
     assert.equal(loser.ok, false);
     if (loser.ok) return;
     assert.equal(loser.reason, "conflict");
+    assert.equal(loser.updatedBy, owner.userId);
     assert.equal(loser.state && "agency" in loser.state ? loser.state.agency : "", "Dos");
     if (!winner.ok) return;
     const [left, right] = await Promise.all([
@@ -90,6 +91,14 @@ test("un miembro sin permiso no guarda y la dueña sí asigna", async () => {
     assert.equal(member.creatorIds.includes("c-alba"), true);
     assert.equal(member.perms.includes("mensajes"), true);
     await assert.rejects(() => setStaffPerms(sql, member, owner.userId, ["mensajes"]), /dueña/);
+    const local = await ensureStaff(sql, "dev-user", true);
+    assert.equal(local.displayName, "Miembro");
+    await sql.query("update staff_profile set display_name = 'Operador local' where user_id = 'dev-user'");
+    assert.equal(await adoptStaffName(sql, "dev-user", "Dev User"), "Dev User");
+    assert.equal((await ensureStaff(sql, "dev-user", true)).displayName, "Dev User");
+    assert.equal(await adoptStaffName(sql, "dev-user", "Otra"), null);
+    assert.equal(await setOwnDisplayName(sql, "dev-user", "Ana"), "Ana");
+    await assert.rejects(() => setOwnDisplayName(sql, "dev-user", "   "), /nombre/);
   } finally {
     await pg.close();
   }

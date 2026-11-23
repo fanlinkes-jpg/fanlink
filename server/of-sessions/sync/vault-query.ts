@@ -235,7 +235,7 @@ export function presentCard(
   });
   return {
     id: item.id,
-    title: item.title.trim() ? item.title : "Sin datos",
+    title: (item.title ?? "").trim() || "Sin datos",
     kind: item.kind,
     seconds: item.seconds,
     folder: item.folder,
@@ -364,7 +364,7 @@ async function selectVaultItems(
     if (query.scope === "carpeta" && query.folderId && !listIds.includes(query.folderId)) listIds.push(query.folderId);
     return {
     id: row.item_key,
-    title: row.title ?? "Sin datos",
+    title: row.title?.trim() && row.title.trim().toLowerCase() !== "sin datos" ? row.title.trim() : null,
     kind: vaultKindOf(row.kind),
     seconds: row.seconds,
     preview: row.preview,

@@ -20,27 +20,40 @@ const account = { id: "acc-9", creatorId: "9ikis52", identityHandle: "bigpoppa11
 const access = { userId: "chatter-a", role: "member" as const, perms: ["mensajes"], creatorIds: ["9ikis52"] };
 const env = { FANLINK_ENABLE_SEND: "true", FANLINK_SEND_ALLOW_ACCOUNTS: "9ikis52,@bigpoppa1111" };
 
-test("un título vacío o repetido no se señala, y el título solo no basta", () => {
+test("se adjunta por id aunque el título falte o se repita, y el título solo no basta", () => {
   const mirror = [
     { id: "a", title: "playa", folder: "Playa", listName: "Playa", listId: "p" },
     { id: "b", title: "playa", folder: "Ciudad", listName: "Ciudad", listId: "c" },
-    { id: "c", title: "  ", folder: "Playa", listName: "Playa", listId: "p" },
+    { id: "c", title: "Sin datos", folder: "Playa", listName: "Playa", listId: "p" },
     { id: "d", title: "sola", folder: null, listName: null, listId: null },
   ];
-  assert.equal(planVaultPieces(mirror, ["c"]).ok, false);
-  assert.equal(planVaultPieces(mirror, ["a", "b"]).ok, false);
+  const blanks = Array.from({ length: 749 }, (_, index) => ({
+    id: `m-${index}`,
+    title: index === 0 ? null : "Sin datos",
+    folder: "Playa",
+    listName: "Playa",
+    listId: "p",
+  }));
+  assert.equal(planVaultPieces(mirror, ["ausente"]).ok, false);
+  assert.equal(planVaultPieces(mirror, ["c"]).ok, true);
+  assert.equal(planVaultPieces(mirror, ["a", "b"]).ok, true);
+  const pair = planVaultPieces(mirror, ["a", "b"]);
+  assert.equal(pair.ok && pair.pieces[0]?.id, "a");
+  assert.equal(pair.ok && pair.pieces[0]?.title, "playa");
   assert.equal(planVaultPieces(mirror, ["a"]).ok, true);
   const one = planVaultPieces(mirror, ["a"]);
   assert.equal(one.ok && one.pieces[0]?.folder, "Playa");
   assert.equal(planVaultPieces(mirror, ["d"]).ok, true);
+  assert.equal(planVaultPieces(blanks, ["m-0", "m-12"]).ok, true);
   assert.equal(planVaultPieces([
     { id: "a", title: "igual", folder: "Playa", listName: null, listId: null },
     { id: "b", title: "igual", folder: "Playa", listName: null, listId: null },
-  ], ["a"]).ok, false);
+  ], ["a"]).ok, true);
   assert.equal(vaultPieceReady({ id: "a", title: "playa", folder: "Playa" }, [{ id: null, title: "playa", folder: null }]), false);
   assert.equal(vaultPieceReady({ id: "a", title: "playa", folder: "Playa" }, [{ id: null, title: "playa", folder: "Playa" }]), true);
   assert.equal(vaultPieceReady({ id: "a", title: "playa", folder: "Playa" }, [{ id: "otro", title: "playa", folder: "Playa" }]), false);
   assert.equal(vaultPieceReady({ id: "a", title: "otra", folder: null }, [{ id: "a", title: "distinto", folder: "X" }]), true);
+  assert.equal(vaultPieceReady({ id: "c", title: "", folder: null }, [{ id: "c", title: "Sin datos", folder: "Playa" }]), true);
   assert.equal(attachmentsConfirmed(1, 1), true);
   assert.equal(attachmentsConfirmed(0, 1), false);
   assert.equal(attachmentsConfirmed(2, 1), false);
@@ -74,39 +87,49 @@ test("vaultTitle de una pieza NO VENDER, sin ids, no envía y no abre el navegad
   }
 });
 
-test("sin título o con el título repetido no se abre el navegador ni se escribe el historial", async () => {
+test("un id que no está no abre el navegador; un título vacío o repetido sí sale", async () => {
   const db = new PGlite();
   try {
-    await apply(db, VAULT_FILES);
+    await apply(db, SEND_FILES);
+    await db.exec(`insert into staff_profile (user_id, display_name, role) values ('chatter-a', 'Ana', 'member')`);
     await db.exec(`insert into of_vault_item (creator_id, item_key, title, folder, list_name) values
-      ('9ikis52', 'vacia', '', 'Playa', 'Playa'),
-      ('9ikis52', 'a', 'mismo', 'Playa', 'Playa'),
-      ('9ikis52', 'b', 'mismo', 'Ciudad', 'Ciudad'),
+      ('9ikis52', 'vacia', null, 'Playa', 'Playa'),
+      ('9ikis52', 'a', 'Sin datos', 'Playa', 'Playa'),
+      ('9ikis52', 'b', 'Sin datos', 'Ciudad', 'Ciudad'),
       ('9ikis52', 'c', 'igual', 'Playa', 'Playa'),
       ('9ikis52', 'd', 'igual', 'Playa', 'Playa')`);
-    let opened = false;
+    let opened = 0;
     const open = async () => {
-      opened = true;
-      return { messageId: "1", reason: null, attachedIds: ["vacia"] };
+      opened += 1;
+      return { messageId: String(opened), reason: null, attachedIds: ["vacia"] };
     };
+    const missing = await sendChatMessageView("chatter-a", {
+      creatorId: "9ikis52", fanKey: "7", threadKey: "7", body: "falta", priceCents: null, vaultItemIds: ["no-esta"],
+    }, hooks(asSql(db), open));
+    assert.equal(missing.sent, false);
+    assert.equal(missing.reason, "NO VENDER");
+    assert.equal(opened, 0);
     const empty = await sendChatMessageView("chatter-a", {
-      creatorId: "9ikis52", fanKey: "7", threadKey: "7", body: "hola", priceCents: null, vaultItemIds: ["vacia"],
+      creatorId: "9ikis52", fanKey: "7", threadKey: "7", body: "vacia", priceCents: 500, vaultItemIds: ["vacia"], previewIds: ["vacia"],
     }, hooks(asSql(db), open));
-    assert.equal(empty.sent, false);
-    assert.equal(empty.reason, "Sin datos");
-    assert.equal(opened, false);
+    assert.equal(empty.sent, true);
+    assert.equal(opened, 1);
     const shared = await sendChatMessageView("chatter-a", {
-      creatorId: "9ikis52", fanKey: "7", threadKey: "7", body: "hola", priceCents: null, vaultItemIds: ["a", "b"],
-    }, hooks(asSql(db), open));
-    assert.equal(shared.sent, false);
-    assert.equal(shared.reason, "Sin datos");
-    assert.equal(opened, false);
+      creatorId: "9ikis52", fanKey: "7", threadKey: "7", body: "dos", priceCents: 500, vaultItemIds: ["a", "b"], previewIds: ["a"],
+    }, hooks(asSql(db), async () => {
+      opened += 1;
+      return { messageId: "9", reason: null, attachedIds: ["a", "b"] };
+    }));
+    assert.equal(shared.sent, true);
+    assert.equal(shared.reason, null);
     const sameFolder = await sendChatMessageView("chatter-a", {
-      creatorId: "9ikis52", fanKey: "7", threadKey: "7", body: "hola", priceCents: null, vaultItemIds: ["c"],
-    }, hooks(asSql(db), open));
-    assert.equal(sameFolder.reason, "Sin datos");
-    assert.equal(opened, false);
-    assert.equal(await count(db, "of_vault_fan_send"), 0);
+      creatorId: "9ikis52", fanKey: "7", threadKey: "7", body: "carpeta", priceCents: null, vaultItemIds: ["c", "d"],
+    }, hooks(asSql(db), async () => {
+      opened += 1;
+      return { messageId: "10", reason: null, attachedIds: ["c"] };
+    }));
+    assert.equal(sameFolder.sent, true);
+    assert.equal(opened, 3);
   } finally {
     await db.close();
   }
@@ -237,6 +260,19 @@ test("el compositor comprueba el adjunto antes de pulsar Send", async () => {
     assert.match(byFolder.messageId ?? "", /^30\d$/);
     assert.deepEqual(byFolder.attachedIds, ["norte-id"]);
     assert.equal(fixture.composed.length, 2);
+    const priced = await composeChat(context, {
+      ...base,
+      body: "ppv",
+      priceCents: 500,
+      vaultPieces: [
+        { id: "playa-1", title: "playa", folder: "Playa", free: true },
+        { id: "gemela", title: "playa", folder: "Ciudad", free: false },
+      ],
+    });
+    assert.equal(priced.reason, null);
+    assert.deepEqual(priced.attachedIds, ["playa-1", "gemela"]);
+    assert.equal(fixture.composed.at(-1)?.price, "5.00");
+    assert.deepEqual(fixture.composed.at(-1)?.previews, ["playa-1"]);
   } finally {
     await browser.close();
     await fixture.close();

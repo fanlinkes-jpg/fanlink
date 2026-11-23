@@ -1,6 +1,8 @@
 import { useEffect } from "react";
+import { useCurrentUser } from "@/lib/auth/use-current-user";
 import { useCrm } from "@/lib/crm";
-import { loadWorkspace, saveWorkspace, snapshot, type SharedSlice } from "@/lib/workspace";
+import { adoptStaffDisplayName, loadWorkspace, saveWorkspace, snapshot, type SharedSlice } from "@/lib/workspace";
+import { createWorkspaceSaver } from "@/lib/workspace-sync";
 
 const LEGACY_KEY = "fanlink-management-v2";
 
@@ -26,13 +28,54 @@ function dropLegacy(): void {
  * El servidor es la copia compartida. localStorage solo se importa una vez
  * si el servidor aún no tiene fila, y después se borra.
  */
+const PLACEHOLDER_NAMES = new Set(["Operador local", "Miembro"]);
+
 export function SessionSync() {
+  const user = useCurrentUser();
+  const storedName = useCrm((state) => state.teamAccess?.displayName ?? null);
+  useEffect(() => {
+    const name = user?.displayName?.trim() ?? "";
+    if (!name || !storedName || !PLACEHOLDER_NAMES.has(storedName) || name === storedName) return;
+    let stop = false;
+    void adoptStaffDisplayName({ data: { displayName: name } }).then((result) => {
+      if (stop) return;
+      const access = useCrm.getState().teamAccess;
+      if (!access) return;
+      useCrm.setState({ teamAccess: { ...access, displayName: result.displayName } });
+    }).catch(() => undefined);
+    return () => {
+      stop = true;
+    };
+  }, [storedName, user?.displayName]);
   useEffect(() => {
     let stop = false;
     let applying = false;
     let ready = false;
-    let known = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const saver = createWorkspaceSaver({
+      save: (input) => saveWorkspace({ data: { state: input.state as SharedSlice, expectedVersion: input.expectedVersion } }),
+      userId: () => {
+        const id = useCrm.getState().teamAccess?.userId ?? "";
+        return id || null;
+      },
+      apply: (state, version, notice) => {
+        applying = true;
+        useCrm.setState({
+          ...(state as SharedSlice),
+          workspaceNotice: notice,
+          workspaceReady: true,
+        });
+        saver.reset(version, state);
+        applying = false;
+      },
+      notice: (message) => {
+        useCrm.setState({ workspaceNotice: message });
+      },
+      forbid: (message) => {
+        useCrm.setState({ workspaceNotice: message });
+        void pull();
+      },
+    });
 
     async function pull() {
       let remote: Awaited<ReturnType<typeof loadWorkspace>>;
@@ -67,14 +110,14 @@ export function SessionSync() {
       if (!remote.state || remote.version === 0) {
         const legacy = readLegacy();
         dropLegacy();
-        if (legacy && known === 0) {
+        if (legacy && saver.knownVersion() === 0) {
           useCrm.setState(legacy);
           const saved = await saveWorkspace({ data: { state: snapshot(useCrm.getState()), expectedVersion: 0 } });
           if (stop) return;
-          if (saved.ok) known = saved.version;
+          if (saved.ok) saver.reset(saved.version, snapshot(useCrm.getState()));
           else if (saved.reason === "conflict" && saved.state) {
             useCrm.setState(saved.state);
-            known = saved.version;
+            saver.reset(saved.version, saved.state);
           }
         }
         applying = true;
@@ -84,7 +127,7 @@ export function SessionSync() {
         return;
       }
       dropLegacy();
-      if (remote.version === known && ready) return;
+      if (remote.version === saver.knownVersion() && ready) return;
       applying = true;
       useCrm.setState({
         ...remote.state,
@@ -92,7 +135,7 @@ export function SessionSync() {
         teamAccess: remote.access,
         workspaceNotice: null,
       });
-      known = remote.version;
+      saver.reset(remote.version, remote.state);
       applying = false;
       ready = true;
     }
@@ -102,30 +145,8 @@ export function SessionSync() {
       if (!ready || applying) return;
       clearTimeout(timer);
       timer = setTimeout(() => {
-        const expectedVersion = known;
-        void saveWorkspace({ data: { state: snapshot(useCrm.getState()), expectedVersion } })
-          .then((saved) => {
-            if (stop) return;
-            if (saved.ok) {
-              known = saved.version;
-              return;
-            }
-            if (saved.reason === "conflict" && saved.state) {
-              applying = true;
-              useCrm.setState({
-                ...saved.state,
-                workspaceNotice: "Otra sesión guardó antes. Se muestra la copia del servidor.",
-              });
-              known = saved.version;
-              applying = false;
-              return;
-            }
-            if (saved.reason === "forbidden") {
-              useCrm.setState({ workspaceNotice: saved.message });
-              void pull();
-            }
-          })
-          .catch(() => undefined);
+        if (stop || applying) return;
+        saver.push(snapshot(useCrm.getState()));
       }, 700);
     });
     const poll = setInterval(() => void pull(), 4000);

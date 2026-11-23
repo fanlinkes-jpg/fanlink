@@ -5,9 +5,10 @@ import { createServer } from "node:net";
 import path from "node:path";
 import { test } from "node:test";
 import { chromium, type Page } from "playwright";
+import { assertDevPortFree, forgetPgliteDir, privatePgliteDir, shotDir } from "../../../src/lib/dev-test-server.ts";
 
 const root = path.resolve(import.meta.dirname, "../../..");
-const shots = path.join(root, "tmp/chat-layout");
+const shots = shotDir();
 
 const viewports = [
   { width: 1024, height: 630, capture: true },
@@ -17,7 +18,7 @@ const viewports = [
 
 test("el botón Enviar se ve entero sin scroll de página", async () => {
   const port = await freePort();
-  const server = startDev(port);
+  const server = await startDev(port);
   const browser = await chromium.launch();
   try {
     await waitForServer(`http://127.0.0.1:${port}/mensajes`);
@@ -161,14 +162,18 @@ function freePort(): Promise<number> {
   });
 }
 
-function startDev(port: number): ChildProcess {
-  const env: NodeJS.ProcessEnv = { ...process.env, VITE_AUTH_ENABLED: "false" };
+async function startDev(port: number): Promise<ChildProcess> {
+  await assertDevPortFree();
+  const dataDir = await privatePgliteDir();
+  const env: NodeJS.ProcessEnv = { ...process.env, VITE_AUTH_ENABLED: "false", FANLINK_PGLITE_DIR: dataDir };
   delete env.DATABASE_URL;
-  return spawn(process.execPath, ["node_modules/vite/bin/vite.js", "dev", "--host", "127.0.0.1", "--port", String(port), "--strictPort"], {
+  const child = spawn(process.execPath, ["node_modules/vite/bin/vite.js", "dev", "--host", "127.0.0.1", "--port", String(port), "--strictPort"], {
     cwd: root,
     env,
     stdio: "ignore",
   });
+  forgetPgliteDir(child, dataDir);
+  return child;
 }
 
 async function waitForServer(url: string): Promise<void> {

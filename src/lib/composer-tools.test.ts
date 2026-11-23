@@ -30,7 +30,8 @@ test("el formato, la mención y el precio no se inventan", () => {
   assert.equal(paymentLabel({ fromFan: false, priceCents: 500, purchased: true }), "$5.00 pagado");
   assert.equal(paymentLabel({ fromFan: false, priceCents: 500, purchased: null }), "$5.00 · Sin datos");
   assert.equal(paymentLabel({ fromFan: true, priceCents: 500, purchased: true }), null);
-  assert.equal(authorLabel("Elena", false), "ELENA");
+  assert.equal(authorLabel("Elena", false), "Elena");
+  assert.equal(authorLabel("  operador local  ", false), "operador local");
   assert.equal(authorLabel(null, false), "Cuenta");
 });
 

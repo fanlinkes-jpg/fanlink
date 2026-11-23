@@ -232,7 +232,7 @@ export async function mirroredFolderItems(sql: ReadSql, creatorId: string, listI
   if (rows.length > cap) return [];
   return rows.map((row) => ({
     id: row.item_key,
-    title: row.title ?? "Sin datos",
+    title: row.title?.trim() && row.title.trim().toLowerCase() !== "sin datos" ? row.title.trim() : null,
     kind: vaultKindOf(row.kind),
     seconds: row.seconds,
     preview: row.preview,
@@ -473,7 +473,7 @@ export async function loadVaultMirror(sql: ReadSql, creatorId: string): Promise<
     folders: lists.map((row) => ({ id: row.list_key, name: row.name, parentId: row.parent_key ?? null })),
     items: items.map((row) => ({
       id: row.item_key,
-      title: row.title ?? "Sin datos",
+      title: row.title?.trim() && row.title.trim().toLowerCase() !== "sin datos" ? row.title.trim() : null,
       kind: vaultKindOf(row.kind),
       listIds: idList(row.list_ids),
       seconds: row.seconds,
@@ -518,7 +518,12 @@ export async function loadSaleContext(sql: ReadSql, creatorId: string, itemIds: 
   return { sales, missing };
 }
 
-export async function prepareVaultSend(sql: ReadSql, creatorId: string, itemIds: readonly string[]): Promise<
+export async function prepareVaultSend(
+  sql: ReadSql,
+  creatorId: string,
+  itemIds: readonly string[],
+  previewIds: readonly string[] = [],
+): Promise<
   { ok: true; pieces: VaultSendPiece[]; sales: Awaited<ReturnType<typeof loadSaleContext>>["sales"] }
   | { ok: false; reason: "NO VENDER" | "Sin datos" }
 > {
@@ -545,7 +550,12 @@ export async function prepareVaultSend(sql: ReadSql, creatorId: string, itemIds:
     listId: row.list_key,
   })), itemIds);
   if (!planned.ok) return planned;
-  return { ok: true, pieces: planned.pieces, sales: loaded.sales };
+  const previews = new Set(previewIds);
+  return {
+    ok: true,
+    pieces: planned.pieces.map((piece) => ({ ...piece, free: previews.has(piece.id) })),
+    sales: loaded.sales,
+  };
 }
 
 export async function piecePurchaseCents(sql: ReadSql, creatorId: string): Promise<Map<string, number[]>> {
@@ -681,7 +691,7 @@ async function hasColumn(sql: ReadSql, table: string, column: string): Promise<b
 
 function rowValues(creatorId: string, item: VaultFile, tags: string, syncedAt: string): unknown[] {
   return [
-    creatorId, item.id, item.title, item.kind, item.seconds, item.preview, item.folder, tags,
+    creatorId, item.id, item.title?.trim() ? item.title.trim() : null, item.kind, item.seconds, item.preview, item.folder, tags,
     item.listId, item.listName, item.description, item.uploadedAt, item.priceCents, item.salesCount, item.sentCount, syncedAt,
   ];
 }

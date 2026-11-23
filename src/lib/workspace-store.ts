@@ -15,7 +15,7 @@ export interface SqlQuery {
 
 export type SaveResult =
   | { ok: true; version: number }
-  | { ok: false; reason: "conflict"; version: number; state: WorkspaceSlice | null }
+  | { ok: false; reason: "conflict"; version: number; state: WorkspaceSlice | null; updatedBy: string | null }
   | { ok: false; reason: "forbidden"; message: string };
 
 type ProfileRow = {
@@ -26,7 +26,15 @@ type ProfileRow = {
 };
 
 type GrantRow = { creator_id: string };
-type StateRow = { state: unknown; version: number | string };
+type StateRow = { state: unknown; version: number | string; updated_by: string | null };
+
+const PLACEHOLDER_NAMES = ["Operador local", "Miembro"];
+
+export function cleanDisplayName(value: string): string | null {
+  const name = value.replace(/\s+/g, " ").trim();
+  if (!name || name.length > 80) return null;
+  return name;
+}
 
 export async function ensureStaff(sql: SqlQuery, userId: string, devMode: boolean): Promise<TeamAccess & { displayName: string; devMode: boolean }> {
   await sql.query("insert into workspace_member (user_id) values ($1) on conflict (user_id) do nothing", [userId]);
@@ -35,7 +43,7 @@ export async function ensureStaff(sql: SqlQuery, userId: string, devMode: boolea
     const owners = await sql.query("select user_id from staff_profile where role = 'owner' limit 1");
     const role: TeamRole = owners.length === 0 ? "owner" : "member";
     const perms = role === "owner" ? [...TEAM_PERMS] : [];
-    const displayName = devMode && role === "owner" ? "Operador local" : "Miembro";
+    const displayName = "Miembro";
     await sql.query(
       "insert into staff_profile (user_id, display_name, role, perms) values ($1, $2, $3, $4::jsonb)",
       [userId, displayName, role, JSON.stringify(perms)],
@@ -114,6 +122,33 @@ export async function setStaffAlert(
   );
 }
 
+/** El nombre de la sesión sustituye al placeholder. Un nombre ya elegido no se pisa. */
+export async function adoptStaffName(sql: SqlQuery, userId: string, name: string): Promise<string | null> {
+  const clean = cleanDisplayName(name);
+  if (!clean || PLACEHOLDER_NAMES.includes(clean)) return null;
+  const slots = PLACEHOLDER_NAMES.map((_, index) => `$${index + 3}`).join(", ");
+  const updated = await sql.query<{ display_name: string }>(
+    `update staff_profile set display_name = $2
+     where user_id = $1 and display_name in (${slots})
+     returning display_name`,
+    [userId, clean, ...PLACEHOLDER_NAMES],
+  );
+  return updated[0]?.display_name ?? null;
+}
+
+/** El chatter elige cómo se ve su nombre junto a la hora del mensaje. */
+export async function setOwnDisplayName(sql: SqlQuery, userId: string, name: string): Promise<string> {
+  const clean = cleanDisplayName(name);
+  if (!clean) throw new WorkspaceAccessError("Escribe un nombre de hasta 80 caracteres.");
+  const updated = await sql.query<{ display_name: string }>(
+    "update staff_profile set display_name = $2 where user_id = $1 returning display_name",
+    [userId, clean],
+  );
+  const saved = updated[0]?.display_name;
+  if (!saved) throw new WorkspaceAccessError("No hay ficha para ese usuario.");
+  return saved;
+}
+
 export async function setStaffPerms(sql: SqlQuery, actor: TeamAccess, userId: string, perms: string[]): Promise<void> {
   if (actor.role !== "owner") throw new WorkspaceAccessError("Solo la dueña puede cambiar permisos.");
   const clean = TEAM_PERMS.filter((perm) => perms.includes(perm));
@@ -146,7 +181,7 @@ export async function commitWorkspace(
 ): Promise<SaveResult> {
   const current = await readState(sql);
   if (current.version !== expectedVersion) {
-    return { ok: false, reason: "conflict", version: current.version, state: current.state };
+    return { ok: false, reason: "conflict", version: current.version, state: current.state, updatedBy: current.updatedBy };
   }
   try {
     assertWorkspaceChange(access, current.state ?? emptyWorkspace(), next);
@@ -164,7 +199,7 @@ export async function commitWorkspace(
     );
     if (!inserted[0]) {
       const again = await readState(sql);
-      return { ok: false, reason: "conflict", version: again.version, state: again.state };
+      return { ok: false, reason: "conflict", version: again.version, state: again.state, updatedBy: again.updatedBy };
     }
     return { ok: true, version: Number(inserted[0].version) };
   }
@@ -177,16 +212,16 @@ export async function commitWorkspace(
   );
   if (!updated[0]) {
     const again = await readState(sql);
-    return { ok: false, reason: "conflict", version: again.version, state: again.state };
+    return { ok: false, reason: "conflict", version: again.version, state: again.state, updatedBy: again.updatedBy };
   }
   return { ok: true, version: Number(updated[0].version) };
 }
 
-async function readState(sql: SqlQuery): Promise<{ version: number; state: WorkspaceSlice | null }> {
-  const rows = await sql.query<StateRow>("select state, version from workspace_state where id = 1");
+async function readState(sql: SqlQuery): Promise<{ version: number; state: WorkspaceSlice | null; updatedBy: string | null }> {
+  const rows = await sql.query<StateRow>("select state, version, updated_by from workspace_state where id = 1");
   const row = rows[0];
-  if (!row) return { version: 0, state: null };
-  return { version: Number(row.version), state: parseSlice(row.state) };
+  if (!row) return { version: 0, state: null, updatedBy: null };
+  return { version: Number(row.version), state: parseSlice(row.state), updatedBy: row.updated_by };
 }
 
 function parseSlice(value: unknown): WorkspaceSlice {

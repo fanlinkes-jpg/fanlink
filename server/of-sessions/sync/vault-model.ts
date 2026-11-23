@@ -6,7 +6,7 @@ export type VaultKind = "foto" | "video" | "audio" | "gif" | null;
 
 export type VaultFile = {
   id: string;
-  title: string;
+  title: string | null;
   kind: VaultKind;
   seconds: number | null;
   preview: string | null;
@@ -183,7 +183,7 @@ export type TrailerPackage = {
 };
 
 function isFreeTrailer(item: VaultFile): boolean {
-  const text = `${item.title} ${item.tags.join(" ")}`.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+  const text = `${item.title ?? ""} ${item.tags.join(" ")}`.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
   const marked = text.includes("trailer");
   return marked && item.priceCents === 0 && item.kind !== "audio";
 }
@@ -313,7 +313,8 @@ function parseVaultItem(item: unknown, lists: readonly VaultList[]): VaultFile[]
   const row = item as Record<string, unknown>;
   const id = textOf(row.id ?? row.mediaId);
   if (!id) return [];
-  const title = (textOf(row.title ?? row.name ?? row.fileName) ?? "Sin datos").slice(0, 120);
+  const rawTitle = textOf(row.title ?? row.name ?? row.fileName);
+  const title = rawTitle && rawTitle.toLowerCase() !== "sin datos" ? rawTitle.slice(0, 120) : null;
   const type = (textOf(row.type ?? row.kind) ?? "").toLowerCase();
   const gif = type.includes("gif") || row.gif === true || row.isGif === true;
   const kind: VaultKind = type.includes("video")

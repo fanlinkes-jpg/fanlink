@@ -8,6 +8,8 @@ import {
   discardOutboundError,
   expireStuckPending,
   insertOutboundOnce,
+  rememberDedupeKey,
+  sentMessageForDedupe,
   markOutboundAwaiting,
   markOutboundError,
   markOutboundSent,
@@ -98,6 +100,7 @@ type SendInput = {
   body: string;
   priceCents: number | null;
   vaultItemIds?: string[];
+  previewIds?: string[];
   tagHandle?: string | null;
   clientId?: string | null;
 };
@@ -149,7 +152,8 @@ export async function sendChatMessageView(
   const vaultItemIds = replay
     ? await listOutboundMediaIds(sql, replay.id)
     : (input.vaultItemIds ?? []).map((item) => item.trim()).filter(Boolean);
-  const planned = await prepareVaultSend(sql, creatorId, vaultItemIds);
+  const previewIds = (input.previewIds ?? []).map((item) => item.trim()).filter((item) => vaultItemIds.includes(item));
+  const planned = await prepareVaultSend(sql, creatorId, vaultItemIds, previewIds);
   if (!planned.ok) return { sent: false, reason: planned.reason, messageId: null };
   const id = clientId ?? crypto.randomUUID();
   const claimKey = sendClaimKey({
@@ -192,6 +196,13 @@ export async function sendChatMessageView(
         return { sent: false, reason: "Ya se está enviando", messageId: null };
       }
       if (vaultItemIds.length > 0) await recordOutboundMedia(sql, id, creatorId, vaultItemIds);
+    }
+    await rememberDedupeKey(sql, id, claimKey);
+    const already = await sentMessageForDedupe(sql, creatorId, claimKey);
+    if (already && already !== id) {
+      await markOutboundSent(sql, id, already);
+      await releaseSendClaim(sql, claimKey, id);
+      return { sent: true, reason: null, messageId: already };
     }
     stopLease = startLease(sql, id, claimKey);
     const result = await deliverChatSend({

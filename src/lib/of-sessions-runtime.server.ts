@@ -35,7 +35,7 @@ import { chatIntervalMinFromEnv } from "../../server/of-sessions/sync/chats.ts";
 import { chatIntervalMinutes, inboxIsOpen, activeThreadWatches } from "../../server/of-sessions/sync/live.ts";
 import { openWatchContext, runInboxWatch } from "../../server/of-sessions/sync/inbox-watch.ts";
 import { pickAccountWatch } from "../../server/of-sessions/sync/watch-plan.ts";
-import { listChatMeta, listChats, listOpenHistory, listPendingOutbounds, listThreadHistory, markChatList, markHistory, markOutboundAwaiting, noteHistoryCursor, recordOutbound, saveChatRead, saveFanCards } from "../../server/of-sessions/sync/chat-store.ts";
+import { listChatMeta, listChats, listOpenHistory, listPendingOutbounds, listRecentMatches, listThreadHistory, markChatList, markHistory, markOutboundAwaiting, noteHistoryCursor, recordOutbound, saveChatRead, saveFanCards } from "../../server/of-sessions/sync/chat-store.ts";
 import { historyAdvance, historyPerMinute, listPageDone, nextHistoryThread } from "../../server/of-sessions/sync/history.ts";
 import { captureChatListPage } from "../../server/of-sessions/sync/history-scroll.ts";
 import { openWorkPage } from "../../server/of-sessions/sessions/work-page.ts";
@@ -743,7 +743,7 @@ export async function listCreatorChatViews(userId: string): Promise<CreatorChatL
       status: item.status,
       reason: publicSyncReason(item.reason),
     })),
-    pending: await listPendingOutbounds(sql, creatorIds),
+    pending: await pendingWithMatches(sql, creatorIds),
     profiles: await listFanProfiles(sql, creatorIds),
     notes: await listFanNotes(sql, creatorIds),
     accounts: accounts.flatMap((account) => account.creatorId && creatorIds.includes(account.creatorId) ? [{
@@ -759,6 +759,30 @@ export async function listCreatorChatViews(userId: string): Promise<CreatorChatL
       creatorIds,
     ),
   };
+}
+
+async function pendingWithMatches(sql: Awaited<ReturnType<typeof getSql>>, creatorIds: string[]) {
+  const pending = await listPendingOutbounds(sql, creatorIds);
+  const matched = await listRecentMatches(sql, creatorIds);
+  return [
+    ...pending.map((item) => ({ ...item, matchedMessageKey: null as string | null })),
+    ...matched.map((item) => ({
+      id: item.id,
+      creatorId: item.creatorId,
+      threadKey: item.threadKey,
+      body: "",
+      scheduledAt: null,
+      authorName: null,
+      authorId: null,
+      priceCents: null,
+      vault: [],
+      status: "pending" as const,
+      stale: false,
+      errorReason: null,
+      dedupeKey: null,
+      matchedMessageKey: item.matchedMessageKey,
+    })),
+  ];
 }
 
 async function applyDerivedConnections(sessions: SessionManager, accounts: readonly Account[]): Promise<Account[]> {
@@ -1085,7 +1109,7 @@ export async function chatSendAccessView(userId: string): Promise<{ creatorIds: 
 
 export async function resolveChatSendHooks(
   userId: string,
-  input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; vaultItemIds?: string[]; tagHandle?: string | null },
+  input: { creatorId: string; fanKey: string | null; threadKey: string | null; body: string; priceCents: number | null; vaultItemIds?: string[]; previewIds?: string[]; tagHandle?: string | null },
 ): Promise<SendChatHooks> {
   const access = await accessFor(userId);
   const sessions = await getOfSessionManager();

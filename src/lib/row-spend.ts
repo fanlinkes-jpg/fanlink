@@ -3,6 +3,18 @@ export function rowSpendCents(thread: number | null, card: number | null, fetche
   return thread ?? card ?? fetched ?? null;
 }
 
+/**
+ * `totalSumm` es el neto, después del 20 % de OnlyFans.
+ * Infloww y OnlyFans enseñan el bruto. Si hay un bruto ya contado, se usa.
+ * Si no, neto / 0.8 redondeado al céntimo. 8477 → 10596 ($105.96).
+ */
+export function shownSpendCents(netCents: number | null, earningsCents: number | null = null): number | null {
+  if (earningsCents != null && Number.isFinite(earningsCents) && earningsCents >= 0) return Math.round(earningsCents);
+  if (netCents == null || !Number.isFinite(netCents)) return null;
+  if (netCents <= 0) return netCents;
+  return Math.round(netCents / 0.8);
+}
+
 export function spendLogLine(input: {
   creatorId: string;
   thread: number;

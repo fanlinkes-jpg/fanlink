@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { pendingForThread } from "./pending-thread.ts";
+import { confirmedMatches, pendingForThread, unmatchedPending } from "./pending-thread.ts";
 
 test("dos creadoras con el mismo hilo ven solo sus pendientes", () => {
   const pending = [
@@ -15,4 +15,10 @@ test("dos creadoras con el mismo hilo ven solo sus pendientes", () => {
   assert.deepEqual(second.map((item) => item.id), ["b"]);
   assert.deepEqual(second.map((item) => item.body), ["para la segunda"]);
   assert.deepEqual(pendingForThread(pending, null), []);
+  const withMatch = [
+    { id: "local", matchedMessageKey: "m-900" },
+    { id: "sigue", matchedMessageKey: null },
+  ];
+  assert.deepEqual(unmatchedPending(withMatch).map((item) => item.id), ["sigue"]);
+  assert.deepEqual(confirmedMatches(withMatch), [{ clientId: "local", messageId: "m-900" }]);
 });
