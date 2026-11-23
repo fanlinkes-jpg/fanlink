@@ -3,7 +3,7 @@ import { AuthProvider } from "@/lib/auth/provider";
 import { PreviewHostBridge } from "@/components/preview-host-bridge";
 import appCss from "../styles.css?url";
 
-const APP_NAME = "Fanlink Management";
+const APP_NAME = "Fanlink CRM";
 
 export const Route = createRootRoute({
   head: () => ({
@@ -15,7 +15,13 @@ export const Route = createRootRoute({
       { name: "description", content: "CRM de Fanlink para creadoras: mensajes, vault, equipo y conversión." },
     ],
     links: [
-      { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },
+      { rel: "icon", type: "image/svg+xml", href: "/favicon.svg", media: "(prefers-color-scheme: light)" },
+      { rel: "icon", type: "image/png", href: "/favicon-32.png", sizes: "32x32", media: "(prefers-color-scheme: light)" },
+      { rel: "icon", type: "image/png", href: "/favicon-16.png", sizes: "16x16", media: "(prefers-color-scheme: light)" },
+      { rel: "icon", type: "image/svg+xml", href: "/favicon-dark.svg", media: "(prefers-color-scheme: dark)" },
+      { rel: "icon", type: "image/png", href: "/favicon-dark-32.png", sizes: "32x32", media: "(prefers-color-scheme: dark)" },
+      { rel: "icon", type: "image/png", href: "/favicon-dark-16.png", sizes: "16x16", media: "(prefers-color-scheme: dark)" },
+      { rel: "apple-touch-icon", href: "/apple-touch-icon.png", sizes: "180x180" },
       { rel: "stylesheet", href: appCss },
       { rel: "manifest", href: "/__grok/manifest.webmanifest" },
       { rel: "apple-touch-icon", href: "/__grok/icon-180.png" },

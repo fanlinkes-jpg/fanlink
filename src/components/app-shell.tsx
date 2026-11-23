@@ -18,6 +18,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Toaster } from "sonner";
+import { FanlinkLogo } from "@/components/brand/FanlinkLogo";
 import { cn } from "@/lib/cn";
 import { useCrm } from "@/lib/crm";
 import {
@@ -71,25 +72,12 @@ function NavRouteLink({
   );
 }
 
-function Logo({ className }: { className?: string }) {
-  return (
-    <span className={cn("grid h-8 w-8 place-items-center rounded-md bg-primary text-primary-fg", className)}>
-      <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
-        <path fill="currentColor" d="M4 4h10.2a5.2 5.2 0 0 1 0 10.4H9.2V20H4V4zm5.2 6h4.6a1.8 1.8 0 0 0 0-3.6H9.2V10z" />
-      </svg>
-    </span>
-  );
-}
-
 export function Splash() {
   return (
     <div className="grid h-dvh place-items-center bg-bg text-fg">
-      <div className="flex items-center gap-3">
-        <Logo />
-        <div>
-          <p className="font-display text-lg font-semibold">Fanlink</p>
-          <p className="text-sm text-muted">Cargando operación…</p>
-        </div>
+      <div className="text-center">
+        <FanlinkLogo wordmark className="text-lg" markClassName="h-10 w-10" />
+        <p className="mt-2 text-sm text-muted">Cargando operación…</p>
       </div>
     </div>
   );
@@ -232,7 +220,7 @@ function ShellFrame({
   return (
     <div className="flex h-dvh max-h-dvh min-h-0 overflow-hidden bg-bg text-fg">
       <aside className="relative z-50 hidden w-14 shrink-0 flex-col items-center gap-1 border-r border-line bg-surface py-3 md:flex">
-        <Logo className="mb-2" />
+        <FanlinkLogo className="mb-2" markClassName="h-8 w-8" />
         {blocks.map((block) => {
           const Icon = BLOCK_ICONS[block.id] ?? LayoutGrid;
           const active = pathMatchesNavLink(path, block);
@@ -257,7 +245,7 @@ function ShellFrame({
           <button className="absolute inset-0 bg-black/30" aria-label="Cerrar menú" onClick={() => setMobile(false)} />
           <div className="absolute inset-y-0 left-0 w-[22rem] overflow-auto bg-[#f4f6f8] p-3 shadow-xl">
             <div className="mb-2 flex items-center justify-between">
-              <p className="font-display text-sm font-semibold">Fanlink</p>
+              <FanlinkLogo wordmark className="text-sm text-[#1c2333]" markClassName="h-7 w-7" />
               <button onClick={() => setMobile(false)} aria-label="Cerrar"><X className="h-4 w-4" /></button>
             </div>
             {blocks.map((block) => {
@@ -288,6 +276,7 @@ function ShellFrame({
           <button className="rounded-md p-2 md:hidden" onClick={() => setMobile(true)} aria-label="Abrir menú">
             <Menu className="h-4 w-4" />
           </button>
+          <FanlinkLogo wordmark className="min-w-0 text-sm text-white" markClassName="h-6 w-6" />
           <span className="min-w-0 flex-1" />
           <HeaderTools devMode={teamAccess.devMode} displayName={teamAccess.displayName} />
         </header>
