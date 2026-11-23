@@ -26,7 +26,14 @@ test("el botón Enviar se ve entero sin scroll de página", async () => {
     for (const viewport of viewports) {
       const page = await browser.newPage({ viewport: { width: viewport.width, height: viewport.height } });
       await page.goto(`http://127.0.0.1:${port}/mensajes`, { waitUntil: "domcontentloaded" });
-      await page.getByRole("button", { name: "Enviar" }).waitFor();
+      const sendButton = page.getByRole("button", { name: "Enviar" });
+      try {
+        await sendButton.waitFor({ timeout: 60_000 });
+      } catch (error) {
+        const text = await page.locator("body").innerText().catch(() => "");
+        const reason = error instanceof Error ? error.message : "sin botón";
+        throw new Error(`${reason}\n${text.slice(0, 400)}`);
+      }
       await page.locator("ol").evaluate((list) => {
         for (let index = 0; index < 40; index += 1) {
           const item = document.createElement("li");
@@ -165,7 +172,13 @@ function freePort(): Promise<number> {
 async function startDev(port: number): Promise<ChildProcess> {
   await assertDevPortFree();
   const dataDir = await privatePgliteDir();
-  const env: NodeJS.ProcessEnv = { ...process.env, VITE_AUTH_ENABLED: "false", FANLINK_PGLITE_DIR: dataDir, FANLINK_HISTORY_ENABLED: "false" };
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    VITE_AUTH_ENABLED: "false",
+    FANLINK_PGLITE_DIR: dataDir,
+    FANLINK_HISTORY_ENABLED: "false",
+    FANLINK_SYNC_ENABLED: "false",
+  };
   delete env.DATABASE_URL;
   const child = spawn(process.execPath, ["node_modules/vite/bin/vite.js", "dev", "--host", "127.0.0.1", "--port", String(port), "--strictPort"], {
     cwd: root,
