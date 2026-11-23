@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createChatSendSession, REAL_SEND_OFF_REASON, type ComposerSend } from "./chat-send-session.ts";
+import { createChatSendSession, REAL_SEND_OFF_REASON, SEND_WAIT_MS, type ComposerSend } from "./chat-send-session.ts";
 
 const draft: ComposerSend = {
   body: "hola",
@@ -131,4 +131,19 @@ test("un envío casado deja el id y sale de pendiente", async () => {
   assert.equal(session.getJobs()[0]?.messageId, "900");
   session.noteMatches([{ clientId: "id-1", messageId: "900" }]);
   assert.equal(session.getJobs().length, 1);
+});
+
+test("si el transporte no contesta en el plazo, queda en error y no se reenvía", async () => {
+  assert.equal(SEND_WAIT_MS, 45_000);
+  let calls = 0;
+  const session = createChatSendSession({ uuid: () => "id-lento", waitMs: 20 });
+  session.setTransport(() => {
+    calls += 1;
+    return new Promise(() => undefined);
+  });
+  session.submit({ ...draft, realSend: true, now: 1_000 });
+  await session.whenIdle();
+  assert.equal(calls, 1);
+  assert.equal(session.getJobs()[0]?.state, "error");
+  assert.equal(session.getJobs()[0]?.reason, "No se envió");
 });

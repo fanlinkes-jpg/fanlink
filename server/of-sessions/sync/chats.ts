@@ -5,6 +5,7 @@
  * envía solo con FANLINK_ENABLE_SEND=true y la cuenta en
  * FANLINK_SEND_ALLOW_ACCOUNTS. Los masivos siguen apagados.
  */
+import { liveViewDebug } from "../live/debug.ts";
 import { sectionFailure, type SectionOutcome } from "./parse.ts";
 import { higherUnread, unreadCountOf } from "./unread-chats.ts";
 
@@ -199,11 +200,33 @@ export function parseChatMessages(
   source: "page" | "socket" = "page",
 ): ChatMessage[] {
   const rows: ChatMessage[] = [];
+  let loggedPpv = false;
   walk(value, 0, (record) => {
+    if (!loggedPpv && liveViewDebug() && isPpvRecord(record)) {
+      loggedPpv = true;
+      console.info(ppvFieldTrace(record));
+    }
     const message = messageFrom(record, threadKey, fanKey, accountId, source);
     if (message) rows.push(message);
   });
   return mergeMessages([], rows);
+}
+
+/** Valores del primer PPV de la página. Sin texto, sin medios y sin secretos. */
+export function ppvFieldTrace(record: Record<string, unknown>): string {
+  const pick = (key: string): string => {
+    const value = record[key];
+    if (typeof value === "boolean") return value ? "true" : "false";
+    if (typeof value === "number" && Number.isFinite(value)) return String(Math.trunc(value));
+    if (typeof value === "string" && /^\d{1,18}$/.test(value.trim())) return value.trim();
+    return "ausente";
+  };
+  return `[fanlink:chat] ppv campos=isOpened=${pick("isOpened")},canPurchase=${pick("canPurchase")},purchased=${pick("purchased")},isFree=${pick("isFree")},isFromQueue=${pick("isFromQueue")},queueId=${pick("queueId")}`;
+}
+
+function isPpvRecord(record: Record<string, unknown>): boolean {
+  const price = priceCents(record.price ?? record.ppvPrice);
+  return price != null && price > 0;
 }
 
 /**
@@ -536,7 +559,7 @@ function messageFrom(
     body,
     sentAt,
     priceCents: priceCents(record.price ?? record.ppvPrice),
-    purchased: purchasedFlag(record, priceCents(record.price ?? record.ppvPrice)),
+    purchased: purchasedFlag(record, priceCents(record.price ?? record.ppvPrice), ownMessage(record, accountId)),
     ...mediaFacts(record),
     media,
     liked: likedFlag(record),
@@ -552,13 +575,27 @@ function priceCents(value: unknown): number | null {
   return null;
 }
 
-function purchasedFlag(record: Record<string, unknown>, price: number | null): boolean | null {
+/**
+ * En un mensaje propio, `canPurchase` y `purchased` hablan de quien mira
+ * (la creadora no compra su PPV). Lo que dice si el fan pagó es `isOpened`.
+ */
+export function purchasedFlag(record: Record<string, unknown>, price: number | null, own = false): boolean | null {
+  if (own && price != null && price > 0) {
+    if (typeof record.isOpened === "boolean") return record.isOpened;
+    return null;
+  }
   if (typeof record.purchased === "boolean") return record.purchased;
   if (typeof record.isPurchased === "boolean") return record.isPurchased;
   if (price == null || price <= 0) return null;
   if (typeof record.canPurchase === "boolean") return !record.canPurchase;
   if (typeof record.isOpened === "boolean") return record.isOpened;
   return null;
+}
+
+function ownMessage(record: Record<string, unknown>, accountId: string | null): boolean {
+  if (record.isMine === true || record.isFromMe === true || record.from === "team") return true;
+  const fromId = clean(nested(record.fromUser)?.id, 40);
+  return accountId != null && fromId === accountId;
 }
 
 function mediaFacts(record: Record<string, unknown>): { mediaCount: number | null; mediaSeconds: number | null; mediaPreview: string | null } {
@@ -577,7 +614,7 @@ export function mediaItems(record: Record<string, unknown>): ChatMedia[] {
   const raw = record.media ?? record.previews ?? record.attachments;
   if (!Array.isArray(raw)) return [];
   const messagePrice = priceCents(record.price ?? record.ppvPrice);
-  const messagePaid = purchasedFlag(record, messagePrice);
+  const messagePaid = purchasedFlag(record, messagePrice, record.isMine === true || record.isFromMe === true);
   return raw.flatMap((item) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) return [];
     const row = item as Record<string, unknown>;

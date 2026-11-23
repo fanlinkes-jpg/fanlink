@@ -10,6 +10,8 @@ import { accountFigure, everyAccountBlocked, SESSION_EXPIRED_LABEL } from "../..
 import { ensureNoticeTab, listCreatorNotifications, markCreatorNotificationsRead, type NotificationListItem } from "@/lib/of-notifications";
 import { NOTIFICATION_TABS, TAB_LABEL, isOwnerOnlyKind, notesForCreator, noticeFace, notificationReplyLine, noticesForOfTab, ofTabListNote, tabOf, type NotificationCounts, type NotificationTab } from "@/lib/notifications";
 import { NotificationFanCard } from "@/features/notification-card";
+import { PurchaseMessageDialog } from "@/features/purchase-message-dialog";
+import { purchaseComposeDraft } from "@/lib/purchase-detail";
 import { useCrm, type VaultItem } from "@/lib/crm";
 import { chatSyncLabel, headerSyncLabel, type ChatSyncInput } from "@/lib/chat-sync-label";
 import { sessionErrorText } from "@/lib/use-creator-sessions";
@@ -327,6 +329,7 @@ export function RealChatsPage() {
   const [notes, setNotes] = useState<NoteRow[] | null>(null);
   const [noteCounts, setNoteCounts] = useState<NotificationCounts | null>(null);
   const [noteNotice, setNoteNotice] = useState<string | null>(null);
+  const [purchaseNote, setPurchaseNote] = useState<NoteRow | null>(null);
   const notesButton = useRef<HTMLButtonElement>(null);
   const [notesPos, setNotesPos] = useState({ top: 0, left: 0 });
   const [discountPercent, setDiscountPercent] = useState("10");
@@ -1293,6 +1296,7 @@ export function RealChatsPage() {
                             renew={face.renewAuto}
                             reply={reply}
                             onChat={thread ? () => openNote(item) : undefined}
+                            onMessage={item.kind === "ppv" && item.messageRef ? () => setPurchaseNote(item) : undefined}
                           />
                         </li>
                       );
@@ -1301,6 +1305,30 @@ export function RealChatsPage() {
                 </div>
               </>,
               document.body,
+            ) : null}
+            {purchaseNote?.messageRef ? (
+              <PurchaseMessageDialog
+                creatorId={purchaseNote.creatorId}
+                creatorName={creators.find((creator) => creator.id === purchaseNote.creatorId)?.name ?? "Cuenta"}
+                fanKey={purchaseNote.fanKey}
+                threadKey={purchaseNote.threadKey}
+                messageRef={purchaseNote.messageRef}
+                onClose={() => setPurchaseNote(null)}
+                onCompose={(mode) => {
+                  const thread = (data?.threads ?? []).find((row) => row.creatorId === purchaseNote.creatorId && (
+                    (purchaseNote.threadKey != null && row.threadKey === purchaseNote.threadKey)
+                    || (purchaseNote.fanKey != null && (row.fanKey === purchaseNote.fanKey || row.threadKey === purchaseNote.fanKey))
+                  ));
+                  if (thread) chooseThread(thread);
+                  const draftText = purchaseComposeDraft(mode, scripts.map((script) => ({ body: script.steps[0]?.text ?? "" })));
+                  setPurchaseNote(null);
+                  setNotesOpen(false);
+                  requestAnimationFrame(() => {
+                    if (draftText.text) replaceDraft(draftText.text);
+                    draftBox.current?.focus();
+                  });
+                }}
+              />
             ) : null}
           </div>
           <div className="flex gap-2">

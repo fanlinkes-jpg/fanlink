@@ -9,6 +9,8 @@ import {
 } from "./send-queue.ts";
 
 export const REAL_SEND_OFF_REASON = "Envío real desactivado";
+/** Si el transporte no contesta, el envío queda en error. No se reintenta solo. */
+export const SEND_WAIT_MS = 45_000;
 
 function cleanTag(value: string | null | undefined): string | null {
   const handle = value?.replace(/^@/, "").trim() ?? "";
@@ -50,6 +52,7 @@ export function createChatSendSession(options?: {
   now?: () => number;
   uuid?: () => string;
   transport?: SendTransport;
+  waitMs?: number;
 }) {
   let jobs: OutboundSend[] = [];
   let holds: LaneHold[] = [];
@@ -96,8 +99,10 @@ export function createChatSendSession(options?: {
   }
 
   async function deliver(job: OutboundSend) {
+    const deadline = sendDeadline(options?.waitMs ?? SEND_WAIT_MS);
+    const signal = deadline.signal;
     try {
-      const result = await transport(job);
+      const result = await waitForSend(transport(job), signal);
       if (result.sent && result.messageId) {
         patch(job.clientId, { state: "sent", messageId: result.messageId, reason: null });
         releaseHold(job.clientId);
@@ -110,8 +115,11 @@ export function createChatSendSession(options?: {
       }
       patch(job.clientId, { state: "error", reason: result.reason ?? "No se envió" });
     } catch (error) {
-      const reason = error instanceof Error && error.message ? error.message : "No se envió";
+      const aborted = signal.aborted || (error instanceof Error && error.name === "AbortError");
+      const reason = aborted ? "No se envió" : error instanceof Error && error.message ? error.message : "No se envió";
       patch(job.clientId, { state: "error", reason });
+    } finally {
+      deadline.done();
     }
   }
 
@@ -243,6 +251,30 @@ export function createChatSendSession(options?: {
       clearQueue();
     },
   };
+}
+
+export function sendDeadline(ms: number): { signal: AbortSignal; done: () => void } {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  return {
+    signal: controller.signal,
+    done: () => clearTimeout(timer),
+  };
+}
+
+export function waitForSend<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(abortError());
+  return new Promise((resolve, reject) => {
+    const fail = () => reject(abortError());
+    signal.addEventListener("abort", fail, { once: true });
+    work.then(resolve, reject).finally(() => signal.removeEventListener("abort", fail));
+  });
+}
+
+function abortError(): Error {
+  const error = new Error("No se envió");
+  error.name = "AbortError";
+  return error;
 }
 
 export const chatSendSession = createChatSendSession();

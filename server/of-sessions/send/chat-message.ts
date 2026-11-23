@@ -8,6 +8,8 @@ import {
   discardOutboundError,
   expireStuckPending,
   insertOutboundOnce,
+  rememberDedupeKey,
+  sentMessageForDedupe,
   markOutboundAwaiting,
   markOutboundError,
   markOutboundSent,
@@ -194,6 +196,13 @@ export async function sendChatMessageView(
         return { sent: false, reason: "Ya se está enviando", messageId: null };
       }
       if (vaultItemIds.length > 0) await recordOutboundMedia(sql, id, creatorId, vaultItemIds);
+    }
+    await rememberDedupeKey(sql, id, claimKey);
+    const already = await sentMessageForDedupe(sql, creatorId, claimKey);
+    if (already && already !== id) {
+      await markOutboundSent(sql, id, already);
+      await releaseSendClaim(sql, claimKey, id);
+      return { sent: true, reason: null, messageId: already };
     }
     stopLease = startLease(sql, id, claimKey);
     const result = await deliverChatSend({
