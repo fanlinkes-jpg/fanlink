@@ -11,8 +11,15 @@
   --color-muted: #6d7585;
   --color-primary: #3b6cff;
   --color-primary-fg: #ffffff;
+  --color-success: #1f9d55;
+  --color-bar: #3b6cff;
+  --color-selection: #d9e4ff;
+  --color-warning: #e07a1a;
   --color-gold: #c4841d;
   --color-danger: #d45656;
+  --color-bubble-in: #f3f4f6;
+  --color-bubble-out: #d9e4ff;
+  --color-overlay: #0e1320;
   --radius-sm: 0.5rem;
   --radius-md: 0.75rem;
   --radius-lg: 1rem;

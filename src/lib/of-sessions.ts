@@ -342,6 +342,14 @@ export const markChatOpened = createServerFn({ method: "POST" })
     return markChatOpenedView(context.userId, data);
   });
 
+export const readFanPurchases = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string; threadKey: string }) => input)
+  .handler(async ({ context, data }) => {
+    const { readFanPurchasesView } = await import("./of-sessions-runtime.server");
+    return readFanPurchasesView(context.userId, data);
+  });
+
 export const loadOlderMessages = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((input: { creatorId: string; threadKey: string }) => input)

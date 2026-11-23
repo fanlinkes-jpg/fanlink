@@ -20,13 +20,14 @@ export function SmartFunctionsPage({ tab }: { tab: FunctionTabId }) {
   }
 
   return (
-    <div>
-      <div className="flex flex-wrap items-end justify-between gap-3 px-4 pt-4 md:px-6 md:pt-6">
+    <div className="min-w-0">
+      <div className="min-w-0 px-4 pt-4 md:px-6 md:pt-6">
         <div>
           <h1 className="font-display text-2xl font-semibold">Funciones inteligentes</h1>
           <p className="text-sm text-muted">Masivos, listas, bóveda, guiones y enlaces en una sola sección.</p>
         </div>
-        <div className="flex max-w-full gap-1 overflow-auto rounded-md border border-line p-1">
+        <div className="relative mt-3 max-w-full">
+        <div className="flex max-w-full gap-1 overflow-x-auto rounded-md border border-line p-1 [scrollbar-width:none]">
           {FUNCTION_TABS.filter((item) => allowed.includes(item.id)).map((item) => (
             <button
               key={item.id}
@@ -37,6 +38,8 @@ export function SmartFunctionsPage({ tab }: { tab: FunctionTabId }) {
               {item.label}
             </button>
           ))}
+        </div>
+        <div className="pointer-events-none absolute inset-y-0 right-0 w-8 rounded-r-md bg-gradient-to-l from-bg to-transparent" />
         </div>
       </div>
       <FunctionBody tab={current} />

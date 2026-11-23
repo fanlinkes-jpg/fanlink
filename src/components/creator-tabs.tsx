@@ -41,7 +41,7 @@ export function CreatorColumn({
                     <span data-badge="messages" className="min-w-7 shrink-0 rounded-full bg-danger px-1.5 text-center text-[10px] font-semibold tabular-nums leading-4 text-white" aria-label={`${messages} chats sin leer`}>{messages}</span>
                   ) : null}
                   {notices > 0 ? (
-                    <span data-badge="notices" className="min-w-7 shrink-0 rounded-full bg-[#1f9d55] px-1.5 text-center text-[10px] font-semibold tabular-nums leading-4 text-white" aria-label={`${notices} notificaciones`}>{notices}</span>
+                    <span data-badge="notices" className="min-w-7 shrink-0 rounded-full bg-success px-1.5 text-center text-[10px] font-semibold tabular-nums leading-4 text-white" aria-label={`${notices} notificaciones`}>{notices}</span>
                   ) : null}
                 </span>
               </button>

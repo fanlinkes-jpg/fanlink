@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { FanlinkLogo } from "@/components/brand/FanlinkLogo";
 import { GROK_PROVIDERS, authEnabled, signIn } from "@/lib/auth/client";
 
 export const Route = createFileRoute("/login")({
@@ -9,7 +10,8 @@ function LoginPage() {
   return (
     <main className="grid min-h-dvh place-items-center bg-[#f4f6f8] px-5 text-[#1c2333]">
       <div className="w-full max-w-sm rounded-2xl border border-[#e6e8ee] bg-white p-6">
-        <p className="font-display text-2xl font-semibold">Entrar en Fanlink</p>
+        <FanlinkLogo wordmark className="text-2xl" markClassName="h-10 w-10" />
+        <p className="mt-4 font-display text-2xl font-semibold">Entrar en Fanlink</p>
         <p className="mt-2 text-sm text-[#6d7585]">
           Cada persona entra con su cuenta. La bandeja, los precios y el equipo son los mismos en todas las sesiones.
         </p>

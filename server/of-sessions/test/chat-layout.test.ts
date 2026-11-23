@@ -59,6 +59,7 @@ test("el botón Enviar se ve entero sin scroll de página", async () => {
         "Price",
         "Tag other creator",
         "Format text",
+        "Emojis",
         "Translation",
         "Enviar",
       ]);
@@ -98,11 +99,12 @@ test("el botón Enviar se ve entero sin scroll de página", async () => {
         const region = page.getByRole("region", { name: `Panel ${name}` });
         await composer.getByRole("button", { name, exact: true }).click();
         await region.waitFor();
-        if (name === "Add from media vault" || name === "Tag other creator") await region.getByText("Sin datos").waitFor();
+        if (name === "Add from media vault" || name === "Tag other creator") await region.getByText("Sin datos").first().waitFor();
         if (name === "GIF") await region.getByText("Sin datos. Hace falta una clave de API para buscar GIF.").waitFor();
         if (name === "Format text") await region.getByRole("button", { name: "Color Gris" }).waitFor();
         if (name === "Translation") await region.getByText("Sin datos: no hay servicio de traducción.").waitFor();
-        await composer.getByRole("button", { name, exact: true }).click();
+        if (name === "Add from media vault") await region.getByRole("button", { name: "Cerrar" }).click();
+        else await composer.getByRole("button", { name, exact: true }).click();
         await region.waitFor({ state: "hidden" });
       }
       await composer.getByRole("button", { name: "Schedule your message", exact: true }).click();
@@ -205,7 +207,7 @@ async function sendButtonBox(page: Page): Promise<{
     const button = [...document.querySelectorAll("button")].find((node) => node.getAttribute("aria-label") === "Enviar");
     const form = document.querySelector("form");
     const formRect = form?.getBoundingClientRect();
-    const parts = ["Add media", "GIF", "Add from media vault", "Schedule your message", "Price", "Tag other creator", "Format text", "Translation", "Guiones", "Enviar"].map((label) => {
+    const parts = ["Add media", "GIF", "Add from media vault", "Schedule your message", "Price", "Tag other creator", "Format text", "Emojis", "Translation", "Guiones", "Enviar"].map((label) => {
       const node = [...document.querySelectorAll("button")].find((item) => item.getAttribute("aria-label") === label || item.textContent?.includes(label));
       const box = node?.getBoundingClientRect();
       return { label, top: box?.top ?? -1, bottom: box?.bottom ?? -1 };

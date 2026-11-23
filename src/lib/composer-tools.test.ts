@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { QUICK_EMOJIS, authorLabel, emojiRows, matchScripts, mentionToken, messagePriceCents, paymentLabel, priceChartLayout, purchasedPpvSeries, slashQuery, wrapSelection } from "./composer-tools.ts";
+import { QUICK_EMOJIS, authorLabel, emojiRows, matchScripts, mentionToken, messagePriceCents, moneyLabel, paymentLabel, priceChartLayout, purchasedPpvSeries, slashQuery, wrapSelection } from "./composer-tools.ts";
 
 test("la cuadrícula rápida cabe en tres filas y el selector la incluye", () => {
   const rows = emojiRows(QUICK_EMOJIS, 12);
@@ -65,6 +65,17 @@ test("la gráfica solo pinta PPV comprados y no rellena huecos", () => {
   assert.equal(series.avgCents, 1000);
   assert.deepEqual(series.points.map((point) => point.priceCents), [500, 1500]);
   const dots = priceChartLayout(series.points, 360, 128);
+  const bought = purchasedPpvSeries([
+    { fromFan: false, purchased: true, priceCents: 2499, sentAt: "2026-05-19T12:00:00.000Z" },
+    { fromFan: false, purchased: true, priceCents: 3900, sentAt: "2026-07-01T12:00:00.000Z" },
+    { fromFan: false, purchased: true, priceCents: 1299, sentAt: "2026-10-11T08:00:00.000Z" },
+    { fromFan: false, purchased: true, priceCents: 2499, sentAt: "2026-10-11T18:00:00.000Z" },
+    { fromFan: false, purchased: false, priceCents: 5000, sentAt: "2026-10-12T00:00:00.000Z" },
+  ]);
+  assert.equal(bought.maxCents, 3900);
+  assert.equal(bought.avgCents, 2549);
+  assert.equal(moneyLabel(bought.maxCents), "$39.00");
+  assert.equal(moneyLabel(bought.avgCents), "$25.49");
   assert.equal(dots[0]?.label, "$5");
   assert.equal(dots[1]?.label, "$15");
   assert.equal(dots[0]?.date, "01/11");
