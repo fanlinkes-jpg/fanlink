@@ -33,9 +33,11 @@ export type NotificationTarget = {
  */
 export function NotificationBell({
   creatorId,
+  creatorName,
   onOpenThread,
 }: {
   creatorId: string;
+  creatorName?: string | null;
   onOpenThread?: (target: NotificationTarget) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -128,6 +130,7 @@ export function NotificationBell({
       {open ? (
         <NotificationPanel
           creatorId={creatorId}
+          creatorName={creatorName?.trim() || "Cuenta"}
           role={role}
           items={items}
           sessionNotice={sessionNotice}
@@ -148,6 +151,7 @@ export function NotificationBell({
 
 function NotificationPanel({
   creatorId,
+  creatorName,
   role,
   items,
   sessionNotice,
@@ -162,6 +166,7 @@ function NotificationPanel({
   onMark,
 }: {
   creatorId: string;
+  creatorName: string;
   role: "owner" | "member" | null;
   items: NotificationListItem[] | null;
   sessionNotice: string | null;
@@ -283,7 +288,7 @@ function NotificationPanel({
           {purchase?.messageRef ? (
             <PurchaseMessageDialog
               creatorId={creatorId}
-              creatorName="Cuenta"
+              creatorName={creatorName}
               fanKey={purchase.fanKey}
               threadKey={purchase.threadKey}
               messageRef={purchase.messageRef}

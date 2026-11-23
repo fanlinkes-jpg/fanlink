@@ -36,16 +36,17 @@ import { chatIntervalMinutes, inboxIsOpen, activeThreadWatches } from "../../ser
 import { openWatchContext, runInboxWatch } from "../../server/of-sessions/sync/inbox-watch.ts";
 import { pickAccountWatch } from "../../server/of-sessions/sync/watch-plan.ts";
 import { listChatMeta, listChats, listOpenHistory, listPendingOutbounds, listRecentMatches, listThreadHistory, markChatList, markHistory, markOutboundAwaiting, noteHistoryCursor, recordOutbound, saveChatRead, saveFanCards } from "../../server/of-sessions/sync/chat-store.ts";
-import { historyAdvance, historyPerMinute, listPageDone, nextHistoryThread } from "../../server/of-sessions/sync/history.ts";
+import { historyAdvance, historyCandidates, historyLoopEnabled, historyPerMinute, listPageDone, nextHistoryThread } from "../../server/of-sessions/sync/history.ts";
 import { captureChatListPage } from "../../server/of-sessions/sync/history-scroll.ts";
 import { openWorkPage } from "../../server/of-sessions/sessions/work-page.ts";
 import { type VaultFile } from "../../server/of-sessions/sync/vault-listen.ts";
 import { readChatVaultView as readVaultPage, type VaultPageResult, type VaultReadDeps } from "../../server/of-sessions/sync/vault-read.ts";
 import { fetchSignedOnlineFans } from "../../server/of-sessions/sync/online-fans.ts";
 import { fetchOlderChatPage, sessionForApi, signedHeaders } from "../../server/of-sessions/sync/of-chat-api.ts";
+import { deliverPpvPost, ppvDryRun } from "../../server/of-sessions/send/ppv-api.ts";
 import { fetchNotificationList } from "../../server/of-sessions/sync/of-notifications-api.ts";
 import { applyDirectoryAvatars, avatarsFromUserMap, directoryAvatarReport, hashFanId, noticeIdsMissingAvatar, noticeTabFresh, ofListType, usersListPath, type NotificationTab } from "@/lib/notifications";
-import { awaitAccountGap, withAccountApi } from "../../server/of-sessions/sync/api-list-pace.ts";
+import { accountApiBusy, awaitAccountGap, REQUEST_GAP_MS, withAccountApi } from "../../server/of-sessions/sync/api-list-pace.ts";
 import { shouldKickCreatorRead } from "./first-sync.ts";
 import { bindSignedViews, listOnlineFansView, markChatOpenedView, readVisibleFanSpendView } from "../../server/of-sessions/sync/signed-views.ts";
 
@@ -314,7 +315,7 @@ export async function rememberCreatorAccounts(): Promise<void> {
 }
 
 function bootHistoryLoop(sessions: SessionManager): void {
-  if (process.env.FANLINK_HISTORY_ENABLED !== "true") return;
+  if (!historyLoopEnabled(process.env.FANLINK_HISTORY_ENABLED)) return;
   if (process.execArgv.includes("--test")) return;
   const recent: number[] = [];
   const skipUntil = new Map<string, number>();
@@ -327,12 +328,14 @@ function bootHistoryLoop(sessions: SessionManager): void {
         let stepped = false;
         for (const account of accounts) {
           if (!account.creatorId || account.identityState === "mismatch" || signedReadsBlocked(account)) continue;
+          if (accountApiBusy(account.id)) continue;
           const open = await listOpenHistory(await getSql(), account.creatorId);
-          const next = nextHistoryThread(open.filter((item) => (skipUntil.get(`${account.creatorId}:${item.threadKey}`) ?? 0) <= Date.now()));
+          const waiting = historyCandidates(open).filter((item) => (skipUntil.get(`${account.creatorId}:${item.threadKey}`) ?? 0) <= Date.now());
+          const next = nextHistoryThread(waiting);
           if (!next) continue;
           const pace = sendPace(recent, Date.now(), historyPerMinute(process.env.FANLINK_HISTORY_PER_MINUTE));
           if (pace.waitMs > 0) await sleep(Math.min(pace.waitMs, 60_000));
-          const got = await pullOlder(sessions, account.id, account.creatorId, next.threadKey, account.identityUserId);
+          const got = await pullOlder(sessions, account.id, account.creatorId, next.threadKey, account.identityUserId, { yieldIfBusy: true });
           if (got.status === "empty") skipUntil.set(`${account.creatorId}:${next.threadKey}`, Date.now() + 10 * 60_000);
           if (got.status === "wait") skipUntil.set(`${account.creatorId}:${next.threadKey}`, Date.now() + got.retryAfterMs);
           recent.push(Date.now());
@@ -348,12 +351,17 @@ function bootHistoryLoop(sessions: SessionManager): void {
   })();
 }
 
-async function pullOlder(sessions: SessionManager, accountId: string, creatorId: string, threadKey: string, accountUserId: string | null): Promise<{ status: "saved" | "empty" | "busy" | "done" | "wait"; hasMore: boolean; retryAfterMs: number }> {
+async function pullOlder(sessions: SessionManager, accountId: string, creatorId: string, threadKey: string, accountUserId: string | null, options?: { yieldIfBusy?: boolean }): Promise<{ status: "saved" | "empty" | "busy" | "done" | "wait"; hasMore: boolean; retryAfterMs: number }> {
   const sql = await getSql();
   await noteHistoryCursor(sql, creatorId);
   const open = await listOpenHistory(sql, creatorId);
-  const row = open.find((item) => item.threadKey === threadKey);
-  if (row?.done) return { status: "done", hasMore: false, retryAfterMs: 0 };
+  const known = open.find((item) => item.threadKey === threadKey) ?? null;
+  if (!known) {
+    const stored = await listThreadHistory(sql, creatorId, threadKey);
+    if (stored.done && stored.messages.length > 0) return { status: "done", hasMore: false, retryAfterMs: 0 };
+  }
+  if (options?.yieldIfBusy && accountApiBusy(accountId)) return { status: "busy", hasMore: true, retryAfterMs: 0 };
+  const cursor = known && known.stored > 0 ? known.cursor : null;
   let state;
   try {
     state = await sessions.readStorageState(accountId);
@@ -364,20 +372,20 @@ async function pullOlder(sessions: SessionManager, accountId: string, creatorId:
     fetch: globalThis.fetch,
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-    minGapMs: 300,
+    minGapMs: REQUEST_GAP_MS,
     accountId,
   }, {
     threadKey,
     fanKey: null,
     accountUserId: accountUserId ?? "",
-    oldestMessageId: row?.cursor ?? null,
+    oldestMessageId: cursor,
   }));
   if (page.retryAfterMs > 0) {
     noteAccountBlock(accountId, "429");
     return { status: "wait", hasMore: true, retryAfterMs: page.retryAfterMs };
   }
   if (page.status != null && page.status !== 200) return { status: "empty", hasMore: true, retryAfterMs: 0 };
-  const step = historyAdvance({ previousCursor: row?.cursor ?? null, incoming: page.messages, hasMore: page.hasMore });
+  const step = historyAdvance({ previousCursor: cursor, incoming: page.messages, hasMore: page.hasMore });
   if (page.messages.length > 0) {
     await saveChatRead(sql, creatorId, { threads: [], messages: page.messages, reason: null, jsonPaths: [] });
   }
@@ -709,6 +717,7 @@ export async function listCreatorChatViews(userId: string): Promise<CreatorChatL
       messagesCents: thread.messagesCents,
       avatarUrl: thread.avatarUrl,
       online: thread.online,
+      lastSeenAt: thread.lastSeenAt ?? null,
       subPriceCents: thread.subPriceCents,
       subExpiresAt: thread.subExpiresAt,
       renewAuto: thread.renewAuto,
@@ -1130,6 +1139,36 @@ export async function resolveChatSendHooks(
     } : null,
     env: process.env,
     vaultPieces,
+    postPpv: async (posted) => {
+      if (!account?.creatorId) return { messageId: null, reason: "Envío real desactivado", dryRun: false };
+      let state;
+      try {
+        state = await sessions.readStorageState(account.id);
+      } catch {
+        return { messageId: null, reason: "OnlyFans pide iniciar sesión: pulsa Reconectar", dryRun: false };
+      }
+      const auth = sessionForApi(state, Date.now());
+      if ("reason" in auth) return { messageId: null, reason: auth.reason, dryRun: false };
+      const rules = await loadSignRules(fetch, Date.now());
+      return deliverPpvPost({
+        ...posted,
+        dryRun: ppvDryRun(process.env),
+        request: (path, payload) => withAccountApi(account.id, async () => {
+          await awaitAccountGap(account.id, () => Date.now(), (ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+          const response = await fetch(`https://onlyfans.com${path}`, {
+            method: "POST",
+            headers: { ...signedHeaders(rules, path, auth, Date.now()), "content-type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          if (response.status === 429) {
+            const retry = Number(response.headers.get("retry-after"));
+            return { status: 429, json: null, retryAfterMs: Number.isFinite(retry) && retry > 0 ? retry * 1000 : 1_500 };
+          }
+          const json = response.ok ? await response.json().catch(() => null) : null;
+          return { status: response.status, json, retryAfterMs: 0 };
+        }),
+      });
+    },
     open: () => {
       if (!account) return Promise.resolve({ messageId: null, reason: "Envío real desactivado" });
       return sessions.withSession(account.id, (context) => composeChat(context, {

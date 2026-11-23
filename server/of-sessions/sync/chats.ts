@@ -30,6 +30,8 @@ export type ChatThread = {
   messagesCents: number | null;
   avatarUrl: string | null;
   online: boolean | null;
+  /** `lastSeen` de api2. Null si el JSON no lo trae. */
+  lastSeenAt?: string | null;
   subPriceCents: number | null;
   subExpiresAt: string | null;
   renewAuto: boolean | null;
@@ -99,6 +101,7 @@ export type ChatUser = {
   messagesCents: number | null;
   avatarUrl: string | null;
   online: boolean | null;
+  lastSeenAt: string | null;
   subPriceCents: number | null;
   subExpiresAt: string | null;
   renewAuto: boolean | null;
@@ -285,6 +288,7 @@ function combineThread(left: ChatThread, right: ChatThread): ChatThread {
     messagesCents: newer.messagesCents ?? older.messagesCents,
     avatarUrl: newer.avatarUrl ?? older.avatarUrl,
     online: newer.online ?? older.online,
+    lastSeenAt: newer.lastSeenAt ?? older.lastSeenAt ?? null,
     subPriceCents: newer.subPriceCents ?? older.subPriceCents,
     subExpiresAt: newer.subExpiresAt ?? older.subExpiresAt,
     renewAuto: newer.renewAuto ?? older.renewAuto,
@@ -340,6 +344,7 @@ export function mergeUsers(current: ChatUser[], incoming: ChatUser[]): ChatUser[
       messagesCents: row.messagesCents ?? prev.messagesCents,
       avatarUrl: row.avatarUrl ?? prev.avatarUrl,
       online: row.online ?? prev.online,
+      lastSeenAt: row.lastSeenAt ?? prev.lastSeenAt ?? null,
       subPriceCents: row.subPriceCents ?? prev.subPriceCents,
       subExpiresAt: row.subExpiresAt ?? prev.subExpiresAt,
       renewAuto: row.renewAuto ?? prev.renewAuto,
@@ -363,7 +368,8 @@ export function applyUserDirectory(threads: ChatThread[], users: ChatUser[]): Ch
       postsCents: thread.postsCents ?? user.postsCents,
       messagesCents: thread.messagesCents ?? user.messagesCents,
       avatarUrl: thread.avatarUrl ?? user.avatarUrl,
-      online: thread.online ?? user.online,
+      online: user.online ?? thread.online,
+      lastSeenAt: user.lastSeenAt ?? thread.lastSeenAt ?? null,
       subPriceCents: thread.subPriceCents ?? user.subPriceCents,
       subExpiresAt: thread.subExpiresAt ?? user.subExpiresAt,
       renewAuto: thread.renewAuto ?? user.renewAuto,
@@ -450,6 +456,8 @@ function threadFrom(record: Record<string, unknown>, accountId: string | null): 
   if (!fanKey && !clean(record.id, 40) && !clean(record.threadId, 40) && !looksLikeThread) return null;
   const excerpt = excerptOf(visibleText(last?.text ?? last?.body ?? record.excerpt, 500));
   const spend = mergeSpend(readFanSpend(user), readFanSpend(chatSpend(record))) ?? emptySpend();
+  const listedOnline = spend.online ?? onlineFlag(record.isOnline) ?? onlineFlag(record.online);
+  const listedSeen = spend.lastSeenAt ?? iso(record.lastSeen ?? record.last_seen);
   const lastFromUserId = clean(nested(last?.fromUser)?.id, 40);
   return {
     threadKey,
@@ -462,6 +470,8 @@ function threadFrom(record: Record<string, unknown>, accountId: string | null): 
     lastFromUserId,
     lastFromFan: fromFanFlag(lastFromUserId, fanKey, accountId),
     ...spend,
+    online: listedOnline,
+    lastSeenAt: listedSeen,
     lists: readFanLists(user),
   };
 }
@@ -576,12 +586,13 @@ function priceCents(value: unknown): number | null {
 }
 
 /**
- * En un mensaje propio, `canPurchase` y `purchased` hablan de quien mira
- * (la creadora no compra su PPV). Lo que dice si el fan pagó es `isOpened`.
+ * En un mensaje propio, `canPurchase` y `purchased` hablan de quien mira.
+ * `isOpened` en true cuenta como pagado. En false no se niega la compra:
+ * Alz2000 tiene 12 PPV sin abrir y las compras están en avisos y movimientos.
  */
 export function purchasedFlag(record: Record<string, unknown>, price: number | null, own = false): boolean | null {
   if (own && price != null && price > 0) {
-    if (typeof record.isOpened === "boolean") return record.isOpened;
+    if (record.isOpened === true) return true;
     return null;
   }
   if (typeof record.purchased === "boolean") return record.purchased;
@@ -703,7 +714,7 @@ export function fromFanFlag(fromUserId: string | null, fanKey: string | null, ac
   return null;
 }
 
-function emptySpend(): Pick<ChatThread, "spentCents" | "subscribesCents" | "tipsCents" | "postsCents" | "messagesCents" | "avatarUrl" | "online" | "subPriceCents" | "subExpiresAt" | "renewAuto"> {
+function emptySpend(): Pick<ChatThread, "spentCents" | "subscribesCents" | "tipsCents" | "postsCents" | "messagesCents" | "avatarUrl" | "online" | "lastSeenAt" | "subPriceCents" | "subExpiresAt" | "renewAuto"> {
   return {
     spentCents: null,
     subscribesCents: null,
@@ -712,6 +723,7 @@ function emptySpend(): Pick<ChatThread, "spentCents" | "subscribesCents" | "tips
     messagesCents: null,
     avatarUrl: null,
     online: null,
+    lastSeenAt: null,
     subPriceCents: null,
     subExpiresAt: null,
     renewAuto: null,
@@ -743,6 +755,7 @@ function mergeSpend(
     messagesCents: left.messagesCents ?? right.messagesCents,
     avatarUrl: left.avatarUrl ?? right.avatarUrl,
     online: left.online ?? right.online,
+    lastSeenAt: left.lastSeenAt ?? right.lastSeenAt,
     subPriceCents: left.subPriceCents ?? right.subPriceCents,
     subExpiresAt: left.subExpiresAt ?? right.subExpiresAt,
     renewAuto: left.renewAuto ?? right.renewAuto,
@@ -751,7 +764,7 @@ function mergeSpend(
 
 function readFanSpend(
   record: Record<string, unknown> | null,
-): Pick<ChatThread, "spentCents" | "subscribesCents" | "tipsCents" | "postsCents" | "messagesCents" | "avatarUrl" | "online" | "subPriceCents" | "subExpiresAt" | "renewAuto"> | null {
+): Pick<ChatThread, "spentCents" | "subscribesCents" | "tipsCents" | "postsCents" | "messagesCents" | "avatarUrl" | "online" | "lastSeenAt" | "subPriceCents" | "subExpiresAt" | "renewAuto"> | null {
   if (!record) return null;
   const nestedSpend = nested(record.subscribedOnData) ?? nested(record.subscribedByData);
   const source = nestedSpend ?? record;
@@ -762,13 +775,14 @@ function readFanSpend(
   const spentCents = money(source.totalSumm ?? source.spent ?? source.totalSpent);
   const avatarUrl = clean(record.avatar, 400);
   const online = onlineFlag(record.isOnline) ?? onlineFlag(record.online);
+  const lastSeenAt = iso(record.lastSeen ?? record.last_seen ?? record.seenAt);
   const subPriceCents = money(source.price ?? source.subscribePrice ?? source.regularPrice);
   const subExpiresAt = iso(source.expiredAt ?? source.expireDate);
   const renewRaw = source.autoRenew ?? source.renewedAuto ?? source.isAutoRenew ?? source.subscribedOnAutoprolong ?? source.subscribedByAutoprolong ?? source.autoprolong ?? record.autoRenew ?? record.subscribedOnAutoprolong ?? record.subscribedByAutoprolong;
   const renewAuto = renewRaw === true || renewRaw === false ? renewRaw : null;
-  const card = { spentCents, subscribesCents, tipsCents, postsCents, messagesCents, avatarUrl, online, subPriceCents, subExpiresAt, renewAuto };
+  const card = { spentCents, subscribesCents, tipsCents, postsCents, messagesCents, avatarUrl, online, lastSeenAt, subPriceCents, subExpiresAt, renewAuto };
   const parts = [subscribesCents, tipsCents, postsCents, messagesCents].filter((value) => value != null);
-  if (spentCents == null && parts.length === 0 && !avatarUrl && online == null && subPriceCents == null && !subExpiresAt && renewAuto == null) return null;
+  if (spentCents == null && parts.length === 0 && !avatarUrl && online == null && !lastSeenAt && subPriceCents == null && !subExpiresAt && renewAuto == null) return null;
   return card;
 }
 
@@ -902,6 +916,7 @@ function userFrom(record: Record<string, unknown>, fallbackId: string | null): C
     username: handle(record.username ?? record.handle),
     name: clean(record.name ?? record.displayName, 80),
     ...spend,
+    lastSeenAt: spend.lastSeenAt ?? null,
   };
 }
 

@@ -453,7 +453,7 @@ function freePort(): Promise<number> {
 async function startDev(port: number): Promise<ChildProcess> {
   await assertDevPortFree();
   const dataDir = await privatePgliteDir();
-  const env: NodeJS.ProcessEnv = { ...process.env, VITE_AUTH_ENABLED: "false", FANLINK_PGLITE_DIR: dataDir };
+  const env: NodeJS.ProcessEnv = { ...process.env, VITE_AUTH_ENABLED: "false", FANLINK_PGLITE_DIR: dataDir, FANLINK_HISTORY_ENABLED: "false" };
   delete env.DATABASE_URL;
   const child = spawn(process.execPath, ["node_modules/vite/bin/vite.js", "dev", "--host", "127.0.0.1", "--port", String(port), "--strictPort"], {
     cwd: root,

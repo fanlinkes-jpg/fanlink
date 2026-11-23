@@ -210,7 +210,11 @@ export async function composeChat(context: BrowserContext, request: ComposeReque
       result = await giveUp(attached.reason);
       return result;
     }
-    await markFreePreviews(page, request.vaultPieces ?? [], request.priceCents);
+    const previews = await markFreePreviews(page, request.vaultPieces ?? [], request.priceCents);
+    if (!previews.ok) {
+      result = await giveUp(previews.reason);
+      return result;
+    }
     confirmedIds = attached.ids;
     if (request.scheduleAt) {
       const schedule = page.locator("[data-fanlink-schedule], button[aria-label='Schedule your message'], button[aria-label='Programar tu mensaje']").first();
@@ -570,14 +574,19 @@ function delay(ms: number): Promise<void> {
 const VAULT_PIECE = "[data-vault-piece], [data-vault-id], [data-media-id]";
 const ATTACHMENT = "[data-fanlink-attachment], [data-attachment-id]";
 
-/** Con precio, la pieza gratis es la vista previa. La de pago se queda cerrada. */
-async function markFreePreviews(page: Page, pieces: readonly VaultSendPiece[], priceCents: number | null): Promise<void> {
-  if (priceCents == null || priceCents <= 0) return;
+/**
+ * Con precio, la pieza gratis es la vista previa. Si no está el botón, no se
+ * pulsa Send: un PPV no puede salir con todo de pago.
+ */
+async function markFreePreviews(page: Page, pieces: readonly VaultSendPiece[], priceCents: number | null): Promise<{ ok: true } | { ok: false; reason: string }> {
+  if (priceCents == null || priceCents <= 0) return { ok: true };
   for (const piece of pieces) {
     if (piece.free !== true) continue;
     const button = page.locator(`[data-fanlink-preview="${piece.id}"]`).first();
-    if (await button.count()) await button.click().catch(() => undefined);
+    if (!(await button.count())) return { ok: false, reason: "No está la vista previa" };
+    await button.click().catch(() => undefined);
   }
+  return { ok: true };
 }
 
 /** Abre la bóveda, señala cada pieza por id o por carpeta y no pulsa Send si falta alguna. */

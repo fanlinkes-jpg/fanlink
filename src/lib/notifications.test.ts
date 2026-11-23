@@ -468,7 +468,15 @@ test("cada pestaña usa el type de OnlyFans y no mezcla compras con propinas", (
   assert.deepEqual(noticesForOfTab(rows, "purchases").map((row) => row.key), ["compra"]);
   assert.deepEqual(noticesForOfTab(rows, "tips").map((row) => row.key), ["propina"]);
   assert.deepEqual(noticesForOfTab(rows, "promotions").map((row) => row.key), ["directo"]);
-  assert.deepEqual(noticesForOfTab(rows, "all").map((row) => row.key), ["todo"]);
+  assert.deepEqual(noticesForOfTab(rows, "all").map((row) => row.key), ["todo", "compra", "propina", "directo"]);
+  assert.deepEqual(noticesForOfTab([
+    { ofType: null, kind: "tip" as const, key: "suelta" },
+    { ofType: "purchases", kind: "ppv" as const, key: "compra" },
+  ], "tips").map((row) => row.key), ["suelta"]);
+  assert.deepEqual(noticesForOfTab([
+    { ofType: null, kind: "tip" as const, key: "suelta" },
+    { ofType: "purchases", kind: "ppv" as const, key: "compra" },
+  ], "all").map((row) => row.key), ["suelta", "compra"]);
   assert.deepEqual(noticesForOfTab(rows, "tags"), []);
   assert.match(ofTabListNote({ tab: "tags", unread: 2, listed: 0 }) ?? "", /2 no leídas/);
   assert.match(ofTabListNote({ tab: "promotions", unread: 3, listed: 1 }) ?? "", /3 no leídas/);

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { messagePriceCents, moneyLabel, priceChartLayout, purchasedPpvSeries, type PpvPoint } from "@/lib/composer-tools";
+import { messagePriceCents, moneyLabel, priceChartLayout, purchasedPpvSeries, type PaidSource, type PpvPoint } from "@/lib/composer-tools";
 
 type PricedMessage = {
   fromFan: boolean;
@@ -12,17 +12,19 @@ type PricedMessage = {
 export function MessagePriceDialog({
   initial,
   messages,
+  purchases = [],
   onCancel,
   onSave,
 }: {
   initial: string;
   messages: PricedMessage[];
+  purchases?: PaidSource[];
   onCancel: () => void;
   onSave: (cents: number | null) => void;
 }) {
   const [raw, setRaw] = useState(initial);
   const parsed = messagePriceCents(raw);
-  const series = purchasedPpvSeries(messages);
+  const series = purchasedPpvSeries(messages, [purchases]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {

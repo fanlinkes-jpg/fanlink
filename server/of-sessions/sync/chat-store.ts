@@ -77,13 +77,14 @@ export async function saveChatRead(
   const failures = failed ? Number(previous[0]?.chat_failures ?? 0) + 1 : 0;
   await sql.query("begin");
   try {
+    const keepSeen = await threadHasColumn(sql, "last_seen_at");
     for (const thread of read.threads) {
       await sql.query(
         `insert into of_chat_thread (
            creator_id, thread_key, fan_key, fan_handle, fan_name, last_message_at, excerpt, unread, synced_at, origin,
            last_from_fan, spent_cents, subscribes_cents, tips_cents, posts_cents, messages_cents,
-           avatar_url, is_online, sub_price_cents, sub_expires_at, renew_auto, fan_lists
-         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+           avatar_url, is_online, sub_price_cents, sub_expires_at, renew_auto, fan_lists${keepSeen ? ", last_seen_at" : ""}
+         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22${keepSeen ? ", $24" : ""})
          on conflict (creator_id, thread_key) do update set
            fan_key = coalesce(excluded.fan_key, of_chat_thread.fan_key),
            fan_handle = coalesce(excluded.fan_handle, of_chat_thread.fan_handle),
@@ -115,7 +116,12 @@ export async function saveChatRead(
            sub_price_cents = coalesce(excluded.sub_price_cents, of_chat_thread.sub_price_cents),
            sub_expires_at = coalesce(excluded.sub_expires_at, of_chat_thread.sub_expires_at),
            renew_auto = coalesce(excluded.renew_auto, of_chat_thread.renew_auto),
-           fan_lists = coalesce(excluded.fan_lists, of_chat_thread.fan_lists)`,
+           fan_lists = coalesce(excluded.fan_lists, of_chat_thread.fan_lists)
+           ${keepSeen ? `, last_seen_at = case
+             when excluded.last_seen_at is null then of_chat_thread.last_seen_at
+             when of_chat_thread.last_seen_at is null or excluded.last_seen_at > of_chat_thread.last_seen_at then excluded.last_seen_at
+             else of_chat_thread.last_seen_at
+           end` : ""}`,
         [
           creatorId,
           thread.threadKey,
@@ -140,6 +146,7 @@ export async function saveChatRead(
           thread.renewAuto,
           thread.lists?.length ? thread.lists.join("\n") : null,
           keepMarkedUnread(creatorId, thread.threadKey, read.startedAt, thread.unread),
+          ...(keepSeen ? [thread.lastSeenAt ?? null] : []),
         ],
       );
     }
@@ -267,7 +274,16 @@ export async function saveChatRead(
 }
 
 /** Rellena nombre, foto y gasto cuando la lista de chats venía sin la ficha. No pisa un dato que ya existe. */
+async function threadHasColumn(sql: ReadSql, column: string): Promise<boolean> {
+  const rows = await sql.query<{ column_name: string }>(
+    "select column_name from information_schema.columns where table_name = 'of_chat_thread' and column_name = $1",
+    [column],
+  );
+  return rows.length > 0;
+}
+
 export async function saveFanCards(sql: ReadSql, creatorId: string, users: ChatUser[]): Promise<void> {
+  const keepSeen = await threadHasColumn(sql, "last_seen_at");
   for (const user of users) {
     if (!user.id) continue;
     await sql.query(
@@ -280,10 +296,15 @@ export async function saveFanCards(sql: ReadSql, creatorId: string, users: ChatU
          tips_cents = coalesce(tips_cents, $8),
          posts_cents = coalesce(posts_cents, $9),
          messages_cents = coalesce(messages_cents, $10),
-         is_online = coalesce(is_online, $11),
+         is_online = coalesce($11, is_online),
          sub_price_cents = coalesce(sub_price_cents, $12),
          sub_expires_at = coalesce(sub_expires_at, $13),
          renew_auto = coalesce(renew_auto, $14)
+         ${keepSeen ? `, last_seen_at = case
+           when $15::timestamptz is null then last_seen_at
+           when last_seen_at is null or $15::timestamptz > last_seen_at then $15::timestamptz
+           else last_seen_at
+         end` : ""}
        where creator_id = $1 and (fan_key = $2 or thread_key = $2)`,
       [
         creatorId,
@@ -300,6 +321,7 @@ export async function saveFanCards(sql: ReadSql, creatorId: string, users: ChatU
         user.subPriceCents,
         user.subExpiresAt,
         user.renewAuto,
+        ...(keepSeen ? [user.lastSeenAt] : []),
       ],
     );
   }
@@ -314,7 +336,7 @@ export async function listChats(
   const threads = await sql.query<ThreadRow>(
     `select creator_id, thread_key, fan_key, fan_handle, fan_name, last_message_at, excerpt, unread, synced_at,
             last_from_fan, spent_cents, subscribes_cents, tips_cents, posts_cents, messages_cents,
-            avatar_url, is_online, sub_price_cents, sub_expires_at, renew_auto, fan_lists
+            avatar_url, is_online, sub_price_cents, sub_expires_at, renew_auto, fan_lists${await threadHasColumn(sql, "last_seen_at") ? ", last_seen_at" : ""}
      from of_chat_thread where creator_id in (${filter})
      order by last_message_at desc nulls last`,
     creatorIds,
@@ -360,6 +382,7 @@ export async function listChats(
       messagesCents: centsOrNull(row.messages_cents),
       avatarUrl: row.avatar_url,
       online: flagOrNull(row.is_online),
+      lastSeenAt: iso(row.last_seen_at),
       subPriceCents: centsOrNull(row.sub_price_cents),
       subExpiresAt: iso(row.sub_expires_at),
       renewAuto: flagOrNull(row.renew_auto),
@@ -434,6 +457,7 @@ type ThreadRow = {
   messages_cents: number | string | null;
   avatar_url: string | null;
   is_online: boolean | string | null;
+  last_seen_at: Date | string | null;
   sub_price_cents: number | string | null;
   sub_expires_at: Date | string | null;
   renew_auto: boolean | string | null;
@@ -965,17 +989,30 @@ export async function noteHistoryCursor(sql: ReadSql, creatorId: string): Promis
   );
 }
 
-export async function listOpenHistory(sql: ReadSql, creatorId: string): Promise<Array<{ threadKey: string; cursor: string | null; done: boolean }>> {
-  const rows = await sql.query<{ thread_key: string; history_cursor: string | null; history_done: boolean | string }>(
-    `select thread_key, history_cursor, history_done from of_chat_thread
-     where creator_id = $1 and history_done = false
-     order by last_message_at desc nulls last`,
+export async function listOpenHistory(sql: ReadSql, creatorId: string): Promise<Array<{ threadKey: string; cursor: string | null; done: boolean; stored: number }>> {
+  const rows = await sql.query<{ thread_key: string; history_cursor: string | null; history_done: boolean | string; has_messages: boolean | string }>(
+    `select t.thread_key, t.history_cursor, t.history_done,
+            exists (
+              select 1 from of_chat_message m
+              where m.creator_id = t.creator_id and m.thread_key = t.thread_key
+            ) as has_messages
+     from of_chat_thread t
+     where t.creator_id = $1
+       and (
+         t.history_done = false
+         or not exists (
+           select 1 from of_chat_message m
+           where m.creator_id = t.creator_id and m.thread_key = t.thread_key
+         )
+       )
+     order by t.last_message_at desc nulls last`,
     [creatorId],
   );
   return rows.map((row) => ({
     threadKey: row.thread_key,
     cursor: row.history_cursor,
     done: row.history_done === true || row.history_done === "t" || row.history_done === "true",
+    stored: row.has_messages === true || row.has_messages === "t" || row.has_messages === "true" ? 1 : 0,
   }));
 }
 
@@ -1212,19 +1249,24 @@ export async function readOutboundClaim(sql: ReadSql, id: string): Promise<Outbo
   };
 }
 
-/** Si ese dedupe_key ya salió, reintentar no abre otro envío. */
-export async function sentMessageForDedupe(sql: ReadSql, creatorId: string, dedupeKey: string): Promise<string | null> {
+/** Unos minutos. Pasado ese rato, el mismo texto o PPV puede salir otra vez. */
+export const DEDUPE_WINDOW_MS = 5 * 60 * 1000;
+
+/** Si ese dedupe_key ya salió dentro de la ventana, reintentar no abre otro envío. */
+export async function sentMessageForDedupe(sql: ReadSql, creatorId: string, dedupeKey: string, windowMs = DEDUPE_WINDOW_MS): Promise<string | null> {
   const columns = await sql.query<{ column_name: string }>(
     "select column_name from information_schema.columns where table_name = 'of_chat_outbound' and column_name = 'dedupe_key'",
   );
   if (columns.length === 0) return null;
+  const since = new Date(Date.now() - Math.max(0, windowMs)).toISOString();
   const rows = await sql.query<{ of_message_key: string | null; matched_message_key: string | null }>(
     `select of_message_key, matched_message_key from of_chat_outbound
      where creator_id = $1 and dedupe_key = $2
+       and created_at >= $3::timestamptz
        and (of_message_key is not null or matched_message_key is not null or coalesce(status, '') = 'sent')
      order by created_at desc
      limit 1`,
-    [creatorId, dedupeKey],
+    [creatorId, dedupeKey, since],
   );
   return rows[0]?.of_message_key ?? rows[0]?.matched_message_key ?? null;
 }

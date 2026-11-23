@@ -530,6 +530,74 @@ test("un aviso sin fecha caduca desde la primera vez que se vio", async () => {
   }
 });
 
+test("0058 une u7022542 y 129795686060 en sus dos variantes", async () => {
+  const pg = new PGlite();
+  for (const name of ["0034_notifications.sql", "0046_notification_fan_card.sql", "0047_notification_counts.sql", "0048_notification_post.sql", "0055_notification_of_type.sql", "0057_notification_message_ref.sql"]) {
+    await pg.exec(await readFile(path.join(root, "migrations", name), "utf8"));
+  }
+  await pg.exec(`
+    insert into of_notification (creator_id, notification_key, kind, body, synced_at, origin, of_type)
+    values
+      ('allison', 'u7022542', 'tip', 'base', now(), 'onlyfans', null),
+      ('allison', E'u7022542\\x1ftip', 'tip', 'copia', now(), 'onlyfans', 'tip'),
+      ('allison', '129795686060', 'comment', 'base', now(), 'onlyfans', null),
+      ('allison', E'129795686060\\x1fcommented', 'comment', 'copia', now(), 'onlyfans', 'commented');
+    insert into of_notification_seen (creator_id, notification_key, user_id, seen_at)
+    values ('allison', E'u7022542\\x1ftip', 'ana', now());
+  `);
+  const file = await readFile(path.join(root, "migrations/0058_notification_tab_keys.sql"), "utf8");
+  await pg.exec(file);
+  await pg.exec(file);
+  const rows = await pg.query<{ notification_key: string; of_type: string | null }>(
+    "select notification_key, of_type from of_notification where creator_id = 'allison' order by notification_key",
+  );
+  assert.deepEqual(rows.rows.map((row) => row.notification_key), ["129795686060", "u7022542"]);
+  assert.equal(rows.rows.find((row) => row.notification_key === "u7022542")?.of_type, "tip");
+  assert.equal(rows.rows.find((row) => row.notification_key === "129795686060")?.of_type, "commented");
+  const seen = await pg.query<{ notification_key: string }>("select notification_key from of_notification_seen where creator_id = 'allison'");
+  assert.equal(seen.rows[0]?.notification_key, "u7022542");
+  await pg.close();
+});
+
+test("las propinas de Allison salen aunque haya más de 50 avisos más nuevos", async () => {
+  const { pg, sql } = await database();
+  try {
+    const likes = Array.from({ length: 60 }, (_, index) => ({
+      key: `like-${index}`,
+      kind: "like" as const,
+      body: "like",
+      fanKey: "7",
+      fanName: "Ana",
+      threadKey: null,
+      amountCents: null,
+      occurredAt: new Date(Date.UTC(2026, 10, 20, 0, index)).toISOString(),
+      pending: false,
+      ofType: null,
+    }));
+    const tips = Array.from({ length: 10 }, (_, index) => ({
+      key: `tip-${index}`,
+      kind: "tip" as const,
+      body: `propina ${index}`,
+      fanKey: "7",
+      fanName: "Ana",
+      threadKey: null,
+      amountCents: 500,
+      occurredAt: new Date(Date.UTC(2026, 9, index + 1, 12, 0)).toISOString(),
+      pending: false,
+      ofType: "tip",
+    }));
+    await saveNotificationRead(sql, "allison", { captured: true, reason: null, items: [...likes, ...tips] });
+    const page = await listNotificationRows(sql, "allison", "ana", { tab: "tips", role: "owner" });
+    assert.equal(page.rows.length, 10);
+    assert.equal(page.rows.every((row) => row.kind === "tip"), true);
+    const everything = await listNotificationRows(sql, "allison", "ana", { tab: "all", role: "owner", limit: 50 });
+    assert.equal(everything.rows.some((row) => row.kind === "tip"), false);
+    assert.equal(everything.nextCursor != null, true);
+  } finally {
+    await pg.close();
+  }
+});
+
 async function migrated() {
   const pg = new PGlite();
   await pg.exec(await readFile(path.join(root, "migrations/0034_notifications.sql"), "utf8"));

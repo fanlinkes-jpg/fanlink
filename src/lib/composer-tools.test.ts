@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { QUICK_EMOJIS, authorLabel, emojiRows, matchScripts, mentionToken, messagePriceCents, paymentLabel, priceChartLayout, purchasedPpvSeries, slashQuery, wrapSelection } from "./composer-tools.ts";
+import { QUICK_EMOJIS, authorLabel, emojiRows, matchScripts, mentionToken, messagePriceCents, moneyLabel, paymentLabel, priceChartLayout, purchasedPpvSeries, slashQuery, wrapSelection } from "./composer-tools.ts";
 
 test("la cuadrícula rápida cabe en tres filas y el selector la incluye", () => {
   const rows = emojiRows(QUICK_EMOJIS, 12);
@@ -71,4 +71,25 @@ test("la gráfica solo pinta PPV comprados y no rellena huecos", () => {
   assert.equal(dots[0]?.date, "01/11");
   assert.ok((dots[0]?.x ?? 0) < (dots[1]?.x ?? 0));
   assert.ok((dots[1]?.y ?? 0) < (dots[0]?.y ?? 0));
+});
+
+test("Alz2000 cuenta las cuatro compras aunque los PPV del hilo no estén abiertos", () => {
+  const unopened = Array.from({ length: 12 }, (_, index) => ({
+    fromFan: false,
+    purchased: null,
+    priceCents: 999,
+    sentAt: `2026-01-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`,
+  }));
+  const buys = [
+    { sentAt: "2026-05-19T12:00:00.000Z", priceCents: 2499 },
+    { sentAt: "2026-07-01T12:00:00.000Z", priceCents: 3900 },
+    { sentAt: "2026-10-11T08:00:00.000Z", priceCents: 1299 },
+    { sentAt: "2026-10-11T18:00:00.000Z", priceCents: 2499 },
+  ];
+  const series = purchasedPpvSeries(unopened, [buys, buys]);
+  assert.equal(series.maxCents, 3900);
+  assert.equal(series.avgCents, 2549);
+  assert.equal(series.points.length, 4);
+  assert.equal(moneyLabel(series.maxCents), "$39.00");
+  assert.equal(moneyLabel(series.avgCents), "$25.49");
 });

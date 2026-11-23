@@ -6,7 +6,9 @@ import {
   encodeNotificationCursor,
   isFanSpendKind,
   isOwnerOnlyKind,
+  kindsForTab,
   notificationLabels,
+  ofListType,
   tabOf,
   NOTIFICATION_KINDS,
   NOTIFICATION_PAGE_SIZE,
@@ -14,6 +16,7 @@ import {
   type ParsedNotification,
   type NotificationCounts,
   type NotificationRecord,
+  type NotificationTab,
 } from "../../../src/lib/notifications.ts";
 
 export type NotificationSql = {
@@ -161,23 +164,38 @@ export async function listNotificationRows(
   sql: NotificationSql,
   creatorId: string,
   userId: string,
-  options: { limit?: number; cursor?: string | null; role?: "owner" | "member" } = {},
+  options: { limit?: number; cursor?: string | null; role?: "owner" | "member"; tab?: NotificationTab | null } = {},
 ): Promise<NotificationPage> {
   const limit = Math.min(100, Math.max(1, options.limit ?? NOTIFICATION_PAGE_SIZE));
   const cursor = decodeNotificationCursor(options.cursor);
   const kinds = options.role === "member" ? chatterVisibleKinds() : [...NOTIFICATION_KINDS];
   const params: unknown[] = [creatorId, userId, kinds];
+  let tabSql = "";
+  const tab = options.tab && options.tab !== "all" ? options.tab : null;
+  if (tab) {
+    const type = ofListType(tab);
+    params.push(kindsForTab(tab));
+    const kindsParam = params.length;
+    if (type) {
+      params.push(type);
+      tabSql = `and (n.of_type = $${params.length} or (n.of_type is null and n.kind = any($${kindsParam}::text[])))`;
+    } else {
+      tabSql = `and n.of_type is null and n.kind = any($${kindsParam}::text[])`;
+    }
+  }
   let cursorSql = "";
   if (cursor?.at) {
     params.push(cursor.at, cursor.key);
+    const at = params.length - 1;
+    const key = params.length;
     cursorSql = `and (
-      n.occurred_at < $4::timestamptz
-      or (n.occurred_at = $4::timestamptz and n.notification_key < $5)
+      n.occurred_at < $${at}::timestamptz
+      or (n.occurred_at = $${at}::timestamptz and n.notification_key < $${key})
       or n.occurred_at is null
     )`;
   } else if (cursor) {
     params.push(cursor.key);
-    cursorSql = "and n.occurred_at is null and n.notification_key < $4";
+    cursorSql = `and n.occurred_at is null and n.notification_key < $${params.length}`;
   }
   params.push(limit + 1);
   const rows = await sql.query<{
@@ -214,6 +232,7 @@ export async function listNotificationRows(
       and s.user_id = $2
      where n.creator_id = $1
        and n.kind = any($3::text[])
+     ${tabSql}
      ${cursorSql}
      order by n.occurred_at desc nulls last, n.notification_key desc
      limit $${params.length}`,
@@ -308,6 +327,7 @@ export async function notificationPageFor(
   access: { userId: string; role: "owner" | "member"; creatorIds: string[] },
   creatorId: string,
   cursor?: string | null,
+  tab?: NotificationTab | null,
 ) {
   if (!canReadCreatorNotifications(access, creatorId)) {
     return {
@@ -322,7 +342,7 @@ export async function notificationPageFor(
     };
   }
   const [page, sync, fanlinkUnread] = await Promise.all([
-    listNotificationRows(sql, creatorId, access.userId, { cursor, role: access.role }),
+    listNotificationRows(sql, creatorId, access.userId, { cursor, role: access.role, tab }),
     notificationSyncState(sql, creatorId),
     countFanlinkUnread(sql, creatorId, access.userId, access.role),
   ]);

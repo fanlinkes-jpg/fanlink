@@ -66,7 +66,7 @@ export const ensureNoticeTab = createServerFn({ method: "POST" })
 
 export const listCreatorNotifications = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
-  .validator((input: { creatorId: string; cursor?: string | null }) => input)
+  .validator((input: { creatorId: string; cursor?: string | null; tab?: NotificationTab | null }) => input)
   .handler(async ({ context, data }): Promise<NotificationList> => {
     const { getSql } = await import("@/lib/db");
     const { ensureStaff } = await import("@/lib/workspace-store");
@@ -75,7 +75,7 @@ export const listCreatorNotifications = createServerFn({ method: "GET" })
     const sql = await getSql();
     const devMode = !authConfigured && context.userId === DEV_USER_ID;
     const access = await ensureStaff(sql, context.userId, devMode);
-    const page = await notificationPageFor(sql, access, data.creatorId, data.cursor);
+    const page = await notificationPageFor(sql, access, data.creatorId, data.cursor, data.tab);
     const { getOfSessionManager } = await import("./of-sessions-runtime.server");
     let sessionNotice: string | null = null;
     try {

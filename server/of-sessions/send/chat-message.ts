@@ -89,6 +89,7 @@ export type SendChatHooks = {
   } | null;
   env: NodeJS.ProcessEnv;
   open: () => Promise<{ messageId: string | null; reason: string | null; awaitingId?: boolean; attachedIds?: string[] }>;
+  postPpv?: (input: { fanId: string; text: string; priceCents: number | null; mediaIds: string[]; previewIds: string[] }) => Promise<{ messageId: string | null; reason: string | null; dryRun: boolean }>;
   /** Lo rellena el envío real, solo con ids ya comprobados, justo antes de abrir OnlyFans. */
   vaultPieces?: VaultSendPiece[];
 };
@@ -215,6 +216,22 @@ export async function sendChatMessageView(
       sales: planned.sales,
       outboundMedia: vaultItemIds.length > 0 ? { sql, outboundId: id } : null,
       open: async () => {
+        if (planned.pieces.length > 0 && prepared.postPpv) {
+          const posted = await prepared.postPpv({
+            fanId: fanKey ?? threadKey,
+            text: body,
+            priceCents,
+            mediaIds: planned.pieces.map((piece) => piece.id),
+            previewIds: planned.pieces.filter((piece) => piece.free === true).map((piece) => piece.id),
+          });
+          if (posted.dryRun) return { messageId: null, reason: posted.reason ?? "Envío en seco" };
+          return {
+            messageId: posted.messageId,
+            reason: posted.reason,
+            awaitingId: posted.reason === "Pendiente de confirmar",
+            attachedIds: posted.messageId ? planned.pieces.map((piece) => piece.id) : [],
+          };
+        }
         browserOpened = true;
         return prepared.open();
       },

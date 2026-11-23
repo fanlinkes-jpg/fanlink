@@ -79,12 +79,33 @@ export function ofListType(tab: NotificationTab): OfNotificationListType | null 
   return found?.[0] ?? null;
 }
 
-/** La lista de una pestaña es la respuesta de su type, no una reclasificación. */
-export function noticesForOfTab<T extends { ofType?: string | null }>(rows: readonly T[], tab: NotificationTab): T[] {
-  if (tab === "all") return rows.filter((row) => row.ofType == null);
-  const type = ofListType(tab);
-  if (!type) return [];
-  return rows.filter((row) => row.ofType === type);
+/** Pestaña del aviso: el type de OnlyFans manda. Sin type, vale el kind. */
+export function noticeTab(row: { ofType?: string | null; kind?: NotificationKind | null }): NotificationTab | null {
+  const type = row.ofType ?? null;
+  if (type && Object.prototype.hasOwnProperty.call(OF_LIST_TAB, type)) return OF_LIST_TAB[type as OfNotificationListType];
+  if (row.kind) return tabOf(row.kind);
+  return null;
+}
+
+export function kindsForTab(tab: NotificationTab): NotificationKind[] {
+  return NOTIFICATION_KINDS.filter((kind) => tabOf(kind) === tab);
+}
+
+/**
+ * Todo enseña todos los avisos de la creadora, una vez por clave.
+ * El resto, solo los de su type. Sin type, los de su kind. Ninguno en dos pestañas.
+ */
+export function noticesForOfTab<T extends { ofType?: string | null; kind?: NotificationKind | null; key?: string }>(rows: readonly T[], tab: NotificationTab): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const row of rows) {
+    const id = row.key ?? "";
+    if (id && seen.has(id)) continue;
+    if (id) seen.add(id);
+    if (tab !== "all" && noticeTab(row) !== tab) continue;
+    out.push(row);
+  }
+  return out;
 }
 
 /**
@@ -625,7 +646,7 @@ export function filterNotifications(
   const to = dayOrNull(query.to);
   const ranged = Boolean(from || to);
   const matched = rows
-    .filter((row) => query.tab === "all" || tabOf(row.kind) === query.tab)
+    .filter((row) => query.tab === "all" || noticeTab(row) === query.tab)
     .filter((row) => !needle || haystack(row).includes(needle));
   const dated: NotificationRecord[] = [];
   const undated: NotificationRecord[] = [];

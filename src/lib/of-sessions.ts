@@ -139,6 +139,7 @@ export type CreatorChatList = {
     messagesCents: number | null;
     avatarUrl: string | null;
     online: boolean | null;
+    lastSeenAt?: string | null;
     subPriceCents: number | null;
     subExpiresAt: string | null;
     renewAuto: boolean | null;

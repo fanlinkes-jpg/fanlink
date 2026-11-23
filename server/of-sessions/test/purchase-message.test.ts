@@ -76,7 +76,7 @@ test("la traza de compra solo nombra claves y tapa los números del href", () =>
 
 test("un PPV propio pagado se lee por isOpened y el modal da el máximo y la media", () => {
   assert.equal(purchasedFlag({ canPurchase: true, purchased: false, isOpened: true }, 2499, true), true);
-  assert.equal(purchasedFlag({ canPurchase: false, purchased: true, isOpened: false }, 2499, true), false);
+  assert.equal(purchasedFlag({ canPurchase: false, purchased: true, isOpened: false }, 2499, true), null);
   assert.equal(purchasedFlag({ purchased: true, canPurchase: true }, 1999, false), true);
   const prices = [24.99, 39, 12.99, 24.99];
   const list = Array.from({ length: 12 }, (_, index) => ({
@@ -259,6 +259,12 @@ test("reintentar no abre otro envío si el dedupe_key ya salió", async () => {
     await rememberDedupeKey(db.sql, "nuevo", "clave-2");
     const updated = await db.pg.query<{ dedupe_key: string }>("select dedupe_key from of_chat_outbound where id = 'nuevo'");
     assert.equal(updated.rows[0]?.dedupe_key, "clave-2");
+    await db.pg.exec(`
+      insert into of_chat_outbound (id, creator_id, author_id, body, status, of_message_key, dedupe_key, created_at)
+      values ('ayer', 'jose', 'ana', 'otro', 'sent', 'm-ayer', 'vieja', now() - interval '1 day');
+    `);
+    assert.equal(await sentMessageForDedupe(db.sql, "jose", "clave"), "m-ya");
+    assert.equal(await sentMessageForDedupe(db.sql, "jose", "vieja"), null);
   } finally {
     await db.pg.close();
   }

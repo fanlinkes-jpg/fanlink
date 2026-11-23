@@ -35,6 +35,7 @@ test("la ficha del fan pinta las tres pestañas", async () => {
     });
     await page.goto(`http://127.0.0.1:${port}/mensajes`, { waitUntil: "domcontentloaded" });
     await page.getByText("Fan sin gasto").first().waitFor();
+    await page.getByLabel("En línea").first().waitFor();
     await page.getByRole("button", { name: "Ficha del fan" }).click();
     const dialog = page.getByRole("dialog", { name: "Ficha del fan" });
     await dialog.waitFor();
@@ -83,7 +84,7 @@ function fanChat() {
       postsCents: 0,
       messagesCents: 0,
       avatarUrl: null,
-      online: null,
+      online: true,
       subPriceCents: 0,
       subExpiresAt: null,
       renewAuto: false,
@@ -136,7 +137,7 @@ function freePort(): Promise<number> {
 async function startDev(port: number): Promise<ChildProcess> {
   await assertDevPortFree();
   const dataDir = await privatePgliteDir();
-  const env: NodeJS.ProcessEnv = { ...process.env, VITE_AUTH_ENABLED: "false", FANLINK_PGLITE_DIR: dataDir };
+  const env: NodeJS.ProcessEnv = { ...process.env, VITE_AUTH_ENABLED: "false", FANLINK_PGLITE_DIR: dataDir, FANLINK_HISTORY_ENABLED: "false" };
   delete env.DATABASE_URL;
   const child = spawn(process.execPath, ["node_modules/vite/bin/vite.js", "dev", "--host", "127.0.0.1", "--port", String(port), "--strictPort"], {
     cwd: root,

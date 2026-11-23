@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { Play, ShoppingBag, X } from "lucide-react";
 import { chatMediaSrc } from "@/lib/chat-media";
 import { readPurchaseMessage, type PurchaseMessageCard } from "@/lib/of-notifications";
-import { purchaseDetailModel } from "@/lib/purchase-detail";
+import { purchaseDetailModel, purchaseTitle } from "@/lib/purchase-detail";
 
 export function PurchaseMessageDialog({
   creatorId,
@@ -24,7 +24,11 @@ export function PurchaseMessageDialog({
 }) {
   const [card, setCard] = useState<PurchaseMessageCard | null>(null);
   const [failed, setFailed] = useState(false);
-  const model = purchaseDetailModel({ creatorName, priceCents: card?.priceCents ?? null });
+  const model = purchaseDetailModel({
+    creatorName,
+    priceCents: card?.priceCents ?? null,
+    title: purchaseTitle(card?.body ?? null),
+  });
 
   useEffect(() => {
     let stop = false;
@@ -80,7 +84,7 @@ export function PurchaseMessageDialog({
             ))}
           </div>
         ) : null}
-        <p className="mt-3 text-sm font-semibold text-[#1f9d55]">{model.price} · pagado</p>
+        <p className="mt-3 inline-flex rounded-full bg-[#e7f7ee] px-2 py-1 text-sm font-semibold text-[#1f9d55]" aria-label={`${model.price} pagado`}>{model.price} · pagado</p>
         <p className="mt-1 text-xs text-[#6d7585]">{model.tags}</p>
         {card?.retryAfterMs ? <p className="mt-2 text-xs text-[#8a5a12]">OnlyFans pide esperar.</p> : null}
         <div className="mt-4 flex flex-wrap justify-end gap-2">

@@ -19,6 +19,7 @@ import { inboxCreators, inboxThreadList, readInboxCreator, resolveInboxCreator, 
 import { useCreatorNoticeBadges } from "@/lib/use-creator-notice-badges";
 import { COMPOSER_LANGUAGES, setComposerLanguage, useComposerLanguage } from "@/lib/ui-prefs";
 import { SfwMedia } from "@/components/sfw-media";
+import { lastSeenLabel, showOnlineDot } from "@/lib/online-dot";
 import { acceptedVaultPieces, chatVaultCreator, chatVaultOnThreadChange, mergeVaultPage, vaultFolderOnAccountChange, vaultLoadAllowed, vaultReadApplies } from "@/lib/vault-load";
 import { VAULT_FOLDER_READ_ERROR } from "@/lib/vault-folder-label";
 import { clearOpenThread, peekOpenThread } from "@/lib/open-thread";
@@ -326,6 +327,7 @@ export function RealChatsPage() {
   const [fanLists, setFanLists] = useState<Array<{ name: string; on: boolean }>>([]);
   const [notesOpen, setNotesOpen] = useState(false);
   const [noteFilter, setNoteFilter] = useState<NotificationTab>("all");
+  const [noteCursor, setNoteCursor] = useState<string | null>(null);
   const [notes, setNotes] = useState<NoteRow[] | null>(null);
   const [noteCounts, setNoteCounts] = useState<NotificationCounts | null>(null);
   const [noteNotice, setNoteNotice] = useState<string | null>(null);
@@ -433,26 +435,29 @@ export function RealChatsPage() {
     return () => clearInterval(timer);
   }, []);
 
-  async function loadNotes() {
+  async function loadNotes(tab: NotificationTab = noteFilter, cursor: string | null = null) {
     const ids = inboxCreator ? [inboxCreator] : [];
     if (ids.length === 0) {
       setNotes([]);
       setNoteCounts(null);
+      setNoteCursor(null);
       return;
     }
     const pages = await Promise.all(ids.map(async (id) => {
       try {
-        const page = await listCreatorNotifications({ data: { creatorId: id } });
+        const page = await listCreatorNotifications({ data: { creatorId: id, tab, cursor } });
         return { id, page };
       } catch {
         return { id, page: null };
       }
     }));
     setNoteCounts(pages.length === 1 ? pages[0]?.page?.counts ?? null : null);
+    setNoteCursor(pages.length === 1 ? pages[0]?.page?.nextCursor ?? null : null);
     const notices = pages.flatMap((entry) => entry.page?.sessionNotice ? [entry.page.sessionNotice] : []);
     setNoteNotice(notices.length > 0 ? notices.join(" · ") : null);
-    setNotes(pages.flatMap((entry) => entry.page?.items.map((item) => ({ ...item, creatorId: entry.id })) ?? [])
-      .sort((left, right) => (right.occurredAt ?? "").localeCompare(left.occurredAt ?? "")));
+    const incoming = pages.flatMap((entry) => entry.page?.items.map((item) => ({ ...item, creatorId: entry.id })) ?? [])
+      .sort((left, right) => (right.occurredAt ?? "").localeCompare(left.occurredAt ?? ""));
+    setNotes((current) => cursor ? [...(current ?? []), ...incoming] : incoming);
   }
 
   useEffect(() => {
@@ -1259,7 +1264,7 @@ export function RealChatsPage() {
                     <h2 className="text-base font-semibold">Notificaciones</h2>
                     <button type="button" aria-label="Actualizar notificaciones" className="grid h-8 w-8 place-items-center rounded-full text-[#6d7585] hover:bg-[#f4f7ff]" onClick={() => void loadNotes()}><RefreshCw className="h-4 w-4" /></button>
                   </div>
-                  <NoteTabRow filter={noteFilter} counts={noteCounts} onSelect={(id) => { setNoteFilter(id); if (inboxCreator) void ensureNoticeTab({ data: { creatorId: inboxCreator, tab: id } }).then(() => loadNotes()).catch(() => undefined); if (id !== "all") markNotes(panelNotes(notes, inboxCreator, id)); }} />
+                  <NoteTabRow filter={noteFilter} counts={noteCounts} onSelect={(id) => { setNoteFilter(id); if (inboxCreator) void ensureNoticeTab({ data: { creatorId: inboxCreator, tab: id } }).catch(() => undefined); void loadNotes(id, null); }} />
                   {ofTabListNote({ tab: noteFilter, unread: noteCounts?.[noteFilter] ?? null, listed: panelNotes(notes, inboxCreator, noteFilter).length }) ? (
                     <p className="px-4 pb-2 text-[11px] text-[#6d7585]">{ofTabListNote({ tab: noteFilter, unread: noteCounts?.[noteFilter] ?? null, listed: panelNotes(notes, inboxCreator, noteFilter).length })}</p>
                   ) : null}
@@ -1302,6 +1307,9 @@ export function RealChatsPage() {
                       );
                     })}
                   </ul>
+                  {noteCursor ? (
+                    <button type="button" className="border-t border-[#eceff3] px-4 py-3 text-left text-sm text-[#2456c7]" onClick={() => void loadNotes(noteFilter, noteCursor)}>Cargar más</button>
+                  ) : null}
                 </div>
               </>,
               document.body,
@@ -1372,11 +1380,7 @@ export function RealChatsPage() {
                   className={`flex w-full gap-3 px-3 py-3 text-left ${selected?.threadKey === thread.threadKey && selected.creatorId === thread.creatorId ? "bg-[#f4f7ff]" : ""}`}
                 >
                   <span className="flex w-12 shrink-0 flex-col items-center gap-1">
-                    {thread.avatarUrl ? (
-                      <SfwMedia><img src={thread.avatarUrl} alt="" className="h-10 w-10 rounded-full object-cover" /></SfwMedia>
-                    ) : (
-                      <span className="grid h-10 w-10 place-items-center rounded-full bg-[#eef2ff] text-sm">{fanTitle(thread).slice(0, 1)}</span>
-                    )}
+                    <FanFace name={fanTitle(thread)} url={thread.avatarUrl} online={thread.online} />
                     <FanSpendLabel
                       thread={thread.spentCents}
                       card={chatFanCardFor(fanCards.fans, thread.creatorId, thread.fanKey)?.spentCents ?? null}
@@ -1387,9 +1391,12 @@ export function RealChatsPage() {
                     <span className="flex items-center gap-1">
                       <span className={`truncate text-sm ${unread.bold ? "font-bold text-[#1d2433]" : "font-medium"}`}>{fanTitle(thread)}</span>
                       {unread.badge != null && !marks.muted.includes(threadMark(thread.creatorId, thread.threadKey)) ? <span className="shrink-0 rounded-full bg-[#3b6cff] px-1.5 text-[10px] font-semibold text-white" aria-label={`${unread.badge} sin leer`}>{unread.badge}</span> : null}
-                      {thread.online === false ? <span className="rounded bg-[#f3f4f6] px-1 text-[10px] text-[#6d7585]">OFF</span> : null}
+                      {thread.online === false && !lastSeenLabel(thread.lastSeenAt, Date.now(), thread.online) ? <span className="rounded bg-[#f3f4f6] px-1 text-[10px] text-[#6d7585]">OFF</span> : null}
                     </span>
-                    <span className="block truncate text-xs text-[#6d7585]">{thread.fanHandle ? `@${thread.fanHandle.replace(/^@/, "")}` : "Sin datos"}</span>
+                    <span className="flex items-baseline gap-2 text-xs text-[#6d7585]">
+                      <span className="truncate">{thread.fanHandle ? `@${thread.fanHandle.replace(/^@/, "")}` : "Sin datos"}</span>
+                      {lastSeenLabel(thread.lastSeenAt, Date.now(), thread.online) ? <span className="shrink-0 truncate">{lastSeenLabel(thread.lastSeenAt, Date.now(), thread.online)}</span> : null}
+                    </span>
                     <span className="mt-1 flex items-baseline justify-between gap-2 text-xs text-[#6d7585]">
                       <span className={`truncate ${unread.bold ? "font-bold text-[#1d2433]" : ""}`}>{thread.excerpt ?? "Sin datos"}</span>
                       <span className="shrink-0">{thread.lastMessageAt ? madridClock(thread.lastMessageAt) : "Sin datos"}</span>
@@ -1406,10 +1413,14 @@ export function RealChatsPage() {
       <section className="hidden h-full min-h-0 min-w-0 flex-1 md:flex">
         <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <header className="relative flex shrink-0 items-center justify-between gap-3 border-b border-[#e6e8ee] px-4 py-3">
-              <div className="min-w-0">
-                <button type="button" className="truncate text-left font-medium" onClick={() => { setFanMenu((open) => !open); setRenaming(false); }} aria-expanded={fanMenu} aria-label="Opciones del fan">
+              <div className="flex min-w-0 items-center gap-2">
+                {selected ? <FanFace name={fanTitle(selected)} url={selected.avatarUrl} online={selected.online} /> : null}
+                <div className="min-w-0">
+                <button type="button" className="block max-w-full truncate text-left font-medium" onClick={() => { setFanMenu((open) => !open); setRenaming(false); }} aria-expanded={fanMenu} aria-label="Opciones del fan">
                   {selected ? fanTitle(selected) : syncPhaseLabel(syncPhase)}
                 </button>
+                {selected && lastSeenLabel(selected.lastSeenAt, Date.now(), selected.online) ? <p className="truncate text-xs text-[#6d7585]">{lastSeenLabel(selected.lastSeenAt, Date.now(), selected.online)}</p> : null}
+                </div>
                 {fanMenu && selected ? (
                   <>
                     <button type="button" aria-label="Cerrar opciones del fan" className="fixed inset-0 z-20 cursor-default" onClick={() => { setFanMenu(false); setRenaming(false); }} />
@@ -1848,6 +1859,16 @@ export function RealChatsPage() {
         <MessagePriceDialog
           initial={draftPrice == null ? "" : (draftPrice / 100).toFixed(2)}
           messages={messages}
+          purchases={[
+            ...(chatFanCardFor(fanCards.fans, selected?.creatorId ?? "", selected?.fanKey ?? null)?.purchases ?? [])
+              .filter((row) => row.kind === "message")
+              .map((row) => ({ sentAt: row.occurredAt, priceCents: row.amountCents })),
+            ...(notes ?? [])
+              .filter((item) => item.kind === "ppv" && item.amountCents != null && item.amountCents > 0 && item.occurredAt && selected && item.creatorId === selected.creatorId && (
+                item.threadKey === selected.threadKey || item.fanKey === selected.fanKey || item.messageRef?.includes(`t:${selected.threadKey}`)
+              ))
+              .map((item) => ({ sentAt: item.occurredAt ?? "", priceCents: item.amountCents ?? 0 })),
+          ]}
           onCancel={() => {
             offerPriceId.current = null;
             setDialog(null);
@@ -2226,6 +2247,19 @@ function ToolButton({ label, title, onClick, children, active = false }: { label
     <button type="button" aria-label={label} title={title} aria-pressed={active} onClick={onClick} className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg ${active ? "bg-[#e7f0ff] text-[#2456c7]" : "text-[#1c2333] hover:bg-[#f3f4f6]"}`}>
       {children}
     </button>
+  );
+}
+
+function FanFace({ name, url, online }: { name: string; url: string | null; online: boolean | null }) {
+  return (
+    <span className="relative inline-block h-10 w-10 shrink-0">
+      {url ? (
+        <SfwMedia><img src={url} alt="" className="h-10 w-10 rounded-full object-cover" /></SfwMedia>
+      ) : (
+        <span className="grid h-10 w-10 place-items-center rounded-full bg-[#eef2ff] text-sm">{name.slice(0, 1)}</span>
+      )}
+      {showOnlineDot(online) ? <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white bg-[#00c853]" aria-label="En línea" /> : null}
+    </span>
   );
 }
 
