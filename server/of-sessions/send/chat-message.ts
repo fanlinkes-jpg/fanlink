@@ -11,6 +11,7 @@ import {
   rememberDedupeKey,
   sentMessageForDedupe,
   markOutboundAwaiting,
+  markOutboundDryRun,
   markOutboundError,
   markOutboundSent,
   pulseOutboundLease,
@@ -72,7 +73,7 @@ export function parseClientId(value: unknown): string | null {
 export function sealedOutbound(row: Pick<OutboundClaimRow, "status" | "errorReason" | "ofMessageKey" | "matchedMessageKey">): boolean {
   if (row.status === "sent" || row.status === "discarded") return true;
   if (row.ofMessageKey || row.matchedMessageKey) return true;
-  if (row.errorReason === "Pendiente de confirmar") return true;
+  if (row.errorReason === "Pendiente de confirmar" || row.errorReason === "Envío en seco") return true;
   return false;
 }
 
@@ -237,6 +238,11 @@ export async function sendChatMessageView(
       },
     });
     if (result.opened) browserOpened = true;
+    if (result.reason === "Envío en seco") {
+      await markOutboundDryRun(sql, id);
+      await releaseSendClaim(sql, claimKey, id);
+      return { sent: false, reason: "Envío en seco", messageId: null };
+    }
     if (result.sent && result.messageId) {
       await markOutboundSent(sql, id, result.messageId);
       confirmedId = result.messageId;

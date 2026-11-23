@@ -344,6 +344,22 @@ export const markChatOpened = createServerFn({ method: "POST" })
     return markChatOpenedView(context.userId, data);
   });
 
+export const readFanPurchases = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string; threadKey: string }) => input)
+  .handler(async ({ context, data }) => {
+    const { getSql } = await import("@/lib/db");
+    const { ensureStaff } = await import("@/lib/workspace-store");
+    const { DEV_USER_ID, authConfigured } = await import("@/lib/auth/verify.server");
+    const { canReadCreatorNotifications } = await import("@/lib/notifications");
+    const { emptyFanPurchases, fanPurchaseSeries } = await import("../../server/of-sessions/sync/fan-purchases.ts");
+    const sql = await getSql();
+    const devMode = !authConfigured && context.userId === DEV_USER_ID;
+    const access = await ensureStaff(sql, context.userId, devMode);
+    if (!canReadCreatorNotifications(access, data.creatorId)) return emptyFanPurchases();
+    return fanPurchaseSeries(sql, data.creatorId, data.threadKey);
+  });
+
 export const loadOlderMessages = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((input: { creatorId: string; threadKey: string }) => input)

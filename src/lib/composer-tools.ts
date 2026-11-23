@@ -13,6 +13,11 @@ export const FULL_EMOJIS = [
   "🍓", "🍒", "💃", "🕺", "💌", "💎", "🌙", "⭐", "🌈", "🍀",
 ];
 
+/** Un PPV de pago con medios y sin vista previa gratis no puede salir. */
+export function ppvPreviewMissing(priceCents: number | null, mediaCount: number, previewCount: number): boolean {
+  return priceCents != null && priceCents > 0 && mediaCount > 0 && previewCount === 0;
+}
+
 export function emojiRows(emojis: string[], perRow = 12): string[][] {
   const rows: string[][] = [];
   for (let index = 0; index < emojis.length; index += perRow) rows.push(emojis.slice(index, index + perRow));

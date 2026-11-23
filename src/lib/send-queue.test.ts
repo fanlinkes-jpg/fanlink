@@ -117,6 +117,7 @@ test("la burbuja dice Enviando, Pendiente de confirmar o No se envió", () => {
   assert.equal(bubbleCaption("sending", null), "Enviando…");
   assert.equal(bubbleCaption("awaiting", null), "Pendiente de confirmar");
   assert.equal(bubbleCaption("error", "Envío real desactivado"), "No se envió: Envío real desactivado");
+  assert.equal(bubbleCaption("error", "Envío en seco"), "Envío en seco");
   assert.equal(bubbleCaption("error", "  "), "No se envió: No se envió");
   assert.equal(bubbleCaption("sent", null), null);
 });

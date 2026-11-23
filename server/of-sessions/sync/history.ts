@@ -33,6 +33,16 @@ export type HistoryCandidate = HistoryThread & { stored: number };
  * Sigue un hilo con el histórico abierto, o uno marcado cerrado que no tiene
  * ningún mensaje guardado. El cursor de un hilo vacío no se reutiliza.
  */
+/** Hilos que solo existen por un mensaje (el pop-up de compra) y aún no tienen fila. */
+export function orphanHistoryThreads(messageThreadKeys: readonly string[], knownThreadKeys: readonly string[]): HistoryThread[] {
+  const known = new Set(knownThreadKeys);
+  return [...new Set(messageThreadKeys)].filter((key) => key && !known.has(key)).map((threadKey) => ({
+    threadKey,
+    cursor: null,
+    done: false,
+  }));
+}
+
 export function historyCandidates(rows: HistoryCandidate[]): HistoryThread[] {
   return rows.flatMap((row) => {
     if (row.done && row.stored > 0) return [];

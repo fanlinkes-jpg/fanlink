@@ -598,6 +598,26 @@ test("las propinas de Allison salen aunque haya más de 50 avisos más nuevos", 
   }
 });
 
+test("0060 borra solo los avisos de pantalla", async () => {
+  const pg = new PGlite();
+  await pg.exec(await readFile(path.join(root, "migrations/0034_notifications.sql"), "utf8"));
+  await pg.exec(`
+    insert into of_notification (creator_id, notification_key, kind, synced_at, origin) values
+      ('jose', 'pantalla:10', 'tip', now(), 'onlyfans'),
+      ('jose', '129795686060', 'tip', now(), 'onlyfans');
+    insert into of_notification_seen (creator_id, notification_key, user_id, seen_at)
+    values ('jose', 'pantalla:10', 'ana', now());
+  `);
+  const file = await readFile(path.join(root, "migrations/0060_drop_screen_notifications.sql"), "utf8");
+  await pg.exec(file);
+  await pg.exec(file);
+  const rows = await pg.query<{ notification_key: string }>("select notification_key from of_notification where creator_id = 'jose'");
+  assert.deepEqual(rows.rows.map((row) => row.notification_key), ["129795686060"]);
+  const seen = await pg.query("select notification_key from of_notification_seen where creator_id = 'jose'");
+  assert.equal(seen.rows.length, 0);
+  await pg.close();
+});
+
 async function migrated() {
   const pg = new PGlite();
   await pg.exec(await readFile(path.join(root, "migrations/0034_notifications.sql"), "utf8"));

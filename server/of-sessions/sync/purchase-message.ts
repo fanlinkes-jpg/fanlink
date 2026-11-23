@@ -151,6 +151,13 @@ export async function readMirroredPurchase(sql: ReadSql, creatorId: string, mess
 export async function savePurchasedMessage(sql: ReadSql, creatorId: string, message: ChatMessage): Promise<void> {
   const now = new Date().toISOString();
   await sql.query(
+    `insert into of_chat_thread (creator_id, thread_key, fan_key, synced_at, origin)
+     values ($1, $2, $3, $4, 'onlyfans')
+     on conflict (creator_id, thread_key) do update set
+       fan_key = coalesce(of_chat_thread.fan_key, excluded.fan_key)`,
+    [creatorId, message.threadKey, message.fanKey ?? message.threadKey, now],
+  );
+  await sql.query(
     `insert into of_chat_message (
        creator_id, message_key, thread_key, fan_key, from_fan, body, sent_at, price_cents, purchased, synced_at, origin,
        media_count, media_seconds, media_preview, media_json

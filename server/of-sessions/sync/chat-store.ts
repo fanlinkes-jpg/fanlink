@@ -966,6 +966,28 @@ export async function markOutboundAwaiting(sql: ReadSql, id: string): Promise<vo
   );
 }
 
+/** Seco: no queda pendiente y la clave de dedupe no bloquea el siguiente envío. */
+export async function markOutboundDryRun(sql: ReadSql, id: string): Promise<void> {
+  const columns = await sql.query<{ column_name: string }>(
+    "select column_name from information_schema.columns where table_name = 'of_chat_outbound' and column_name = 'dedupe_key'",
+  );
+  if (columns.length > 0) {
+    await sql.query(
+      `update of_chat_outbound
+       set status = 'error', error_reason = 'Envío en seco', dedupe_key = null
+       where id = $1 and coalesce(status, 'pending') <> 'sent'`,
+      [id],
+    );
+    return;
+  }
+  await sql.query(
+    `update of_chat_outbound
+     set status = 'error', error_reason = 'Envío en seco'
+     where id = $1 and coalesce(status, 'pending') <> 'sent'`,
+    [id],
+  );
+}
+
 export async function markOutboundError(sql: ReadSql, id: string, reason: string): Promise<void> {
   await sql.query(
     `update of_chat_outbound
@@ -1005,7 +1027,16 @@ export async function listOpenHistory(sql: ReadSql, creatorId: string): Promise<
            where m.creator_id = t.creator_id and m.thread_key = t.thread_key
          )
        )
-     order by t.last_message_at desc nulls last`,
+     union all
+     select m.thread_key, null, false, true
+     from of_chat_message m
+     where m.creator_id = $1
+       and not exists (
+         select 1 from of_chat_thread t
+         where t.creator_id = m.creator_id and t.thread_key = m.thread_key
+       )
+     group by m.thread_key
+     order by 1`,
     [creatorId],
   );
   return rows.map((row) => ({

@@ -1,4 +1,7 @@
+import { ppvPreviewMissing } from "../../../src/lib/composer-tools.ts";
 import { onlineChatId, onlineMessageBody, onlineMessagePath } from "./online-broadcast.ts";
+
+export { ppvPreviewMissing };
 
 export type PpvApiBody = ReturnType<typeof onlineMessageBody>;
 
@@ -22,7 +25,7 @@ export function buildPpvPost(input: {
   const media = new Set(mediaFiles);
   if (previews.some((id) => !media.has(id))) return { ok: false, reason: "No está la vista previa" };
   const price = input.priceCents != null && input.priceCents > 0 ? input.priceCents / 100 : 0;
-  if (price > 0 && input.previewIds.length > 0 && previews.length === 0) {
+  if (ppvPreviewMissing(input.priceCents, mediaFiles.length, previews.length)) {
     return { ok: false, reason: "No está la vista previa" };
   }
   const text = input.text.replace(/\s+/g, " ").trim();
@@ -32,6 +35,8 @@ export function buildPpvPost(input: {
     body: { ...onlineMessageBody({ text, mediaIds: mediaFiles, price }), previews },
   };
 }
+
+export const DRY_RUN_REASON = "Envío en seco";
 
 export function ppvDryRun(env: NodeJS.ProcessEnv): boolean {
   const raw = env.FANLINK_SEND_DRY_RUN?.trim().toLowerCase();
@@ -54,7 +59,7 @@ export async function deliverPpvPost(input: {
   const line = ppvLogLine(built.body);
   if (input.dryRun) {
     (input.log ?? console.info)(`[fanlink:send] dry-run ${line}`);
-    return { messageId: null, reason: "Envío en seco", dryRun: true };
+    return { messageId: null, reason: DRY_RUN_REASON, dryRun: true };
   }
   const response = await input.request(built.path, built.body);
   if (response.status === 429 || response.retryAfterMs > 0) {

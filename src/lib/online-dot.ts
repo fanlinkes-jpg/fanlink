@@ -1,3 +1,31 @@
+/** La lista de chats no manda isOnline. Dos minutos de lastSeen cuentan como en línea. */
+export const ONLINE_SEEN_MS = 2 * 60 * 1000;
+
+export function fanIsOnline(online: boolean | null | undefined, lastSeen: string | null | undefined, now: number): boolean {
+  if (online === true) return true;
+  if (!lastSeen) return false;
+  const time = Date.parse(lastSeen);
+  if (!Number.isFinite(time)) return false;
+  const age = now - time;
+  return age >= 0 && age <= ONLINE_SEEN_MS;
+}
+
+/** La lectura de fans en línea que ya está en memoria. No dispara otro GET. */
+export function fanListedOnline(keys: readonly string[], fanKey: string | null | undefined, threadKey: string | null | undefined): boolean {
+  if (keys.length === 0) return false;
+  const known = new Set(keys);
+  return (fanKey != null && known.has(fanKey)) || (threadKey != null && known.has(threadKey));
+}
+
+export function fanShowsOnline(
+  online: boolean | null | undefined,
+  lastSeen: string | null | undefined,
+  now: number,
+  listed: boolean,
+): boolean {
+  return listed || fanIsOnline(online, lastSeen, now);
+}
+
 /** Punto verde, como OnlyFans, solo cuando la ficha dice que el fan está en línea. */
 export function showOnlineDot(online: boolean | null | undefined): boolean {
   return online === true;

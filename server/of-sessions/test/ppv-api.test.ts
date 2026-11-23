@@ -1,10 +1,18 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { buildPpvPost, deliverPpvPost, ppvDryRun } from "../send/ppv-api.ts";
-import { historyAdvance, historyCandidates, historyLoopEnabled, olderChatMessagesPath } from "../sync/history.ts";
-import { lastSeenLabel, showOnlineDot } from "../../../src/lib/online-dot.ts";
+import { PGlite } from "@electric-sql/pglite";
+import { markOutboundDryRun } from "../sync/chat-store.ts";
+import { buildPpvPost, deliverPpvPost, ppvDryRun, ppvPreviewMissing } from "../send/ppv-api.ts";
+import { historyAdvance, historyCandidates, historyLoopEnabled, olderChatMessagesPath, orphanHistoryThreads } from "../sync/history.ts";
+import { fanIsOnline, fanListedOnline, fanShowsOnline, lastSeenLabel, showOnlineDot } from "../../../src/lib/online-dot.ts";
+import { fanPurchaseSeries } from "../sync/fan-purchases.ts";
+import { sealedOutbound } from "../send/chat-message.ts";
+import { purchaseHeading } from "../../../src/lib/purchase-detail.ts";
+import { purchasedPpvSeries } from "../../../src/lib/composer-tools.ts";
 import { accountApiBusy, clearAccountChatPace, withAccountApi } from "../sync/api-list-pace.ts";
-import { purchaseTitle } from "../../../src/lib/purchase-detail.ts";
 
 test("el PPV se arma para api2 y el seco no llama al POST", async () => {
   const built = buildPpvPost({
@@ -21,6 +29,11 @@ test("el PPV se arma para api2 y el seco no llama al POST", async () => {
   assert.deepEqual(built.body.previews, [501]);
   assert.equal(Math.round(built.body.price * 100), 1999);
   assert.equal(buildPpvPost({ fanId: "411378187", text: "x", priceCents: 500, mediaIds: ["501"], previewIds: ["9"] }).ok, false);
+  const priced = buildPpvPost({ fanId: "411378187", text: "pago", priceCents: 1799, mediaIds: ["501"], previewIds: [] });
+  assert.equal(priced.ok, false);
+  if (!priced.ok) assert.equal(priced.reason, "No está la vista previa");
+  assert.equal(ppvPreviewMissing(1799, 1, 0), true);
+  assert.equal(ppvPreviewMissing(0, 1, 0), false);
   assert.equal(ppvDryRun({ FANLINK_SEND_DRY_RUN: "true" }), true);
   let called = 0;
   const lines: string[] = [];
@@ -51,12 +64,28 @@ test("el PPV se arma para api2 y el seco no llama al POST", async () => {
     request: async () => ({ status: 200, json: { id: 42 }, retryAfterMs: 0 }),
   });
   assert.equal(posted.messageId, "42");
+  let refusedCalls = 0;
+  const refused = await deliverPpvPost({
+    fanId: "88",
+    text: "hola",
+    priceCents: 1799,
+    mediaIds: ["7"],
+    previewIds: [],
+    dryRun: false,
+    request: async () => {
+      refusedCalls += 1;
+      return { status: 200, json: { id: 1 }, retryAfterMs: 0 };
+    },
+  });
+  assert.equal(refusedCalls, 0);
+  assert.equal(refused.reason, "No está la vista previa");
+  assert.equal(refused.messageId, null);
   const blocked = await deliverPpvPost({
     fanId: "88",
     text: "hola",
     priceCents: 500,
     mediaIds: ["7"],
-    previewIds: [],
+    previewIds: ["7"],
     dryRun: false,
     request: async () => ({ status: 429, json: null, retryAfterMs: 1500 }),
   });
@@ -89,7 +118,54 @@ test("el histórico sigue los hilos abiertos y los que no tienen mensajes", () =
   assert.equal(lastSeenLabel(fiveMin, Date.now(), false), "Visto hace 5 min");
   assert.equal(lastSeenLabel(fiveMin, Date.now(), true), null);
   assert.equal(lastSeenLabel(null, Date.now(), false), null);
-  assert.equal(purchaseTitle("ARCADAS Y CORRIDA EN EL BALCÓN"), "ARCADAS Y CORRIDA EN EL BALCÓN");
+  const justNow = new Date(Date.now() - 30_000).toISOString();
+  assert.equal(fanIsOnline(null, justNow, Date.now()), true);
+  assert.equal(fanIsOnline(null, fiveMin, Date.now()), false);
+  assert.equal(fanListedOnline(["411378187"], "411378187", "411378187"), true);
+  assert.equal(fanShowsOnline(null, fiveMin, Date.now(), true), true);
+  assert.equal(fanShowsOnline(null, fiveMin, Date.now(), false), false);
+  assert.equal(showOnlineDot(fanShowsOnline(null, justNow, Date.now(), false)), true);
+  assert.deepEqual(orphanHistoryThreads(["591849192", "387943185", "591849192"], []).map((row) => row.threadKey), ["591849192", "387943185"]);
+  assert.equal(sealedOutbound({ status: "error", errorReason: "Envío en seco", ofMessageKey: null, matchedMessageKey: null }), true);
+  assert.equal(sealedOutbound({ status: "error", errorReason: "No se envió", ofMessageKey: null, matchedMessageKey: null }), false);
+  const heading = purchaseHeading("ARCADAS Y CORRIDA EN EL BALCÓN\ntexto");
+  assert.equal(heading.title, "ARCADAS Y CORRIDA EN EL BALCÓN");
+  assert.equal(heading.rest, "texto");
+  const four = purchasedPpvSeries([], [[
+    { sentAt: "2026-05-19T12:00:00.000Z", priceCents: 2499 },
+    { sentAt: "2026-07-01T12:00:00.000Z", priceCents: 3900 },
+    { sentAt: "2026-10-11T08:00:00.000Z", priceCents: 1299 },
+    { sentAt: "2026-10-11T18:00:00.000Z", priceCents: 2499 },
+  ], [
+    { sentAt: "2026-05-19T12:00:00.000Z", priceCents: 2499 },
+    { sentAt: "2026-07-01T12:00:00.000Z", priceCents: 3900 },
+  ]]);
+  assert.equal(four.points.length, 4);
+  assert.equal(four.maxCents, 3900);
+});
+
+test("el envío en seco no queda pendiente ni conserva la clave", async () => {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+  const pg = new PGlite();
+  for (const name of ["0007_of_reads.sql", "0008_sync_schedule.sql", "0009_of_chats.sql", "0019_chat_author.sql", "0025_outbound_send.sql", "0049_online_broadcast_dedupe.sql"]) {
+    await pg.exec(await readFile(path.join(root, "migrations", name), "utf8"));
+  }
+  await pg.exec(`
+    insert into staff_profile (user_id, display_name, role, perms) values ('ana', 'Ana', 'member', '[]'::jsonb);
+    insert into of_chat_outbound (id, creator_id, author_id, body, status, dedupe_key)
+    values ('seco', 'jose', 'ana', 'hola', 'pending', 'clave');
+  `);
+  const sql = {
+    query: async <T>(text: string, params?: unknown[]): Promise<T[]> => (await pg.query<T>(text, params)).rows,
+  };
+  await markOutboundDryRun(sql, "seco");
+  const rows = await pg.query<{ status: string; error_reason: string | null; dedupe_key: string | null }>(
+    "select status, error_reason, dedupe_key from of_chat_outbound where id = 'seco'",
+  );
+  assert.equal(rows.rows[0]?.status, "error");
+  assert.equal(rows.rows[0]?.error_reason, "Envío en seco");
+  assert.equal(rows.rows[0]?.dedupe_key, null);
+  await pg.close();
 });
 
 test("el histórico no se cuela delante de una lectura en vivo", async () => {
@@ -104,4 +180,42 @@ test("el histórico no se cuela delante de una lectura en vivo", async () => {
   release();
   await held;
   assert.equal(accountApiBusy("cuenta-viva"), false);
+});
+
+test("Alz2000 suma las compras del aviso que el movimiento no trae", async () => {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+  const pg = new PGlite();
+  for (const name of [
+    "0007_of_reads.sql",
+    "0008_sync_schedule.sql",
+    "0009_of_chats.sql",
+    "0012_extended_read.sql",
+    "0013_chat_price.sql",
+    "0034_notifications.sql",
+    "0055_notification_of_type.sql",
+    "0057_notification_message_ref.sql",
+  ]) {
+    await pg.exec(await readFile(path.join(root, "migrations", name), "utf8"));
+  }
+  await pg.exec(`
+    insert into of_chat_thread (creator_id, thread_key, fan_key, synced_at)
+    values ('allison', '411378187', '411378187', now());
+    insert into of_transaction (creator_id, tx_key, occurred_at, gross_cents, kind, fan_key, currency, synced_at)
+    values
+      ('allison', 'mayo', '2026-05-19T12:00:00Z', 2499, 'message', '411378187', 'USD', now()),
+      ('allison', 'octubre', '2026-10-11T08:00:00Z', 1299, 'message', '411378187', 'USD', now());
+    insert into of_notification (creator_id, notification_key, kind, fan_key, thread_key, amount_cents, occurred_at, synced_at, of_type)
+    values
+      ('allison', 'julio', 'ppv', '411378187', '411378187', 3900, '2026-07-01T12:00:00Z', now(), 'purchases'),
+      ('allison', 'octubre-2', 'ppv', '411378187', '411378187', 2499, '2026-10-11T18:00:00Z', now(), 'purchases'),
+      ('allison', 'mayo-dup', 'ppv', '411378187', '411378187', 2499, '2026-05-19T12:00:00Z', now(), 'purchases');
+  `);
+  const sql = {
+    query: async <T>(text: string, params?: unknown[]): Promise<T[]> => (await pg.query<T>(text, params)).rows,
+  };
+  const series = await fanPurchaseSeries(sql, "allison", "411378187");
+  assert.equal(series.points.length, 4);
+  assert.equal(series.maxCents, 3900);
+  assert.deepEqual(series.points.map((point) => point.priceCents), [2499, 3900, 1299, 2499]);
+  await pg.close();
 });

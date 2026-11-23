@@ -5,10 +5,15 @@ export function purchaseComposeDraft(mode: "quick" | "reply", scripts: ReadonlyA
   return { text: "", send: false };
 }
 
-export function purchaseTitle(body: string | null): string | null {
-  const line = body?.split("\n").map((part) => part.trim()).find((part) => part.length > 0) ?? "";
-  if (!line || line.length > 80) return null;
-  return line;
+/** El título va en la cabecera. El texto de debajo no lo repite. */
+export function purchaseHeading(body: string | null): { title: string; rest: string } {
+  const raw = body ?? "";
+  const lines = raw.split("\n");
+  const index = lines.findIndex((line) => line.trim().length > 0);
+  if (index < 0) return { title: "PPV", rest: "" };
+  const title = lines[index]?.trim() || "PPV";
+  const rest = lines.slice(index + 1).join("\n").trim();
+  return { title, rest };
 }
 
 export function purchaseDetailModel(input: { creatorName: string; priceCents: number | null; title?: string | null }): {

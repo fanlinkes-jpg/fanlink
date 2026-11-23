@@ -19,7 +19,7 @@ import { inboxCreators, inboxThreadList, readInboxCreator, resolveInboxCreator, 
 import { useCreatorNoticeBadges } from "@/lib/use-creator-notice-badges";
 import { COMPOSER_LANGUAGES, setComposerLanguage, useComposerLanguage } from "@/lib/ui-prefs";
 import { SfwMedia } from "@/components/sfw-media";
-import { lastSeenLabel, showOnlineDot } from "@/lib/online-dot";
+import { fanListedOnline, fanShowsOnline, lastSeenLabel, showOnlineDot } from "@/lib/online-dot";
 import { acceptedVaultPieces, chatVaultCreator, chatVaultOnThreadChange, mergeVaultPage, vaultFolderOnAccountChange, vaultLoadAllowed, vaultReadApplies } from "@/lib/vault-load";
 import { VAULT_FOLDER_READ_ERROR } from "@/lib/vault-folder-label";
 import { clearOpenThread, peekOpenThread } from "@/lib/open-thread";
@@ -27,7 +27,7 @@ import { useChatFanCards } from "@/lib/use-chat-fan-cards";
 import { chatFanCardFor, fanCardTransactions } from "@/lib/chat-fan-cards";
 import { FanInsights } from "@/features/fan-insights";
 import { MessagePriceDialog } from "@/features/message-price-dialog";
-import { FULL_EMOJIS, QUICK_EMOJIS, TEXT_COLORS, authorLabel, matchScripts, mentionToken, slashQuery, wrapSelection } from "@/lib/composer-tools";
+import { FULL_EMOJIS, QUICK_EMOJIS, TEXT_COLORS, authorLabel, matchScripts, mentionToken, ppvPreviewMissing, slashQuery, wrapSelection } from "@/lib/composer-tools";
 import { confirmedMatches, pendingForThread, unmatchedPending } from "@/lib/pending-thread";
 import { chatSendSession } from "@/lib/chat-send-session";
 import { useCurrentUser } from "@/lib/auth/use-current-user";
@@ -262,9 +262,9 @@ function OutboundBubbleView({
       {caption ? <p className="mt-1 text-[10px] text-[#8a5a12]">{caption}</p> : null}
       {job.state === "error" ? (
         <p className="mt-1 flex justify-end gap-2 text-[10px]">
-          <button type="button" className="text-[#2456c7]" onClick={onRetry}>Reintentar</button>
+          {job.reason === "Envío en seco" ? null : <button type="button" className="text-[#2456c7]" onClick={onRetry}>Reintentar</button>}
           <button type="button" className="text-[#2456c7]" onClick={onDiscard}>Descartar</button>
-          <button type="button" className="text-[#2456c7]" onClick={onRestore}>Recuperar</button>
+          {job.reason === "Envío en seco" ? null : <button type="button" className="text-[#2456c7]" onClick={onRestore}>Recuperar</button>}
         </p>
       ) : null}
       {job.state === "awaiting" && onReview ? (
@@ -635,6 +635,8 @@ export function RealChatsPage() {
     }
   }
   const visible = inbox.visible;
+  const onlineKeys = onlineFans.flatMap((fan) => (fan.online ? [fan.fanKey] : []));
+  const presenceNow = Date.now();
   const fanCards = useChatFanCards([
     ...threads,
     ...(notes ?? []).flatMap((item) => item.creatorId === inboxCreator && item.fanKey ? [{ creatorId: item.creatorId, fanKey: item.fanKey }] : []),
@@ -883,6 +885,11 @@ export function RealChatsPage() {
       name: file.name,
       free: file.free !== false,
     }));
+    const freePreviews = vault.filter((file) => file.free === true).length;
+    if (key === "Enter" && !shiftKey && !composing && ppvPreviewMissing(draftPrice, vault.length, freePreviews)) {
+      setError("No está la vista previa");
+      return;
+    }
     const decision = chatSendSession.press({
       key,
       shiftKey,
@@ -1372,6 +1379,8 @@ export function RealChatsPage() {
           <ul>
             {visible.map((thread) => {
               const unread = unreadChatRow(thread.unread);
+              const online = fanShowsOnline(thread.online, thread.lastSeenAt, presenceNow, fanListedOnline(onlineKeys, thread.fanKey, thread.threadKey));
+              const seen = lastSeenLabel(thread.lastSeenAt, presenceNow, online);
               return (
               <li key={`${thread.creatorId}:${thread.threadKey}`}>
                 <button
@@ -1380,7 +1389,7 @@ export function RealChatsPage() {
                   className={`flex w-full gap-3 px-3 py-3 text-left ${selected?.threadKey === thread.threadKey && selected.creatorId === thread.creatorId ? "bg-[#f4f7ff]" : ""}`}
                 >
                   <span className="flex w-12 shrink-0 flex-col items-center gap-1">
-                    <FanFace name={fanTitle(thread)} url={thread.avatarUrl} online={thread.online} />
+                    <FanFace name={fanTitle(thread)} url={thread.avatarUrl} online={online} />
                     <FanSpendLabel
                       thread={thread.spentCents}
                       card={chatFanCardFor(fanCards.fans, thread.creatorId, thread.fanKey)?.spentCents ?? null}
@@ -1391,11 +1400,11 @@ export function RealChatsPage() {
                     <span className="flex items-center gap-1">
                       <span className={`truncate text-sm ${unread.bold ? "font-bold text-[#1d2433]" : "font-medium"}`}>{fanTitle(thread)}</span>
                       {unread.badge != null && !marks.muted.includes(threadMark(thread.creatorId, thread.threadKey)) ? <span className="shrink-0 rounded-full bg-[#3b6cff] px-1.5 text-[10px] font-semibold text-white" aria-label={`${unread.badge} sin leer`}>{unread.badge}</span> : null}
-                      {thread.online === false && !lastSeenLabel(thread.lastSeenAt, Date.now(), thread.online) ? <span className="rounded bg-[#f3f4f6] px-1 text-[10px] text-[#6d7585]">OFF</span> : null}
+                      {thread.online === false && !online && !seen ? <span className="rounded bg-[#f3f4f6] px-1 text-[10px] text-[#6d7585]">OFF</span> : null}
                     </span>
                     <span className="flex items-baseline gap-2 text-xs text-[#6d7585]">
                       <span className="truncate">{thread.fanHandle ? `@${thread.fanHandle.replace(/^@/, "")}` : "Sin datos"}</span>
-                      {lastSeenLabel(thread.lastSeenAt, Date.now(), thread.online) ? <span className="shrink-0 truncate">{lastSeenLabel(thread.lastSeenAt, Date.now(), thread.online)}</span> : null}
+                      {seen ? <span className="shrink-0 truncate">{seen}</span> : null}
                     </span>
                     <span className="mt-1 flex items-baseline justify-between gap-2 text-xs text-[#6d7585]">
                       <span className={`truncate ${unread.bold ? "font-bold text-[#1d2433]" : ""}`}>{thread.excerpt ?? "Sin datos"}</span>
@@ -1414,12 +1423,12 @@ export function RealChatsPage() {
         <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <header className="relative flex shrink-0 items-center justify-between gap-3 border-b border-[#e6e8ee] px-4 py-3">
               <div className="flex min-w-0 items-center gap-2">
-                {selected ? <FanFace name={fanTitle(selected)} url={selected.avatarUrl} online={selected.online} /> : null}
+                {selected ? <FanFace name={fanTitle(selected)} url={selected.avatarUrl} online={fanShowsOnline(selected.online, selected.lastSeenAt, presenceNow, fanListedOnline(onlineKeys, selected.fanKey, selected.threadKey))} /> : null}
                 <div className="min-w-0">
                 <button type="button" className="block max-w-full truncate text-left font-medium" onClick={() => { setFanMenu((open) => !open); setRenaming(false); }} aria-expanded={fanMenu} aria-label="Opciones del fan">
                   {selected ? fanTitle(selected) : syncPhaseLabel(syncPhase)}
                 </button>
-                {selected && lastSeenLabel(selected.lastSeenAt, Date.now(), selected.online) ? <p className="truncate text-xs text-[#6d7585]">{lastSeenLabel(selected.lastSeenAt, Date.now(), selected.online)}</p> : null}
+                {selected && lastSeenLabel(selected.lastSeenAt, presenceNow, fanShowsOnline(selected.online, selected.lastSeenAt, presenceNow, fanListedOnline(onlineKeys, selected.fanKey, selected.threadKey))) ? <p className="truncate text-xs text-[#6d7585]">{lastSeenLabel(selected.lastSeenAt, presenceNow, fanShowsOnline(selected.online, selected.lastSeenAt, presenceNow, fanListedOnline(onlineKeys, selected.fanKey, selected.threadKey)))}</p> : null}
                 </div>
                 {fanMenu && selected ? (
                   <>
@@ -1581,9 +1590,9 @@ export function RealChatsPage() {
                     ) : null}
                     {item.status === "error" && mine ? (
                       <p className="mt-1 flex justify-end gap-2 text-[10px]">
-                        {item.dedupeKey ? null : <button type="button" className="text-[#2456c7]" onClick={() => retrySend(item.id)}>Reintentar</button>}
+                        {item.dedupeKey || item.errorReason === "Envío en seco" ? null : <button type="button" className="text-[#2456c7]" onClick={() => retrySend(item.id)}>Reintentar</button>}
                         <button type="button" className="text-[#2456c7]" onClick={() => void discardSend(item.id)}>Descartar</button>
-                        {item.dedupeKey ? null : <button type="button" className="text-[#2456c7]" onClick={() => restoreDraft(recovered)}>Recuperar</button>}
+                        {item.dedupeKey || item.errorReason === "Envío en seco" ? null : <button type="button" className="text-[#2456c7]" onClick={() => restoreDraft(recovered)}>Recuperar</button>}
                       </p>
                     ) : null}
                     {item.errorReason === "Pendiente de confirmar" && teamAccess?.role === "owner" ? (
@@ -1858,17 +1867,8 @@ export function RealChatsPage() {
       {dialog === "precio" ? (
         <MessagePriceDialog
           initial={draftPrice == null ? "" : (draftPrice / 100).toFixed(2)}
-          messages={messages}
-          purchases={[
-            ...(chatFanCardFor(fanCards.fans, selected?.creatorId ?? "", selected?.fanKey ?? null)?.purchases ?? [])
-              .filter((row) => row.kind === "message")
-              .map((row) => ({ sentAt: row.occurredAt, priceCents: row.amountCents })),
-            ...(notes ?? [])
-              .filter((item) => item.kind === "ppv" && item.amountCents != null && item.amountCents > 0 && item.occurredAt && selected && item.creatorId === selected.creatorId && (
-                item.threadKey === selected.threadKey || item.fanKey === selected.fanKey || item.messageRef?.includes(`t:${selected.threadKey}`)
-              ))
-              .map((item) => ({ sentAt: item.occurredAt ?? "", priceCents: item.amountCents ?? 0 })),
-          ]}
+          creatorId={selected?.creatorId ?? null}
+          threadKey={selected?.threadKey ?? null}
           onCancel={() => {
             offerPriceId.current = null;
             setDialog(null);

@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { Play, ShoppingBag, X } from "lucide-react";
 import { chatMediaSrc } from "@/lib/chat-media";
 import { readPurchaseMessage, type PurchaseMessageCard } from "@/lib/of-notifications";
-import { purchaseDetailModel, purchaseTitle } from "@/lib/purchase-detail";
+import { purchaseDetailModel, purchaseHeading } from "@/lib/purchase-detail";
 
 export function PurchaseMessageDialog({
   creatorId,
@@ -24,10 +24,11 @@ export function PurchaseMessageDialog({
 }) {
   const [card, setCard] = useState<PurchaseMessageCard | null>(null);
   const [failed, setFailed] = useState(false);
+  const heading = card ? purchaseHeading(card.body) : { title: failed ? "PPV" : "", rest: "" };
   const model = purchaseDetailModel({
     creatorName,
     priceCents: card?.priceCents ?? null,
-    title: purchaseTitle(card?.body ?? null),
+    title: heading.title,
   });
 
   useEffect(() => {
@@ -72,7 +73,7 @@ export function PurchaseMessageDialog({
             <X className="h-4 w-4" />
           </button>
         </div>
-        <p className="mt-3 whitespace-pre-wrap text-sm text-[#1c2333]">{failed ? "Sin datos" : card?.body || "Sin datos"}</p>
+        {heading.rest ? <p className="mt-3 whitespace-pre-wrap text-sm text-[#1c2333]">{heading.rest}</p> : null}
         {media.length > 0 && messageId ? (
           <div className="mt-3 flex gap-2 overflow-x-auto">
             {media.map((item, index) => (
