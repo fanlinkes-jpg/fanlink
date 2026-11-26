@@ -23,8 +23,24 @@ export function historyAdvance(input: {
   const cursor = oldestCursor(input.incoming) ?? input.previousCursor;
   if (input.incoming.length === 0) return { done: true, cursor };
   if (pageFinished(input.previousCursor, input.incoming)) return { done: true, cursor: input.previousCursor };
+  if (historyPageStalled(input.previousCursor, cursor, input.incoming)) {
+    return { done: true, cursor: input.previousCursor ?? cursor };
+  }
   if (!input.hasMore && input.incoming.length < pageSize) return { done: true, cursor };
   return { done: false, cursor };
+}
+
+/** La misma página otra vez: el cursor no retrocede y no se cierra el bucle. */
+export function historyPageStalled(
+  previousCursor: string | null,
+  nextCursor: string | null,
+  incoming: Array<{ messageKey: string; sentAt: string }>,
+): boolean {
+  if (incoming.length === 0) return false;
+  if (!previousCursor || !nextCursor) return false;
+  if (nextCursor === previousCursor) return true;
+  if (incoming.every((message) => message.messageKey === previousCursor)) return true;
+  return false;
 }
 
 export type HistoryCandidate = HistoryThread & { stored: number };

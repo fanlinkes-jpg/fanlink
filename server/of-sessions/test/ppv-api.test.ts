@@ -129,8 +129,9 @@ test("el histórico sigue los hilos abiertos y los que no tienen mensajes", () =
   assert.equal(sealedOutbound({ status: "error", errorReason: "Envío en seco", ofMessageKey: null, matchedMessageKey: null }), true);
   assert.equal(sealedOutbound({ status: "error", errorReason: "No se envió", ofMessageKey: null, matchedMessageKey: null }), false);
   const heading = purchaseHeading("ARCADAS Y CORRIDA EN EL BALCÓN\ntexto");
-  assert.equal(heading.title, "ARCADAS Y CORRIDA EN EL BALCÓN");
-  assert.equal(heading.rest, "texto");
+  assert.equal(heading.title, "PPV");
+  assert.equal(heading.rest, "ARCADAS Y CORRIDA EN EL BALCÓN\ntexto");
+  assert.deepEqual(purchaseHeading(""), { title: "PPV", rest: "" });
   const four = purchasedPpvSeries([], [[
     { sentAt: "2026-05-19T12:00:00.000Z", priceCents: 2499 },
     { sentAt: "2026-07-01T12:00:00.000Z", priceCents: 3900 },

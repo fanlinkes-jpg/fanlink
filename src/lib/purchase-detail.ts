@@ -5,15 +5,11 @@ export function purchaseComposeDraft(mode: "quick" | "reply", scripts: ReadonlyA
   return { text: "", send: false };
 }
 
-/** El título va en la cabecera. El texto de debajo no lo repite. */
+/** La cabecera del modal es corta; el texto del mensaje va debajo. */
 export function purchaseHeading(body: string | null): { title: string; rest: string } {
-  const raw = body ?? "";
-  const lines = raw.split("\n");
-  const index = lines.findIndex((line) => line.trim().length > 0);
-  if (index < 0) return { title: "PPV", rest: "" };
-  const title = lines[index]?.trim() || "PPV";
-  const rest = lines.slice(index + 1).join("\n").trim();
-  return { title, rest };
+  const raw = (body ?? "").trim();
+  if (!raw) return { title: "PPV", rest: "" };
+  return { title: "PPV", rest: raw };
 }
 
 export function purchaseDetailModel(input: { creatorName: string; priceCents: number | null; title?: string | null }): {

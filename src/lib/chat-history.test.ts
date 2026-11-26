@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { historyAdvance, olderChatMessagesPath, pageFinished } from "../../server/of-sessions/sync/history.ts";
+import { historyAdvance, historyPageStalled, olderChatMessagesPath, pageFinished } from "../../server/of-sessions/sync/history.ts";
 import { mergeHistoryMessages, rememberThreadMessages, scrollAfterPrepend, scrollAnchor, scrollDeltaForAnchor } from "./chat-history.ts";
 
 test("la página antigua usa el id del mensaje más viejo y hasMore cierra el hilo", () => {
@@ -28,6 +28,14 @@ test("la página antigua usa el id del mensaje más viejo y hasMore cierra el hi
   assert.equal(end.done, true);
   assert.equal(end.cursor, "70");
   assert.equal(pageFinished("80", [{ messageKey: "80", sentAt: "2025-12-01T00:00:00.000Z" }]), true);
+  assert.equal(historyPageStalled("104", "104", [{ messageKey: "104", sentAt: "2026-02-01T00:00:00.000Z" }]), true);
+  const stalled = historyAdvance({
+    previousCursor: "104",
+    incoming: [{ messageKey: "104", sentAt: "2026-02-01T00:00:00.000Z" }],
+    hasMore: true,
+  });
+  assert.equal(stalled.done, true);
+  assert.equal(stalled.cursor, "104");
 });
 
 test("el histórico no repite un mensaje y el scroll no salta", () => {

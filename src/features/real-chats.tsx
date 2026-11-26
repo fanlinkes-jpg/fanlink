@@ -333,6 +333,7 @@ export function RealChatsPage() {
   const [noteNotice, setNoteNotice] = useState<string | null>(null);
   const [purchaseNote, setPurchaseNote] = useState<NoteRow | null>(null);
   const notesButton = useRef<HTMLButtonElement>(null);
+  const notesLoadGen = useRef(0);
   const [notesPos, setNotesPos] = useState({ top: 0, left: 0 });
   const [discountPercent, setDiscountPercent] = useState("10");
   const [reportText, setReportText] = useState("");
@@ -436,11 +437,14 @@ export function RealChatsPage() {
   }, []);
 
   async function loadNotes(tab: NotificationTab = noteFilter, cursor: string | null = null) {
+    const loadGen = notesLoadGen.current;
     const ids = inboxCreator ? [inboxCreator] : [];
     if (ids.length === 0) {
+      if (loadGen !== notesLoadGen.current) return;
       setNotes([]);
       setNoteCounts(null);
       setNoteCursor(null);
+      setNoteNotice(null);
       return;
     }
     const pages = await Promise.all(ids.map(async (id) => {
@@ -451,6 +455,7 @@ export function RealChatsPage() {
         return { id, page: null };
       }
     }));
+    if (loadGen !== notesLoadGen.current) return;
     setNoteCounts(pages.length === 1 ? pages[0]?.page?.counts ?? null : null);
     setNoteCursor(pages.length === 1 ? pages[0]?.page?.nextCursor ?? null : null);
     const notices = pages.flatMap((entry) => entry.page?.sessionNotice ? [entry.page.sessionNotice] : []);
@@ -461,8 +466,13 @@ export function RealChatsPage() {
   }
 
   useEffect(() => {
-    void loadNotes();
-    const timer = setInterval(() => { void loadNotes(); }, 20_000);
+    notesLoadGen.current += 1;
+    setNotes(null);
+    setNoteCursor(null);
+    setNoteCounts(null);
+    setNoteNotice(null);
+    void loadNotes(noteFilter, null);
+    const timer = setInterval(() => { void loadNotes(noteFilter, null); }, 20_000);
     return () => clearInterval(timer);
   }, [inboxCreator, creators.length]);
 
