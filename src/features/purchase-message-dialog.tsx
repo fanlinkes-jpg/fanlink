@@ -23,7 +23,7 @@ export function PurchaseMessageDialog({
   onCompose: (mode: "quick" | "reply") => void;
 }) {
   const [card, setCard] = useState<PurchaseMessageCard | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [, setFailed] = useState(false);
   const heading = purchaseHeading(card?.body ?? null);
   const model = purchaseDetailModel({
     creatorName,
