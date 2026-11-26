@@ -180,6 +180,7 @@ export const readPurchaseMessage = createServerFn({ method: "GET" })
     if (!ref.messageId) return null;
     const mirrored = await readMirroredPurchase(sql, data.creatorId, ref.messageId);
     if (mirrored) {
+      await savePurchasedMessage(sql, data.creatorId, mirrored);
       return {
         messageId: mirrored.messageKey,
         threadKey: mirrored.threadKey,

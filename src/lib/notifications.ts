@@ -619,6 +619,20 @@ export function canReadCreatorNotifications(
   return access.creatorIds.includes(creatorId);
 }
 
+/** Descarta respuestas de notificaciones que ya no coinciden con la creadora o pestaña actuales. */
+export function notesResponseApplies(input: {
+  requestId: number;
+  creatorId: string;
+  tab: NotificationTab;
+  currentId: number;
+  currentCreatorId: string | null;
+  currentTab: NotificationTab;
+}): boolean {
+  if (input.requestId !== input.currentId) return false;
+  if (!input.creatorId || input.creatorId !== input.currentCreatorId) return false;
+  return input.tab === input.currentTab;
+}
+
 export function visibleNotifications(
   rows: NotificationRecord[],
   access: { role: "owner" | "member"; creatorIds: string[] } | null,

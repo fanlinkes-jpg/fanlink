@@ -8,7 +8,7 @@ import { unreadChatRow } from "../../server/of-sessions/sync/unread-chats.ts";
 import { inboxPillCounts, matchesInboxPill, tipThreads, type InboxPill } from "../../server/of-sessions/sync/chat-pills.ts";
 import { accountFigure, everyAccountBlocked, SESSION_EXPIRED_LABEL } from "../../server/of-sessions/sync/session-link.ts";
 import { ensureNoticeTab, listCreatorNotifications, markCreatorNotificationsRead, type NotificationListItem } from "@/lib/of-notifications";
-import { NOTIFICATION_TABS, TAB_LABEL, isOwnerOnlyKind, notesForCreator, noticeFace, notificationReplyLine, noticesForOfTab, ofTabListNote, tabOf, type NotificationCounts, type NotificationTab } from "@/lib/notifications";
+import { NOTIFICATION_TABS, TAB_LABEL, isOwnerOnlyKind, notesForCreator, notesResponseApplies, noticeFace, notificationReplyLine, noticesForOfTab, ofTabListNote, tabOf, type NotificationCounts, type NotificationTab } from "@/lib/notifications";
 import { NotificationFanCard } from "@/features/notification-card";
 import { PurchaseMessageDialog } from "@/features/purchase-message-dialog";
 import { purchaseComposeDraft } from "@/lib/purchase-detail";
@@ -335,7 +335,7 @@ export function RealChatsPage() {
   const [noteNotice, setNoteNotice] = useState<string | null>(null);
   const [purchaseNote, setPurchaseNote] = useState<NoteRow | null>(null);
   const notesButton = useRef<HTMLButtonElement>(null);
-  const notesLoadGen = useRef(0);
+  const notesLive = useRef<{ seq: number; creatorId: string | null; tab: NotificationTab }>({ seq: 0, creatorId: null, tab: "all" });
   const [notesPos, setNotesPos] = useState({ top: 0, left: 0 });
   const [discountPercent, setDiscountPercent] = useState("10");
   const [reportText, setReportText] = useState("");
@@ -439,10 +439,21 @@ export function RealChatsPage() {
   }, []);
 
   async function loadNotes(tab: NotificationTab = noteFilter, cursor: string | null = null) {
-    const loadGen = notesLoadGen.current;
-    const ids = inboxCreator ? [inboxCreator] : [];
+    const creator = inboxCreator;
+    const requestId = notesLive.current.seq + 1;
+    notesLive.current.seq = requestId;
+    notesLive.current.creatorId = creator;
+    notesLive.current.tab = tab;
+    const ids = creator ? [creator] : [];
     if (ids.length === 0) {
-      if (loadGen !== notesLoadGen.current) return;
+      if (!notesResponseApplies({
+        requestId,
+        creatorId: "",
+        tab,
+        currentId: notesLive.current.seq,
+        currentCreatorId: notesLive.current.creatorId,
+        currentTab: notesLive.current.tab,
+      })) return;
       setNotes([]);
       setNoteCounts(null);
       setNoteCursor(null);
@@ -457,7 +468,14 @@ export function RealChatsPage() {
         return { id, page: null };
       }
     }));
-    if (loadGen !== notesLoadGen.current) return;
+    if (!creator || !notesResponseApplies({
+      requestId,
+      creatorId: creator,
+      tab,
+      currentId: notesLive.current.seq,
+      currentCreatorId: notesLive.current.creatorId,
+      currentTab: notesLive.current.tab,
+    })) return;
     setNoteCounts(pages.length === 1 ? pages[0]?.page?.counts ?? null : null);
     setNoteCursor(pages.length === 1 ? pages[0]?.page?.nextCursor ?? null : null);
     const notices = pages.flatMap((entry) => entry.page?.sessionNotice ? [entry.page.sessionNotice] : []);
@@ -468,13 +486,18 @@ export function RealChatsPage() {
   }
 
   useEffect(() => {
-    notesLoadGen.current += 1;
+    notesLive.current.seq += 1;
+    notesLive.current.creatorId = inboxCreator;
+    notesLive.current.tab = "all";
+    setNoteFilter("all");
     setNotes(null);
     setNoteCursor(null);
     setNoteCounts(null);
     setNoteNotice(null);
-    void loadNotes(noteFilter, null);
-    const timer = setInterval(() => { void loadNotes(noteFilter, null); }, 20_000);
+    void loadNotes("all", null);
+    const timer = setInterval(() => {
+      void loadNotes(notesLive.current.tab, null);
+    }, 20_000);
     return () => clearInterval(timer);
   }, [inboxCreator, creators.length]);
 

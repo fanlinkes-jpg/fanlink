@@ -35,7 +35,7 @@ import { chatIntervalMinFromEnv } from "../../server/of-sessions/sync/chats.ts";
 import { chatIntervalMinutes, inboxIsOpen, activeThreadWatches } from "../../server/of-sessions/sync/live.ts";
 import { openWatchContext, runInboxWatch } from "../../server/of-sessions/sync/inbox-watch.ts";
 import { pickAccountWatch } from "../../server/of-sessions/sync/watch-plan.ts";
-import { listChatMeta, listChats, listOpenHistory, listPendingOutbounds, listRecentMatches, listThreadHistory, markChatList, markHistory, markOutboundAwaiting, noteHistoryCursor, recordOutbound, saveChatRead, saveFanCards } from "../../server/of-sessions/sync/chat-store.ts";
+import { ensureHistoryThread, listChatMeta, listChats, listOpenHistory, listPendingOutbounds, listRecentMatches, listThreadHistory, markChatList, markHistory, markOutboundAwaiting, noteHistoryCursor, recordOutbound, saveChatRead, saveFanCards } from "../../server/of-sessions/sync/chat-store.ts";
 import { historyAdvance, historyCandidates, historyLoopEnabled, historyPerMinute, listPageDone, nextHistoryThread } from "../../server/of-sessions/sync/history.ts";
 import { captureChatListPage } from "../../server/of-sessions/sync/history-scroll.ts";
 import { openWorkPage } from "../../server/of-sessions/sessions/work-page.ts";
@@ -353,6 +353,7 @@ function bootHistoryLoop(sessions: SessionManager): void {
 
 async function pullOlder(sessions: SessionManager, accountId: string, creatorId: string, threadKey: string, accountUserId: string | null, options?: { yieldIfBusy?: boolean }): Promise<{ status: "saved" | "empty" | "busy" | "done" | "wait"; hasMore: boolean; retryAfterMs: number }> {
   const sql = await getSql();
+  await ensureHistoryThread(sql, creatorId, threadKey);
   await noteHistoryCursor(sql, creatorId);
   const open = await listOpenHistory(sql, creatorId);
   const known = open.find((item) => item.threadKey === threadKey) ?? null;

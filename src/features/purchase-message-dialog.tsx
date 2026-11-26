@@ -24,7 +24,7 @@ export function PurchaseMessageDialog({
 }) {
   const [card, setCard] = useState<PurchaseMessageCard | null>(null);
   const [, setFailed] = useState(false);
-  const heading = purchaseHeading(card?.body ?? null);
+  const heading = purchaseHeading(card?.body ?? null, card?.priceCents ?? null);
   const model = purchaseDetailModel({
     creatorName,
     priceCents: card?.priceCents ?? null,

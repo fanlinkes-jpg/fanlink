@@ -45,6 +45,7 @@ import {
   tabOf,
   unreadCount,
   canReadCreatorNotifications,
+  notesResponseApplies,
   visibleNotifications,
   SIN_DATOS,
   type NotificationRecord,
@@ -140,6 +141,33 @@ test("el chatter solo ve las notificaciones de sus cuentas y la dueña ve todas"
   assert.equal(canReadCreatorNotifications(owner, "c-alba"), true);
   assert.deepEqual(visibleNotifications(rows, owner, "c-nora").map((row) => row.key), ["ajena"]);
   assert.deepEqual(visibleNotifications(rows, owner, "c-alba").map((row) => row.key), ["propia"]);
+});
+
+test("descarta respuestas de notificaciones de otra creadora o pestaña", () => {
+  assert.equal(notesResponseApplies({
+    requestId: 3,
+    creatorId: "jose",
+    tab: "all",
+    currentId: 3,
+    currentCreatorId: "jose",
+    currentTab: "all",
+  }), true);
+  assert.equal(notesResponseApplies({
+    requestId: 2,
+    creatorId: "jose",
+    tab: "all",
+    currentId: 3,
+    currentCreatorId: "jose",
+    currentTab: "all",
+  }), false);
+  assert.equal(notesResponseApplies({
+    requestId: 3,
+    creatorId: "jose",
+    tab: "purchases",
+    currentId: 3,
+    currentCreatorId: "jose",
+    currentTab: "all",
+  }), false);
 });
 
 test("filtra por pestaña, texto y fechas, y cuenta no leídas", () => {

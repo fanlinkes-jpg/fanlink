@@ -1013,30 +1013,34 @@ export async function noteHistoryCursor(sql: ReadSql, creatorId: string): Promis
 
 export async function listOpenHistory(sql: ReadSql, creatorId: string): Promise<Array<{ threadKey: string; cursor: string | null; done: boolean; stored: number }>> {
   const rows = await sql.query<{ thread_key: string; history_cursor: string | null; history_done: boolean | string; has_messages: boolean | string }>(
-    `select t.thread_key, t.history_cursor, t.history_done,
-            exists (
-              select 1 from of_chat_message m
-              where m.creator_id = t.creator_id and m.thread_key = t.thread_key
-            ) as has_messages
-     from of_chat_thread t
-     where t.creator_id = $1
-       and (
-         t.history_done = false
-         or not exists (
-           select 1 from of_chat_message m
-           where m.creator_id = t.creator_id and m.thread_key = t.thread_key
+    `select open.thread_key, open.history_cursor, open.history_done, open.has_messages
+     from (
+       select t.thread_key, t.history_cursor, t.history_done,
+              exists (
+                select 1 from of_chat_message m
+                where m.creator_id = t.creator_id and m.thread_key = t.thread_key
+              ) as has_messages,
+              t.last_message_at as sort_at
+       from of_chat_thread t
+       where t.creator_id = $1
+         and (
+           t.history_done = false
+           or not exists (
+             select 1 from of_chat_message m
+             where m.creator_id = t.creator_id and m.thread_key = t.thread_key
+           )
          )
-       )
-     union all
-     select m.thread_key, null, false, true
-     from of_chat_message m
-     where m.creator_id = $1
-       and not exists (
-         select 1 from of_chat_thread t
-         where t.creator_id = m.creator_id and t.thread_key = m.thread_key
-       )
-     group by m.thread_key
-     order by 1`,
+       union all
+       select m.thread_key, null, false, true, max(m.sent_at)
+       from of_chat_message m
+       where m.creator_id = $1
+         and not exists (
+           select 1 from of_chat_thread t
+           where t.creator_id = m.creator_id and t.thread_key = m.thread_key
+         )
+       group by m.thread_key
+     ) open
+     order by open.sort_at desc nulls last, open.thread_key`,
     [creatorId],
   );
   return rows.map((row) => ({
@@ -1096,12 +1100,42 @@ function storedMessage(row: MessageRow): Awaited<ReturnType<typeof listChats>>["
   };
 }
 
-export async function markHistory(sql: ReadSql, creatorId: string, threadKey: string, cursor: string | null, done: boolean): Promise<void> {
+/** Crea la fila del hilo a partir de mensajes guardados si solo existía por compra. */
+export async function ensureHistoryThread(sql: ReadSql, creatorId: string, threadKey: string): Promise<void> {
+  const syncedAt = new Date().toISOString();
   await sql.query(
-    `update of_chat_thread set history_cursor = coalesce($3, history_cursor), history_done = $4
-     where creator_id = $1 and thread_key = $2`,
-    [creatorId, threadKey, cursor, done],
+    `insert into of_chat_thread (
+       creator_id, thread_key, fan_key, last_message_at, excerpt, unread, synced_at, origin, history_done
+     )
+     select $1, src.thread_key, coalesce(src.fan_key, src.thread_key), src.sent_at,
+            left(trim(regexp_replace(coalesce(src.body, ''), '\\s+', ' ', 'g')), 180),
+            null, $3, $4, false
+     from (
+       select m.thread_key, m.fan_key, m.sent_at, m.body,
+              row_number() over (order by m.sent_at desc) as rn
+       from of_chat_message m
+       where m.creator_id = $1 and m.thread_key = $2
+     ) src
+     where src.rn = 1
+     on conflict (creator_id, thread_key) do nothing`,
+    [creatorId, threadKey, syncedAt, ORIGIN],
   );
+}
+
+export async function markHistory(sql: ReadSql, creatorId: string, threadKey: string, cursor: string | null, done: boolean): Promise<void> {
+  await ensureHistoryThread(sql, creatorId, threadKey);
+  const syncedAt = new Date().toISOString();
+  const rows = await sql.query<{ one: number }>(
+    `insert into of_chat_thread (
+       creator_id, thread_key, fan_key, synced_at, origin, history_cursor, history_done
+     ) values ($1, $2, $2, $5, $6, $3, $4)
+     on conflict (creator_id, thread_key) do update set
+       history_cursor = coalesce($3, of_chat_thread.history_cursor),
+       history_done = $4
+     returning 1 as one`,
+    [creatorId, threadKey, cursor, done, syncedAt, ORIGIN],
+  );
+  if (rows.length === 0) throw new Error(`markHistory sin fila ${creatorId}/${threadKey}`);
 }
 
 export async function markChatList(sql: ReadSql, creatorId: string, cursor: string | null, done: boolean): Promise<void> {

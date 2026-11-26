@@ -150,12 +150,30 @@ export async function readMirroredPurchase(sql: ReadSql, creatorId: string, mess
 
 export async function savePurchasedMessage(sql: ReadSql, creatorId: string, message: ChatMessage): Promise<void> {
   const now = new Date().toISOString();
+  const excerpt = (message.body || "").replace(/\s+/g, " ").trim().slice(0, 180);
   await sql.query(
-    `insert into of_chat_thread (creator_id, thread_key, fan_key, synced_at, origin)
-     values ($1, $2, $3, $4, 'onlyfans')
+    `insert into of_chat_thread (
+       creator_id, thread_key, fan_key, last_message_at, excerpt, synced_at, origin, last_from_fan
+     ) values ($1, $2, $3, $4, $5, $6, 'onlyfans', $7)
      on conflict (creator_id, thread_key) do update set
-       fan_key = coalesce(of_chat_thread.fan_key, excluded.fan_key)`,
-    [creatorId, message.threadKey, message.fanKey ?? message.threadKey, now],
+       fan_key = coalesce(of_chat_thread.fan_key, excluded.fan_key),
+       last_message_at = case
+         when of_chat_thread.last_message_at is null or excluded.last_message_at > of_chat_thread.last_message_at
+           then excluded.last_message_at
+         else of_chat_thread.last_message_at
+       end,
+       excerpt = case
+         when of_chat_thread.last_message_at is null or excluded.last_message_at >= of_chat_thread.last_message_at
+           then excluded.excerpt
+         else of_chat_thread.excerpt
+       end,
+       last_from_fan = case
+         when of_chat_thread.last_message_at is null or excluded.last_message_at >= of_chat_thread.last_message_at
+           then excluded.last_from_fan
+         else of_chat_thread.last_from_fan
+       end,
+       synced_at = excluded.synced_at`,
+    [creatorId, message.threadKey, message.fanKey ?? message.threadKey, message.sentAt, excerpt || null, now, message.fromFan],
   );
   await sql.query(
     `insert into of_chat_message (
