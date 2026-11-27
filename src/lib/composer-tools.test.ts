@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { QUICK_EMOJIS, authorLabel, emojiRows, matchScripts, mentionToken, messagePriceCents, moneyLabel, paymentLabel, priceChartLayout, purchasedPpvSeries, slashQuery, wrapSelection } from "./composer-tools.ts";
+import { QUICK_EMOJIS, authorLabel, emojiRows, matchScripts, mentionToken, messagePriceCents, moneyLabel, paymentLabel, priceChartLayout, purchasedPpvSeries, slashQuery, vaultOfferFlagsAfterPrice, wrapSelection } from "./composer-tools.ts";
 
 test("la cuadrícula rápida cabe en tres filas y el selector la incluye", () => {
   const rows = emojiRows(QUICK_EMOJIS, 12);
@@ -33,6 +33,18 @@ test("el formato, la mención y el precio no se inventan", () => {
   assert.equal(authorLabel("Elena", false), "Elena");
   assert.equal(authorLabel("  operador local  ", false), "operador local");
   assert.equal(authorLabel(null, false), "Cuenta");
+});
+
+test("guardar precio deja una vista previa si hay varias piezas", () => {
+  const vault = [{ id: "vault-a", free: true }, { id: "vault-b", free: false }];
+  const flags = vaultOfferFlagsAfterPrice(vault, 999, null);
+  assert.equal(flags.get("vault-a"), true);
+  assert.equal(flags.get("vault-b"), false);
+  const allPaid = vaultOfferFlagsAfterPrice(vault, 999, "vault-b");
+  assert.equal(allPaid.get("vault-a"), true);
+  assert.equal(allPaid.get("vault-b"), false);
+  const single = vaultOfferFlagsAfterPrice([{ id: "vault-a", free: true }], 999, null);
+  assert.equal(single.get("vault-a"), false);
 });
 
 test("el precio del mensaje es gratis o como mínimo 3 USD", () => {

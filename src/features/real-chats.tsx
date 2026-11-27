@@ -27,7 +27,8 @@ import { useChatFanCards } from "@/lib/use-chat-fan-cards";
 import { chatFanCardFor, fanCardTransactions } from "@/lib/chat-fan-cards";
 import { FanInsights } from "@/features/fan-insights";
 import { MessagePriceDialog } from "@/features/message-price-dialog";
-import { FULL_EMOJIS, QUICK_EMOJIS, TEXT_COLORS, authorLabel, matchScripts, mentionToken, ppvPreviewMissing, slashQuery, wrapSelection } from "@/lib/composer-tools";
+import { FULL_EMOJIS, QUICK_EMOJIS, TEXT_COLORS, authorLabel, matchScripts, mentionToken, ppvPreviewMissing, slashQuery, vaultOfferFlagsAfterPrice, wrapSelection } from "@/lib/composer-tools";
+import { REAL_SEND_OFF_REASON } from "@/lib/chat-send-session";
 import { confirmedMatches, pendingForThread, unmatchedPending } from "@/lib/pending-thread";
 import { chatSendSession } from "@/lib/chat-send-session";
 import { useCurrentUser } from "@/lib/auth/use-current-user";
@@ -302,6 +303,7 @@ export function RealChatsPage() {
     setCreator(inboxCreator);
   }, [inboxCreator, creatorId, setCreator]);
   const [error, setError] = useState<string | null>(null);
+  const [composerError, setComposerError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [filter, setFilter] = useState<InboxPill>("todos");
   const [fetchedSpend, setFetchedSpend] = useState<Record<string, number | null>>({});
@@ -824,6 +826,20 @@ export function RealChatsPage() {
   const scriptHits = matchScripts(scripts, slash != null ? slash : libraryQuery);
   const showScripts = panel === "guiones" || slash != null;
   const realSend = selected != null && sendCreators.includes(selected.creatorId);
+  const vaultAttachmentRows = attachments.filter((file) => file.kind === "vault");
+  const vaultPreviewCount = vaultAttachmentRows.filter((file) => file.free === true).length;
+  const ppvBlocked = ppvPreviewMissing(draftPrice, vaultAttachmentRows.length, vaultPreviewCount);
+  const sendBlockedReason = !selected
+    ? "Elige un hilo"
+    : !draft.trim()
+      ? "Escribe un mensaje"
+      : !realSend
+        ? REAL_SEND_OFF_REASON
+        : attachments.some((file) => file.kind !== "vault")
+          ? "Quita los archivos locales pendientes"
+          : ppvBlocked
+            ? "Falta una vista previa gratis"
+            : null;
   const threadCreator = chatVaultCreator(selected, inboxCreator);
   const vaultItems = rowsForCreator(vault, threadCreator);
   const tagCreators = creators.filter((creator) => creator.id !== selected?.creatorId && creator.handle.trim() !== "");
@@ -884,20 +900,24 @@ export function RealChatsPage() {
   }
 
   function commitSend(key: string, shiftKey: boolean, composing: boolean) {
+    if (key === "Enter" && !shiftKey && !composing && !selected) {
+      setComposerError("Elige un hilo");
+      return;
+    }
     if (!selected && key === "Enter" && !shiftKey && !composing) return;
     const localFiles = attachments.filter((file) => file.kind !== "vault");
     if (key === "Enter" && !shiftKey && !composing && localFiles.length > 0) {
-      setError("Los archivos locales siguen pendientes. El vault de OnlyFans sí se adjunta.");
+      setComposerError("Los archivos locales siguen pendientes. El vault de OnlyFans sí se adjunta.");
       return;
     }
     const vault = attachments.filter((file) => file.kind === "vault").map((file) => ({
       id: file.id.replace(/^vault-/, ""),
       name: file.name,
-      free: file.free !== false,
+      free: file.free === true,
     }));
-    const freePreviews = vault.filter((file) => file.free === true).length;
+    const freePreviews = vault.filter((file) => file.free).length;
     if (key === "Enter" && !shiftKey && !composing && ppvPreviewMissing(draftPrice, vault.length, freePreviews)) {
-      setError("No está la vista previa");
+      setComposerError("PPV de pago: marca al menos un vídeo como Gratis (vista previa).");
       return;
     }
     const decision = chatSendSession.press({
@@ -915,10 +935,21 @@ export function RealChatsPage() {
       tagHandle,
     });
     if (decision.action === "blocked") {
-      setError(decision.reason);
+      setComposerError(decision.reason);
       return;
     }
-    if (decision.action === "queued") clearComposer();
+    if (decision.action === "duplicate") {
+      setComposerError("Ya enviaste este mensaje hace un momento.");
+      return;
+    }
+    if (decision.action === "ignored") {
+      setComposerError("No se pudo encolar el mensaje. Comprueba el hilo y el texto.");
+      return;
+    }
+    if (decision.action === "queued") {
+      setComposerError(null);
+      clearComposer();
+    }
   }
 
   function restoreDraft(source: { body: string; priceCents: number | null; priceLabel: string | null; vault: Array<{ id: string; name: string }> }) {
@@ -1838,8 +1869,18 @@ export function RealChatsPage() {
                 <ToolButton label="Tag other creator" title="Tag other creator · Etiquetar otra creadora" active={panel === "etiqueta"} onClick={() => toggle("etiqueta")}><AtSign className="h-6 w-6" /></ToolButton>
                 <ToolButton label="Format text" title="Format text · Formato de texto" active={panel === "formato"} onClick={() => toggle("formato")}><Type className="h-6 w-6" /></ToolButton>
                 <ToolButton label="Translation" title="Translation · Traducción" active={panel === "traduccion"} onClick={() => toggle("traduccion")}><Languages className="h-6 w-6" /></ToolButton>
-                <button type="button" disabled={!realSend || !draft.trim()} title={realSend ? "Enviar" : "Envío real desactivado en esta cuenta"} aria-label="Enviar" onClick={() => commitSend("Enter", false, false)} className="ml-auto grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#3b6cff] text-white disabled:opacity-60"><Send className="h-5 w-5" /></button>
+                <button
+                  type="button"
+                  disabled={sendBlockedReason != null}
+                  title={sendBlockedReason ?? "Enviar"}
+                  aria-label="Enviar"
+                  onClick={() => commitSend("Enter", false, false)}
+                  className="ml-auto grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#3b6cff] text-white disabled:opacity-60"
+                >
+                  <Send className="h-5 w-5" />
+                </button>
               </div>
+              {composerError ? <p className="mt-2 text-xs font-medium text-[#b42318]">{composerError}</p> : null}
             </form>
         </div>
       </section>
@@ -1888,12 +1929,16 @@ export function RealChatsPage() {
             offerPriceId.current = null;
             setDraftPrice(cents);
             setPriceLabel(cents == null ? "Gratis" : `$${(cents / 100).toFixed(2)}`);
-            setAttachments((current) => current.map((file) => {
-              if (file.kind !== "vault") return file;
-              if (cents == null || cents <= 0) return { ...file, free: true };
-              if (only) return file.id === only ? { ...file, free: false } : file;
-              return { ...file, free: false };
-            }));
+            setAttachments((current) => {
+              const vault = current.filter((file) => file.kind === "vault");
+              const flags = vaultOfferFlagsAfterPrice(vault, cents, only);
+              return current.map((file) => {
+                if (file.kind !== "vault") return file;
+                const free = flags.get(file.id);
+                return free == null ? file : { ...file, free };
+              });
+            });
+            setComposerError(null);
             setDialog(null);
           }}
         />

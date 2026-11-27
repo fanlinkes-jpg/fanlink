@@ -18,6 +18,38 @@ export function ppvPreviewMissing(priceCents: number | null, mediaCount: number,
   return priceCents != null && priceCents > 0 && mediaCount > 0 && previewCount === 0;
 }
 
+type VaultOfferRow = { id: string; free?: boolean };
+
+/**
+ * Al guardar el precio, no marcar todo como de pago: deja una vista previa si hay
+ * varias piezas. `paidAttachmentId` es el id con prefijo vault- cuando viene del par.
+ */
+export function vaultOfferFlagsAfterPrice(
+  vault: readonly VaultOfferRow[],
+  priceCents: number | null,
+  paidAttachmentId: string | null,
+): Map<string, boolean> {
+  const flags = new Map<string, boolean>();
+  for (const item of vault) flags.set(item.id, item.free !== false);
+  if (priceCents == null || priceCents <= 0) {
+    for (const item of vault) flags.set(item.id, true);
+    return flags;
+  }
+  if (paidAttachmentId) {
+    for (const item of vault) {
+      flags.set(item.id, item.id === paidAttachmentId ? false : (flags.get(item.id) ?? true));
+    }
+    return flags;
+  }
+  if (vault.length <= 1) {
+    for (const item of vault) flags.set(item.id, false);
+    return flags;
+  }
+  const previewId = vault.find((item) => item.free !== false)?.id ?? vault[0]!.id;
+  for (const item of vault) flags.set(item.id, item.id === previewId);
+  return flags;
+}
+
 export function emojiRows(emojis: string[], perRow = 12): string[][] {
   const rows: string[][] = [];
   for (let index = 0; index < emojis.length; index += perRow) rows.push(emojis.slice(index, index + perRow));
