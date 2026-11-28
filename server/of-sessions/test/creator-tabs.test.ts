@@ -33,11 +33,12 @@ test("las pestañas de creadora caben en 1280 y los badges no se pisan", async (
     assert.equal(await page.getByRole("textbox", { name: "Buscar fan" }).count(), 0);
     assert.equal(await page.getByText("Operador local").count(), 0);
     await page.getByRole("button", { name: "Traducción" }).click();
-    await page.getByRole("option", { name: "Inglés" }).click();
-    await page.getByRole("button", { name: "Translation", exact: true }).click();
-    await page.getByRole("combobox", { name: "Idioma" }).selectOption("en");
-    assert.equal(await page.getByRole("button", { name: "Traducción", exact: true }).innerText(), "EN");
-    assert.equal(await page.getByRole("combobox", { name: "Idioma" }).inputValue(), "en");
+    await page.getByRole("combobox", { name: "Idioma de destino" }).selectOption("en");
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Traducción", exact: true }).click();
+    assert.equal(await page.getByRole("combobox", { name: "Idioma de destino" }).inputValue(), "en");
+    await page.keyboard.press("Escape");
+    assert.equal(await page.getByRole("button", { name: "Traducción", exact: true }).innerText(), "");
     await column.getByRole("button", { name: /Jose/ }).click();
     await page.getByRole("button", { name: /^Notificaciones/ }).click();
     await page.getByText("Renew On").waitFor();
