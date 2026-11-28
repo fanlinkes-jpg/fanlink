@@ -246,6 +246,8 @@ type CrmState = DataSlice & {
   togglePerm: (employeeId: string, perm: Perm) => void;
   cycleShift: (employeeId: string, day: number) => void;
   addEmployee: (name: string, role: Role) => void;
+  /** Mete en la consola de turnos a las personas reales del servidor que aún no están. */
+  ensureEmployees: (people: Array<{ id: string; name: string; role: Role }>) => void;
   addCreator: (input: { name: string; nick: string; handle: string; platform: Platform; city: string; tag: string }) => void;
   addStopWord: (word: string) => void;
   removeStopWord: (word: string) => void;
@@ -266,6 +268,7 @@ type CrmState = DataSlice & {
     displayName: string;
     devMode: boolean;
     level?: string;
+    roles?: string[];
     status?: "active" | "disabled";
   } | null;
 };
@@ -577,6 +580,25 @@ export const useCrm = create<CrmState>()((set, get) => ({
             return { ...e, shifts };
           }),
         })),
+      ensureEmployees: (people) =>
+        set((s) => {
+          const missing = people.filter((person) => !s.employees.some((e) => e.id === person.id));
+          if (missing.length === 0) return s;
+          return {
+            employees: [
+              ...s.employees,
+              ...missing.map((person) => ({
+                id: person.id,
+                name: person.name,
+                role: person.role,
+                replyMin: null,
+                online: false,
+                perms: [] as Perm[],
+                shifts: ["libre", "libre", "libre", "libre", "libre", "libre", "libre"] as Employee["shifts"],
+              })),
+            ],
+          };
+        }),
       addEmployee: (name, role) =>
         set((s) => ({
           employees: [

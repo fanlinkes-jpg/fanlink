@@ -1,5 +1,5 @@
 import path from "node:path";
-import { assertCreatorAccess, assertOwnerForce, canOperateCreator, canSeeAgencyEarnings, creatorIdsForChats, WorkspaceAccessError } from "@/lib/access-policy";
+import { assertCreatorAccess, assertOwnerForce, canOperateCreator, canSeeAgencyEarnings, creatorIdsForChats, seesAllCreators, WorkspaceAccessError } from "@/lib/access-policy";
 import { DEV_USER_ID, authConfigured } from "@/lib/auth/verify.server";
 import { getSql } from "@/lib/db";
 import { ensureStaff } from "@/lib/workspace-store";
@@ -28,6 +28,8 @@ import type { NotificationPace } from "../../server/of-sessions/sync/api-list-pa
 import { accountSessionNotices, deriveConnectedFromLastRead, SESSION_EXPIRED_LABEL, signedReadsBlocked } from "../../server/of-sessions/sync/session-link.ts";
 import { accountPause, blockKind, listAccountPauses, noteAccountBlock } from "../../server/of-sessions/sync/backoff.ts";
 import { presentTeamMetrics } from "../../server/of-sessions/metrics/present-team.ts";
+import { persistAttributions, readAttributions, readMassLaunches } from "../../server/of-sessions/metrics/attribution-store.ts";
+import { attributeSales } from "../../server/of-sessions/metrics/team.ts";
 import { creatorIdsForReads } from "@/lib/dashboard-config";
 import { assertChatFanCardThreadLimit, chatFanCardsFrom, type ChatFanCard } from "@/lib/chat-fan-cards";
 import { deliverFanAlerts } from "../../server/of-sessions/notify/deliver.ts";
@@ -649,7 +651,7 @@ export async function listCreatorReadViews(
     intervalMin: await readSyncIntervalMin(sql, intervalMinFromEnv(process.env.FANLINK_SYNC_INTERVAL_MIN)),
     chatIntervalMin: await readChatIntervalMin(sql, chatIntervalMinFromEnv(process.env.FANLINK_CHAT_SYNC_MIN)),
     runningCreatorIds: visibleRunning(accounts, new Set(creatorIds), running),
-    creators: rows.map((row) => presentRead(access.role, row)),
+    creators: rows.map((row) => presentRead(canSeeAgencyEarnings(access), row)),
   };
 }
 
@@ -867,11 +869,11 @@ export async function syncCreatorReadView(userId: string, creatorId: string): Pr
       transactions: canSeeAgencyEarnings(access) ? [] : null,
     };
   }
-  return presentRead(access.role, stored);
+  return presentRead(canSeeAgencyEarnings(access), stored);
 }
 
-function presentRead(role: "owner" | "member", row: Awaited<ReturnType<typeof listCreatorReads>>[number]): CreatorReadView {
-  const owner = canSeeAgencyEarnings({ role });
+/** `owner`: la dueña o quien tenga el permiso de cifras de agencia (Admin, Supervisor). */
+function presentRead(owner: boolean, row: Awaited<ReturnType<typeof listCreatorReads>>[number]): CreatorReadView {
   return {
     creatorId: row.creatorId,
     earningsSyncedAt: owner ? row.earningsSyncedAt : null,
@@ -956,10 +958,11 @@ export async function listTeamMetricViews(userId: string): Promise<Array<{
 }>> {
   const access = await accessFor(userId);
   const sql = await getSql();
-  const sales = await sql.query<{ creator_id: string; fan_key: string | null; occurred_at: Date | string; gross_cents: number | string }>(
-    "select creator_id, fan_key, occurred_at, gross_cents from of_transaction where kind = 'tip'",
+  const sales = await sql.query<{ tx_key: string; creator_id: string; fan_key: string | null; kind: string; occurred_at: Date | string; gross_cents: number | string }>(
+    "select tx_key, creator_id, fan_key, kind, occurred_at, gross_cents from of_transaction where kind in ('tip', 'subscription', 'renewal')",
   );
   const messages = await sql.query<{
+    message_key: string;
     creator_id: string;
     thread_key: string;
     fan_key: string | null;
@@ -968,38 +971,58 @@ export async function listTeamMetricViews(userId: string): Promise<Array<{
     price_cents: number | string | null;
     purchased: boolean | string | null;
     author_id: string | null;
-  }>("select creator_id, thread_key, fan_key, sent_at, from_fan, price_cents, purchased, author_id from of_chat_message");
+    author_name: string | null;
+    mass_id: string | null;
+  }>("select message_key, creator_id, thread_key, fan_key, sent_at, from_fan, price_cents, purchased, author_id, author_name, mass_id from of_chat_message");
   const names = await sql.query<{ user_id: string; display_name: string }>("select user_id, display_name from staff_profile");
   const nameOf = new Map(names.map((row) => [row.user_id, row.display_name]));
   const asIso = (value: Date | string) => (value instanceof Date ? value.toISOString() : String(value));
-  const inScope = (creatorId: string) => canSeeAgencyEarnings(access) || access.creatorIds.includes(creatorId);
-  const chatRows = messages.filter((row) => inScope(row.creator_id)).map((row) => ({
+  const flag = (value: boolean | string | null) => value === true || value === "t" || value === "true";
+  const allMessages = messages.map((row) => ({
+    key: row.message_key,
     creatorId: row.creator_id,
     threadKey: row.thread_key,
     fanKey: row.fan_key,
     at: asIso(row.sent_at),
-    fromFan: row.from_fan === true || row.from_fan === "t" || row.from_fan === "true",
+    fromFan: flag(row.from_fan),
     priceCents: row.price_cents == null ? null : Number(row.price_cents),
-    purchased: row.purchased == null ? null : row.purchased === true || row.purchased === "t" || row.purchased === "true",
+    purchased: row.purchased == null ? null : flag(row.purchased),
     authorId: row.author_id,
+    authorName: row.author_name,
+    massId: row.mass_id,
   }));
-  const ppvSales = chatRows
-    .filter((row) => !row.fromFan && row.purchased === true && row.priceCents != null && row.priceCents > 0)
-    .map((row) => ({ creatorId: row.creatorId, fanKey: row.fanKey, at: row.at, grossCents: row.priceCents ?? 0, kind: "ppv" as const }));
+  // La atribución se calcula sobre todo el histórico y se guarda; después cada persona lee solo lo suyo.
+  const allSales = [
+    ...sales.map((row) => ({
+      key: `tx:${row.creator_id}:${row.tx_key}`,
+      creatorId: row.creator_id,
+      fanKey: row.fan_key,
+      at: asIso(row.occurred_at),
+      grossCents: Number(row.gross_cents),
+      kind: (row.kind === "tip" ? "tip" : row.kind === "renewal" ? "renewal" : "subscription") as "tip" | "renewal" | "subscription",
+    })),
+    ...allMessages
+      .filter((row) => !row.fromFan && row.purchased === true && row.priceCents != null && row.priceCents > 0)
+      .map((row) => ({
+        key: `ppv:${row.creatorId}:${row.key}`,
+        creatorId: row.creatorId,
+        fanKey: row.fanKey,
+        at: row.at,
+        grossCents: row.priceCents ?? 0,
+        kind: "ppv" as const,
+        messageKey: row.key,
+      })),
+  ];
+  const launches = await readMassLaunches(sql);
+  await persistAttributions(sql, attributeSales({ messages: allMessages, sales: allSales, launches }));
+  const inScope = (creatorId: string) => seesAllCreators(access) || access.creatorIds.includes(creatorId);
+  const scopedSales = allSales.filter((row) => inScope(row.creatorId));
   return presentTeamMetrics(
     access,
-    chatRows,
-    [
-      ...sales.filter((row) => inScope(row.creator_id)).map((row) => ({
-        creatorId: row.creator_id,
-        fanKey: row.fan_key,
-        at: asIso(row.occurred_at),
-        grossCents: Number(row.gross_cents),
-        kind: "tip" as const,
-      })),
-      ...ppvSales,
-    ],
+    allMessages.filter((row) => inScope(row.creatorId)),
+    scopedSales,
     nameOf,
+    { launches, attributions: await readAttributions(sql, [...new Set(scopedSales.map((row) => row.creatorId))]) },
   );
 }
 

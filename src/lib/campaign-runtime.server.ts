@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { getSql } from "@/lib/db";
-import { canOperateCreator, WorkspaceAccessError } from "@/lib/access-policy";
+import { canOperateCreator, canSeeAgencyEarnings, WorkspaceAccessError } from "@/lib/access-policy";
 import { ensureStaff } from "@/lib/workspace-store";
 import { DEV_USER_ID, authConfigured } from "@/lib/auth/verify.server";
 import { fansInSegment, memberMayUseSegment, previewBody, sendGate, type SegmentKind } from "../../server/of-sessions/campaigns/segment.ts";
@@ -141,8 +141,8 @@ export async function listCampaignDraftViews(userId: string): Promise<CampaignDr
         vaultIds: row.vault_ids ? row.vault_ids.split(",").filter(Boolean) : [],
         scheduledAt: row.scheduled_at == null ? null : new Date(row.scheduled_at).toISOString(),
         recipientCount: Number(row.recipient_count),
-        purchases: access.role === "owner" && row.purchases != null ? Number(row.purchases) : null,
-        revenueCents: access.role === "owner" && row.revenue_cents != null ? Number(row.revenue_cents) : null,
+        purchases: canSeeAgencyEarnings(access) && row.purchases != null ? Number(row.purchases) : null,
+        revenueCents: canSeeAgencyEarnings(access) && row.revenue_cents != null ? Number(row.revenue_cents) : null,
         status: row.status === "scheduled" ? "scheduled" : "draft",
       },
     ];
