@@ -761,7 +761,7 @@ test("el reproductor de un vídeo responde video/mp4 con 206", async () => {
 });
 
 function chatter(userId: string) {
-  return { userId, role: "member" as const, perms: ["vault", "mensajes"] };
+  return { userId, role: "member" as const, perms: ["vault", "mensajes"], creatorIds: ["9ikis52", "c-1", "c"] };
 }
 
 function jsonRequest(body: unknown): Request {

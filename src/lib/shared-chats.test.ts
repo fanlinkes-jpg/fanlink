@@ -12,10 +12,13 @@ const chatter: TeamAccess = { userId: "chatter", role: "member", perms: ["mensaj
 const other: TeamAccess = { userId: "otro", role: "member", perms: ["mensajes"], creatorIds: ["c-alba"] };
 const owner: TeamAccess = { userId: "owner", role: "owner", perms: [], creatorIds: [] };
 
-test("un chatter ve los chats de una cuenta que no tiene asignada", () => {
-  assert.deepEqual(creatorIdsForChats(chatter, ["c-alba", "c-otra"]), ["c-alba", "c-otra"]);
-  assert.equal(canOperateCreator(chatter, "c-otra", "mensajes"), true);
-  assert.equal(canOperateCreator(chatter, "c-otra", "equipo"), false);
+test("un chatter solo ve los chats de las cuentas asignadas y la dueña todos", () => {
+  assert.deepEqual(creatorIdsForChats(chatter, ["c-alba", "c-otra"]), ["c-alba"]);
+  assert.deepEqual(creatorIdsForChats(owner, ["c-alba", "c-otra"]), ["c-alba", "c-otra"]);
+  assert.deepEqual(creatorIdsForChats(null, ["c-alba"]), []);
+  assert.equal(canOperateCreator(chatter, "c-alba", "mensajes"), true);
+  assert.equal(canOperateCreator(chatter, "c-otra", "mensajes"), false);
+  assert.equal(canOperateCreator(chatter, "c-alba", "equipo"), false);
 });
 
 test("un chatter no ve ingresos de la agencia ni las cifras de otro", () => {

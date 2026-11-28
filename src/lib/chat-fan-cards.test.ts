@@ -5,11 +5,13 @@ import { creatorIdsForReads } from "./dashboard-config.ts";
 import { assertChatFanCardThreadLimit, chatFanCardFor, chatFanCardsFrom, fanCardTransactions, fanThreadsForCards, isLatestFanCardRequest, type ChatFanRead } from "./chat-fan-cards.ts";
 
 const chatter: TeamAccess = { userId: "chatter", role: "member", perms: ["mensajes"], creatorIds: ["c-alba"] };
+const chatterNora: TeamAccess = { userId: "chatter", role: "member", perms: ["mensajes"], creatorIds: ["c-alba", "c-nora"] };
 
-test("un chatter ve la ficha completa en una cuenta que no tiene asignada", () => {
+test("un chatter ve la ficha completa en una cuenta asignada y nada de las demás", () => {
   const accounts = [{ creatorId: "c-alba" }, { creatorId: "c-nora" }];
-  const allowed = creatorIdsForChats(chatter, accounts.flatMap((account) => (account.creatorId ? [account.creatorId] : [])));
+  const allowed = creatorIdsForChats(chatterNora, accounts.flatMap((account) => (account.creatorId ? [account.creatorId] : [])));
   assert.deepEqual(creatorIdsForReads(chatter, accounts, "chat"), ["c-alba"]);
+  assert.deepEqual(chatFanCardsFrom([noraRead()], creatorIdsForChats(chatter, ["c-alba", "c-nora"])), []);
   const cards = chatFanCardsFrom([noraRead()], allowed);
   const card = chatFanCardFor(cards, "c-nora", "fan-9");
   assert.ok(card);
@@ -54,7 +56,7 @@ test("la ficha solo pide los hilos visibles", () => {
 });
 
 test("la ficha del chat no lleva cifras agregadas de la agencia", () => {
-  const allowed = creatorIdsForChats(chatter, ["c-nora"]);
+  const allowed = creatorIdsForChats(chatterNora, ["c-nora"]);
   const cards = chatFanCardsFrom([noraRead()], allowed);
   const card = chatFanCardFor(cards, "c-nora", "fan-9");
   assert.ok(card);
