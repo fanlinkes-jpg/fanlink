@@ -224,6 +224,10 @@ Abre `http://127.0.0.1:8080/funciones?tab=vault` (la URL vieja `/vault` redirige
 
 El login, la restauración, la caducidad y el cifrado se prueban contra un sitio local con el mismo contrato, no contra OnlyFans.
 
+## Empleados
+
+Personal › Empleados crea invitaciones por correo (token de un solo uso, 7 días). Ver `docs/empleados.md` para el flujo, las variables `RESEND_API_KEY` y `FANLINK_MAIL_FROM` y cómo probarlo en local.
+
 ## Licencia Widevine y carpetas
 
 La licencia Widevine de la bóveda es siempre `POST /api2/v2/users/media/{id}/drm/?type=widevine`, firmada, con el id del medio que ya está en el ticket. No se usa `/drm/post/{id}` ni `/drm/message/{id}`. Si un adjunto del chat necesitara esa ruta de publicación o de mensaje, OnlyFans puede responder 400, 403 o 404. En el visor se lee «No se ha podido cargar el vídeo» y el log es `tipo=licencia status=400` (o 403 o 404), sin cookie, sin `sign` y sin el cuerpo. Un vídeo abierto desde la bóveda o desde Add from media vault sigue en la ruta de medio.
