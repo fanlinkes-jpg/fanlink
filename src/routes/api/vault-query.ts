@@ -3,8 +3,9 @@ import { authConfigured, DEV_USER_ID, requireUserId, UnauthorizedError } from "@
 import { getSql } from "@/lib/db";
 import { getOfSessionManager } from "@/lib/of-sessions-runtime.server";
 import { ensureStaff } from "@/lib/workspace-store";
+import { creatorAllowed } from "../../../server/of-sessions/sync/vault-query.ts";
 import { handleVaultQuery } from "../../../server/of-sessions/http/vault-http.ts";
-import { accountCreatorIds } from "../../../server/of-sessions/http/vault-accounts.ts";
+import { scopedCreatorIds } from "../../../server/of-sessions/http/vault-accounts.ts";
 import { fetchSignedVault } from "../../../server/of-sessions/sync/of-chat-api.ts";
 import { persistVaultRead } from "../../../server/of-sessions/sync/vault-store.ts";
 import { rememberVaultThumbs } from "../../../server/of-sessions/sync/vault-thumbs.ts";
@@ -20,9 +21,9 @@ export const Route = createFileRoute("/api/vault-query")({
           const userId = await requireUserId();
           const sql = await getSql();
           const access = await ensureStaff(sql, userId, !authConfigured && userId === DEV_USER_ID);
-          const creatorIds = await accountCreatorIds(sql);
+          const creatorIds = await scopedCreatorIds(sql, access);
           const raw = await request.text();
-          await refreshVault(sql, raw);
+          if (creatorAllowed({ userId: access.userId, role: access.role, perms: access.perms, creatorIds }, bodyCreatorId(raw))) await refreshVault(sql, raw);
           return handleVaultQuery(new Request(request.url, { method: "POST", headers: { "content-type": "application/json" }, body: raw }), {
             session: async () => ({ userId: access.userId, role: access.role, perms: access.perms, creatorIds }),
             sql,
@@ -35,6 +36,15 @@ export const Route = createFileRoute("/api/vault-query")({
     },
   },
 });
+
+function bodyCreatorId(raw: string): string {
+  try {
+    const body = JSON.parse(raw) as { creatorId?: unknown };
+    return typeof body.creatorId === "string" ? body.creatorId : "";
+  } catch {
+    return "";
+  }
+}
 
 async function refreshVault(sql: Awaited<ReturnType<typeof getSql>>, raw: string): Promise<void> {
   let creatorId = "";

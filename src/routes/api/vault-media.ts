@@ -6,7 +6,7 @@ import { ensureStaff } from "@/lib/workspace-store";
 import { abortResponse, handleVaultMedia, noteVaultPlayRequest, playbackDebugLine } from "../../../server/of-sessions/http/vault-http.ts";
 import { creatorAllowed } from "../../../server/of-sessions/sync/vault-query.ts";
 import { readSessionMediaResult, videoBytesAccepted, videoFollowUp } from "../../../server/of-sessions/sync/media-bytes.ts";
-import { accountCreatorIds } from "../../../server/of-sessions/http/vault-accounts.ts";
+import { scopedCreatorIds } from "../../../server/of-sessions/http/vault-accounts.ts";
 import { fetchSignedVault, sessionForApi, signedHeaders } from "../../../server/of-sessions/sync/of-chat-api.ts";
 import { parseVaultBundle, videoContainer, videoFormatHold } from "../../../server/of-sessions/sync/vault-model.ts";
 import { drmLicenseEnabled, forwardDrmLicense, hlsMediaResponse, LICENSE_BODY_MAX, licenseMethodStatus, paceLicense, protectedVideoHold } from "../../../server/of-sessions/sync/vault-hls.ts";
@@ -67,7 +67,7 @@ async function vaultAccess() {
   const userId = await requireUserId();
   const sql = await getSql();
   const access = await ensureStaff(sql, userId, !authConfigured && userId === DEV_USER_ID);
-  const creatorIds = await accountCreatorIds(sql);
+  const creatorIds = await scopedCreatorIds(sql, access);
   return { sql, userId: access.userId, role: access.role, perms: access.perms, creatorIds };
 }
 
@@ -97,6 +97,9 @@ async function vaultMediaGet(request: Request): Promise<Response> {
     }
     const creatorId = url.searchParams.get("creatorId") ?? "";
     const mediaId = url.searchParams.get("mediaId") ?? "";
+    if (!creatorAllowed({ userId: access.userId, role: access.role, perms: access.perms, creatorIds: access.creatorIds }, creatorId)) {
+      return new Response("Sin datos", { status: 403 });
+    }
           const rawVariant = url.searchParams.get("variant");
           const variant = rawVariant === "full" || rawVariant === "clip" ? rawVariant : "preview";
           const page = await thumbPage(sql, creatorId, mediaId, url);

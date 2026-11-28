@@ -3,7 +3,7 @@ import { authConfigured, DEV_USER_ID, requireUserId, UnauthorizedError } from "@
 import { getSql } from "@/lib/db";
 import { ensureStaff } from "@/lib/workspace-store";
 import { handleVaultSend } from "../../../server/of-sessions/http/vault-http.ts";
-import { accountCreatorIds } from "../../../server/of-sessions/http/vault-accounts.ts";
+import { scopedCreatorIds } from "../../../server/of-sessions/http/vault-accounts.ts";
 
 export const Route = createFileRoute("/api/vault-send")({
   server: {
@@ -13,7 +13,7 @@ export const Route = createFileRoute("/api/vault-send")({
           const userId = await requireUserId();
           const sql = await getSql();
           const access = await ensureStaff(sql, userId, !authConfigured && userId === DEV_USER_ID);
-          const creatorIds = await accountCreatorIds(sql);
+          const creatorIds = await scopedCreatorIds(sql, access);
           return handleVaultSend(request, {
             session: async () => ({ userId: access.userId, role: access.role, perms: access.perms, creatorIds }),
             sql,

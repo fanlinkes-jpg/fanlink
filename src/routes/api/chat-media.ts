@@ -5,7 +5,7 @@ import { ensureStaff } from "@/lib/workspace-store";
 import { handleChatMedia } from "../../../server/of-sessions/http/vault-http.ts";
 import { readSessionMediaBytes } from "../../../server/of-sessions/sync/media-bytes.ts";
 import { decodeMedia } from "../../../server/of-sessions/sync/history.ts";
-import { accountCreatorIds } from "../../../server/of-sessions/http/vault-accounts.ts";
+import { scopedCreatorIds } from "../../../server/of-sessions/http/vault-accounts.ts";
 
 export const Route = createFileRoute("/api/chat-media")({
   server: {
@@ -15,7 +15,7 @@ export const Route = createFileRoute("/api/chat-media")({
           const userId = await requireUserId();
           const sql = await getSql();
           const access = await ensureStaff(sql, userId, !authConfigured && userId === DEV_USER_ID);
-          const creatorIds = await accountCreatorIds(sql);
+          const creatorIds = await scopedCreatorIds(sql, access);
           const creatorId = new URL(request.url).searchParams.get("creatorId") ?? "";
           const variant = new URL(request.url).searchParams.get("variant") === "preview" ? "preview" : "full";
           return handleChatMedia(request, {
