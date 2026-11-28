@@ -1,7 +1,8 @@
 import { ClientOnly, Link, useRouterState } from "@tanstack/react-router";
 import { readInboxCreator, resolveInboxCreator, showsCreatorRail, writeInboxCreator } from "@/lib/inbox-scope";
 import { CreatorRail } from "@/components/creator-rail";
-import { bindUiUser, COMPOSER_LANGUAGES, setComposerLanguage, setSfwEnabled, useComposerLanguage, useSfw } from "@/lib/ui-prefs";
+import { bindUiUser, COMPOSER_LANGUAGES, setSfwEnabled, useComposerLanguage, useSfw } from "@/lib/ui-prefs";
+import { AutoTranslateSwitch, TranslateMenu } from "@/features/translate-ui";
 import { useEffect, useState, type ReactNode } from "react";
 import {
   Home,
@@ -168,26 +169,9 @@ function HeaderTools({ devMode, displayName }: { devMode: boolean; displayName: 
           <Languages className="h-4 w-4" />
           <span className="text-[10px] font-semibold uppercase">{current.id}</span>
         </button>
-        {open ? (
-          <div className="absolute right-0 z-30 mt-1 w-36 rounded-lg border border-[#e6e8ee] bg-white p-1 text-[#1c2333] shadow-lg" role="listbox" aria-label="Idioma">
-            {COMPOSER_LANGUAGES.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                role="option"
-                aria-selected={item.id === language}
-                className={cn("block w-full rounded px-2 py-1.5 text-left text-xs", item.id === language ? "bg-[#e7f3ff]" : "hover:bg-[#f4f6f8]")}
-                onClick={() => {
-                  setComposerLanguage(item.id);
-                  setOpen(false);
-                }}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
-        ) : null}
+        {open ? <TranslateMenu onClose={() => setOpen(false)} /> : null}
       </div>
+      <AutoTranslateSwitch />
       <button
         type="button"
         role="switch"

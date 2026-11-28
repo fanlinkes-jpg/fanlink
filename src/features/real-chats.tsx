@@ -21,7 +21,10 @@ import { chatSyncLabel, headerSyncLabel, type ChatSyncInput } from "@/lib/chat-s
 import { sessionErrorText } from "@/lib/use-creator-sessions";
 import { inboxCreators, inboxThreadList, readInboxCreator, resolveInboxCreator, rowsForCreator, writeInboxCreator } from "@/lib/inbox-scope";
 import { useCreatorNoticeBadges } from "@/lib/use-creator-notice-badges";
-import { COMPOSER_LANGUAGES, setComposerLanguage, useComposerLanguage } from "@/lib/ui-prefs";
+import { useAutoTranslate, useComposerLanguage, useTranslateMode } from "@/lib/ui-prefs";
+import { ComposerTranslationPanel, MessageTranslateButton, TranslateNotice } from "@/features/translate-ui";
+import { useFanLanguage, useTranslated, useTranslatorSupport } from "@/lib/use-translator";
+import { translateNotice } from "@/lib/translator";
 import { SfwMedia } from "@/components/sfw-media";
 import { fanListedOnline, fanShowsOnline, lastSeenLabel, showOnlineDot } from "@/lib/online-dot";
 import { acceptedVaultPieces, chatVaultCreator, chatVaultOnThreadChange, mergeVaultPage, vaultFolderOnAccountChange, vaultLoadAllowed, vaultReadApplies } from "@/lib/vault-load";
@@ -187,7 +190,7 @@ function threadMark(creatorId: string, threadKey: string): string {
   return `${creatorId}:${threadKey}`;
 }
 
-function ThreadMessage({ message, find, watermark }: { watermark?: string | null; message: {
+function ThreadMessage({ message, find, watermark, fanLanguage = null }: { watermark?: string | null; fanLanguage?: string | null; message: {
   creatorId: string;
   threadKey: string;
   messageKey: string;
@@ -227,6 +230,21 @@ function ThreadMessage({ message, find, watermark }: { watermark?: string | null
     : value;
   const hasBubble = slides.length > 0 || message.body || pill != null;
   const footer = pill != null || who || when || read != null;
+  const auto = useAutoTranslate();
+  const mode = useTranslateMode();
+  const target = useComposerLanguage();
+  const supported = useTranslatorSupport();
+  const [override, setOverride] = useState<"on" | "off" | null>(null);
+  const [showOriginal, setShowOriginal] = useState(false);
+  const parts = [...(text.title ? [text.title] : []), ...text.paragraphs];
+  const translatable = message.fromFan && parts.length > 0;
+  const active = translatable && (override ? override === "on" : auto);
+  const translated = useTranslated({ texts: parts, enabled: active && supported, target, fallbackSource: fanLanguage });
+  const done = active && translated.state === "done" && !translated.same ? translated : null;
+  const replaced = done && mode === "replace" && !showOriginal;
+  const shown = replaced
+    ? { title: text.title ? done.texts[0] ?? null : null, paragraphs: done.texts.slice(text.title ? 1 : 0) }
+    : text;
   return (
     <li data-message-id={message.messageKey} className={message.fromFan ? "" : "text-right"} data-layout={layout.layout} data-automatic={message.automatic ? "1" : "0"}>
       {hasBubble ? (
@@ -249,8 +267,25 @@ function ThreadMessage({ message, find, watermark }: { watermark?: string | null
         ) : null}
         {text.title || text.paragraphs.length > 0 ? (
           <div className="space-y-2 px-4 py-3">
-            {text.title ? <p className="font-semibold tracking-[-0.01em] text-[#111827]">{marked(text.title)}</p> : null}
-            {text.paragraphs.map((paragraph, index) => <p key={index}>{marked(paragraph)}</p>)}
+            {shown.title ? <p className="font-semibold tracking-[-0.01em] text-[#111827]">{marked(shown.title)}</p> : null}
+            {shown.paragraphs.map((paragraph, index) => <p key={index}>{marked(paragraph)}</p>)}
+            {translatable ? (
+              <div className="flex flex-wrap items-center justify-end gap-2 text-[11px] text-[#6d7585]" data-translation={translated.state}>
+                {active && translated.state === "loading" ? <span>Traduciendo…</span> : null}
+                {active && translated.state === "done" && translated.same ? <span>Ya está en {languageLabelOf(target)}</span> : null}
+                {active && !supported ? <span role="status" className="text-[#8a5a12]">{translateNotice("unsupported")}</span> : null}
+                {active && translated.state === "error" ? <TranslateNotice code={translated.code} source={translated.source} target={translated.target} /> : null}
+                {replaced ? <button type="button" className="text-[#2456c7] underline" onClick={() => setShowOriginal(true)}>Ver original</button> : null}
+                {done && mode === "replace" && showOriginal ? <button type="button" className="text-[#2456c7] underline" onClick={() => setShowOriginal(false)}>Ver traducción</button> : null}
+                <MessageTranslateButton active={active} onClick={() => { setShowOriginal(false); setOverride(active ? "off" : "on"); }} />
+              </div>
+            ) : null}
+            {done && mode === "below" ? (
+              <div className="space-y-1 border-l-2 border-[#9db8f5] pl-3 text-[14px] italic text-[#3c4a66]" data-translated="1">
+                <p className="text-[10px] font-medium not-italic uppercase tracking-wide text-[#8b909a]">{done.source.toUpperCase()} → {target.toUpperCase()}</p>
+                {done.texts.map((value, index) => <p key={index} className={text.title && index === 0 ? "font-semibold not-italic" : ""}>{value}</p>)}
+              </div>
+            ) : null}
           </div>
         ) : null}
         {footer ? (
@@ -273,6 +308,12 @@ function ThreadMessage({ message, find, watermark }: { watermark?: string | null
     </li>
   );
 }
+
+function languageLabelOf(code: string): string {
+  return COMPOSER_LABELS[code] ?? code.toUpperCase();
+}
+
+const COMPOSER_LABELS: Record<string, string> = { es: "español", en: "inglés", pt: "portugués", de: "alemán" };
 
 function OutboundBubbleView({
   job,
@@ -393,7 +434,8 @@ export function RealChatsPage() {
   const [dialog, setDialog] = useState<"precio" | "programar" | null>(null);
   const [textSize, setTextSize] = useState<"sm" | "base" | "lg">("base");
   const [attachments, setAttachments] = useState<PendingFile[]>([]);
-  const [fanTranslation, setFanTranslation] = useState(false);
+  const [fanChoice, setFanChoice] = useState("auto");
+  const [draftBeforeTranslation, setDraftBeforeTranslation] = useState<string | null>(null);
   const draftBox = useRef<HTMLDivElement>(null);
   const fileBox = useRef<HTMLInputElement>(null);
   const savedRange = useRef<Range | null>(null);
@@ -772,6 +814,9 @@ export function RealChatsPage() {
     storedHistory?.messages ?? [],
   );
   const historyDone = storedHistory?.done === true;
+  const fanTexts = messages.filter((message) => message.fromFan && message.body.trim() !== "").map((message) => message.body);
+  const translatorReady = useTranslatorSupport();
+  const fanLanguage = useFanLanguage(fanTexts, translatorReady);
   const findKeys = findOpen ? findMessages(messages, findQuery) : [];
   const activeFindKey = findOpen ? findKeys[findIndex] ?? null : null;
   const openedThread = selected ? `${selected.creatorId}:${selected.threadKey}` : null;
@@ -781,6 +826,8 @@ export function RealChatsPage() {
     setFindQuery("");
     setFindIndex(0);
     setFlashKey(null);
+    setDraftBeforeTranslation(null);
+    setFanChoice("auto");
   }, [openedThread]);
   const meta = data?.meta.find((item) => item.creatorId === selected?.creatorId);
   const running = selected ? data?.runningCreatorIds.includes(selected.creatorId) : false;
@@ -915,6 +962,17 @@ export function RealChatsPage() {
     setDraft(text);
   }
 
+  function translateDraftInto(text: string, original: string) {
+    setDraftBeforeTranslation(original);
+    replaceDraft(text);
+  }
+
+  function undoDraftTranslation() {
+    if (draftBeforeTranslation == null) return;
+    replaceDraft(draftBeforeTranslation);
+    setDraftBeforeTranslation(null);
+  }
+
   function rememberSelection() {
     const node = draftBox.current;
     const selection = window.getSelection();
@@ -949,6 +1007,7 @@ export function RealChatsPage() {
   function clearComposer() {
     const files = attachments;
     replaceDraft("");
+    setDraftBeforeTranslation(null);
     setDraftPrice(null);
     setPriceLabel(null);
     setAttachments([]);
@@ -1770,7 +1829,7 @@ export function RealChatsPage() {
                       <span className="h-px flex-1 bg-[#e3e7ee]" />
                     </li>
                   ) : null}
-                  <ThreadMessage message={message} watermark={watermarkHandle} find={findOpen || flashKey === message.messageKey ? { query: findOpen ? findQuery : "", active: activeFindKey === message.messageKey, flash: flashKey === message.messageKey } : undefined} />
+                  <ThreadMessage message={message} fanLanguage={fanLanguage} watermark={watermarkHandle} find={findOpen || flashKey === message.messageKey ? { query: findOpen ? findQuery : "", active: activeFindKey === message.messageKey, flash: flashKey === message.messageKey } : undefined} />
                 </Fragment>
               ))}
               {pendingBesideLocal(pendingForThread(unmatchedPending(pendingOut), selected), jobList).map((item) => {
@@ -1806,7 +1865,6 @@ export function RealChatsPage() {
               {reconcileBubbles(jobList, messages).filter((job) => selected && job.creatorId === selected.creatorId && job.threadKey === selected.threadKey).map((job) => (
                 <OutboundBubbleView key={job.clientId} job={job} onRetry={() => retrySend(job.clientId)} onDiscard={() => void discardSend(job.clientId)} onRestore={() => restoreDraft(job)} onReview={job.state === "awaiting" && teamAccess?.role === "owner" ? () => void reviewSend(job.clientId) : undefined} />
               ))}
-              {messages.some((message) => message.fromFan) && fanTranslation ? <li className="text-[10px] text-[#6d7585]">Traducción: Sin datos</li> : null}
             </ol>
             </div>
             <form className="relative shrink-0 border-t border-[#e6e8ee] px-[max(0.5rem,calc((100%-760px)/2))] py-3" onSubmit={(event) => event.preventDefault()}>
@@ -1818,8 +1876,14 @@ export function RealChatsPage() {
                     tagCreators={tagCreators}
                     tagQuery={tagQuery}
                     onTagQuery={setTagQuery}
-                    fanTranslation={fanTranslation}
                     textSize={textSize}
+                    draft={draft}
+                    fanTexts={fanTexts}
+                    fanChoice={fanChoice}
+                    onFanChoice={setFanChoice}
+                    onDraftTranslated={translateDraftInto}
+                    canUndoTranslation={draftBeforeTranslation != null}
+                    onUndoTranslation={undoDraftTranslation}
                     ofVault={ofVault}
                     vaultReload={vaultReload}
                     creatorId={threadCreator ?? ""}
@@ -1829,7 +1893,6 @@ export function RealChatsPage() {
                     onTag={(handle) => { const name = handle.replace(/^@/, "").trim(); setTagHandle(name || null); insertAtCursor(mentionToken(handle)); setPanel(null); }}
                     onFormat={formatCommand}
                     onSize={setTextSize}
-                    onFanTranslation={() => setFanTranslation((value) => !value)}
                     onEmoji={insertAtCursor}
                   />
                 </div>
@@ -1843,8 +1906,14 @@ export function RealChatsPage() {
                       tagCreators={tagCreators}
                       tagQuery={tagQuery}
                       onTagQuery={setTagQuery}
-                      fanTranslation={fanTranslation}
                       textSize={textSize}
+                    draft={draft}
+                    fanTexts={fanTexts}
+                    fanChoice={fanChoice}
+                    onFanChoice={setFanChoice}
+                    onDraftTranslated={translateDraftInto}
+                    canUndoTranslation={draftBeforeTranslation != null}
+                    onUndoTranslation={undoDraftTranslation}
                       ofVault={ofVault}
                       vaultReload={vaultReload}
                       creatorId={threadCreator ?? ""}
@@ -1854,7 +1923,6 @@ export function RealChatsPage() {
                       onTag={(handle) => { const name = handle.replace(/^@/, "").trim(); setTagHandle(name || null); insertAtCursor(mentionToken(handle)); setPanel(null); }}
                       onFormat={formatCommand}
                       onSize={setTextSize}
-                      onFanTranslation={() => setFanTranslation((value) => !value)}
                       onEmoji={insertAtCursor}
                       onClose={() => setPanel(null)}
                       reading={vaultReading}
@@ -1872,8 +1940,14 @@ export function RealChatsPage() {
                     tagCreators={tagCreators}
                     tagQuery={tagQuery}
                     onTagQuery={setTagQuery}
-                    fanTranslation={fanTranslation}
                     textSize={textSize}
+                    draft={draft}
+                    fanTexts={fanTexts}
+                    fanChoice={fanChoice}
+                    onFanChoice={setFanChoice}
+                    onDraftTranslated={translateDraftInto}
+                    canUndoTranslation={draftBeforeTranslation != null}
+                    onUndoTranslation={undoDraftTranslation}
                     ofVault={ofVault}
                     vaultReload={vaultReload}
                     creatorId={threadCreator ?? ""}
@@ -1883,7 +1957,6 @@ export function RealChatsPage() {
                     onTag={(handle) => { const name = handle.replace(/^@/, "").trim(); setTagHandle(name || null); insertAtCursor(mentionToken(handle)); setPanel(null); }}
                     onFormat={formatCommand}
                     onSize={setTextSize}
-                    onFanTranslation={() => setFanTranslation((value) => !value)}
                     onEmoji={insertAtCursor}
                     onClose={() => setPanel(null)}
                     reading={vaultReading}
@@ -2325,13 +2398,18 @@ function ComposerPanelBody({
   tagCreators,
   tagQuery,
   onTagQuery,
-  fanTranslation,
   textSize,
+  draft,
+  fanTexts,
+  fanChoice,
+  onFanChoice,
+  onDraftTranslated,
+  canUndoTranslation,
+  onUndoTranslation,
   onVault,
   onTag,
   onFormat,
   onSize,
-  onFanTranslation,
   onEmoji,
   onClose,
   reading = false,
@@ -2349,13 +2427,18 @@ function ComposerPanelBody({
   tagCreators: Array<{ id: string; name: string; handle: string }>;
   tagQuery: string;
   onTagQuery: (value: string) => void;
-  fanTranslation: boolean;
   textSize: "sm" | "base" | "lg";
+  draft: string;
+  fanTexts: readonly string[];
+  fanChoice: string;
+  onFanChoice: (value: string) => void;
+  onDraftTranslated: (text: string, original: string) => void;
+  canUndoTranslation: boolean;
+  onUndoTranslation: () => void;
   onVault: (item: { id: string; title: string; withId?: string | null; withTitle?: string | null; seconds?: number | null; offerLabel?: string | null; dateLabel?: string | null }) => void;
   onTag: (handle: string) => void;
   onFormat: (command: "bold" | "italic" | "foreColor", value?: string) => void;
   onSize: (size: "sm" | "base" | "lg") => void;
-  onFanTranslation: () => void;
   onEmoji: (emoji: string) => void;
   onClose?: () => void;
   reading?: boolean;
@@ -2363,7 +2446,6 @@ function ComposerPanelBody({
   onVaultMore?: () => void;
   onOpenFolder?: (listId: string | null) => void;
 }) {
-  const language = useComposerLanguage();
   switch (panel) {
     case "vault": {
       return (
@@ -2461,15 +2543,15 @@ function ComposerPanelBody({
       );
     case "traduccion":
       return (
-        <div className="space-y-2 text-xs text-[#6d7585]">
-          <label className="block">Idioma
-            <select aria-label="Idioma" value={language} onChange={(event) => setComposerLanguage(event.target.value === "en" ? "en" : "es")} className="mt-1 block h-8 rounded border border-[#e6e8ee] px-2 text-sm text-[#1c2333]">
-              {COMPOSER_LANGUAGES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-            </select>
-          </label>
-          <p>Sin datos: no hay servicio de traducción.</p>
-          <button type="button" className="rounded border border-[#e6e8ee] px-2 py-1" onClick={onFanTranslation}>{fanTranslation ? "Ocultar traducción del fan" : "Mostrar traducción del fan"}</button>
-        </div>
+        <ComposerTranslationPanel
+          draft={draft}
+          fanTexts={fanTexts}
+          fanChoice={fanChoice}
+          onFanChoice={onFanChoice}
+          onTranslated={onDraftTranslated}
+          canUndo={canUndoTranslation}
+          onUndo={onUndoTranslation}
+        />
       );
     case "emojis":
       return (
