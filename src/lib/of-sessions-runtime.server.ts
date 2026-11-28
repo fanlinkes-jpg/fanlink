@@ -55,7 +55,7 @@ import { loadSignRules } from "../../server/of-sessions/sync/of-sign.ts";
 import { prepareVaultSend } from "../../server/of-sessions/sync/vault-store.ts";
 import { canSeeOnlineFans, cancelOnlineBroadcast, emptyOnlineBroadcast, onlineBroadcastGate, refuseOnlineBroadcast, sendOnlineBroadcast, type OnlineBroadcastResult } from "../../server/of-sessions/send/online-broadcast.ts";
 import { claimOnlineOutbound, finishOnlineOutbound, noteStaleOnlineSends, resolveStaleOnlineSend } from "../../server/of-sessions/send/online-claim.ts";
-import { normalizeFanMenuRequest, runFanMenuOnPage, type FanMenuResult } from "../../server/of-sessions/sync/fan-menu.ts";
+import { fetchOfLists, normalizeFanListsRequest, writeFanList } from "../../server/of-sessions/sync/fan-lists-api.ts";
 import { chatPageUrl } from "../../server/of-sessions/sync/chats.ts";
 import { sendPace } from "../../server/of-sessions/send/gate.ts";
 import { chatSendGate, publicSendReason, type SendAccount } from "../../server/of-sessions/send/gate.ts";
@@ -1332,27 +1332,50 @@ export async function broadcastOnlineFansView(
   });
 }
 
-export async function runFanChatMenuView(userId: string, input: { creatorId: string; fanKey: string; request: unknown }): Promise<FanMenuResult> {
+export type FanListsMenuResult = { ok: boolean; reason: string | null; lists: Array<{ id: string; name: string }>; wrote?: boolean };
+
+/**
+ * Menú ⋮ del chat: solo «Añadir o quitar de listas» sale a OnlyFans, por la API firmada y las rutas del catálogo.
+ * Leer las listas no escribe. Añadir o quitar pasa por el gate de envío y el allowlist de la cuenta.
+ * Descuento, restringir, bloquear y denunciar siguen como «Próximamente»: no hay ruta confirmada.
+ */
+export async function runFanChatMenuView(userId: string, input: { creatorId: string; fanKey: string; request: unknown }): Promise<FanListsMenuResult> {
   const access = await accessFor(userId);
   if (access.role !== "owner" && !access.perms.includes("mensajes")) {
     throw new WorkspaceAccessError("No tienes permiso para escribir.");
   }
-  const request = normalizeFanMenuRequest(input.request);
-  if (!request || !input.fanKey.trim()) return { ok: false, reason: "Sin datos", lists: [] };
+  const request = normalizeFanListsRequest(input.request);
+  if (!request) return { ok: false, reason: "Próximamente", lists: [] };
+  const fanId = input.fanKey.trim();
+  if (!/^\d{1,18}$/.test(fanId)) return { ok: false, reason: "Este chat no tiene el id del fan en OnlyFans.", lists: [] };
   const sessions = await getOfSessionManager();
   const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
-  if (!account) return { ok: false, reason: "Sin datos", lists: [] };
-  const url = chatPageUrl(onlyFansSite.chatsUrl ?? "https://onlyfans.com/my/chats", input.fanKey, "onlyfans");
-  const ran = await sessions.runQueued(account.id, async (context) => {
-    const page = await openWorkPage(context);
-    try {
-      return await runFanMenuOnPage(page, url, request);
-    } finally {
-      await page.close().catch(() => undefined);
-    }
-  }, { wait: true });
-  if (!ran.ok) return { ok: false, reason: "OnlyFans está ocupado con otra lectura.", lists: [] };
-  return ran.value;
+  if (!account) return { ok: false, reason: "Sin cuenta de OnlyFans para este chat.", lists: [] };
+  let state;
+  try {
+    state = await sessions.readStorageState(account.id);
+  } catch {
+    return { ok: false, reason: "La sesión de OnlyFans no está lista.", lists: [] };
+  }
+  const deps = {
+    fetch: globalThis.fetch,
+    now: () => Date.now(),
+    sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+    minGapMs: 1_500,
+    accountId: account.id,
+  };
+  if (request.action === "lists") return withAccountApi(account.id, () => fetchOfLists(state, deps));
+  const wrote = await withAccountApi(account.id, () => writeFanList({
+    flag: process.env.FANLINK_ENABLE_SEND,
+    allowlist: process.env.FANLINK_SEND_ALLOW_ACCOUNTS,
+    account: sendAccount(account),
+    state,
+    deps,
+    listId: request.listId,
+    fanId,
+    add: request.add,
+  }));
+  return { ok: wrote.ok, reason: wrote.reason, lists: [], wrote: wrote.wrote };
 }
 
 const noticeTabAt = new Map<string, number>();

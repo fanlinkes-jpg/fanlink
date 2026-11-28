@@ -1,3 +1,4 @@
+import { initialOf } from "@/lib/initial";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -230,7 +231,7 @@ export function MessagesPage() {
               <li key={f.id}>
                 <button onClick={() => openFan(f.id)} className={cn("flex w-full gap-3 px-4 py-3 text-left", active && "bg-[#eef2ff]")}>
                   <span className="relative grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#eceff3] text-sm font-semibold">
-                    {f.status === "nuevo" ? <span className="text-[10px] font-bold text-[#16a34a]">NEW</span> : f.name.slice(0, 1)}
+                    {f.status === "nuevo" ? <span className="text-[10px] font-bold text-[#16a34a]">NEW</span> : initialOf(f.name)}
                     <span className={cn("absolute -top-2 left-1/2 -translate-x-1/2 rounded-full px-1 text-[9px] font-semibold text-white", f.spendLife > 0 ? "bg-[#16a34a]" : "bg-[#f59e0b]")}>
                       {eur(f.spendLife)}
                     </span>

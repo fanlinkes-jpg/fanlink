@@ -1,3 +1,4 @@
+import { initialOf } from "@/lib/initial";
 import { AtSign, Bell, DollarSign, Heart, Megaphone, MessageCircle, MessageSquare, ShoppingBag, Tag, ThumbsUp } from "lucide-react";
 import { SfwMedia } from "@/components/sfw-media";
 import type { NotificationListItem } from "@/lib/of-notifications";
@@ -37,7 +38,7 @@ export function NotificationFanCard({
   const amount = item.amountCents != null ? item.labels.amount : null;
   const postText = item.postText?.trim() || null;
   const unread = !item.seen;
-  const initial = (name ?? user ?? "?").slice(0, 1).toUpperCase();
+  const initial = initialOf(name ?? user);
   const TypeIcon = typeIcon(tabOf(item.kind));
   return (
     <article className="flex gap-3 py-3 text-sm" data-kind={item.kind} data-unread={unread ? "true" : "false"} onClick={onSeen}>

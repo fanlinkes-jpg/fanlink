@@ -1,3 +1,4 @@
+import { initialOf } from "@/lib/initial";
 import { useEffect, useState } from "react";
 import { useNavigate, Link } from "@tanstack/react-router";
 import { toast } from "sonner";
@@ -834,7 +835,7 @@ export function CreatorsPage() {
                 <tr key={c.id} className="border-t border-[#f0f1f4]">
                   <td className="border-b border-[#f4f5f7] px-4 py-3">
                     <div className="flex items-center gap-3">
-                      <span className="grid h-9 w-9 place-items-center rounded-full text-xs font-semibold text-white" style={{ background: `hsl(${c.hue} 45% 42%)` }}>{c.name.slice(0, 1)}</span>
+                      <span className="grid h-9 w-9 place-items-center rounded-full text-xs font-semibold text-white" style={{ background: `hsl(${c.hue} 45% 42%)` }}>{initialOf(c.name)}</span>
                       <span className="font-medium">{c.name}</span>
                     </div>
                   </td>
