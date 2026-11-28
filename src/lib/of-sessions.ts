@@ -542,3 +542,13 @@ export const checkCreatorSession = createServerFn({ method: "POST" })
     const { inspectCreatorSession } = await import("./of-sessions-runtime.server");
     return inspectCreatorSession(context.userId, data.creatorId);
   });
+
+export type { DashboardInsightsView } from "../../server/of-sessions/metrics/insights-view.ts";
+
+export const getDashboardInsights = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { from?: string | null; to?: string | null; creatorId?: string | null; tag?: string | null; basis?: string | null; granularity?: string | null } | undefined) => input ?? {})
+  .handler(async ({ context, data }) => {
+    const { getDashboardInsightsView } = await import("./of-sessions-runtime.server");
+    return getDashboardInsightsView(context.userId, data);
+  });

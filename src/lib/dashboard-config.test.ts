@@ -29,11 +29,21 @@ const owner: TeamAccess = { userId: "owner", role: "owner", perms: [], creatorId
 const chatter: TeamAccess = { userId: "chatter", role: "member", perms: ["mensajes"], creatorIds: ["c-alba"] };
 
 test("el menú de la dueña incluye ajustes y el del chatter no", () => {
-  assert.deepEqual(screensFor({ role: "owner", perms: [] }), ["resumen", "creadoras", "fans", "chatters", "campanas", "ajustes"]);
-  assert.deepEqual(screensFor({ role: "member", perms: ["mensajes"] }), ["resumen", "creadoras", "fans", "chatters"]);
+  assert.deepEqual(screensFor({ role: "owner", perms: [] }), ["resumen", "creadoras", "rendimiento", "chatters", "nuevos", "segmentos", "campanas", "ajustes"]);
+  assert.deepEqual(screensFor({ role: "member", perms: ["mensajes"] }), ["resumen", "chatters", "nuevos", "segmentos"]);
   assert.equal(screensFor({ role: "member", perms: ["campanas"] }).includes("campanas"), true);
-  assert.equal(parseScreen("#fans"), "fans");
+  // El enlace viejo #fans abre Segmentos.
+  assert.equal(parseScreen("#fans"), "segmentos");
   assert.equal(parseScreen("#desconocida"), "resumen");
+});
+
+test("Admin y Supervisor (permiso estadisticas) ven las pantallas de agencia; el chatter no", () => {
+  const admin = screensFor({ role: "member", perms: ["mensajes", "estadisticas", "equipo"] });
+  assert.equal(admin.includes("creadoras"), true);
+  assert.equal(admin.includes("rendimiento"), true);
+  const chatterScreens = screensFor({ role: "member", perms: ["mensajes"] });
+  assert.equal(chatterScreens.includes("creadoras"), false);
+  assert.equal(chatterScreens.includes("rendimiento"), false);
 });
 
 test("un chatter no ve importes aunque la configuración se los asigne", () => {

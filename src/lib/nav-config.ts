@@ -96,12 +96,13 @@ const LEGACY_GATED_PATHS: PathGate[] = [
 ];
 
 /**
- * La sesión solo guarda `owner` o `member`. El miembro entra como chatter.
- * `manager` (admin) existe en la tabla del menú y vería Configuración, pero esta función no lo devuelve.
+ * La sesión solo guarda `owner` o `member`. Un miembro con el permiso «estadisticas» (Admin, Supervisor)
+ * entra como `manager`: ve las secciones de agencia. El resto entra como chatter.
  */
-export function navRoleFromAccess(access: Pick<TeamAccess, "role"> | null | undefined): NavRole | null {
+export function navRoleFromAccess(access: (Pick<TeamAccess, "role"> & { perms?: readonly string[] }) | null | undefined): NavRole | null {
   if (!access) return null;
   if (access.role === "owner") return "owner";
+  if (access.perms?.includes("estadisticas")) return "manager";
   return "chatter";
 }
 

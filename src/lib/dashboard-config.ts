@@ -11,7 +11,7 @@ import { formatCents, pct } from "./format.ts";
 
 export const SIN_DATOS = "Sin datos";
 
-export const SCREEN_IDS = ["resumen", "creadoras", "fans", "chatters", "campanas", "ajustes"] as const;
+export const SCREEN_IDS = ["resumen", "creadoras", "rendimiento", "chatters", "nuevos", "segmentos", "campanas", "ajustes"] as const;
 export type ScreenId = (typeof SCREEN_IDS)[number];
 
 export const DASHBOARD_ROLES = ["owner", "chatter"] as const;
@@ -46,20 +46,40 @@ export type DashboardConfig = {
 };
 
 export const WIDGETS: WidgetDef[] = [
-  { id: "ingresos", screen: "resumen", label: "Ingresos", revenue: true, defaultVisible: true, defaultOrder: 10, defaultRoles: ["owner"] },
+  { id: "ingresos", screen: "resumen", label: "Facturación total", revenue: true, defaultVisible: true, defaultOrder: 10, defaultRoles: ["owner"] },
   { id: "suscripciones", screen: "resumen", label: "Suscripciones", revenue: true, defaultVisible: true, defaultOrder: 20, defaultRoles: ["owner"] },
-  { id: "ppv", screen: "resumen", label: "PPV", revenue: true, defaultVisible: true, defaultOrder: 30, defaultRoles: ["owner"] },
-  { id: "tips", screen: "resumen", label: "Tips", revenue: true, defaultVisible: true, defaultOrder: 40, defaultRoles: ["owner"] },
-  { id: "mensajes", screen: "resumen", label: "Mensajes", revenue: false, defaultVisible: true, defaultOrder: 50, defaultRoles: ["owner", "chatter"] },
+  { id: "ppv", screen: "resumen", label: "Mensajes y PPV", revenue: true, defaultVisible: true, defaultOrder: 30, defaultRoles: ["owner"] },
+  { id: "tips", screen: "resumen", label: "Propinas", revenue: true, defaultVisible: true, defaultOrder: 40, defaultRoles: ["owner"] },
+  { id: "posts", screen: "resumen", label: "Posts", revenue: true, defaultVisible: true, defaultOrder: 42, defaultRoles: ["owner"] },
+  { id: "referidos", screen: "resumen", label: "Referidos", revenue: true, defaultVisible: true, defaultOrder: 44, defaultRoles: ["owner"] },
+  { id: "directos", screen: "resumen", label: "Directos", revenue: true, defaultVisible: true, defaultOrder: 46, defaultRoles: ["owner"] },
+  { id: "mensajes", screen: "resumen", label: "Mensajes enviados", revenue: false, defaultVisible: true, defaultOrder: 50, defaultRoles: ["owner", "chatter"] },
   { id: "fans-activos", screen: "resumen", label: "Fans activos", revenue: false, defaultVisible: true, defaultOrder: 60, defaultRoles: ["owner", "chatter"] },
-  { id: "tendencia", screen: "resumen", label: "Tendencia", revenue: true, defaultVisible: true, defaultOrder: 70, defaultRoles: ["owner"] },
-  { id: "alertas", screen: "resumen", label: "Alertas", revenue: false, defaultVisible: true, defaultOrder: 80, defaultRoles: ["owner", "chatter"] },
-  { id: "creadoras-cuentas", screen: "creadoras", label: "Cuentas", revenue: false, defaultVisible: true, defaultOrder: 10, defaultRoles: ["owner", "chatter"] },
-  { id: "creadoras-ingresos", screen: "creadoras", label: "Ingresos por creadora", revenue: true, defaultVisible: true, defaultOrder: 20, defaultRoles: ["owner"] },
-  { id: "fans-segmentos", screen: "fans", label: "Segmentos", revenue: false, defaultVisible: true, defaultOrder: 10, defaultRoles: ["owner", "chatter"] },
-  { id: "fans-ltv", screen: "fans", label: "Gasto del fan", revenue: false, defaultVisible: true, defaultOrder: 20, defaultRoles: ["owner", "chatter"] },
-  { id: "chatters-ventas", screen: "chatters", label: "Ventas atribuidas", revenue: false, defaultVisible: true, defaultOrder: 10, defaultRoles: ["owner", "chatter"] },
-  { id: "chatters-respuesta", screen: "chatters", label: "Tiempo de respuesta", revenue: false, defaultVisible: true, defaultOrder: 20, defaultRoles: ["owner", "chatter"] },
+  { id: "nuevos-subs", screen: "resumen", label: "Suscriptores nuevos", revenue: false, defaultVisible: true, defaultOrder: 62, defaultRoles: ["owner"] },
+  { id: "compras", screen: "resumen", label: "Compras", revenue: false, defaultVisible: true, defaultOrder: 64, defaultRoles: ["owner"] },
+  { id: "fans-online", screen: "resumen", label: "Fans online", revenue: false, defaultVisible: true, defaultOrder: 66, defaultRoles: ["owner"] },
+  { id: "tendencia", screen: "resumen", label: "Ingresos", revenue: true, defaultVisible: true, defaultOrder: 70, defaultRoles: ["owner"] },
+  { id: "canales", screen: "resumen", label: "Ingresos por canal", revenue: true, defaultVisible: true, defaultOrder: 72, defaultRoles: ["owner"] },
+  { id: "reparto", screen: "resumen", label: "Reparto de ingresos", revenue: true, defaultVisible: true, defaultOrder: 74, defaultRoles: ["owner"] },
+  { id: "mejor-dia", screen: "resumen", label: "Mejor día", revenue: true, defaultVisible: true, defaultOrder: 76, defaultRoles: ["owner"] },
+  { id: "mejor-hora", screen: "resumen", label: "Mejor hora", revenue: true, defaultVisible: true, defaultOrder: 77, defaultRoles: ["owner"] },
+  { id: "clv", screen: "resumen", label: "Valor medio por suscriptor (CLV)", revenue: true, defaultVisible: true, defaultOrder: 78, defaultRoles: ["owner"] },
+  { id: "top-fans", screen: "resumen", label: "Top fans", revenue: true, defaultVisible: true, defaultOrder: 79, defaultRoles: ["owner"] },
+  { id: "heatmap", screen: "resumen", label: "Mapa de calor", revenue: true, defaultVisible: true, defaultOrder: 80, defaultRoles: ["owner"] },
+  { id: "alertas", screen: "resumen", label: "Alertas", revenue: false, defaultVisible: true, defaultOrder: 90, defaultRoles: ["owner", "chatter"] },
+  { id: "creadoras-cuentas", screen: "creadoras", label: "Tarjetas", revenue: true, defaultVisible: true, defaultOrder: 10, defaultRoles: ["owner"] },
+  { id: "creadoras-ingresos", screen: "creadoras", label: "Tabla por creadora", revenue: true, defaultVisible: true, defaultOrder: 20, defaultRoles: ["owner"] },
+  { id: "comparativa", screen: "creadoras", label: "Comparativa detallada", revenue: true, defaultVisible: true, defaultOrder: 30, defaultRoles: ["owner"] },
+  { id: "rendimiento", screen: "rendimiento", label: "Rendimiento por creadora", revenue: true, defaultVisible: true, defaultOrder: 10, defaultRoles: ["owner"] },
+  { id: "chatters-ventas", screen: "chatters", label: "Ranking de chatters", revenue: false, defaultVisible: true, defaultOrder: 10, defaultRoles: ["owner", "chatter"] },
+  { id: "chatters-respuesta", screen: "chatters", label: "Ingresos por chatter", revenue: false, defaultVisible: true, defaultOrder: 20, defaultRoles: ["owner", "chatter"] },
+  { id: "chatters-turnos", screen: "chatters", label: "Turnos ahora", revenue: false, defaultVisible: true, defaultOrder: 30, defaultRoles: ["owner"] },
+  { id: "nuevos-bienvenida", screen: "nuevos", label: "Respuesta al mensaje de bienvenida", revenue: false, defaultVisible: true, defaultOrder: 10, defaultRoles: ["owner", "chatter"] },
+  { id: "nuevos-compra", screen: "nuevos", label: "Compraron / no compraron", revenue: false, defaultVisible: true, defaultOrder: 20, defaultRoles: ["owner", "chatter"] },
+  { id: "nuevos-duracion", screen: "nuevos", label: "Duración de la suscripción", revenue: false, defaultVisible: true, defaultOrder: 30, defaultRoles: ["owner", "chatter"] },
+  { id: "nuevos-segmentos", screen: "nuevos", label: "Conversión a cada segmento", revenue: false, defaultVisible: true, defaultOrder: 40, defaultRoles: ["owner", "chatter"] },
+  { id: "fans-segmentos", screen: "segmentos", label: "Segmentos", revenue: false, defaultVisible: true, defaultOrder: 10, defaultRoles: ["owner", "chatter"] },
+  { id: "fans-ltv", screen: "segmentos", label: "Lista de fans", revenue: false, defaultVisible: true, defaultOrder: 20, defaultRoles: ["owner", "chatter"] },
   { id: "campanas-estado", screen: "campanas", label: "Estado", revenue: false, defaultVisible: true, defaultOrder: 10, defaultRoles: ["owner", "chatter"] },
   { id: "campanas-resultado", screen: "campanas", label: "Resultado", revenue: true, defaultVisible: true, defaultOrder: 20, defaultRoles: ["owner"] },
 ];
@@ -101,6 +121,7 @@ export function isScreenId(value: string): value is ScreenId {
 
 export function parseScreen(value: string): ScreenId {
   const id = value.replace(/^#/, "").trim();
+  if (id === "fans") return "segmentos";
   return isScreenId(id) ? id : "resumen";
 }
 
@@ -110,10 +131,14 @@ export function screenLabel(screen: ScreenId): string {
       return "Resumen";
     case "creadoras":
       return "Creadoras";
-    case "fans":
-      return "Fans";
+    case "rendimiento":
+      return "Rendimiento";
     case "chatters":
       return "Chatters";
+    case "nuevos":
+      return "Suscriptores nuevos";
+    case "segmentos":
+      return "Segmentos de fans";
     case "campanas":
       return "Campañas";
     case "ajustes":
@@ -128,13 +153,17 @@ export function screenLabel(screen: ScreenId): string {
 export function screenBlurb(screen: ScreenId): string {
   switch (screen) {
     case "resumen":
-      return "Cifras del rango elegido, solo con lo ya sincronizado.";
+      return "Cifras del rango elegido con lo leído de OnlyFans hasta el último corte.";
     case "creadoras":
-      return "Cuentas visibles para este rol. El detalle operativo sigue en Creadoras.";
-    case "fans":
-      return "Segmentos de fanProfiles. Esta fase aún no pinta la lista.";
+      return "Tabla por creadora con columnas a elegir y comparativa diaria exportable.";
+    case "rendimiento":
+      return "Una creadora: canales, reparto y mapa de calor.";
     case "chatters":
-      return "Atribución y respuesta de chatterReports. Esta fase aún no pinta la tabla.";
+      return "Ventas atribuidas, PPV, conversión, respuesta y turnos.";
+    case "nuevos":
+      return "Qué hacen los suscriptores nuevos del rango.";
+    case "segmentos":
+      return "Whale, Top spender, Spender, Low spender y New.";
     case "campanas":
       return "Estado de las campañas guardadas. Esta fase aún no pinta el resultado.";
     case "ajustes":
@@ -146,14 +175,30 @@ export function screenBlurb(screen: ScreenId): string {
   }
 }
 
-export function audienceOf(role: "owner" | "member"): DashboardAudience {
-  return role === "owner" ? "owner" : "chatter";
+/**
+ * Público del dashboard. La dueña y quien tenga «estadisticas» (Admin, Supervisor, Analyst) ven
+ * la vista de agencia con el dinero. El resto, la de chatter con sus propios números.
+ * Acepta el rol suelto por compatibilidad: sin permisos, un miembro es chatter.
+ */
+export function audienceOf(access: "owner" | "member" | { role: "owner" | "member"; perms?: readonly string[] }): DashboardAudience {
+  if (typeof access === "string") return access === "owner" ? "owner" : "chatter";
+  if (access.role === "owner") return "owner";
+  return access.perms?.includes("estadisticas") ? "owner" : "chatter";
+}
+
+function seesEveryCreator(access: { role: "owner" | "member"; perms?: readonly string[] }): boolean {
+  return access.role === "owner" || (access.perms?.includes("todas") ?? false);
 }
 
 export function screensFor(access: { role: "owner" | "member"; perms: string[] } | null): ScreenId[] {
   if (!access) return [];
   if (access.role === "owner") return [...SCREEN_IDS];
-  const screens: ScreenId[] = ["resumen", "creadoras", "fans", "chatters"];
+  if (audienceOf(access) === "owner") {
+    // Admin y Supervisor: todo menos Ajustes del dashboard, que solo guarda la dueña.
+    return SCREEN_IDS.filter((screen) => screen !== "ajustes");
+  }
+  // Chatter: sus números, segmentos de sus creadoras y nuevos suscriptores sin dinero.
+  const screens: ScreenId[] = ["resumen", "chatters", "nuevos", "segmentos"];
   if (access.perms.includes("campanas")) screens.push("campanas");
   return screens;
 }
@@ -235,17 +280,17 @@ export function moveWidget(config: unknown, id: string, direction: -1 | 1): Dash
 }
 
 export function visibleCreators<T extends { id: string }>(
-  access: { role: "owner" | "member"; creatorIds: string[] } | null,
+  access: { role: "owner" | "member"; creatorIds: string[]; perms?: readonly string[] } | null,
   creators: T[],
 ): T[] {
   if (!access) return [];
-  if (access.role === "owner") return creators;
+  if (seesEveryCreator(access)) return creators;
   const allowed = new Set(access.creatorIds);
   return creators.filter((creator) => allowed.has(creator.id));
 }
 
 export function scopedCreators<T extends { id: string }>(
-  access: { role: "owner" | "member"; creatorIds: string[] } | null,
+  access: { role: "owner" | "member"; creatorIds: string[]; perms?: readonly string[] } | null,
   creators: T[],
   selectedId: string,
 ): T[] {
@@ -288,7 +333,7 @@ export function readsScopeFor(
 
 /** Ids que devuelve listCreatorReadViews. Un chatter que pide "chat" no sale de sus cuentas. */
 export function creatorIdsForReads(
-  access: { role: "owner" | "member"; creatorIds: string[] } | null,
+  access: { role: "owner" | "member"; creatorIds: string[]; perms?: readonly string[] } | null,
   accounts: Array<{ creatorId: string | null }>,
   requested: "dashboard" | "chat" | undefined,
 ): string[] {
@@ -300,12 +345,12 @@ export function creatorIdsForReads(
 
 /** El dashboard y un chatter recortan por cuenta asignada. */
 export function dashboardCreatorIds(
-  access: { role: "owner" | "member"; creatorIds: string[] } | null,
+  access: { role: "owner" | "member"; creatorIds: string[]; perms?: readonly string[] } | null,
   accounts: Array<{ creatorId: string | null }>,
 ): string[] {
   if (!access) return [];
   const ids = accounts.flatMap((account) => (account.creatorId ? [account.creatorId] : []));
-  if (access.role === "owner") return [...new Set(ids)];
+  if (seesEveryCreator(access)) return [...new Set(ids)];
   const allowed = new Set(access.creatorIds);
   return [...new Set(ids.filter((id) => allowed.has(id)))];
 }
