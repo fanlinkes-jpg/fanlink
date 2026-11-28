@@ -15,6 +15,7 @@ export type FanProfileFields = {
 };
 
 export type FanInsightProps = {
+  initialTab?: (typeof FAN_CARD_TABS)[number];
   name: string | null;
   handle: string | null;
   spentCents: number | null;
@@ -47,7 +48,7 @@ export type FanInsightProps = {
 };
 
 export function FanInsights(props: FanInsightProps) {
-  const [tab, setTab] = useState<(typeof FAN_CARD_TABS)[number]>("Insights");
+  const [tab, setTab] = useState<(typeof FAN_CARD_TABS)[number]>(props.initialTab ?? "Insights");
   const model = fanInsightModel({
     spentCents: props.spentCents,
     tipsCents: props.tipsCents,
