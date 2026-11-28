@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Button, Field, Select } from "@/components/ui";
 import { StaffCard, TABLE_CLASS, TD_CLASS, THEAD_CLASS, TH_CLASS, TR_CLASS } from "@/components/staff-card";
 import { CreatorMark } from "@/components/creator-mark";
+import { FixedMenu } from "@/components/fixed-menu";
 import { ProxyForm } from "@/components/proxy-form";
 import { useCrm, type Creator, type Platform } from "@/lib/crm";
 import { PLATFORMS } from "@/features/growth-pages";
@@ -69,7 +70,7 @@ export function CreatorsPage() {
   const [editing, setEditing] = useState<Creator | "new" | null>(null);
   const [tagsOpen, setTagsOpen] = useState(false);
   const [menuId, setMenuId] = useState<string | null>(null);
-  const menuRef = useRef<HTMLDivElement | null>(null);
+  const menuAnchor = useRef<HTMLElement | null>(null);
 
   const refreshAssignments = useCallback(async () => {
     try {
@@ -86,15 +87,6 @@ export function CreatorsPage() {
   useEffect(() => {
     void refreshAssignments();
   }, [refreshAssignments]);
-
-  useEffect(() => {
-    if (!menuId) return;
-    const onDoc = (event: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) setMenuId(null);
-    };
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [menuId]);
 
   const tags = useMemo(() => {
     const values = [...new Set(creators.map((item) => item.tag?.trim()).filter((item): item is string => Boolean(item)))];
@@ -344,7 +336,7 @@ export function CreatorsPage() {
                   </td>
                   <td className={`${TD_CLASS} tabular-nums`}>{sales == null ? "Sin datos" : moneyUsd(sales)}</td>
                   <td className={`${TD_CLASS} ${STICKY}`}>
-                    <div className="relative flex items-center gap-1" ref={menuId === creator.id ? menuRef : undefined}>
+                    <div className="relative flex items-center gap-1">
                       <button type="button" className="rounded p-1 text-muted hover:bg-raised" aria-label={`Editar ${creator.name}`} onClick={() => setEditing(creator)}>
                         <Pencil className="h-4 w-4" aria-hidden />
                       </button>
@@ -354,31 +346,42 @@ export function CreatorsPage() {
                         aria-label={`Más acciones de ${creator.name}`}
                         aria-haspopup="menu"
                         aria-expanded={menuId === creator.id}
-                        onClick={() => setMenuId((id) => (id === creator.id ? null : creator.id))}
+                        onClick={(event) => {
+                          if (menuId === creator.id) {
+                            setMenuId(null);
+                            return;
+                          }
+                          menuAnchor.current = event.currentTarget;
+                          setMenuId(creator.id);
+                        }}
                       >
                         <MoreVertical className="h-4 w-4" aria-hidden />
                       </button>
-                      {menuId === creator.id && (
-                        <div role="menu" className="absolute right-0 top-full z-30 mt-1 w-64 rounded-md border border-line bg-surface p-1 text-sm shadow-lg">
-                          <button type="button" role="menuitem" className="block w-full rounded px-3 py-2 text-left hover:bg-raised" onClick={() => { setMenuId(null); setEditing(creator); }}>
-                            Editar detalles
-                          </button>
-                          <Link
-                            role="menuitem"
-                            to="/conectar"
-                            search={{ creadora: creator.id }}
-                            className="block rounded px-3 py-2 hover:bg-raised"
-                            onClick={() => setMenuId(null)}
-                          >
-                            {expired ? "Reconectar" : "Abrir Conectar"}
-                          </Link>
-                          {reason ? (
-                            <p className="px-3 py-2 text-xs text-muted" title={reason}>
-                              Último aviso: {reason}
-                            </p>
-                          ) : null}
-                        </div>
-                      )}
+                      <FixedMenu
+                        open={menuId === creator.id}
+                        anchor={menuId === creator.id ? menuAnchor.current : null}
+                        onClose={() => setMenuId(null)}
+                        label={`Más acciones de ${creator.name}`}
+                        className="w-64"
+                      >
+                        <button type="button" role="menuitem" className="block w-full rounded px-3 py-2 text-left hover:bg-raised" onClick={() => { setMenuId(null); setEditing(creator); }}>
+                          Editar detalles
+                        </button>
+                        <Link
+                          role="menuitem"
+                          to="/conectar"
+                          search={{ creadora: creator.id }}
+                          className="block rounded px-3 py-2 hover:bg-raised"
+                          onClick={() => setMenuId(null)}
+                        >
+                          {expired ? "Reconectar" : "Abrir Conectar"}
+                        </Link>
+                        {reason ? (
+                          <p className="px-3 py-2 text-xs text-muted" title={reason}>
+                            Último aviso: {reason}
+                          </p>
+                        ) : null}
+                      </FixedMenu>
                     </div>
                   </td>
                 </tr>

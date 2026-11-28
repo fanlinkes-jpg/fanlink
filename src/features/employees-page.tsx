@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { ChevronDown, Plus, X } from "lucide-react";
 import { Button, Field, Select } from "@/components/ui";
 import { StaffCard, TABLE_CLASS, TD_CLASS, THEAD_CLASS, TH_CLASS, TR_CLASS } from "@/components/staff-card";
+import { FixedMenu } from "@/components/fixed-menu";
 import { useCrm } from "@/lib/crm";
 import {
   deleteEmployee,
@@ -73,6 +74,7 @@ export function EmployeesPage() {
   const [picked, setPicked] = useState<string[]>([]);
   const [bulkRoles, setBulkRoles] = useState(false);
   const barRef = useRef<HTMLDivElement | null>(null);
+  const menuAnchor = useRef<HTMLElement | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -94,7 +96,7 @@ export function EmployeesPage() {
   useEffect(() => {
     if (!menu && !groupMenu) return;
     const close = (event: MouseEvent) => {
-      if (!(event.target instanceof Element) || !event.target.closest("[data-menu-root]")) {
+      if (!(event.target instanceof Element) || !event.target.closest("[data-menu-root], [data-menu-portal]")) {
         setMenu(null);
         setGroupMenu(false);
       }
@@ -352,7 +354,15 @@ export function EmployeesPage() {
                         <span aria-hidden className="text-line">|</span>
                         <button
                           type="button"
-                          onClick={() => setMenu(menu === keyOf(row) ? null : keyOf(row))}
+                          onClick={(event) => {
+                            const key = keyOf(row);
+                            if (menu === key) {
+                              setMenu(null);
+                              return;
+                            }
+                            menuAnchor.current = event.currentTarget;
+                            setMenu(key);
+                          }}
                           aria-label={`Más acciones de ${row.name}`}
                           aria-expanded={menu === keyOf(row)}
                           aria-haspopup="menu"
@@ -360,19 +370,22 @@ export function EmployeesPage() {
                         >
                           Más <ChevronDown className="h-3.5 w-3.5" aria-hidden />
                         </button>
-                        {menu === keyOf(row) && (
-                          <div role="menu" className="absolute right-0 top-full z-20 mt-1 w-56 rounded-md border border-line bg-surface p-1 text-fg shadow-lg">
-                            {row.kind === "invite" && <MenuItem onClick={() => void resend(row)}>Reenviar invitación</MenuItem>}
-                            {row.kind === "member" && row.status === "active" && (
-                              <MenuItem onClick={() => void act("Empleado desactivado", () => setEmployeeActive({ data: { id: row.id, active: false } }))}>Desactivar</MenuItem>
-                            )}
-                            {row.kind === "member" && row.status === "disabled" && (
-                              <MenuItem onClick={() => void act("Empleado activado", () => setEmployeeActive({ data: { id: row.id, active: true } }))}>Activar</MenuItem>
-                            )}
-                            {row.kind === "member" && <MenuItem onClick={() => void resetPassword(row)}>Restablecer contraseña</MenuItem>}
-                            <MenuItem danger onClick={() => void remove(row)}>Borrar</MenuItem>
-                          </div>
-                        )}
+                        <FixedMenu
+                          open={menu === keyOf(row)}
+                          anchor={menu === keyOf(row) ? menuAnchor.current : null}
+                          onClose={() => setMenu(null)}
+                          label={`Más acciones de ${row.name}`}
+                        >
+                          {row.kind === "invite" && <MenuItem onClick={() => void resend(row)}>Reenviar invitación</MenuItem>}
+                          {row.kind === "member" && row.status === "active" && (
+                            <MenuItem onClick={() => void act("Empleado desactivado", () => setEmployeeActive({ data: { id: row.id, active: false } }))}>Desactivar</MenuItem>
+                          )}
+                          {row.kind === "member" && row.status === "disabled" && (
+                            <MenuItem onClick={() => void act("Empleado activado", () => setEmployeeActive({ data: { id: row.id, active: true } }))}>Activar</MenuItem>
+                          )}
+                          {row.kind === "member" && <MenuItem onClick={() => void resetPassword(row)}>Restablecer contraseña</MenuItem>}
+                          <MenuItem danger onClick={() => void remove(row)}>Borrar</MenuItem>
+                        </FixedMenu>
                       </div>
                     )}
                   </td>
