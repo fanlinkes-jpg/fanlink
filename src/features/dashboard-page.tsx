@@ -3,42 +3,40 @@ import { canSeeAgencyEarnings, hasPerm } from "@/lib/access-policy";
 import { ShiftBoard } from "@/features/shift-board";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { NotificationBell } from "@/features/notification-bell";
-import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { Button, Panel, Select } from "@/components/ui";
+import { Button, Panel } from "@/components/ui";
 import { useCrm } from "@/lib/crm";
 import {
-  alertLabelsFor,
   audienceOf,
-  buildSummary,
-  cardOf,
-  isCardId,
   moveWidget,
   normalizeDashboardConfig,
-  PERIODS,
   screenBlurb,
   screenLabel,
   SCREEN_IDS,
   screensFor,
-  scopedCreators,
-  selectionValue,
   setWidgetRoles,
   setWidgetVisible,
-  visibleCreators,
   widgetDef,
   widgetsFor,
   type DashboardAudience,
   type ScreenId,
-  type SummaryAlert,
-  type SummaryFigures,
-  type WidgetPlacement,
   SIN_DATOS,
 } from "@/lib/dashboard-config";
 import type { MetricPeriod } from "@/lib/creator-metrics";
 import { AnalyticsPage, AuditPage } from "@/features/control-pages";
-import { formatCents } from "@/lib/format";
-import { listCreatorSessions, listDashboard } from "@/lib/of-sessions";
-import { useOfReads } from "@/lib/use-of-reads";
 import { rememberOpenThread } from "@/lib/open-thread";
+import {
+  ChattersScreen,
+  CreadorasScreen,
+  defaultFilters,
+  InsightsHeader,
+  NuevosScreen,
+  RendimientoScreen,
+  ResumenScreen,
+  ScreenTitle,
+  SegmentosScreen,
+  useDashboardInsights,
+  type InsightFilters,
+} from "@/features/dashboard-insights";
 import {
   canOpenMessagePanel,
   canOpenReports,
@@ -52,18 +50,15 @@ import {
 } from "@/lib/nav-config";
 
 export function DashboardPage() {
-  const creators = useCrm((s) => s.creators);
-  const creatorId = useCrm((s) => s.creatorId);
-  const setCreator = useCrm((s) => s.setCreator);
   const teamAccess = useCrm((s) => s.teamAccess);
   const dashboardConfig = useCrm((s) => s.dashboardConfig);
   const setDashboardConfig = useCrm((s) => s.setDashboardConfig);
-  const reads = useOfReads();
+  const setCreator = useCrm((s) => s.setCreator);
   const navigate = useNavigate();
   const [period, setPeriod] = useState<MetricPeriod>("month");
   const [zone, setZone] = useState<DashboardZone>(() => dashboardZone(window.location.hash));
-  const [alerts, setAlerts] = useState<SummaryAlert[] | null>(null);
-  const [sessions, setSessions] = useState<Array<{ creatorId: string; label: string }>>([]);
+  const [filters, setFilters] = useState<InsightFilters>(() => defaultFilters());
+  const insights = useDashboardInsights(filters, Boolean(teamAccess));
 
   useEffect(() => {
     const onHash = () => setZone(dashboardZone(window.location.hash));
@@ -71,61 +66,20 @@ export function DashboardPage() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  useEffect(() => {
-    let stop = false;
-    async function pull() {
-      try {
-        const [dash, rows] = await Promise.all([listDashboard(), listCreatorSessions()]);
-        if (stop) return;
-        setAlerts(dash.alerts);
-        setSessions(rows.map((row) => ({ creatorId: row.creatorId, label: row.label })));
-      } catch {
-        if (!stop) setAlerts(null);
-      }
-    }
-    void pull();
-    const timer = setInterval(() => void pull(), 15_000);
-    return () => {
-      stop = true;
-      clearInterval(timer);
-    };
-  }, []);
-
   if (!teamAccess) return null;
 
   const config = normalizeDashboardConfig(dashboardConfig);
-  const audience = audienceOf(teamAccess.role);
+  // Admin y Supervisor (permiso «estadisticas») ven la vista de agencia, como la dueña.
+  const audience = audienceOf(teamAccess);
+  const agency = canSeeAgencyEarnings(teamAccess);
   const allowed = screensFor(teamAccess);
   const navRole = navRoleFromAccess(teamAccess);
   const reportsOk = canOpenReports(navRole, teamAccess);
   const panelOk = canOpenMessagePanel(navRole, teamAccess);
   const showingReports = zone.kind === "informes";
   const current = zone.kind === "metricas" && allowed.includes(zone.screen) ? zone.screen : "resumen";
-  const visible = visibleCreators(teamAccess, creators);
-  const selected = selectionValue(visible.map((creator) => creator.id), creatorId);
-  const scoped = scopedCreators(teamAccess, creators, creatorId);
-  const figures = buildSummary({
-    role: canSeeAgencyEarnings(teamAccess) ? "owner" : teamAccess.role,
-    period,
-    now: new Date(),
-    alerts,
-    alertLabels: alertLabelsFor(scoped, sessions),
-    reads: scoped.map((creator) => {
-      const read = reads.byCreator.get(creator.id);
-      return {
-        creatorId: creator.id,
-        earningsSyncedAt: read?.earningsSyncedAt ?? null,
-        fansSyncedAt: read?.fansSyncedAt ?? null,
-        earnings: read?.earnings ?? null,
-        transactions: read?.transactions ?? null,
-        fans: (read?.fans ?? []).map((fan) => ({
-          status: fan.status,
-          subscribedAt: fan.subscribedAt,
-          renewAuto: fan.renewAuto,
-        })),
-      };
-    }),
-  });
+  const view = insights.view;
+  const selected = filters.creatorId;
 
   function open(next: ScreenId) {
     window.location.hash = next;
@@ -164,37 +118,28 @@ export function DashboardPage() {
         ) : null}
       </nav>
       <div className="min-w-0 flex-1">
-        <header className="flex flex-wrap items-center gap-2 border-b border-line bg-surface px-4 py-3">
-          <Select aria-label="Creadora" value={selected} onChange={(event) => setCreator(event.target.value)}>
-            <option value="all">Todas</option>
-            {visible.map((creator) => (
-              <option key={creator.id} value={creator.id}>{creator.name}</option>
-            ))}
-          </Select>
-          <Select aria-label="Rango" value={period} onChange={(event) => setPeriod(readPeriod(event.target.value))}>
-            {PERIODS.map((item) => (
-              <option key={item.id} value={item.id}>{item.label}</option>
-            ))}
-          </Select>
-          <span className="text-xs text-muted">{teamAccess.role === "owner" ? "Dueña" : "Chatter"}</span>
+        <div className="relative">
+          <InsightsHeader name={teamAccess.displayName} filters={filters} onChange={setFilters} view={view} loading={insights.loading} agency={agency} />
           {selected !== "all" ? (
-            <NotificationBell
-              creatorId={selected}
-              creatorName={visible.find((creator) => creator.id === selected)?.name ?? null}
-              onOpenThread={(target) => {
-                setCreator(target.creatorId);
-                rememberOpenThread(target);
-                void navigate({ to: "/mensajes" });
-              }}
-            />
+            <div className="absolute top-3 right-4">
+              <NotificationBell
+                creatorId={selected}
+                creatorName={view?.creators.find((creator) => creator.id === selected)?.name ?? null}
+                onOpenThread={(target) => {
+                  setCreator(target.creatorId);
+                  rememberOpenThread(target);
+                  void navigate({ to: "/mensajes" });
+                }}
+              />
+            </div>
           ) : null}
-        </header>
-        <div className="space-y-4 p-4 md:p-6">
-          {teamAccess.role !== "owner" && visible.length === 0 ? (
+        </div>
+        <div className="space-y-4 p-4 md:p-6" data-testid="dashboard-body" data-audience={audience}>
+          {!agency && teamAccess.creatorIds.length === 0 && !teamAccess.perms.includes("todas") ? (
             <p className="text-sm text-muted">No tienes cuentas asignadas. La dueña las asigna en Personal.</p>
           ) : null}
-          {teamAccess && !hasPerm(teamAccess, "equipo") ? <ShiftBoard compact /> : null}
-          {reads.error ? <p className="text-sm text-[#8a5a12]">{reads.error}</p> : null}
+          {teamAccess && !hasPerm(teamAccess, "equipo") && current === "resumen" ? <ShiftBoard compact /> : null}
+          {insights.error ? <p className="text-sm text-[#8a5a12]">{insights.error}</p> : null}
           {showingReports ? (
             <ReportsPanel
               vista={zone.vista}
@@ -204,12 +149,29 @@ export function DashboardPage() {
               onPeriod={setPeriod}
               onView={openReport}
             />
-          ) : current === "resumen" ? (
-            <Resumen audience={audience} config={config} figures={figures} />
           ) : current === "ajustes" ? (
             <ConfigEditor config={config} onChange={setDashboardConfig} />
-          ) : (
+          ) : current === "campanas" ? (
             <Upcoming screen={current} config={config} audience={audience} />
+          ) : (
+            <>
+              <ScreenTitle title={screenLabel(current)} blurb={screenBlurb(current)} />
+              {!view ? (
+                <p className="text-sm text-muted">{insights.loading ? "Cargando…" : SIN_DATOS}</p>
+              ) : current === "resumen" ? (
+                <ResumenScreen view={view} config={config} audience={audience} filters={filters} onFilters={setFilters} />
+              ) : current === "creadoras" ? (
+                <CreadorasScreen view={view} config={config} audience={audience} />
+              ) : current === "rendimiento" ? (
+                <RendimientoScreen view={view} filters={filters} />
+              ) : current === "chatters" ? (
+                <ChattersScreen view={view} config={config} audience={audience} />
+              ) : current === "nuevos" ? (
+                <NuevosScreen view={view} config={config} audience={audience} />
+              ) : (
+                <SegmentosScreen view={view} config={config} audience={audience} />
+              )}
+            </>
           )}
         </div>
       </div>
@@ -292,112 +254,6 @@ function reportTabLabel(vista: ReportView): string {
   }
 }
 
-function Resumen({
-  audience,
-  config,
-  figures,
-}: {
-  audience: DashboardAudience;
-  config: ReturnType<typeof normalizeDashboardConfig>;
-  figures: SummaryFigures;
-}) {
-  const widgets = widgetsFor(config, "resumen", audience);
-  return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="font-display text-2xl font-semibold tracking-tight">Resumen</h1>
-        <p className="text-sm text-muted">{screenBlurb("resumen")}</p>
-      </div>
-      {widgets.length === 0 ? <p className="text-sm text-muted">{SIN_DATOS}</p> : null}
-      {groupResumen(widgets).map((block) =>
-        block.kind === "cards" ? (
-          <div key={block.items.map((widget) => widget.id).join("-")} className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-            {block.items.map((widget) => {
-              if (!isCardId(widget.id)) return null;
-              const figure = cardOf(figures, widget.id);
-              const label = widgetDef(widget.id)?.label ?? widget.id;
-              return (
-                <article key={widget.id} className="rounded-lg border border-line bg-surface p-4">
-                  <p className="text-xs text-muted">{label}</p>
-                  <p className="mt-2 font-display text-2xl font-semibold tabular-nums">{figure.value}</p>
-                  {figure.hint ? <p className="mt-1 text-xs text-muted">{figure.hint}</p> : null}
-                </article>
-              );
-            })}
-          </div>
-        ) : (
-          <ResumenExtra key={block.item.id} widget={block.item} figures={figures} />
-        ),
-      )}
-    </div>
-  );
-}
-
-function groupResumen(widgets: WidgetPlacement[]): Array<{ kind: "cards"; items: WidgetPlacement[] } | { kind: "widget"; item: WidgetPlacement }> {
-  const blocks: Array<{ kind: "cards"; items: WidgetPlacement[] } | { kind: "widget"; item: WidgetPlacement }> = [];
-  for (const widget of widgets) {
-    if (!isCardId(widget.id)) {
-      blocks.push({ kind: "widget", item: widget });
-      continue;
-    }
-    const last = blocks.at(-1);
-    if (last?.kind === "cards") last.items.push(widget);
-    else blocks.push({ kind: "cards", items: [widget] });
-  }
-  return blocks;
-}
-
-function ResumenExtra({ widget, figures }: { widget: WidgetPlacement; figures: SummaryFigures }) {
-  const label = widgetDef(widget.id)?.label ?? widget.id;
-  switch (widget.id) {
-    case "ingresos":
-    case "suscripciones":
-    case "ppv":
-    case "tips":
-    case "mensajes":
-    case "fans-activos":
-      return null;
-    case "tendencia":
-      return figures.tendencia == null ? (
-        <Panel title={label}>
-          <p className="text-sm text-muted">{SIN_DATOS}</p>
-        </Panel>
-      ) : (
-        <Panel title={label} bodyClass="h-64">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={figures.tendencia}>
-              <XAxis dataKey="label" tick={{ fill: "var(--color-muted)", fontSize: 12 }} axisLine={false} tickLine={false} />
-              <YAxis hide />
-              <Tooltip
-                formatter={(value) => [formatCents(Number(value)), "Bruto"]}
-                contentStyle={{ background: "var(--color-raised)", border: "1px solid var(--color-line)", color: "var(--color-fg)" }}
-              />
-              <Bar dataKey="grossCents" fill="var(--color-primary)" radius={6} />
-            </BarChart>
-          </ResponsiveContainer>
-        </Panel>
-      );
-    case "alertas":
-      return (
-        <Panel title={label}>
-          {figures.alertas == null ? (
-            <p className="text-sm text-muted">{SIN_DATOS}</p>
-          ) : figures.alertas.length === 0 ? (
-            <p className="text-sm text-muted">Sin alertas</p>
-          ) : (
-            <ul className="space-y-2 text-sm">
-              {figures.alertas.map((alert) => (
-                <li key={`${alert.kind}:${alert.text}`}>{alert.text}</li>
-              ))}
-            </ul>
-          )}
-        </Panel>
-      );
-    default:
-      return null;
-  }
-}
-
 function Upcoming({
   screen,
   config,
@@ -435,8 +291,11 @@ function ExistingLink({ screen }: { screen: ScreenId }) {
   switch (screen) {
     case "creadoras":
       return <Link to="/administrar" search={{ tab: "creadoras" }} className="text-sm font-medium text-primary">Abrir creadoras</Link>;
-    case "fans":
+    case "segmentos":
       return <a href="/#informes-fans" className="text-sm font-medium text-primary">Ver informes de fans</a>;
+    case "rendimiento":
+    case "nuevos":
+      return null;
     case "chatters":
       return <Link to="/administrar" search={{ tab: "empleados" }} className="text-sm font-medium text-primary">Abrir empleados</Link>;
     case "campanas":
@@ -525,13 +384,3 @@ function ConfigEditor({
   );
 }
 
-function readPeriod(value: string): MetricPeriod {
-  switch (value) {
-    case "day":
-    case "week":
-    case "month":
-      return value;
-    default:
-      return "month";
-  }
-}
