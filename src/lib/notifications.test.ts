@@ -502,7 +502,7 @@ test("cada pestaña usa el type de OnlyFans y no mezcla compras con propinas", (
   assert.equal(ofListType("purchases"), "purchases");
   assert.equal(ofListType("tips"), "tip");
   assert.equal(ofListType("promotions"), "message");
-  assert.equal(ofListType("tags"), null);
+  assert.equal(ofListType("tags"), "tags");
   assert.equal(ofListType("all"), null);
   assert.deepEqual(noticesForOfTab(rows, "purchases").map((row) => row.key), ["compra"]);
   assert.deepEqual(noticesForOfTab(rows, "tips").map((row) => row.key), ["propina"]);

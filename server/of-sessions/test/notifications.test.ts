@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { countFanlinkUnread, listNotificationRows, markNotificationPage, markNotificationsSeen, notificationPageFor, saveNotificationRead } from "../sync/notification-store.ts";
+import { notificationSyncState, countFanlinkUnread, listNotificationRows, markNotificationPage, markNotificationsSeen, notificationPageFor, saveNotificationRead } from "../sync/notification-store.ts";
 import { dashboardCreatorIds } from "../../../src/lib/dashboard-config.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -657,3 +657,47 @@ async function database() {
   };
   return { pg, sql };
 }
+
+
+test("el total y los chats de OnlyFans se guardan, se mezclan sin perder claves y mandan sobre la BD local", async () => {
+  const { pg, sql } = await database();
+  try {
+    const all = { all: 10, subscriptions: 0, purchases: 0, tips: 0, tags: 9, comments: 0, mentions: 0, likes: 0, promotions: 1, onlyfans: 0 };
+    await saveNotificationRead(sql, "3zk7kbr", {
+      captured: true,
+      reason: null,
+      counts: all,
+      chatUnread: 6,
+      items: [item("local-1", "like", "2026-11-05T10:00:00.000Z"), item("local-2", "tip", "2026-11-05T11:00:00.000Z")],
+    });
+    const first = await notificationSyncState(sql, "3zk7kbr");
+    assert.equal(first.counts?.all, 10);
+    assert.equal(first.counts?.tags, 9);
+    assert.equal(first.counts?.promotions, 1);
+    assert.equal(first.chatUnread, 6);
+    // Dos avisos locales sin leer no cambian el badge: manda el 10 de OnlyFans.
+    const access = { userId: "dueña", role: "owner" as const, creatorIds: ["3zk7kbr"] };
+    const page = await notificationPageFor(sql, access, "3zk7kbr", null);
+    assert.equal(page.fanlinkUnread, 10);
+    assert.equal(page.counts?.tags, 9);
+    // Una lectura que solo trae el total y no trae chats ni el resto no borra lo anterior.
+    await saveNotificationRead(sql, "3zk7kbr", {
+      captured: true,
+      reason: null,
+      counts: { all: 9, subscriptions: null, purchases: null, tips: null, tags: null, comments: null, mentions: null, likes: null, promotions: null, onlyfans: null },
+      items: [],
+    });
+    const second = await notificationSyncState(sql, "3zk7kbr");
+    assert.equal(second.counts?.all, 9);
+    assert.equal(second.counts?.tags, 9);
+    assert.equal(second.counts?.promotions, 1);
+    assert.equal(second.chatUnread, 6);
+    // Un 0 de OnlyFans sí pisa.
+    await saveNotificationRead(sql, "3zk7kbr", { captured: true, reason: null, counts: { ...all, all: 0, tags: 0 }, chatUnread: 0, items: [] });
+    const third = await notificationSyncState(sql, "3zk7kbr");
+    assert.equal(third.counts?.tags, 0);
+    assert.equal(third.chatUnread, 0);
+  } finally {
+    await pg.close();
+  }
+});

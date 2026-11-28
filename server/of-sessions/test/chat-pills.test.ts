@@ -33,3 +33,18 @@ test("cada pastilla filtra la lista", () => {
   assert.deepEqual(withSpend.filter((thread) => matchesInboxPill(thread, "sin-leer", tipped)).map((thread) => thread.threadKey), ["1"]);
   assert.deepEqual(withSpend.filter((thread) => matchesInboxPill(thread, "propinas", tipped)).map((thread) => thread.threadKey), ["1", "4"]);
 });
+
+test("Sin leer sale de chatMessagesCount de OnlyFans cuando viene, y del recuento local si no", () => {
+  const local = [
+    { threadKey: "1", unread: 2 },
+    { threadKey: "2", unread: 1 },
+    { threadKey: "3", unread: 5 },
+    { threadKey: "4", unread: 0 },
+  ];
+  assert.equal(inboxPillCounts({ status: "ready", threads: local, messages: null }).sinLeer, 3);
+  assert.equal(inboxPillCounts({ status: "ready", threads: local, messages: null, ofUnread: 2 }).sinLeer, 2);
+  assert.equal(inboxPillCounts({ status: "ready", threads: local, messages: null, ofUnread: 0 }).sinLeer, 0);
+  assert.equal(inboxPillCounts({ status: "ready", threads: local, messages: null, ofUnread: null }).sinLeer, 3);
+  assert.equal(inboxPillCounts({ status: "loading", threads: local, messages: null, ofUnread: 6 }).sinLeer, null);
+  assert.equal(inboxPillCounts({ status: "ready", threads: local, messages: null, ofUnread: 6 }).todos, 4);
+});

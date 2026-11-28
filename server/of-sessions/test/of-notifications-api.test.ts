@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { ofTabListNote, tabOf } from "../../../src/lib/notifications.ts";
+import { notificationActionText, notificationOpensChat, noticeTab, noticesForOfTab, ofListType, ofTabListNote, parseNotificationPayload, tabOf } from "../../../src/lib/notifications.ts";
 import type { StorageStateFile } from "../sessions/storage-state.ts";
 import { clearAccountChatPace } from "../sync/api-list-pace.ts";
 import { clearAccountPauses, noteAccountBlock } from "../sync/backoff.ts";
@@ -11,7 +11,12 @@ import { passNotificationAccounts } from "../sync/notification-cycle.ts";
 import {
   clearNotificationListPlans,
   dispatchNotificationMark,
+  fetchNotificationList,
   fetchSignedNotifications,
+  nextNoticeListType,
+  noticeListQueue,
+  TAG_MENTIONS_PATH,
+  withMe,
   notificationCountPath,
   notificationListPath,
   notificationLogLine,
@@ -125,7 +130,10 @@ test("un 400 del contador deja ver la lista y no marca la firma", async () => {
   assert.equal(read.signatureRejected, false);
   assert.equal(read.sessionRejected, false);
   assert.equal(read.items.length, 1);
-  assert.equal(read.counts, null);
+  // El 400 del contador no borra lo que /users/me sí trajo (Etiquetas); el resto queda sin dato.
+  assert.equal(read.counts?.tags, 1);
+  assert.equal(read.counts?.all, null);
+  assert.equal(read.counts?.purchases, null);
   assert.equal(read.countMotivo, "firma rechazada");
   assert.equal(read.routes.find((route) => route.route === "contador")?.status, 400);
 });
@@ -576,3 +584,126 @@ function cookie(name: string, value: string): StorageStateFile["cookies"][number
     sameSite: "Lax",
   };
 }
+
+
+// Fixture con la forma de GET /release-forms/mentions del catálogo ({list, hasMore, lastId}).
+// Los campos de cada fila (id, user, createdAt) son los que el catálogo no detalla: no están confirmados con datos reales.
+const tagMentions = {
+  list: [
+    { id: 9001, createdAt: "2026-11-27T20:15:00.000Z", isRead: false, user: { id: 555, name: "Jason Carrera", username: "jasonc", avatar: "https://cdn.example/a.jpg" } },
+    { id: 9002, createdAt: "2026-11-26T09:00:00.000Z", user: { id: 556, name: "Marta", username: "marta" } },
+    { releaseForm: { id: 9003 }, date: "2026-11-25T09:00:00.000Z", user: { id: 42, name: "Cuenta propia", username: "yo" } },
+    { note: "sin id ni fecha" },
+  ],
+  hasMore: false,
+  lastId: 9003,
+};
+
+test("Etiquetas se pide a release-forms/mentions, con GET y no como type de notificaciones", async () => {
+  assert.equal(notificationListPath("tags"), TAG_MENTIONS_PATH);
+  assert.match(TAG_MENTIONS_PATH, /^\/api2\/v2\/release-forms\/mentions\?limit=\d+&offset=0&format=infinite$/);
+  assert.doesNotMatch(notificationListPath("tags"), /users\/notifications/);
+  assert.match(notificationListPath("message"), /users\/notifications\?limit=\d+&format=infinite&type=message$/);
+  assert.equal(ofListType("tags"), "tags");
+  assert.equal(ofListType("promotions"), "message");
+  const urls: string[] = [];
+  const methods: string[] = [];
+  const page = await fetchNotificationList(state(), deps(urls, () => json(200, tagMentions), methods), "tags");
+  assert.deepEqual(methods, ["GET"]);
+  assert.equal(new URL(urls[0]!).pathname, "/api2/v2/release-forms/mentions");
+  assert.equal(page.status, 200);
+  const rows = page.items;
+  assert.deepEqual(rows.map((row) => row.key), ["tag:9001", "tag:9002", "tag:9003"]);
+  assert.ok(rows.every((row) => row.kind === "tag" && row.ofType === "tags" && !row.pending));
+  assert.equal(rows[0]?.fanKey, "555");
+  assert.equal(rows[0]?.fanName, "Jason Carrera");
+  assert.equal(rows[0]?.fanHandle, "jasonc");
+  assert.equal(rows[0]?.ofUnread, true);
+  assert.equal(rows[1]?.ofUnread, null);
+  assert.equal(rows[2]?.fanKey, null);
+  assert.equal(noticeTab(rows[0]!), "tags");
+  assert.equal(noticesForOfTab(rows, "tags").length, 3);
+  assert.equal(noticesForOfTab(rows, "promotions").length, 0);
+  assert.deepEqual(parseNotificationPayload({ list: [] }, { listType: "tags" }), []);
+  assert.deepEqual(parseNotificationPayload("basura", { listType: "tags" }), []);
+});
+
+test("la cola de listas incluye Etiquetas y Promociones, y cada pasada pide una sola lista", async () => {
+  const queue = noticeListQueue();
+  assert.ok(queue.includes("tags"));
+  assert.ok(queue.includes("message"));
+  assert.equal(queue.length, 10);
+  const seen = new Set<string | null>();
+  let cursor = 0;
+  for (let index = 0; index < queue.length; index += 1) {
+    const step = nextNoticeListType(cursor);
+    seen.add(step.type);
+    cursor = step.next;
+  }
+  assert.equal(seen.size, queue.length);
+  clearNotificationListPlans();
+  const calls: string[] = [];
+  const respond = (url: string) => {
+    calls.push(new URL(url).pathname);
+    if (url.endsWith(notificationCountPath())) return json(200, { all: 1, message: 1 });
+    if (url.endsWith("/users/me")) return json(200, { notificationsCount: 10, chatMessagesCount: 6, newTagsCount: 9 });
+    return json(200, { list: [], hasMore: false });
+  };
+  for (let index = 0; index < queue.length; index += 1) {
+    calls.length = 0;
+    await fetchSignedNotifications(state(), { ...deps([], respond), accountId: "acc-tags" });
+    assert.equal(calls.length, 3, "lista, contador y users/me: tres GET por pasada");
+  }
+  clearNotificationListPlans();
+});
+
+test("los contadores salen de OnlyFans: Notificaciones 10, Etiquetas 9, Promociones 1, Mensajes 6", async () => {
+  clearNotificationListPlans();
+  // Caso de Jose (3zk7kbr): /notifications/count trae all=1 (sin Etiquetas) y message=1.
+  // La barra lateral de OnlyFans enseña notificationsCount=10 y chatMessagesCount=6.
+  const read = await fetchSignedNotifications(state(), deps([], (url) => {
+    if (url.endsWith(notificationCountPath())) return json(200, { all: 1, subscribed: 0, purchases: 0, tip: 0, commented: 0, mentioned: 0, favorited: 0, message: 1, deactivated_media: 0 });
+    if (url.endsWith("/users/me")) return json(200, { notificationsCount: 10, chatMessagesCount: 6, newTagsCount: 9 });
+    return json(200, { list: [], hasMore: false });
+  }));
+  assert.equal(read.counts?.all, 10);
+  assert.equal(read.counts?.tags, 9);
+  assert.equal(read.counts?.promotions, 1);
+  assert.equal(read.chatUnread, 6);
+  assert.equal(read.motivo, "ok");
+});
+
+test("sin notificationsCount en users/me, el total se queda con el del contador y no se inventa", () => {
+  const base = { all: 1, subscriptions: 0, purchases: 0, tips: 0, tags: null, comments: 0, mentions: 0, likes: 0, promotions: 1, onlyfans: 0 };
+  assert.equal(withMe(base, { notifications: null, chats: null, tags: null })?.all, 1);
+  assert.equal(withMe(base, { notifications: null, chats: null, tags: 9 })?.tags, 9);
+  assert.equal(withMe(null, { notifications: null, chats: 3, tags: null }), null);
+  assert.equal(withMe(null, { notifications: 10, chats: null, tags: null })?.all, 10);
+});
+
+test("marcar leído relee users/me y no pierde Etiquetas ni el total de la barra lateral", async () => {
+  const result = await dispatchNotificationMark({
+    flag: "true",
+    allowlist: "3zk7kbr",
+    account: { creatorId: "3zk7kbr", accountId: "acc", handle: null, userId: null, label: null },
+    state: state(),
+    deps: deps([], (url) => {
+      if (url.endsWith(notificationCountPath())) return json(200, { all: 0, message: 0 });
+      if (url.endsWith("/users/me")) return json(200, { notificationsCount: 9, chatMessagesCount: 6, newTagsCount: 9 });
+      return json(200, { success: true });
+    }),
+    scope: { all: true, types: [] },
+  });
+  assert.equal(result.wrote, true);
+  assert.equal(result.counts?.all, 9);
+  assert.equal(result.counts?.tags, 9);
+  assert.equal(result.chatUnread, 6);
+});
+
+
+test("solo me gusta, PPV, propinas y suscripciones llevan al chat; el resto solo se ve", () => {
+  for (const kind of ["like", "ppv", "tip", "subscription", "renewal"] as const) assert.equal(notificationOpensChat(kind), true, kind);
+  for (const kind of ["tag", "promotion", "comment", "mention", "system", "message", "agency", "other"] as const) assert.equal(notificationOpensChat(kind), false, kind);
+  assert.equal(notificationActionText("tip"), "Ha enviado una propina");
+  assert.equal(notificationActionText("other"), null);
+});
