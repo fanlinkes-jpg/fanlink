@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { authMiddleware } from "@/lib/auth/middleware";
 import { normalizeDashboardConfig } from "@/lib/dashboard-config";
 import type { DataSlice } from "@/lib/crm";
+import type { WorkspaceSlice } from "@/lib/access-policy";
 
 export type SharedSlice = Pick<
   DataSlice,
@@ -53,6 +54,7 @@ export const loadWorkspace = createServerFn({ method: "GET" })
   .handler(async ({ context }) => {
     const { getSql } = await import("@/lib/db");
     const { ensureStaff } = await import("@/lib/workspace-store");
+    const { scopeWorkspaceFor } = await import("@/lib/access-policy");
     const { DEV_USER_ID, authConfigured } = await import("@/lib/auth/verify.server");
     const sql = await getSql();
     const devMode = !authConfigured && context.userId === DEV_USER_ID;
@@ -63,7 +65,9 @@ export const loadWorkspace = createServerFn({ method: "GET" })
     const row = rows[0];
     if (!row) return { state: null as SharedSlice | null, version: 0, access };
     const state = typeof row.state === "string" ? (JSON.parse(row.state) as SharedSlice) : row.state;
-    return { state, version: Number(row.version), access };
+    // Un miembro recibe solo sus creadoras asignadas. La dueña, todo.
+    const scoped = scopeWorkspaceFor(access, state as unknown as WorkspaceSlice) as unknown as SharedSlice;
+    return { state: scoped, version: Number(row.version), access };
   });
 
 export const saveWorkspace = createServerFn({ method: "POST" })

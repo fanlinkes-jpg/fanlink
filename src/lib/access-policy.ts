@@ -84,22 +84,34 @@ export function assertOwnerForce(access: TeamAccess | null): void {
   throw new WorkspaceAccessError("Solo la dueña puede forzar la sincronización.");
 }
 
-export function canOperateCreator(access: TeamAccess | null, creatorId: string, perm: TeamPerm): boolean {
-  if (!hasPerm(access, perm)) return false;
-  if (!access) return false;
+export type CreatorScope = { role: TeamRole; creatorIds: readonly string[] };
+
+/** La dueña ve todas las cuentas. Un miembro solo las que tienen una asignación activa (`creator_grant`). */
+export function canAccessCreator(access: CreatorScope | null, creatorId: string): boolean {
+  if (!access || !creatorId) return false;
   if (access.role === "owner") return true;
-  // Los chats son comunes: el permiso de mensajes no se recorta por cuenta asignada.
-  if (perm === "mensajes") return true;
   return access.creatorIds.includes(creatorId);
 }
 
-/** Las conversaciones son de todo el equipo. La asignación de cuenta no las recorta. */
-export function creatorIdsForChats(access: TeamAccess | null, allCreatorIds: string[]): string[] {
-  if (access?.role !== "owner" && access?.role !== "member") return [];
-  return allCreatorIds;
+export function assertCreatorAccess(access: CreatorScope | null, creatorId: string, message = "Esa cuenta no está asignada a tu usuario."): void {
+  if (!canAccessCreator(access, creatorId)) throw new WorkspaceAccessError(message);
 }
 
-export function canSeeAgencyEarnings(access: TeamAccess | null): boolean {
+export function canOperateCreator(access: TeamAccess | null, creatorId: string, perm: TeamPerm): boolean {
+  if (!hasPerm(access, perm)) return false;
+  return canAccessCreator(access, creatorId);
+}
+
+/** Cuentas cuyas conversaciones, fichas, bóveda y contadores puede leer esta persona: la dueña todas, un miembro las asignadas. */
+export function creatorIdsForChats(access: CreatorScope | null, allCreatorIds: string[]): string[] {
+  if (!access) return [];
+  if (access.role === "owner") return allCreatorIds;
+  const allowed = new Set(access.creatorIds);
+  return [...new Set(allCreatorIds.filter((id) => allowed.has(id)))];
+}
+
+/** Totales de la agencia, ingresos y comisiones: solo la dueña. */
+export function canSeeAgencyEarnings(access: { role: TeamRole } | null): boolean {
   return access?.role === "owner";
 }
 
@@ -107,6 +119,102 @@ export function canSeeChatterFigures(access: TeamAccess | null, subjectUserId: s
   if (!access) return false;
   if (access.role === "owner") return true;
   return access.userId === subjectUserId;
+}
+
+function recordScope(record: WorkspaceRecord): string {
+  return record.creatorId ?? record.id;
+}
+
+/** Cifras de dinero de una creadora o campaña que un miembro nunca recibe. */
+const CREATOR_MONEY_KEYS = ["revenue30", "split"] as const;
+
+function maskCreatorMoney(record: WorkspaceRecord): WorkspaceRecord {
+  const copy: Record<string, unknown> = { ...record };
+  if ("revenue30" in copy) copy.revenue30 = null;
+  if ("split" in copy) copy.split = 0;
+  return copy as WorkspaceRecord;
+}
+
+function maskCampaign(campaign: unknown): unknown {
+  if (!campaign || typeof campaign !== "object" || !("earned" in campaign)) return campaign;
+  return { ...(campaign as Record<string, unknown>), earned: 0 };
+}
+
+/**
+ * Lo que el servidor entrega del espacio compartido. La dueña lo recibe entero. Un miembro solo recibe las
+ * creadoras asignadas con sus fans, mensajes, bóveda y enlaces, sin comisión ni ingresos, y sin el histórico de la agencia.
+ */
+export function scopeWorkspaceFor(access: TeamAccess | null, slice: WorkspaceSlice): WorkspaceSlice {
+  if (!access) return emptyWorkspace();
+  if (canSeeAgencyEarnings(access)) return slice;
+  const allowed = new Set(access.creatorIds);
+  const keep = (record: WorkspaceRecord) => allowed.has(recordScope(record));
+  return {
+    ...slice,
+    creators: slice.creators.filter(keep).map(maskCreatorMoney),
+    fans: slice.fans.filter(keep),
+    messages: slice.messages.filter(keep),
+    vault: slice.vault.filter(keep),
+    links: slice.links.filter(keep),
+    campaigns: slice.campaigns.map(maskCampaign),
+    history: [],
+  };
+}
+
+function mergeRecords(
+  access: TeamAccess,
+  prev: WorkspaceRecord[],
+  next: WorkspaceRecord[],
+  restore?: (before: WorkspaceRecord, after: WorkspaceRecord) => WorkspaceRecord,
+): WorkspaceRecord[] {
+  const allowed = new Set(access.creatorIds);
+  const nextById = new Map(next.map((record) => [record.id, record]));
+  const merged: WorkspaceRecord[] = [];
+  const seen = new Set<string>();
+  for (const before of prev) {
+    seen.add(before.id);
+    const after = nextById.get(before.id);
+    if (after) {
+      merged.push(restore ? restore(before, after) : after);
+    } else if (!allowed.has(recordScope(before))) {
+      merged.push(before);
+    }
+  }
+  for (const after of next) if (!seen.has(after.id)) merged.push(after);
+  return merged;
+}
+
+/**
+ * El miembro guarda lo que recibió, que es una parte. Se junta con lo que no ve para no borrarlo, y las cifras de
+ * dinero que no recibió se conservan. Lo que toque fuera de sus cuentas queda en `assertWorkspaceChange`.
+ */
+export function mergeScopedWorkspace(access: TeamAccess, prev: WorkspaceSlice, next: WorkspaceSlice): WorkspaceSlice {
+  if (canSeeAgencyEarnings(access)) return next;
+  const keepMoney = (before: WorkspaceRecord, after: WorkspaceRecord): WorkspaceRecord => {
+    const restored: Record<string, unknown> = { ...after };
+    for (const key of CREATOR_MONEY_KEYS) if (key in before) restored[key] = (before as Record<string, unknown>)[key];
+    return restored as WorkspaceRecord;
+  };
+  const earnedBefore = new Map(
+    prev.campaigns.flatMap((campaign) => {
+      const row = campaign as { id?: string; earned?: unknown } | null;
+      return row && typeof row.id === "string" ? [[row.id, row.earned] as const] : [];
+    }),
+  );
+  return {
+    ...next,
+    creators: mergeRecords(access, prev.creators, next.creators, keepMoney),
+    fans: mergeRecords(access, prev.fans, next.fans),
+    messages: mergeRecords(access, prev.messages, next.messages),
+    vault: mergeRecords(access, prev.vault, next.vault),
+    links: mergeRecords(access, prev.links, next.links),
+    campaigns: next.campaigns.map((campaign) => {
+      const row = campaign as { id?: string; earned?: unknown } | null;
+      if (!row || typeof row.id !== "string" || !earnedBefore.has(row.id)) return campaign;
+      return { ...row, earned: earnedBefore.get(row.id) };
+    }),
+    history: prev.history,
+  };
 }
 
 export function assertWorkspaceChange(access: TeamAccess, prev: WorkspaceSlice, next: WorkspaceSlice): void {
@@ -168,7 +276,7 @@ function assertRecords(
     if (!access.perms.includes(perm)) {
       throw new WorkspaceAccessError(message);
     }
-    if (perm !== "mensajes" && !access.creatorIds.includes(creatorId)) {
+    if (!access.creatorIds.includes(creatorId)) {
       throw new WorkspaceAccessError(message);
     }
   }
@@ -189,6 +297,14 @@ function changedIds(prev: WorkspaceRecord[], next: WorkspaceRecord[]): string[] 
   return changed;
 }
 
+/** jsonb no conserva el orden de las claves: se compara sin depender de él. */
 function same(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  return canonical(left) === canonical(right);
+}
+
+function canonical(value: unknown): string {
+  return JSON.stringify(value, (_key, item: unknown) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+    return Object.fromEntries(Object.entries(item as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+  });
 }

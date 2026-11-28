@@ -1,6 +1,8 @@
 import {
   assertWorkspaceChange,
   emptyWorkspace,
+  mergeScopedWorkspace,
+  scopeWorkspaceFor,
   TEAM_PERMS,
   type TeamAccess,
   type TeamPerm,
@@ -181,10 +183,12 @@ export async function commitWorkspace(
 ): Promise<SaveResult> {
   const current = await readState(sql);
   if (current.version !== expectedVersion) {
-    return { ok: false, reason: "conflict", version: current.version, state: current.state, updatedBy: current.updatedBy };
+    return { ok: false, reason: "conflict", version: current.version, state: scopedState(access, current.state), updatedBy: current.updatedBy };
   }
+  const prior = current.state ?? emptyWorkspace();
+  const merged = mergeScopedWorkspace(access, prior, next);
   try {
-    assertWorkspaceChange(access, current.state ?? emptyWorkspace(), next);
+    assertWorkspaceChange(access, prior, merged);
   } catch (error) {
     if (error instanceof WorkspaceAccessError) return { ok: false, reason: "forbidden", message: error.message };
     throw error;
@@ -195,11 +199,11 @@ export async function commitWorkspace(
        values (1, $1::jsonb, 1, $2)
        on conflict (id) do nothing
        returning version`,
-      [JSON.stringify(next), userId],
+      [JSON.stringify(merged), userId],
     );
     if (!inserted[0]) {
       const again = await readState(sql);
-      return { ok: false, reason: "conflict", version: again.version, state: again.state, updatedBy: again.updatedBy };
+      return { ok: false, reason: "conflict", version: again.version, state: scopedState(access, again.state), updatedBy: again.updatedBy };
     }
     return { ok: true, version: Number(inserted[0].version) };
   }
@@ -208,13 +212,18 @@ export async function commitWorkspace(
      set state = $1::jsonb, version = version + 1, updated_at = now(), updated_by = $2
      where id = 1 and version = $3
      returning version`,
-    [JSON.stringify(next), userId, expectedVersion],
+    [JSON.stringify(merged), userId, expectedVersion],
   );
   if (!updated[0]) {
     const again = await readState(sql);
-    return { ok: false, reason: "conflict", version: again.version, state: again.state, updatedBy: again.updatedBy };
+    return { ok: false, reason: "conflict", version: again.version, state: scopedState(access, again.state), updatedBy: again.updatedBy };
   }
   return { ok: true, version: Number(updated[0].version) };
+}
+
+/** El estado compartido tal como lo puede ver esta persona. */
+export function scopedState(access: TeamAccess, state: WorkspaceSlice | null): WorkspaceSlice | null {
+  return state ? scopeWorkspaceFor(access, state) : null;
 }
 
 async function readState(sql: SqlQuery): Promise<{ version: number; state: WorkspaceSlice | null; updatedBy: string | null }> {
