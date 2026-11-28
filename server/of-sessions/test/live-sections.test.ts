@@ -77,9 +77,9 @@ test("solo la dueña abre la sección de notificaciones", () => {
   if (!denied.ok) assert.match(denied.reason, /dueña/);
 });
 
-test("el menú de Operativa tiene las 13 secciones y rutas fijas de OnlyFans", () => {
+test("el menú de Operativa tiene las 12 secciones y rutas fijas de OnlyFans", () => {
   assert.deepEqual(DESK_PAGES.map((page) => page.label), [
-    "Inicio", "Nuevo post", "Notificaciones", "Mensajes", "Bóveda", "Archivo", "Colecciones",
+    "Inicio", "Nuevo post", "Notificaciones", "Bóveda", "Archivo", "Colecciones",
     "Estados de cuenta", "Estadísticas", "Banco", "Mi perfil", "Ajustes de OF", "Release forms",
   ]);
   assert.equal(deskPageUrl(parseDeskPage("notifications")!), "https://onlyfans.com/my/notifications");
@@ -95,6 +95,9 @@ test("el cliente solo elige por clave: una URL o una clave rara no vale", () => 
   assert.equal(parseDeskPage(""), null);
   assert.equal(parseDeskPage(undefined), null);
   assert.equal(parseDeskPage("banking")?.id, "banking");
+  assert.equal(parseDeskPage("chats"), null);
+  assert.equal(parseDeskPage("messages"), null);
+  assert.equal(DESK_PAGES.some((page) => page.path.startsWith("/my/chats")), false);
 });
 
 test("una zona cerrada solo se abre con la ruta de la entrada elegida", () => {

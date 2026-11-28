@@ -58,7 +58,6 @@ export const DESK_PAGES = [
   { id: "home", label: "Inicio", path: "/", restricted: false },
   { id: "new-post", label: "Nuevo post", path: "/posts/create", restricted: false },
   { id: "notifications", label: "Notificaciones", path: "/my/notifications", restricted: false },
-  { id: "chats", label: "Mensajes", path: "/my/chats", restricted: false },
   { id: "vault", label: "Bóveda", path: "/my/vault", restricted: false },
   { id: "archive", label: "Archivo", path: "/my/collections/post-labels/archived", restricted: false },
   { id: "collections", label: "Colecciones", path: "/my/collections", restricted: false },

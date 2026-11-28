@@ -1,5 +1,5 @@
 import { useState, type ComponentType } from "react";
-import { Archive, BarChart3, Bell, FileSignature, House, Landmark, Layers, Lock, MessageCircle, Receipt, Settings, SquarePen, User } from "lucide-react";
+import { Archive, BarChart3, Bell, FileSignature, House, Landmark, Layers, Lock, Receipt, Settings, SquarePen, User } from "lucide-react";
 import { ComingSoonPage } from "@/features/coming-soon-page";
 import { LiveOfViewer } from "@/features/live-of-viewer";
 import { useCrm } from "@/lib/crm";
@@ -9,7 +9,6 @@ const PAGE_ICONS: Record<DeskPageId, ComponentType<{ className?: string; "aria-h
   home: House,
   "new-post": SquarePen,
   notifications: Bell,
-  chats: MessageCircle,
   vault: Lock,
   archive: Archive,
   collections: Layers,
