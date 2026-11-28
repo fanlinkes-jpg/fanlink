@@ -164,7 +164,7 @@ export type CreatorChatList = {
     mediaCount: number | null;
     mediaSeconds: number | null;
     mediaPreview: string | null;
-    media: Array<{ kind: "foto" | "video" | "audio" | null; seconds: number | null; preview: string | null; full: string | null; locked: boolean | null; priceCents: number | null; paid: boolean | null; opened: boolean | null }> | null;
+    media: Array<{ kind: "foto" | "video" | "audio" | null; seconds: number | null; preview: string | null; full: string | null; locked: boolean | null; priceCents: number | null; paid: boolean | null; opened: boolean | null; tags?: Array<{ name: string | null; username: string | null }> }> | null;
     liked: boolean | null;
     replyBody: string | null;
     eventKind: "compra" | "propina" | null;

@@ -79,7 +79,12 @@ export type ChatMedia = {
   priceCents: number | null;
   paid: boolean | null;
   opened: boolean | null;
+  /** Cuentas etiquetadas en el mensaje (`releaseForms` de OnlyFans). Solo si el JSON las trae. */
+  tags?: ChatTag[];
 };
+
+/** Una cuenta etiquetada. OnlyFans las manda en `releaseForms[].name` y `releaseForms[].user.username`. */
+export type ChatTag = { name: string | null; username: string | null };
 
 export type FanMessageEvent = {
   id: string;
@@ -551,7 +556,7 @@ function messageFrom(
   accountId: string | null,
   source: "page" | "socket" = "page",
 ): ChatMessage | null {
-  const body = visibleText(record.text ?? record.body, 2000) ?? "";
+  const body = messageText(record.text ?? record.body, 2000) ?? "";
   const sentAt = iso(record.createdAt ?? record.created_at ?? record.at);
   const messageKey = clean(record.id, 40);
   const media = mediaItems(record);
@@ -637,6 +642,7 @@ export function mediaItems(record: Record<string, unknown>): ChatMedia[] {
   if (!Array.isArray(raw)) return [];
   const messagePrice = priceCents(record.price ?? record.ppvPrice);
   const messagePaid = purchasedFlag(record, messagePrice, record.isMine === true || record.isFromMe === true);
+  const tags = releaseTags(record);
   return raw.flatMap((item) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) return [];
     const row = item as Record<string, unknown>;
@@ -649,6 +655,7 @@ export function mediaItems(record: Record<string, unknown>): ChatMedia[] {
     const locked = typeof row.canView === "boolean" ? row.canView === false : typeof row.isLocked === "boolean" ? row.isLocked === true : null;
     const opened = typeof row.isOpened === "boolean" ? row.isOpened : null;
     return [{
+      ...(tags.length > 0 ? { tags } : {}),
       kind: mediaKind(row.type ?? row.mediaType),
       seconds,
       preview,
@@ -659,6 +666,28 @@ export function mediaItems(record: Record<string, unknown>): ChatMedia[] {
       opened,
     }];
   });
+}
+
+/** Etiquetas del mensaje: quién va etiquetado en el medio. OnlyFans las manda por mensaje, no por medio. */
+export function releaseTags(record: Record<string, unknown>): ChatTag[] {
+  const raw = record.releaseForms;
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const tags: ChatTag[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const row = item as Record<string, unknown>;
+    const user = nested(row.user);
+    const name = clean(row.name, 60) ?? clean(user?.name, 60);
+    const username = clean(user?.username, 60)?.replace(/^@+/, "") ?? null;
+    if (!name && !username) continue;
+    const key = (username ?? name ?? "").toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    tags.push({ name: name ?? null, username });
+    if (tags.length >= 8) break;
+  }
+  return tags;
 }
 
 function mediaKind(value: unknown): ChatMedia["kind"] {
@@ -922,6 +951,29 @@ function iso(value: unknown): string | null {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return null;
   return parsed.toISOString();
+}
+
+/** Texto del mensaje con los párrafos y saltos de línea de OnlyFans. Una línea por párrafo. */
+function messageText(value: unknown, max: number): string | null {
+  const raw = clean(value, max * 4);
+  if (!raw) return null;
+  const text = raw
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<\/div>/gi, "\n")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&quot;/gi, '"')
+    .split("\n")
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n");
+  if (!text) return null;
+  return text.slice(0, max);
 }
 
 function visibleText(value: unknown, max: number): string | null {
