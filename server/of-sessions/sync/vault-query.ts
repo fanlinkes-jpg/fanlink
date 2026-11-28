@@ -70,15 +70,11 @@ export function lockedChatterId(actor: { role: string; userId: string }, request
   return trimmed ? trimmed.slice(0, 80) : actor.userId;
 }
 
+/** Fallo cerrado: un miembro sin lista de cuentas no entra en ninguna. La dueña entra en todas. */
 export function creatorAllowed(actor: VaultActor, creatorId: string): boolean {
-  if (!actor.creatorIds) return true;
-  const access = {
-    userId: actor.userId,
-    role: actor.role,
-    perms: actor.perms,
-    creatorIds: [...actor.creatorIds],
-  };
-  return creatorIdsForChats(access, [...actor.creatorIds]).includes(creatorId);
+  if (!creatorId) return false;
+  if (actor.role === "owner") return true;
+  return creatorIdsForChats({ role: actor.role, creatorIds: actor.creatorIds ?? [] }, [creatorId]).includes(creatorId);
 }
 
 export function presentGap(value: unknown): string {

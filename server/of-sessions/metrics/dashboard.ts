@@ -1,3 +1,4 @@
+import { canSeeAgencyEarnings } from "../../../src/lib/access-policy.ts";
 import { changeRatio, creatorReport, type MetricEarning, type MetricFan, type MetricTx } from "../../../src/lib/creator-metrics.ts";
 import { dashboardCreatorIds } from "../../../src/lib/dashboard-config.ts";
 
@@ -39,7 +40,7 @@ export function dashboardViewFor(input: {
   const visible = input.accounts.filter((account) => account.creatorId && ids.includes(account.creatorId));
   const reads = input.reads.filter((row) => ids.includes(row.creatorId));
   const byCreator = new Map(reads.map((row) => [row.creatorId, row]));
-  const owner = input.access.role === "owner";
+  const owner = canSeeAgencyEarnings(input.access);
   const bundle = {
     now: input.now,
     earningsSynced: reads.some((row) => row.earningsSyncedAt),

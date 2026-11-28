@@ -172,7 +172,7 @@ export async function handleVaultSend(request: Request, deps: {
   const record = body && typeof body === "object" ? body as Record<string, unknown> : {};
   const mode = record.mode === "mass" ? "mass" : "chat";
   const creatorId = typeof record.creatorId === "string" ? record.creatorId : "";
-  if (creatorId && !creatorAllowed(actor, creatorId)) {
+  if ((creatorId || actor.role !== "owner") && !creatorAllowed(actor, creatorId)) {
     return Response.json({ sent: false, opened: false, reason: "Sin datos" }, { status: 403 });
   }
   const itemIds = Array.isArray(record.itemIds) ? record.itemIds.filter((item): item is string => typeof item === "string") : [];
