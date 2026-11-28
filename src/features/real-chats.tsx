@@ -52,7 +52,6 @@ import {
   type OutboundSend,
 } from "@/lib/send-queue";
 import { spendTone } from "@/lib/spend-tiers";
-import { FAN_SEGMENT_IDS, isFanSegmentId, matchesSegmentFilter, segmentLabel, type FanSegmentId } from "@/lib/fan-segments";
 import { rowSpendCents } from "@/lib/row-spend";
 import { FanSpendLabel } from "@/lib/fan-spend-label";
 import { useInboxSelection } from "@/lib/inbox-selection";
@@ -403,7 +402,6 @@ export function RealChatsPage() {
   const [composerError, setComposerError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [filter, setFilter] = useState<InboxPill>("todos");
-  const [segmentFilter, setSegmentFilter] = useState<FanSegmentId | "all">("all");
   const [fetchedSpend, setFetchedSpend] = useState<Record<string, number | null>>({});
   const [onlineOpen, setOnlineOpen] = useState(false);
   const [onlineBusy, setOnlineBusy] = useState(false);
@@ -770,10 +768,7 @@ export function RealChatsPage() {
   const tipped = tipThreads(accountMessages, threads);
   const inbox = useInboxSelection({
     threads: threads.map((thread) => ({ ...thread, id: `${thread.creatorId}:${thread.threadKey}` })),
-    matches: (thread) => matchesInboxPill(thread, filter, tipped) && matchesSegmentFilter(segmentFilter, {
-      spentCents: thread.spentCents ?? (thread.fanKey ? fetchedSpend[`${thread.creatorId}:${thread.fanKey}`] ?? null : null),
-      subscribedAt: thread.subStartedAt ?? null,
-    }, new Date()),
+    matches: (thread) => matchesInboxPill(thread, filter, tipped),
     hidden: (thread) => marks.hidden.includes(threadMark(thread.creatorId, thread.threadKey)),
     showHidden,
     pinnedAt: (thread) => (thread.fanKey ? flags.find((item) => item.creatorId === thread.creatorId && item.fanKey === thread.fanKey)?.pinnedAt ?? null : null),
@@ -1637,16 +1632,6 @@ export function RealChatsPage() {
                 {label} {viewBlocked ? "" : count == null ? "· Sin datos" : accountFigure({ sessionRejected: false, connection: "live" }, count)}
               </button>
             ))}
-            <select
-              aria-label="Segmento"
-              data-testid="chat-segment-filter"
-              value={segmentFilter}
-              onChange={(event) => setSegmentFilter(isFanSegmentId(event.target.value) ? event.target.value : "all")}
-              className="rounded-full bg-[#f3f4f6] px-2 py-1 text-xs text-[#6d7585]"
-            >
-              <option value="all">Segmento: todos</option>
-              {FAN_SEGMENT_IDS.map((id) => <option key={id} value={id}>{segmentLabel(id)}</option>)}
-            </select>
             {sessionNotices.length > 0 && !viewBlocked ? <p className="w-full text-[10px] text-[#8a5a12]">{sessionNotices.join(" · ")}</p> : null}
             {marks.hidden.length > 0 ? (
               <button type="button" onClick={() => setShowHidden((open) => !open)} className={`rounded-full px-3 py-1 text-xs ${showHidden ? "bg-[#3b6cff] text-white" : "bg-[#f3f4f6] text-[#6d7585]"}`}>Ocultos {marks.hidden.length}</button>
