@@ -114,6 +114,21 @@ export function UserButton() {
         </span>
       )}
       <span className="text-sm font-medium">{label}</span>
+      {!authEnabled && !user.isDevFallback && (
+        <button
+          type="button"
+          disabled={signingOut}
+          onClick={() => {
+            setSigningOut(true);
+            void fetch("/api/staff-login", { method: "DELETE" })
+              .then(() => window.location.assign("/login"))
+              .catch(() => setSigningOut(false));
+          }}
+          className="cursor-pointer text-sm underline-offset-4 opacity-70 hover:underline disabled:cursor-wait disabled:no-underline"
+        >
+          {signingOut ? "Saliendo…" : "Cerrar sesión"}
+        </button>
+      )}
       {authEnabled && !gateSession && (
         <button
           type="button"
