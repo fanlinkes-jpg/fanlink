@@ -107,7 +107,10 @@ test("la misma venta no se reparte entre dos chatters", () => {
       { creatorId: "c-alba", threadKey: "7", fanKey: "7", at: "2026-11-03T14:10:00.000Z", fromFan: false, priceCents: null, purchased: null, authorId: "b" },
     ],
   });
-  assert.equal(reports.every((row) => row.grossCents == null), true);
+  // Una propina es del último chatter que habló con el fan: una sola persona, nunca repartida.
+  assert.equal(reports.find((row) => row.userId === "a")?.grossCents, null);
+  assert.equal(reports.find((row) => row.userId === "b")?.grossCents, 800);
+  assert.equal(reports.reduce((sum, row) => sum + (row.grossCents ?? 0), 0), 800);
 });
 
 test("la primera respuesta cuenta un turno, no cada mensaje del fan", () => {

@@ -42,15 +42,34 @@ test("la dueña invita, el empleado acepta, entra con correo y contraseña y sol
     await owner.goto(`${base}/equipo`, { waitUntil: "domcontentloaded" });
     await owner.getByTestId("employees-table").waitFor();
     assert.match(owner.url(), /tab=empleados/);
+    // Título del grupo y filtros del estilo Infloww.
+    await owner.getByRole("heading", { name: "FANLINK MANAGEMENT" }).waitFor();
+    for (const label of ["Por empleado", "Por creador", "Por estado"]) await owner.getByLabel(label, { exact: true }).waitFor();
+    await owner.getByRole("button", { name: "Reestablecer" }).waitFor();
+    await owner.getByRole("button", { name: "Buscar" }).waitFor();
+    const ownerRow = owner.getByTestId("employee-row").filter({ hasText: "Dueña" });
+    assert.equal(await ownerRow.getAttribute("data-owner"), "true");
+    assert.equal(await ownerRow.getByRole("button", { name: /Editar/ }).count(), 0, "la fila del owner no se edita");
+    assert.equal(await ownerRow.getByRole("checkbox").isDisabled(), true);
     await owner.getByRole("button", { name: "Añadir empleado" }).click();
     const dialog = owner.getByRole("dialog", { name: "Añadir empleado" });
-    await dialog.getByLabel("Nombre").fill("Marta Ruiz");
-    await dialog.getByLabel("Correo").fill("marta@example.com");
-    await dialog.getByLabel("Rol").selectOption("chatter");
-    assert.equal(await dialog.getByLabel("Rol").locator("option", { hasText: "Owner" }).count(), 0, "Owner no se puede asignar");
-    await dialog.getByLabel("Alba").check();
-    await dialog.getByLabel("Nora").check();
-    await dialog.getByRole("button", { name: "Guardar e invitar" }).click();
+    await dialog.getByLabel("Nombre de empleado").fill("Marta Ruiz");
+    await dialog.getByLabel("Correo electrónico").fill("marta@example.com");
+    await dialog.getByLabel("Grupo").waitFor();
+    assert.equal(await dialog.getByLabel("Añadir rol").locator("option", { hasText: "Owner" }).count(), 0, "Owner no se puede asignar");
+    assert.equal(await dialog.getByLabel("Añadir rol").locator("option", { hasText: "Admin" }).count(), 1);
+    await dialog.getByLabel("Asignar creador(es)").selectOption("c-alba");
+    await dialog.getByLabel("Asignar creador(es)").selectOption("c-nora");
+    await dialog.getByTestId("creator-chips").getByText("Alba - alba").waitFor();
+    await dialog.getByRole("button", { name: "Guardar", exact: true }).click();
+    // Al dar de alta sale el pop-up con los permisos del rol premarcados; el chatter no puede tener dinero.
+    const altaPerms = owner.getByRole("dialog", { name: "Permisos del rol" });
+    await altaPerms.waitFor();
+    assert.equal(await altaPerms.locator('input[data-perm="mensajes"]').isChecked(), true);
+    assert.equal(await altaPerms.locator('input[data-perm="precios"]').isChecked(), false);
+    assert.equal(await altaPerms.locator('input[data-perm="banco"]').isDisabled(), true);
+    for (const group of ["Workspace", "Team Mgmt", "Analytics", "Chat", "Account Settings", "Statements"]) await altaPerms.getByRole("group", { name: group }).waitFor();
+    await altaPerms.getByRole("button", { name: "Confirmar y añadir" }).click();
     // Sin RESEND_API_KEY no falla: enseña el enlace para copiarlo.
     const delivery = owner.getByTestId("invite-delivery");
     await delivery.waitFor();
@@ -63,6 +82,7 @@ test("la dueña invita, el empleado acepta, entra con correo y contraseña y sol
     assert.match(await row.innerText(), /Invitado/);
     assert.match(await row.innerText(), /Alba/);
     assert.match(await row.innerText(), /Chatter/);
+    assert.match(await row.innerText(), /Alba, Nora/);
     assert.equal(await owner.getByTestId("employee-row").filter({ hasText: "Tercera" }).count(), 0);
 
     // Entrar sin invitación no da acceso: un enlace inventado no abre nada.
@@ -117,56 +137,111 @@ test("la dueña invita, el empleado acepta, entra con correo y contraseña y sol
     const activeRow = owner.getByTestId("employee-row").filter({ hasText: "Marta Ruiz" });
     await activeRow.waitFor();
     assert.match(await activeRow.innerText(), /Activado/);
-    await owner.getByLabel("Filtrar por estado").selectOption("invited");
-    assert.equal(await owner.getByTestId("employee-row").filter({ hasText: "Marta Ruiz" }).count(), 0);
-    await owner.getByLabel("Filtrar por estado").selectOption("active");
-    await activeRow.waitFor();
-    await owner.getByLabel("Filtrar por creadora").selectOption("c-nora");
-    await activeRow.waitFor();
-    await owner.getByLabel("Filtrar por creadora").selectOption("c-tercera");
+    // El buscador es instantáneo: filtra al escribir o elegir, sin pulsar Buscar. Reestablecer limpia.
+    const filter = async (who: string, creator: string, status: string) => {
+      await owner.getByLabel("Por empleado", { exact: true }).fill(who);
+      await owner.getByLabel("Por creador", { exact: true }).selectOption(creator);
+      await owner.getByLabel("Por estado", { exact: true }).selectOption(status);
+    };
+    await filter("", "todas", "invited");
     await activeRow.waitFor({ state: "detached" });
-    await owner.getByLabel("Filtrar por creadora").selectOption("todas");
-    await owner.getByLabel("Filtrar por estado").selectOption("todos");
-    await owner.screenshot({ path: shotFile("personal-empleados.png") });
+    await filter("", "todas", "active");
+    await activeRow.waitFor();
+    await filter("", "c-nora", "active");
+    await activeRow.waitFor();
+    await filter("", "c-tercera", "active");
+    await activeRow.waitFor({ state: "detached" });
+    await filter("mar", "todas", "todos");
+    await activeRow.waitFor();
+    assert.equal(await owner.getByTestId("employee-row").count(), 1);
+    await owner.getByRole("button", { name: "Reestablecer" }).click();
+    assert.equal(await owner.getByLabel("Por empleado", { exact: true }).inputValue(), "");
+    await oldRow.waitFor();
+    // Última conexión: la dueña acaba de entrar; Marta entró al aceptar; una invitación no tiene.
+    assert.match(await ownerRow.getByTestId("employee-last-seen").innerText(), /Ahora|hace \d+ min/);
+    assert.match(await activeRow.getByTestId("employee-last-seen").innerText(), /Ahora|hace \d+ min/);
+    assert.equal(await oldRow.getByTestId("employee-last-seen").innerText(), "Nunca");
+    await owner.getByTestId("employees-card").screenshot({ path: shotFile("personal-tabla-empleados.png") });
 
-    // 4b. Editar reúne permisos, creadoras y avisos por teléfono en secciones.
+    // Turnos queda debajo de la tabla con el mismo ancho, título y estilo de tabla.
+    const table = await owner.getByTestId("employees-card").boundingBox();
+    const turnos = owner.getByTestId("turnos-card");
+    await turnos.getByRole("heading", { name: "Turnos" }).waitFor();
+    const shifts = await turnos.boundingBox();
+    assert.ok(table && shifts);
+    assert.equal(Math.round(shifts.x), Math.round(table.x));
+    assert.equal(Math.round(shifts.width), Math.round(table.width));
+    assert.ok(shifts.y > table.y + table.height, "Turnos va debajo de la tabla de empleados");
+    // Las personas reales de la tabla salen en Turnos con su rol y en Métricas.
+    await turnos.getByText("Marta Ruiz").waitFor();
+    await turnos.getByText("Antiguo").waitFor();
+    await owner.getByTestId("métricas-card").getByText("Marta Ruiz").waitFor();
+    assert.equal(await turnos.locator("thead").getAttribute("class"), await owner.getByTestId("employees-table").locator("thead").getAttribute("class"));
+    await owner.screenshot({ path: shotFile("personal-turnos.png"), fullPage: true });
+
+    // 4b. Editar: campos obligatorios, roles en chips, creadoras en chips, permisos en pop-up y avisos por teléfono.
     await activeRow.getByRole("button", { name: "Editar Marta Ruiz" }).click();
     const edit = owner.getByRole("dialog", { name: "Editar empleado" });
-    for (const section of ["Permisos", "Creadoras asignadas", "Avisos por teléfono"]) await edit.getByRole("heading", { name: section }).waitFor();
+    for (const section of ["Asignar creador(es)", "Permisos", "Avisos por teléfono"]) await edit.getByRole("heading", { name: section }).waitFor();
+    for (const label of ["Nombre de empleado*", "Correo electrónico*", "Grupo*", "Rol*"]) await edit.getByText(label, { exact: true }).waitFor();
     await owner.screenshot({ path: shotFile("empleado-editar.png") });
-    assert.equal(await edit.getByLabel("Alba").isChecked(), true);
-    assert.equal(await edit.getByLabel("Tercera").isChecked(), false);
-    assert.equal(await edit.getByLabel("Mensajes").isChecked(), true);
-    assert.equal(await edit.getByLabel("Precios").isChecked(), false);
-    await edit.getByLabel("Precios").check();
-    await edit.getByLabel("Tercera").check();
+    await edit.getByTestId("role-chips").getByText("Chatter").waitFor();
+    await edit.getByTestId("creator-chips").getByText("Alba - alba").waitFor();
+    assert.equal(await edit.getByTestId("creator-chips").getByText("Tercera - tercera").count(), 0);
+    assert.match(await edit.getByTestId("perms-summary").innerText(), /^1 permiso activos/);
+    // Cambiar el rol abre el pop-up con el preset de los dos roles sumados (Chatter + Team Manager).
+    await edit.getByLabel("Añadir rol").selectOption("team_manager");
+    const popup = owner.getByRole("dialog", { name: "Permisos del rol" });
+    await popup.waitFor();
+    assert.match(await popup.getByTestId("perms-roles").innerText(), /Chatter \+ Team Manager/);
+    for (const perm of ["mensajes", "precios", "vault", "campanas", "equipo", "analitica"]) assert.equal(await popup.locator(`input[data-perm="${perm}"]`).isChecked(), true, perm);
+    for (const perm of ["banco", "estados", "estadisticas", "todas", "ajustes"]) assert.equal(await popup.locator(`input[data-perm="${perm}"]`).isChecked(), false, perm);
+    assert.match(await popup.getByTestId("perms-summary-text").innerText(), /No podrá:.*abrir el Banco/);
+    await popup.locator('input[data-perm="banco"]').check();
+    assert.doesNotMatch(await popup.getByTestId("perms-summary-text").innerText(), /No podrá:[^.]*abrir el Banco/);
+    assert.match(await popup.getByTestId("perms-summary-text").innerText(), /Podrá:.*abrir el Banco/);
+    await owner.screenshot({ path: shotFile("permisos-popup.png") });
+    await popup.getByRole("button", { name: "Aplicar permisos" }).click();
+    await edit.getByTestId("role-chips").getByText("Team Manager").waitFor();
+    assert.match(await edit.getByTestId("perms-summary").innerText(), /^7 permisos activos/);
+    await edit.getByLabel("Asignar creador(es)").selectOption("c-tercera");
     await edit.getByLabel("WhatsApp").fill("600");
     await edit.getByRole("button", { name: "Guardar", exact: true }).click();
     await edit.getByRole("alert").getByText(/formato internacional/).waitFor();
     await edit.getByLabel("WhatsApp").fill("+34600111222");
     await edit.getByRole("checkbox", { name: "Avisos", exact: true }).check();
     await edit.getByLabel("Minutos entre avisos del mismo fan").fill("20");
-    await edit.getByLabel("Tercera").uncheck();
+    await edit.getByRole("button", { name: "Quitar Tercera - tercera" }).click();
     await edit.getByRole("button", { name: "Guardar", exact: true }).click();
     await edit.waitFor({ state: "detached" });
+    await activeRow.getByTestId("employee-roles").getByText("Chatter, Team Manager").waitFor();
     await activeRow.getByRole("button", { name: "Editar Marta Ruiz" }).click();
     const again2 = owner.getByRole("dialog", { name: "Editar empleado" });
     await again2.getByRole("heading", { name: "Permisos" }).waitFor();
-    assert.equal(await again2.getByLabel("Precios").isChecked(), true);
-    assert.equal(await again2.getByLabel("Tercera").isChecked(), false);
+    assert.match(await again2.getByTestId("perms-summary").innerText(), /^7 permisos activos/);
+    await again2.getByRole("button", { name: "Ver y editar permisos" }).click();
+    const saved = owner.getByRole("dialog", { name: "Permisos del rol" });
+    assert.equal(await saved.locator('input[data-perm="banco"]').isChecked(), true);
+    assert.equal(await saved.locator('input[data-perm="estados"]').isChecked(), false);
+    await saved.getByRole("button", { name: "Cancelar" }).click();
+    assert.equal(await again2.getByTestId("creator-chips").getByText("Tercera - tercera").count(), 0);
     assert.equal(await again2.getByLabel("WhatsApp").inputValue(), "+34600111222");
     assert.equal(await again2.getByRole("checkbox", { name: "Avisos", exact: true }).isChecked(), true);
     assert.equal(await again2.getByLabel("Minutos entre avisos del mismo fan").inputValue(), "20");
-    await again2.getByRole("button", { name: "Cancelar" }).click();
+    await again2.getByRole("button", { name: "Cancelar", exact: true }).click();
     // Un miembro antiguo conserva lo que ya tenía y lo ve en Editar.
     await oldRow.getByRole("button", { name: "Editar Antiguo" }).click();
     const oldEdit = owner.getByRole("dialog", { name: "Editar empleado" });
     await oldEdit.getByRole("heading", { name: "Avisos por teléfono" }).waitFor();
-    assert.equal(await oldEdit.getByLabel("Vault").isChecked(), true);
-    assert.equal(await oldEdit.getByLabel("Nora").isChecked(), true);
+    await oldEdit.getByTestId("creator-chips").getByText("Nora - nora").waitFor();
     assert.equal(await oldEdit.getByLabel("WhatsApp").inputValue(), "+34600000000");
     assert.equal(await oldEdit.getByLabel("Minutos entre avisos del mismo fan").inputValue(), "30");
-    await oldEdit.getByRole("button", { name: "Cancelar" }).click();
+    await oldEdit.getByRole("button", { name: "Ver y editar permisos" }).click();
+    const oldPerms = owner.getByRole("dialog", { name: "Permisos del rol" });
+    assert.equal(await oldPerms.locator('input[data-perm="vault"]').isChecked(), true);
+    assert.equal(await oldPerms.locator('input[data-perm="precios"]').isChecked(), false);
+    await oldPerms.getByRole("button", { name: "Cancelar" }).click();
+    await oldEdit.getByRole("button", { name: "Cancelar", exact: true }).click();
 
     // 5. Login con correo y contraseña desde cero; con la contraseña mala no entra.
     const login = await (await browser.newContext()).newPage();
@@ -196,6 +271,50 @@ test("la dueña invita, el empleado acepta, entra con correo y contraseña y sol
     await owner.getByRole("menuitem", { name: "Activar" }).click();
     await owner.getByTestId("employee-row").filter({ hasText: "Marta Ruiz" }).getByText("Activado", { exact: true }).waitFor();
     assert.notEqual(await status(employee, `${base}/api/vault-query`, { creatorId: "c-alba" }), 401);
+
+    // 8. Restablecer contraseña: enlace de un solo uso; cierra sus sesiones y la contraseña vieja deja de valer.
+    await activeRow.getByRole("button", { name: "Más acciones de Marta Ruiz" }).click();
+    await owner.getByRole("menuitem", { name: "Restablecer contraseña" }).click();
+    const resetDialog = owner.getByRole("dialog", { name: "Restablecer contraseña" });
+    await resetDialog.getByTestId("invite-delivery").waitFor();
+    assert.match(await resetDialog.getByTestId("invite-delivery").innerText(), /no está configurado/);
+    const resetLink = await resetDialog.getByTestId("invite-link").inputValue();
+    assert.match(resetLink, new RegExp(`^http://127\\.0\\.0\\.1:${port}/restablecer/[A-Za-z0-9_-]{40,}$`));
+    await resetDialog.getByRole("button", { name: "Listo" }).click();
+    const resetPage = await (await browser.newContext()).newPage();
+    await resetPage.goto(resetLink, { waitUntil: "networkidle" });
+    await resetPage.getByText("Nueva contraseña").waitFor();
+    await resetPage.getByLabel("Contraseña", { exact: true }).fill("nueva-contraseña-2");
+    await resetPage.getByLabel("Repite la contraseña").fill("nueva-contraseña-2");
+    await resetPage.getByRole("button", { name: "Cambiar contraseña" }).click();
+    await resetPage.getByText("Contraseña cambiada").waitFor();
+    const reused = await (await browser.newContext()).newPage();
+    await reused.goto(resetLink, { waitUntil: "domcontentloaded" });
+    await reused.getByText("Este enlace ya se usó.").waitFor();
+    assert.equal(await status(employee, `${base}/api/vault-query`, { creatorId: "c-alba" }), 401);
+    const oldPassword = await (await browser.newContext()).request.post(`${base}/api/staff-login`, { data: { email: "marta@example.com", password: PASSWORD } });
+    assert.equal(oldPassword.status(), 401);
+    const newPassword = await (await browser.newContext()).request.post(`${base}/api/staff-login`, { data: { email: "marta@example.com", password: "nueva-contraseña-2" } });
+    assert.equal(newPassword.status(), 200);
+
+    // 9. Acciones en grupo: roles en grupo y borrar en grupo.
+    await oldRow.getByRole("checkbox").check();
+    await owner.getByRole("button", { name: "Acciones en grupo" }).click();
+    assert.equal(await owner.getByRole("menuitem", { name: "Editar grupo en grupo" }).isDisabled(), true);
+    await owner.getByRole("menuitem", { name: "Editar roles en grupo" }).click();
+    const bulk = owner.getByRole("dialog", { name: "Editar roles en grupo" });
+    await bulk.getByLabel("Añadir rol").selectOption("analyst");
+    await bulk.getByRole("button", { name: "Quitar rol Chatter" }).click();
+    await bulk.getByRole("button", { name: "Guardar" }).click();
+    await bulk.waitFor({ state: "detached" });
+    await owner.getByTestId("employee-row").filter({ hasText: "Antiguo" }).getByTestId("employee-roles").getByText("Analyst").waitFor();
+    await oldRow.getByRole("checkbox").check();
+    await owner.getByRole("button", { name: "Acciones en grupo" }).click();
+    await owner.getByRole("menuitem", { name: "Eliminar en grupo" }).click();
+    await oldRow.waitFor({ state: "detached" });
+    await activeRow.getByRole("button", { name: "Más acciones de Marta Ruiz" }).click();
+    await owner.getByRole("menuitem", { name: "Borrar" }).click();
+    await activeRow.waitFor({ state: "detached" });
     await employee.close();
     await owner.close();
   } finally {
@@ -235,7 +354,7 @@ async function seed(dir: string): Promise<void> {
   await pg.query(
     "insert into workspace_state (id, state, version, updated_by) values (1, $1::jsonb, 1, 'dueña')",
     [JSON.stringify({
-      agency: "Fanlink",
+      agency: "Fanlink Management",
       creators,
       fans: ["c-alba", "c-nora", "c-tercera"].map((creatorId) => ({ id: `f-${creatorId}`, creatorId, name: `Fan ${creatorId}`, handle: "fan", spendLife: 0, spend30: 0, days: 1, status: "activo", tier: "bronce", online: false, notes: creatorId === "c-tercera" ? SECRET : "", tags: [], city: "", unread: 0 })),
       messages: [],

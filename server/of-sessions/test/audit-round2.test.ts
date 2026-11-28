@@ -27,7 +27,7 @@ test("no se expira más del 30 % de los fans activos", () => {
   assert.equal(few.warning, null);
 });
 
-test("si dos autores escribieron al mismo fan, la venta no se duplica", () => {
+test("si dos autores escribieron al mismo fan, el PPV es de quien lo envió y no se duplica", () => {
   const reports = chatterReports({
     sales: [{ creatorId: "c-alba", fanKey: "7", at: "2026-11-05T10:06:00.000Z", grossCents: 500, kind: "ppv" }],
     messages: [
@@ -36,8 +36,10 @@ test("si dos autores escribieron al mismo fan, la venta no se duplica", () => {
       { creatorId: "c-alba", threadKey: "7", fanKey: "7", at: "2026-11-05T10:05:00.000Z", fromFan: false, priceCents: 500, purchased: true, authorId: "b" },
     ],
   });
+  // El PPV es de quien envió el mensaje de pago (b), no de quien habló antes (a).
   assert.equal(reports.find((row) => row.userId === "a")?.grossCents, null);
-  assert.equal(reports.find((row) => row.userId === "b")?.grossCents, null);
+  assert.equal(reports.find((row) => row.userId === "b")?.grossCents, 500);
+  assert.equal(reports.reduce((sum, row) => sum + (row.grossCents ?? 0), 0), 500);
   assert.equal(reports.find((row) => row.userId === "b")?.ppvSent, 1);
 });
 
