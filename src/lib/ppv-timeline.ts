@@ -1,3 +1,8 @@
+/** Un medio del PPV: tipo, duración, miniatura y si sigue con candado. */
+export type PpvMedia = { kind: "foto" | "video" | "audio" | null; seconds: number | null; preview: string | null; locked: boolean | null };
+
+export const PPV_MEDIA_MAX = 12;
+
 export type PpvSource = {
   messageKey: string;
   body: string;
@@ -8,6 +13,7 @@ export type PpvSource = {
   mediaCount?: number | null;
   mediaSeconds?: number | null;
   mediaPreview?: string | null;
+  media?: ReadonlyArray<{ kind?: PpvMedia["kind"]; seconds?: number | null; preview?: string | null; locked?: boolean | null }> | null;
 };
 
 export type PpvRow = {
@@ -19,6 +25,8 @@ export type PpvRow = {
   state: "comprado" | "no comprado" | "Sin datos";
   media: string;
   preview: string | null;
+  /** Todos los medios del PPV, en el orden del mensaje. Vacío si no se guardaron. */
+  items: PpvMedia[];
 };
 
 /** Mensajes cargados en pantalla más los PPV guardados del hilo. Gana el cargado si la clave se repite. */
@@ -63,6 +71,7 @@ export function ppvTimeline(messages: PpvSource[], purchases?: readonly Purchase
       : message.purchased === false || purchases ? "no comprado" as const : "Sin datos" as const,
     media: mediaLabel(message.mediaCount, message.mediaSeconds),
     preview: message.mediaPreview ?? null,
+    items: mediaItems(message),
   }));
   for (const purchase of loose) {
     rows.push({
@@ -74,6 +83,7 @@ export function ppvTimeline(messages: PpvSource[], purchases?: readonly Purchase
       state: "comprado",
       media: "Sin datos",
       preview: null,
+      items: [],
     });
   }
   rows.sort((left, right) => right.sentAt.localeCompare(left.sentAt));
@@ -96,4 +106,34 @@ function mediaLabel(count: number | null | undefined, seconds: number | null | u
   if (count == null) return "Sin datos";
   const length = seconds == null ? "" : ` · ${seconds}s`;
   return `${count} medios${length}`;
+}
+
+/** Medios del mensaje para la fila. Si solo hay miniatura suelta, es un medio. */
+export function mediaItems(message: Pick<PpvSource, "media" | "mediaPreview" | "mediaCount" | "mediaSeconds">): PpvMedia[] {
+  const list = (message.media ?? []).slice(0, PPV_MEDIA_MAX).map((item) => ({
+    kind: item.kind ?? null,
+    seconds: item.seconds ?? null,
+    preview: item.preview ?? null,
+    locked: item.locked ?? null,
+  }));
+  if (list.length > 0) return list;
+  if (message.mediaPreview) return [{ kind: null, seconds: message.mediaSeconds ?? null, preview: message.mediaPreview, locked: null }];
+  return [];
+}
+
+/** 0:12 · 1:05:09 */
+export function clipLabel(seconds: number | null | undefined): string | null {
+  if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return null;
+  const total = Math.round(seconds);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const rest = String(total % 60).padStart(2, "0");
+  return hours > 0 ? `${hours}:${String(minutes).padStart(2, "0")}:${rest}` : `${minutes}:${rest}`;
+}
+
+/** Etiqueta de la fecha del PPV, como Infloww: Oct 16, 2026 (hora de Madrid). */
+export function ppvDateLabel(iso: string): string {
+  const time = Date.parse(iso);
+  if (!Number.isFinite(time)) return "Sin datos";
+  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "Europe/Madrid" }).format(new Date(time));
 }

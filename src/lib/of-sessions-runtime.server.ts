@@ -722,6 +722,8 @@ export async function listCreatorChatViews(userId: string, open: { creatorId: st
       lastSeenAt: thread.lastSeenAt ?? null,
       subPriceCents: thread.subPriceCents,
       subExpiresAt: thread.subExpiresAt,
+      subStartedAt: thread.subStartedAt ?? null,
+      subMonths: thread.subMonths ?? null,
       renewAuto: thread.renewAuto,
       lists: thread.lists ?? null,
     })),

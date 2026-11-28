@@ -156,7 +156,8 @@ export function purchasedPpvSeries(
   const fromChat = messages
     .filter((message) => !message.fromFan && message.purchased === true && message.priceCents != null && message.priceCents > 0 && message.sentAt !== "")
     .map((message) => ({ sentAt: message.sentAt, priceCents: message.priceCents ?? 0 }));
-  const points = mergePaidPoints([fromChat, ...sources.map((rows) => rows.filter((row) => row.priceCents > 0 && row.sentAt !== ""))]);
+  const bought = mergePaidPoints(sources.map((rows) => rows.filter((row) => row.priceCents > 0 && row.sentAt !== "")));
+  const points = withChatPurchases(bought, fromChat);
   if (points.length === 0) return { maxCents: null, avgCents: null, points: [] };
   const total = points.reduce((sum, point) => sum + point.priceCents, 0);
   return {
@@ -164,6 +165,29 @@ export function purchasedPpvSeries(
     avgCents: Math.round(total / points.length),
     points,
   };
+}
+
+const PURCHASE_WINDOW_MS = 60 * 86_400_000;
+
+/**
+ * Un mensaje pagado lleva la hora de envío; el aviso o el movimiento, la hora de la compra.
+ * Si hay una compra del mismo importe entre un día antes del envío y 60 días después, es la misma:
+ * manda la hora de la compra y no se cuenta dos veces. Los pagados sin compra guardada entran con su envío.
+ */
+export function withChatPurchases(bought: PpvPoint[], fromChat: PaidSource[]): PpvPoint[] {
+  const used = new Set<number>();
+  const rest: PpvPoint[] = [];
+  for (const chat of [...fromChat].sort((left, right) => left.sentAt.localeCompare(right.sentAt))) {
+    const sent = Date.parse(chat.sentAt);
+    const index = bought.findIndex((point, at) => {
+      if (used.has(at) || point.priceCents !== chat.priceCents) return false;
+      const time = Date.parse(point.sentAt);
+      return Number.isFinite(sent) && Number.isFinite(time) && time >= sent - 86_400_000 && time <= sent + PURCHASE_WINDOW_MS;
+    });
+    if (index >= 0) used.add(index);
+    else rest.push({ sentAt: chat.sentAt, priceCents: chat.priceCents });
+  }
+  return [...bought, ...rest].sort((left, right) => left.sentAt.localeCompare(right.sentAt));
 }
 
 function mergePaidPoints(sources: PaidSource[][]): PpvPoint[] {
