@@ -151,7 +151,7 @@ test("el histórico sigue los hilos abiertos y los que no tienen mensajes", () =
 test("el envío en seco no queda pendiente ni conserva la clave", async () => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
   const pg = new PGlite();
-  for (const name of ["0007_of_reads.sql", "0008_sync_schedule.sql", "0009_of_chats.sql", "0019_chat_author.sql", "0025_outbound_send.sql", "0049_online_broadcast_dedupe.sql"]) {
+  for (const name of ["0007_of_reads.sql", "0008_sync_schedule.sql", "0009_of_chats.sql", "0019_chat_author.sql", "0063_staff_employees.sql", "0064_outbound_author_name.sql", "0025_outbound_send.sql", "0049_online_broadcast_dedupe.sql"]) {
     await pg.exec(await readFile(path.join(root, "migrations", name), "utf8"));
   }
   await pg.exec(`
