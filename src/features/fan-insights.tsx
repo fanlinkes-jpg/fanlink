@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { Lock } from "lucide-react";
 import { FAN_CARD_TABS } from "@/lib/fan-card-tabs";
 import { fanInsightModel } from "@/lib/fan-insights";
 import { clipLabel, ppvDateLabel, ppvTimeline, type PpvRow, type PpvSource } from "@/lib/ppv-timeline";
@@ -187,9 +188,9 @@ function PpvCard({ row, onCopy }: { row: PpvRow; onCopy?: (body: string, priceCe
   return (
     <article className="rounded-xl border border-[#e6e8ee] bg-white p-3">
       <div className="flex items-center justify-between gap-2 text-sm">
-        <span className="rounded-full bg-[#ff5a7a] px-2 py-0.5 text-xs font-semibold text-white">{row.price} · {ppvDateLabel(row.sentAt)}</span>
-        <span className={row.state === "comprado" ? "text-[#137333]" : row.state === "no comprado" ? "text-[#b4234a]" : "text-[#6d7585]"}>
-          {row.state === "comprado" ? "$ comprado" : row.state === "no comprado" ? "candado · no comprado" : "Sin datos"}
+        <span className="inline-flex items-center gap-1 rounded-full bg-[#ff5a7a] px-2 py-0.5 text-xs font-semibold text-white">{row.state === "no comprado" ? <Lock className="h-3 w-3" aria-label="Con candado" /> : null}{row.price} · {ppvDateLabel(row.sentAt)}</span>
+        <span className={`font-medium ${row.state === "comprado" ? "text-[#137333]" : row.state === "no comprado" ? "text-[#b4234a]" : "text-[#6d7585]"}`}>
+          {row.state === "comprado" ? "Comprado" : row.state === "no comprado" ? "No comprado" : "Sin datos"}
         </span>
       </div>
       {row.items.length > 0 ? (

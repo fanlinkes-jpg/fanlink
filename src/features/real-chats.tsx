@@ -4,7 +4,7 @@ import { AtSign, Bell, Check, CheckCheck, ChevronLeft, ChevronRight, Clock, Doll
 import { broadcastOnlineFans, cancelOnlineBroadcast, chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, markChatOpened, readChatVault, readFanPurchases, readThreadHistory, readVisibleFanSpend, recordChatOutbound, resolveOnlineOutbound, reviewChatOutbound, runFanChatMenu, saveFanFlag, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
 import { OnlineFansPanel, type OnlineBroadcastPayload } from "@/features/online-fans-panel";
 import type { OnlineFanRow } from "@/lib/online-fan-row";
-import { pinnedFirst } from "../../server/of-sessions/sync/fan-flags.ts";
+import { applyFlagOverrides, flagKey, patchedFlag } from "../../server/of-sessions/sync/fan-flags.ts";
 import { ChatGalleryPanel } from "@/features/chat-gallery-panel";
 import { ChatFindBar } from "@/features/chat-find-bar";
 import { findMessages, highlightParts, stepMatch } from "@/lib/chat-find";
@@ -50,6 +50,7 @@ import { spendTone } from "@/lib/spend-tiers";
 import { rowSpendCents } from "@/lib/row-spend";
 import { FanSpendLabel } from "@/lib/fan-spend-label";
 import { useInboxSelection } from "@/lib/inbox-selection";
+import { useStickToBottom } from "@/features/use-stick-to-bottom";
 import { MessageMedia, type MessageSlide } from "@/features/message-media";
 import { bubbleBlocks, bubbleText, mediaTags, pricePill, readState, tagLine } from "@/lib/chat-bubble";
 import { withDateSeparators } from "@/lib/chat-dates";
@@ -256,7 +257,7 @@ function ThreadMessage({ message, find, watermark }: { watermark?: string | null
           <div className={`flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 pb-2.5 text-[11px] text-[#7a8496] ${text.title || text.paragraphs.length > 0 ? "" : "pt-2.5"}`}>
             {pill ? (
               <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 font-semibold ring-1 ring-inset ${pill.state === "pagado" ? "bg-[#e6f6ec] text-[#13693a] ring-[#bfe5cd]" : pill.state === "no pagado" ? "bg-[#fff3e0] text-[#9a5b00] ring-[#f6dcae]" : "bg-[#f1f3f7] text-[#6d7585] ring-[#e1e5ec]"}`}>
-                {pill.money}<span className="font-medium opacity-80">· {pill.label}</span>
+                {pill.money}{" "}<span className="font-medium opacity-80">· {pill.label}</span>
               </span>
             ) : <span />}
             <span className="ml-auto inline-flex items-center gap-1.5">
@@ -352,6 +353,7 @@ export function RealChatsPage() {
   const [insightsTab, setInsightsTab] = useState<"Insights" | "Ventas" | "Notas">("Insights");
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [refreshSpin, setRefreshSpin] = useState(false);
+  const [flagOverrides, setFlagOverrides] = useState<Record<string, import("../../server/of-sessions/sync/fan-flags.ts").FanFlag>>({});
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState("");
   const [findIndex, setFindIndex] = useState(0);
@@ -668,8 +670,7 @@ export function RealChatsPage() {
     creators: inboxScope,
     remembered: rememberedInbox,
   }).threads;
-  const flags = data?.flags ?? [];
-  const pinnedThreads = pinnedFirst(threads, flags);
+  const flags = applyFlagOverrides(data?.flags ?? [], flagOverrides);
   const accountMessages = rowsForCreator(data?.messages ?? [], inboxCreator);
   const scopeIds = inboxCreator ? [inboxCreator] : [];
   const sessionRows = rowsForCreator(data?.accounts ?? [], inboxCreator);
@@ -683,10 +684,11 @@ export function RealChatsPage() {
   });
   const tipped = tipThreads(accountMessages, threads);
   const inbox = useInboxSelection({
-    threads: pinnedThreads.map((thread) => ({ ...thread, id: `${thread.creatorId}:${thread.threadKey}` })),
+    threads: threads.map((thread) => ({ ...thread, id: `${thread.creatorId}:${thread.threadKey}` })),
     matches: (thread) => matchesInboxPill(thread, filter, tipped),
     hidden: (thread) => marks.hidden.includes(threadMark(thread.creatorId, thread.threadKey)),
     showHidden,
+    pinnedAt: (thread) => (thread.fanKey ? flags.find((item) => item.creatorId === thread.creatorId && item.fanKey === thread.fanKey)?.pinnedAt ?? null : null),
     onMark: (thread) => {
       void markChatOpened({ data: { creatorId: thread.creatorId, threadKey: thread.threadKey } }).then((result) => {
         if (result.marked) void refresh();
@@ -877,40 +879,23 @@ export function RealChatsPage() {
     };
   }, [confirmMark, selected?.creatorId, selected?.threadKey]);
   useLayoutEffect(() => {
+    // Historial antiguo que entra por arriba: se conserva el mensaje que se estaba leyendo.
     const node = threadBox.current;
-    if (!node) return;
-    if (scrollMark.current) {
-      restoreThreadScroll(node);
-      stickToBottom.current = false;
-      return;
-    }
-    if (!stickToBottom.current) return;
-    node.scrollTop = node.scrollHeight;
-    const frame = requestAnimationFrame(() => {
-      if (stickToBottom.current && !scrollMark.current && threadBox.current) threadBox.current.scrollTop = threadBox.current.scrollHeight;
-    });
-    return () => cancelAnimationFrame(frame);
+    if (node && scrollMark.current) restoreThreadScroll(node);
   }, [threadTail, openThread, messages.length]);
+  const stickBottom = useStickToBottom({
+    box: threadBox,
+    stick: stickToBottom,
+    threadKey: openThread,
+    tail: `${threadTail}:${messages.length}`,
+    blocked: () => scrollMark.current != null,
+  });
   useLayoutEffect(() => {
-    // Al abrir otro chat: ancla vieja fuera y a leer desde el último mensaje.
+    // Al abrir otro chat, la ancla vieja ya no vale.
     if (seenThread.current === openThread) return;
     seenThread.current = openThread;
     scrollMark.current = null;
-    stickToBottom.current = true;
-    const node = threadBox.current;
-    if (node) node.scrollTop = node.scrollHeight;
   }, [openThread]);
-  // Lo que cambia de alto después (fotos, vídeos, historial que llega, separadores) no suelta el final.
-  useEffect(() => {
-    const node = threadBox.current;
-    if (!node || typeof ResizeObserver === "undefined") return;
-    const follow = () => {
-      if (stickToBottom.current && !scrollMark.current) node.scrollTop = node.scrollHeight;
-    };
-    const observer = new ResizeObserver(follow);
-    for (const child of Array.from(node.children)) observer.observe(child);
-    return () => observer.disconnect();
-  }, [openThread, messages.length, threadTail]);
   useEffect(() => {
     const node = threadBox.current;
     if (!node || typeof ResizeObserver === "undefined") return;
@@ -1326,19 +1311,18 @@ export function RealChatsPage() {
   function setFlag(patch: { favorite?: boolean; muted?: boolean; pinned?: boolean }) {
     if (!selected?.fanKey) return;
     const target = { creatorId: selected.creatorId, fanKey: selected.fanKey };
-    setData((current) => {
-      if (!current) return current;
-      const rest = (current.flags ?? []).filter((item) => !(item.creatorId === target.creatorId && item.fanKey === target.fanKey));
-      const before = (current.flags ?? []).find((item) => item.creatorId === target.creatorId && item.fanKey === target.fanKey);
-      const next = {
-        ...target,
-        favorite: patch.favorite ?? before?.favorite ?? false,
-        muted: patch.muted ?? before?.muted ?? false,
-        pinnedAt: patch.pinned === undefined ? before?.pinnedAt ?? null : patch.pinned ? before?.pinnedAt ?? new Date().toISOString() : null,
-      };
-      return { ...current, flags: [...rest, next] };
+    const key = flagKey(target);
+    const next = patchedFlag(flagFor(selected), target, patch, new Date().toISOString());
+    // La lista y el icono cambian al pulsar; el servidor confirma después.
+    setFlagOverrides((current) => ({ ...current, [key]: next }));
+    const settle = () => setFlagOverrides((current) => {
+      if (current[key] !== next) return current;
+      const { [key]: _done, ...rest } = current;
+      return rest;
     });
-    void saveFanFlag({ data: { ...target, patch } }).then(() => refresh()).catch((err: unknown) => { setError(sessionErrorText(err)); void refresh(); });
+    void saveFanFlag({ data: { ...target, patch } })
+      .then(() => refresh())
+      .then(settle, (err: unknown) => { setError(sessionErrorText(err)); settle(); void refresh(); });
   }
 
   function toggleMuted() {
@@ -1770,12 +1754,13 @@ export function RealChatsPage() {
             ) : null}
             <div className="relative min-h-0 flex-1">
             {olderBusy ? <p className="pointer-events-none absolute inset-x-0 top-2 z-10 text-center text-xs text-[#6d7585]">Cargando mensajes anteriores…</p> : null}
-            <ol ref={threadBox} onLoadCapture={() => { if (stickToBottom.current && !scrollMark.current && threadBox.current) threadBox.current.scrollTop = threadBox.current.scrollHeight; }} onLoadedMetadataCapture={() => { if (stickToBottom.current && !scrollMark.current && threadBox.current) threadBox.current.scrollTop = threadBox.current.scrollHeight; }} className="h-full space-y-4 overflow-y-auto [overflow-anchor:none] bg-[#fbfcfe] px-[max(1rem,calc((100%-760px)/2))] py-6" onScroll={(event) => {
+            <ol ref={threadBox} data-thread-scroll style={{ scrollBehavior: "auto" }} {...stickBottom.intent} onLoadCapture={stickBottom.follow} onLoadedMetadataCapture={stickBottom.follow} className="h-full space-y-4 overflow-y-auto [overflow-anchor:none] bg-[#fbfcfe] px-[max(1rem,calc((100%-760px)/2))] py-6" onScroll={(event) => {
               const node = event.currentTarget;
-              stickToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80;
+              stickBottom.noteScroll(node);
               if (node.scrollTop > 24 || !selected || olderLock.current || historyDone) return;
               olderLock.current = true;
-              pinThreadScroll(node);
+              // Pegado al final, el historial que entra por arriba no mueve la lectura: se sigue abajo.
+              if (!stickToBottom.current) pinThreadScroll(node);
               setOlderBusy(true);
               const creatorId = selected.creatorId;
               const threadKey = selected.threadKey;
