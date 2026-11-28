@@ -24,7 +24,7 @@ test("el hilo marca el medio y el precio pagado", async () => {
     await page.getByRole("button", { name: "Reproducir" }).waitFor();
     await page.getByText("Purchased — has purchased your message for $20.00").first().waitFor();
     await page.getByText(/^Elena\b/).waitFor();
-    await page.getByText("$150.00 pagado").waitFor();
+    await page.getByText(/\$150\.00\s*· Pagado/).waitFor();
     await page.close();
   } finally {
     await browser.close().catch(() => undefined);
