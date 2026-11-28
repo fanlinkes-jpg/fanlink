@@ -19,13 +19,18 @@ const MOCK = `
   window.__packs = new Set(["es>en"]);
   window.__gesture = false;
   window.__created = [];
-  window.addEventListener("pointerdown", () => { window.__gesture = true; setTimeout(() => { window.__gesture = false; }, 0); }, true);
+  const gestureMs = Number(localStorage.getItem("__gestureMs") || 3000);
+  window.__detector = false;
+  window.__log = [];
+  window.addEventListener("pointerdown", () => { window.__gesture = true; setTimeout(() => { window.__gesture = false; }, gestureMs); }, true);
+  window.addEventListener("keydown", () => { window.__gesture = true; setTimeout(() => { window.__gesture = false; }, gestureMs); }, true);
   Object.defineProperty(navigator, "userActivation", { get: () => ({ isActive: window.__gesture }) });
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   window.Translator = {
     availability: async ({ sourceLanguage, targetLanguage }) => window.__packs.has(sourceLanguage + ">" + targetLanguage) ? "available" : "downloadable",
     create: async ({ sourceLanguage, targetLanguage, monitor }) => {
       const key = sourceLanguage + ">" + targetLanguage;
+      window.__log.push("translator:" + key + ":" + window.__gesture);
       if (!window.__packs.has(key)) {
         if (!window.__gesture) { const error = new Error("needs gesture"); error.name = "NotAllowedError"; throw error; }
         const listeners = [];
@@ -38,8 +43,16 @@ const MOCK = `
     },
   };
   window.LanguageDetector = {
-    availability: async () => "available",
-    create: async () => ({ detect: async (text) => [{ detectedLanguage: /\\b(hello|you|miss|the|how)\\b/i.test(text) ? "en" : "es", confidence: 0.95 }] }),
+    availability: async () => window.__detector ? "available" : "downloadable",
+    create: async () => {
+      if (!window.__detector) {
+        window.__log.push("detector:" + window.__gesture);
+        if (!window.__gesture) { const error = new Error("needs gesture"); error.name = "NotAllowedError"; throw error; }
+        await wait(100);
+        window.__detector = true;
+      }
+      return { detect: async (text) => [{ detectedLanguage: /\\b(hello|you|miss|the|how)\\b/i.test(text) ? "en" : "es", confidence: 0.95 }] };
+    },
   };
 `;
 
@@ -60,9 +73,18 @@ test("traductor: automática, icono por mensaje, descarga con clic y compositor 
     assert.equal(await fanMessage.getByRole("button", { name: "Traducir mensaje" }).count(), 1, "el mensaje del fan lleva el icono");
     assert.equal(await page.locator("[data-message-id='c0']").getByRole("button", { name: "Traducir mensaje" }).count(), 0, "los del equipo no");
 
+    // Un solo control: el icono activa la traducción y la flecha abre el menú. Sin «Auto» ni badge de idioma.
+    const header = page.locator("header");
+    assert.equal(await header.getByRole("switch", { name: "Traducción automática" }).count(), 1);
+    assert.equal(await header.getByRole("button", { name: "Ajustes de traducción" }).count(), 1);
+    assert.equal(await header.getByText("Auto", { exact: true }).count(), 0);
+    assert.equal(await header.getByText("ES", { exact: true }).count(), 0);
+    assert.equal(await header.getByRole("switch", { name: "Traducción automática" }).getAttribute("aria-checked"), "false");
+
     // Menú: título, desplegable (español por defecto, lista amplia) e interruptor; sin paquetes ni textos de aviso.
-    await page.getByRole("button", { name: "Traducción", exact: true }).click();
+    await page.getByRole("button", { name: "Ajustes de traducción" }).click();
     const menu = page.getByRole("dialog", { name: "Traducir mensajes de fans" });
+    assert.equal(await page.getByRole("dialog", { name: "Traducir mensajes de fans" }).count(), 1, "un solo popover");
     await menu.getByText("Traducir mensajes de fans a").waitFor();
     assert.equal(await menu.getByRole("combobox", { name: "Idioma de destino" }).inputValue(), "es");
     assert.ok(await menu.getByRole("option").count() >= 30, "lista amplia de idiomas");
@@ -72,11 +94,14 @@ test("traductor: automática, icono por mensaje, descarga con clic y compositor 
     await page.keyboard.press("Escape");
     await menu.waitFor({ state: "hidden" });
 
-    // Traducción automática: el clic que la activa lanza la descarga sola, con un spinner pequeño en el mensaje.
+    // Traducción automática: el clic del icono es el gesto; baja el detector y el paquete en silencio, con un
+    // spinner pequeño en el mensaje y sin ningún texto de descarga.
     await page.getByRole("switch", { name: "Traducción automática" }).click();
+    assert.equal(await header.getByRole("switch", { name: "Traducción automática" }).getAttribute("aria-checked"), "true");
     await fanMessage.getByRole("status", { name: "Traduciendo" }).waitFor();
     await fanMessage.locator("[data-translated]").waitFor({ timeout: 10_000 });
-    assert.equal(await fanMessage.getByRole("button", { name: /Descargar/ }).count(), 0);
+    assert.doesNotMatch(await fanMessage.innerText(), /descarg|paquete|Chrome/i);
+    assert.deepEqual(await page.evaluate(() => (window as unknown as { __log: string[] }).__log), ["detector:true", "translator:en>es:true"], "create se llama dentro del gesto");
     assert.match(await fanMessage.locator("[data-translated]").innerText(), /\[es\] Hello, how are you today\?/);
     assert.match(await fanMessage.innerText(), /Hello, how are you today\?/, "el original sigue ahí");
     assert.equal(await page.locator("[data-message-id='f3'] [data-translated]").count(), 1, "los demás mensajes del fan también");
@@ -88,7 +113,7 @@ test("traductor: automática, icono por mensaje, descarga con clic y compositor 
     await page.locator("[data-message-id='f3'] [data-translated]").waitFor();
 
     // En lugar del original, con enlace para ver el original.
-    await page.getByRole("button", { name: "Traducción", exact: true }).click();
+    await page.getByRole("button", { name: "Ajustes de traducción" }).click();
     await page.getByRole("switch", { name: "Ocultar texto original" }).click();
     await page.keyboard.press("Escape");
     await page.waitForFunction(() => document.querySelectorAll("[data-translated]").length === 0);
@@ -111,19 +136,26 @@ test("traductor: automática, icono por mensaje, descarga con clic y compositor 
     await page.getByRole("button", { name: "Volver al original" }).click();
     assert.equal(await page.getByRole("textbox", { name: "Mensaje" }).innerText(), "Hola guapo, ¿qué tal estás hoy?");
 
-    // La preferencia se guarda: tras recargar sigue en automático y ocultando el original. El primer clic
-    // (abrir el chat) lanza la descarga del modelo y los mensajes salen traducidos sin pulsar nada más.
+    // La preferencia se guarda: tras recargar sigue activa y ocultando el original. Con el gesto ya caducado, la
+    // descarga espera al primer pointerdown o keydown de la página y se lanza sola, sin ningún aviso.
+    await page.evaluate(() => localStorage.setItem("__gestureMs", "20"));
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: /Fan Uno/ }).click();
     const again = page.locator("[data-message-id='f3']");
     await again.waitFor({ timeout: 60_000 });
-    await again.getByText("[es] I miss you so much").waitFor({ timeout: 10_000 });
+    await page.waitForTimeout(600);
+    assert.doesNotMatch(await again.innerText(), /descarg|paquete|clic|Chrome|\[es\]/i);
     assert.equal(await page.getByRole("switch", { name: "Traducción automática" }).getAttribute("aria-checked"), "true");
-    await page.getByRole("button", { name: "Traducción", exact: true }).click();
+    await page.mouse.click(700, 12);
+    await again.getByText("[es] I miss you so much").waitFor({ timeout: 10_000 });
+    await page.getByRole("button", { name: "Ajustes de traducción" }).click();
     assert.equal(await page.getByRole("switch", { name: "Ocultar texto original" }).getAttribute("aria-checked"), "true");
     await page.getByRole("combobox", { name: "Idioma de destino" }).selectOption("en");
     await page.keyboard.press("Escape");
     await again.getByText(/Ya está en inglés/i).waitFor();
+    // El icono apaga la traducción automática y los mensajes vuelven al original.
+    await page.getByRole("switch", { name: "Traducción automática" }).click();
+    await page.waitForFunction(() => !document.body.innerText.includes("Ya está en inglés"));
     await page.close();
   } finally {
     await browser.close().catch(() => undefined);
@@ -144,7 +176,7 @@ test("traductor: sin la API del navegador el aviso es claro y no dice Sin datos"
     await page.getByRole("button", { name: /Fan Uno/ }).click();
     const fanMessage = page.locator("[data-message-id='f1']");
     await fanMessage.waitFor({ timeout: 60_000 });
-    await page.getByRole("button", { name: "Traducción", exact: true }).click();
+    await page.getByRole("button", { name: "Ajustes de traducción" }).click();
     const menu = page.getByRole("dialog", { name: "Traducir mensajes de fans" });
     await menu.waitFor();
     assert.equal(await menu.getByRole("alert").count(), 0, "el menú no lleva avisos");

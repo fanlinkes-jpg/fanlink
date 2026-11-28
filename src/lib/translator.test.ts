@@ -7,6 +7,8 @@ import {
   detectLanguage,
   downloadDetector,
   downloadPair,
+  downloadWaiting,
+  warmUpInGesture,
   fanLanguageOf,
   languageLabel,
   pairAvailability,
@@ -94,8 +96,8 @@ test("un paquete por descargar no se baja sin gesto del usuario: la descarga esp
   const { host, calls } = fakeHost({ gesture: false });
   await assert.rejects(() => prepareTranslator(host, "en", "es"), (error: unknown) => error instanceof TranslateError && error.code === "needs-download" && error.source === "en" && error.target === "es");
   assert.equal(calls.creates, 0);
-  assert.match(translateNotice("needs-download", "en", "es"), /Haz clic/);
-  assert.doesNotMatch(translateNotice("needs-download", "en", "es"), /Descargar|Chrome/);
+  assert.equal(translateNotice("needs-download", "en", "es"), "", "sin texto de descarga");
+  assert.equal(downloadWaiting(), true);
 });
 
 test("con un clic baja el paquete, informa del progreso y luego traduce sin gesto", async () => {
@@ -167,7 +169,7 @@ test("un par que Chrome no ofrece da un aviso propio, y un fallo de creación no
   resetTranslatorCaches();
   const { host } = fakeHost({ unavailable: ["de>pt"] });
   await assert.rejects(() => translateText(host, "Hallo", { source: "de", target: "pt" }), (error: unknown) => error instanceof TranslateError && error.code === "pair-unavailable");
-  assert.match(translateNotice("pair-unavailable", "de", "pt"), /DE → PT/);
+  assert.match(translateNotice("pair-unavailable", "de", "pt"), /DE a PT/);
   const failing = fakeHost({ packs: ["en>es"], failCreate: "SomeError" });
   await assert.rejects(() => prepareTranslator(failing.host, "en", "es"), (error: unknown) => error instanceof TranslateError && error.code === "failed");
   await assert.rejects(() => prepareTranslator(failing.host, "en", "es"), (error: unknown) => error instanceof TranslateError);
@@ -221,4 +223,28 @@ test("la lista de idiomas es amplia, empieza por español y normaliza códigos",
   assert.equal(baseLanguage("zh-TW"), "zh-Hant");
   assert.equal(baseLanguage("zh-Hans-CN"), "zh");
   assert.equal(baseLanguage("pt_BR"), "pt");
+});
+
+test("con gesto, create se llama de forma síncrona, antes de cualquier await", () => {
+  resetTranslatorCaches();
+  const { host, calls } = fakeHost({ gesture: true, detector: "downloadable" });
+  const pending = prepareTranslator(host, "en", "es");
+  assert.equal(calls.creates, 1, "create ya se ha llamado sin esperar nada");
+  void pending.catch(() => undefined);
+  const detecting = detectLanguage(host, "Hello my friend");
+  void detecting.catch(() => undefined);
+});
+
+test("sin gesto el par queda esperando, y el primer gesto lo crea en el acto, con el detector", async () => {
+  resetTranslatorCaches();
+  const gestureHost = fakeHost({ gesture: false, detector: "downloadable" });
+  await assert.rejects(() => translateText(gestureHost.host, "Hello my friend", { source: null, target: "es" }), (error: unknown) => error instanceof TranslateError && error.code === "needs-download");
+  assert.equal(gestureHost.calls.creates, 0);
+  assert.equal(downloadWaiting(), true);
+  (gestureHost.host.navigator as { userActivation: { isActive: boolean } }).userActivation.isActive = true;
+  assert.equal(warmUpInGesture(gestureHost.host), true);
+  assert.equal(downloadWaiting(), false);
+  assert.equal(warmUpInGesture(gestureHost.host), false, "una sola vez");
+  const done = await translateText(gestureHost.host, "Hello my friend", { source: null, target: "es" });
+  assert.equal(done.text, "[es] Hello my friend");
 });
