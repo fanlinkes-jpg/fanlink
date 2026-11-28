@@ -26,6 +26,8 @@ test("el botón Enviar se ve entero sin scroll de página", async () => {
     for (const viewport of viewports) {
       const page = await browser.newPage({ viewport: { width: viewport.width, height: viewport.height } });
       await page.goto(`http://127.0.0.1:${port}/mensajes`, { waitUntil: "domcontentloaded" });
+      const thread = page.locator("main ul button").first();
+      if (await thread.count()) await thread.click();
       const sendButton = page.getByRole("button", { name: "Enviar" });
       try {
         await sendButton.waitFor({ timeout: 60_000 });
