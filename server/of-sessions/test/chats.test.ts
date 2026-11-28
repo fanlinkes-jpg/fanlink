@@ -338,3 +338,11 @@ test("el simulador entrega el chat y solo avisa de mensajes nuevos", { timeout: 
     await removeDir(dataDir);
   }
 });
+
+test("precio de suscripción: el primer importe positivo, no un price a 0", async () => {
+  const { subscriptionPriceCents } = await import("../sync/chats.ts");
+  assert.equal(subscriptionPriceCents({ price: 0, subscribePrice: 9.99 }), 999);
+  assert.equal(subscriptionPriceCents({ price: 4.99, subscribePrice: 9.99 }), 499);
+  assert.equal(subscriptionPriceCents({ price: 0, regularPrice: 0 }), 0);
+  assert.equal(subscriptionPriceCents({}), null);
+});

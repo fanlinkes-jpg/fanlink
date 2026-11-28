@@ -776,7 +776,7 @@ function readFanSpend(
   const avatarUrl = clean(record.avatar, 400);
   const online = onlineFlag(record.isOnline) ?? onlineFlag(record.online);
   const lastSeenAt = iso(record.lastSeen ?? record.last_seen ?? record.seenAt);
-  const subPriceCents = money(source.price ?? source.subscribePrice ?? source.regularPrice);
+  const subPriceCents = subscriptionPriceCents(source);
   const subExpiresAt = iso(source.expiredAt ?? source.expireDate);
   const renewRaw = source.autoRenew ?? source.renewedAuto ?? source.isAutoRenew ?? source.subscribedOnAutoprolong ?? source.subscribedByAutoprolong ?? source.autoprolong ?? record.autoRenew ?? record.subscribedOnAutoprolong ?? record.subscribedByAutoprolong;
   const renewAuto = renewRaw === true || renewRaw === false ? renewRaw : null;
@@ -784,6 +784,17 @@ function readFanSpend(
   const parts = [subscribesCents, tipsCents, postsCents, messagesCents].filter((value) => value != null);
   if (spentCents == null && parts.length === 0 && !avatarUrl && online == null && !lastSeenAt && subPriceCents == null && !subExpiresAt && renewAuto == null) return null;
   return card;
+}
+
+/**
+ * `price` viene a 0 cuando OnlyFans no lo rellena para este fan (Maik: Infloww dice $9.99).
+ * Se usa el primer importe positivo de los campos de precio. Si todos son 0, es gratis.
+ */
+export function subscriptionPriceCents(source: Record<string, unknown>): number | null {
+  const found = [source.price, source.subscribePrice, source.currentSubscribePrice, source.regularPrice].map(money);
+  const positive = found.find((value) => value != null && value > 0);
+  if (positive != null) return positive;
+  return found.find((value) => value != null) ?? null;
 }
 
 function onlineFlag(value: unknown): boolean | null {

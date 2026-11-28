@@ -223,3 +223,24 @@ test("Alz2000 suma las compras del aviso que el movimiento no trae", async () =>
   assert.deepEqual(series.points.map((point) => point.priceCents), [2499, 3900, 1299, 2499]);
   await pg.close();
 });
+
+test("la ficha lee todos los PPV propios guardados del hilo, con y sin columnas de medios", async () => {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+  const pg = new PGlite();
+  for (const name of ["0007_of_reads.sql", "0008_sync_schedule.sql", "0009_of_chats.sql", "0012_extended_read.sql", "0013_chat_price.sql", "0034_notifications.sql", "0055_notification_of_type.sql", "0057_notification_message_ref.sql"]) {
+    await pg.exec(await readFile(path.join(root, "migrations", name), "utf8"));
+  }
+  await pg.exec(`
+    insert into of_chat_thread (creator_id, thread_key, fan_key, synced_at) values ('allison', '9', '9', now());
+    insert into of_chat_message (creator_id, message_key, thread_key, fan_key, from_fan, body, sent_at, price_cents, purchased, synced_at)
+    values
+      ('allison', 'a', '9', '9', false, 'caro', '2026-11-01T10:00:00Z', 6900, null, now()),
+      ('allison', 'b', '9', '9', false, 'barato', '2026-11-02T10:00:00Z', 1199, true, now()),
+      ('allison', 'c', '9', '9', true, 'fan', '2026-11-02T11:00:00Z', 500, null, now()),
+      ('allison', 'd', '9', '9', false, 'gratis', '2026-11-03T10:00:00Z', null, null, now());
+  `);
+  const sql = { query: async <T>(text: string, params?: unknown[]): Promise<T[]> => (await pg.query<T>(text, params)).rows };
+  const series = await fanPurchaseSeries(sql, "allison", "9");
+  assert.deepEqual(series.ppvs?.map((row) => [row.messageKey, row.priceCents, row.purchased]), [["b", 1199, true], ["a", 6900, null]]);
+  await pg.close();
+});

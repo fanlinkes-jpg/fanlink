@@ -1,9 +1,22 @@
 import { purchasedPpvSeries, type PpvPoint } from "../../../src/lib/composer-tools.ts";
 import type { ReadSql } from "./store.ts";
 
-export type FanPurchaseSeries = { maxCents: number | null; avgCents: number | null; points: PpvPoint[] };
+export type PricedMessage = {
+  messageKey: string;
+  body: string;
+  sentAt: string;
+  fromFan: boolean;
+  priceCents: number;
+  purchased: boolean | null;
+  mediaCount: number | null;
+  mediaSeconds: number | null;
+  mediaPreview: string | null;
+};
 
-const EMPTY: FanPurchaseSeries = { maxCents: null, avgCents: null, points: [] };
+/** `ppvs`: todos los PPV propios guardados del hilo, no solo los cargados en pantalla. */
+export type FanPurchaseSeries = { maxCents: number | null; avgCents: number | null; points: PpvPoint[]; ppvs?: PricedMessage[] };
+
+const EMPTY: FanPurchaseSeries = { maxCents: null, avgCents: null, points: [], ppvs: [] };
 
 /**
  * Compras reales del fan: movimientos de mensaje, avisos de compra y PPV
@@ -35,7 +48,17 @@ export async function fanPurchaseSeries(sql: ReadSql, creatorId: string, threadK
        )`,
     [creatorId, threadKey, fanKey, `t:${threadKey}/%`],
   );
-  return purchasedPpvSeries(
+  type PricedRow = {
+    message_key: string; body: string | null; sent_at: Date | string; price_cents: number | string; purchased: boolean | string | null;
+    media_count?: number | string | null; media_seconds?: number | string | null; media_preview?: string | null;
+  };
+  const where = "from of_chat_message where creator_id = $1 and thread_key = $2 and from_fan is not true and price_cents > 0 order by sent_at desc limit 2000";
+  // Si la base aún no tiene las columnas de medios, se lee sin ellas.
+  const priced = await sql
+    .query<PricedRow>(`select message_key, body, sent_at, price_cents, purchased, media_count, media_seconds, media_preview ${where}`, [creatorId, threadKey])
+    .catch(() => sql.query<PricedRow>(`select message_key, body, sent_at, price_cents, purchased ${where}`, [creatorId, threadKey]))
+    .catch(() => [] as PricedRow[]);
+  const series = purchasedPpvSeries(
     messages.map((row) => ({
       fromFan: row.from_fan === true || row.from_fan === "t" || row.from_fan === "true",
       purchased: row.purchased === true || row.purchased === "t" || row.purchased === "true",
@@ -51,6 +74,20 @@ export async function fanPurchaseSeries(sql: ReadSql, creatorId: string, threadK
       }),
     ],
   );
+  return {
+    ...series,
+    ppvs: priced.map((row) => ({
+      messageKey: row.message_key,
+      body: row.body ?? "",
+      sentAt: iso(row.sent_at),
+      fromFan: false,
+      priceCents: Number(row.price_cents),
+      purchased: row.purchased == null ? null : row.purchased === true || row.purchased === "t" || row.purchased === "true",
+      mediaCount: row.media_count == null ? null : Number(row.media_count),
+      mediaSeconds: row.media_seconds == null ? null : Number(row.media_seconds),
+      mediaPreview: row.media_preview ?? null,
+    })),
+  };
 }
 
 export function emptyFanPurchases(): FanPurchaseSeries {
