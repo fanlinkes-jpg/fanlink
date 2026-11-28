@@ -22,9 +22,21 @@ export function nextInboxSelection(input: {
   return input.firstId;
 }
 
-/** Orden fijo de la bandeja: el mensaje más reciente arriba. */
-export function inboxByRecent<T extends { lastMessageAt: string | null }>(threads: readonly T[]): T[] {
-  return [...threads].sort((left, right) => (right.lastMessageAt ?? "").localeCompare(left.lastMessageAt ?? ""));
+/**
+ * Orden fijo de la bandeja: los chats fijados arriba (el último fijado primero) y el resto
+ * con el mensaje más reciente arriba.
+ */
+export function inboxByRecent<T extends { lastMessageAt: string | null }>(threads: readonly T[], pinnedAt?: (thread: T) => string | null): T[] {
+  const recent = (left: T, right: T) => (right.lastMessageAt ?? "").localeCompare(left.lastMessageAt ?? "");
+  if (!pinnedAt) return [...threads].sort(recent);
+  return [...threads].sort((left, right) => {
+    const a = pinnedAt(left);
+    const b = pinnedAt(right);
+    if (a && b) return b.localeCompare(a) || recent(left, right);
+    if (a) return -1;
+    if (b) return 1;
+    return recent(left, right);
+  });
 }
 
 export function arrowIgnored(target: EventTarget | null): boolean {
@@ -57,6 +69,8 @@ export function useInboxSelection<T extends InboxThread>(input: {
   showHidden: boolean;
   onMark: (thread: T) => void;
   seenMs?: number;
+  /** Hora en que se fijó el chat. Los fijados van arriba. */
+  pinnedAt?: (thread: T) => string | null;
 }): {
   selected: T | null;
   visible: T[];
@@ -70,7 +84,7 @@ export function useInboxSelection<T extends InboxThread>(input: {
   const onMark = useRef(input.onMark);
   onMark.current = input.onMark;
   const seenMs = input.seenMs ?? MARK_SEEN_MS;
-  const sorted = inboxByRecent(input.threads);
+  const sorted = inboxByRecent(input.threads, input.pinnedAt);
   const visible = sorted.filter((thread) => {
     const selected = thread.id === selectedId;
     if (!input.matches(thread) && !selected) return false;

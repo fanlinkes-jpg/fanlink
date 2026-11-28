@@ -4,7 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
-import { listFanFlags, pinnedFirst, saveFanFlag } from "../sync/fan-flags.ts";
+import { applyFlagOverrides, flagKey, listFanFlags, patchedFlag, saveFanFlag } from "../sync/fan-flags.ts";
+import { inboxByRecent } from "../../../src/lib/inbox-selection.ts";
 import type { ReadSql } from "../sync/store.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -59,19 +60,42 @@ test("sin la tabla la lista de chats sigue funcionando", async () => {
   await db.close();
 });
 
-test("los chats fijados van arriba, el último fijado primero, y el resto no cambia de orden", () => {
+test("los chats fijados van arriba, el último fijado primero, y el resto sigue por mensaje reciente", () => {
   const rows = [
-    { creatorId: "c", fanKey: "a" },
-    { creatorId: "c", fanKey: "b" },
-    { creatorId: "c", fanKey: "c" },
-    { creatorId: "c", fanKey: null },
-    { creatorId: "d", fanKey: "b" },
+    { id: "a", lastMessageAt: "2026-11-05T10:00:00Z" },
+    { id: "b", lastMessageAt: "2026-11-01T10:00:00Z" },
+    { id: "c", lastMessageAt: "2026-11-03T10:00:00Z" },
+    { id: "d", lastMessageAt: "2026-11-04T10:00:00Z" },
+    { id: "e", lastMessageAt: null },
   ];
-  const flags = [
-    { creatorId: "c", fanKey: "c", favorite: false, muted: false, pinnedAt: "2026-11-01T10:00:00.000Z" },
-    { creatorId: "c", fanKey: "b", favorite: false, muted: false, pinnedAt: "2026-11-02T10:00:00.000Z" },
-    { creatorId: "c", fanKey: "a", favorite: true, muted: false, pinnedAt: null },
-  ];
-  assert.deepEqual(pinnedFirst(rows, flags).map((row) => `${row.creatorId}${row.fanKey}`), ["cb", "cc", "ca", "cnull", "db"]);
-  assert.deepEqual(pinnedFirst(rows, []), rows);
+  const pins: Record<string, string> = { b: "2026-11-27T10:00:00Z", c: "2026-11-26T10:00:00Z" };
+  const order = (list: typeof rows) => inboxByRecent(list, (row) => pins[row.id] ?? null).map((row) => row.id);
+  assert.deepEqual(order(rows), ["b", "c", "a", "d", "e"]);
+  // Al llegar un mensaje nuevo a un chat no fijado, los fijados siguen arriba y en el mismo orden.
+  assert.deepEqual(order(rows.map((row) => (row.id === "e" ? { ...row, lastMessageAt: "2026-11-28T08:00:00Z" } : row))), ["b", "c", "e", "a", "d"]);
+  // Sin fijados, o sin función, el orden es el de siempre.
+  assert.deepEqual(inboxByRecent(rows).map((row) => row.id), ["a", "d", "c", "b", "e"]);
+  assert.deepEqual(inboxByRecent(rows, () => null).map((row) => row.id), ["a", "d", "c", "b", "e"]);
+});
+
+test("al pulsar fijar o favorito la marca cambia al instante y un refresco viejo no la deshace", () => {
+  const target = { creatorId: "c", fanKey: "f" };
+  const now = "2026-11-28T09:00:00.000Z";
+  const pinned = patchedFlag(null, target, { pinned: true }, now);
+  assert.equal(pinned.pinnedAt, now);
+  assert.equal(pinned.favorite, false);
+  const both = patchedFlag(pinned, target, { favorite: true }, "2026-11-28T09:05:00.000Z");
+  assert.equal(both.pinnedAt, now, "fijar otra marca no mueve la hora del pin");
+  assert.equal(both.favorite, true);
+  assert.equal(patchedFlag(both, target, { pinned: false }, now).pinnedAt, null);
+  const overrides = { [flagKey(target)]: pinned };
+  // El servidor aún manda la lista vieja sin el pin: se ve fijado igualmente.
+  assert.deepEqual(applyFlagOverrides([], overrides).map((flag) => flag.pinnedAt), [now]);
+  // Un desfijado pendiente quita la marca aunque el servidor todavía la traiga.
+  const unpinned = patchedFlag(pinned, target, { pinned: false }, now);
+  assert.deepEqual(applyFlagOverrides([pinned], { [flagKey(target)]: unpinned }), []);
+  // Otras marcas no se tocan.
+  const other = { creatorId: "c", fanKey: "g", favorite: true, muted: false, pinnedAt: null };
+  assert.deepEqual(applyFlagOverrides([other], overrides).length, 2);
+  assert.deepEqual(applyFlagOverrides([other], {}), [other]);
 });

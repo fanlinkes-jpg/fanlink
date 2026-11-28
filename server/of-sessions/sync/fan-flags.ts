@@ -73,10 +73,29 @@ export async function saveFanFlag(
   };
 }
 
-/** Fijados arriba (el último fijado primero) y el resto en su orden. */
-export function pinnedFirst<T extends { creatorId: string; fanKey: string | null }>(rows: readonly T[], flags: readonly FanFlag[]): T[] {
-  const pinned = new Map(flags.filter((flag) => flag.pinnedAt).map((flag) => [`${flag.creatorId}\u001f${flag.fanKey}`, flag.pinnedAt as string]));
-  const at = (row: T) => (row.fanKey ? pinned.get(`${row.creatorId}\u001f${row.fanKey}`) ?? null : null);
-  const top = rows.filter((row) => at(row) != null).sort((left, right) => String(at(right)).localeCompare(String(at(left))));
-  return [...top, ...rows.filter((row) => at(row) == null)];
+/**
+ * Marcas con los cambios que aún no ha confirmado el servidor. Así la lista cambia al pulsar
+ * y un refresco automático que llega antes de guardar no devuelve el chat a su sitio.
+ */
+export function applyFlagOverrides(flags: readonly FanFlag[], overrides: Readonly<Record<string, FanFlag>>): FanFlag[] {
+  const keys = Object.keys(overrides);
+  if (keys.length === 0) return [...flags];
+  const rest = flags.filter((flag) => !(flagKey(flag) in overrides));
+  const extra = keys.map((key) => overrides[key] as FanFlag).filter((flag) => flag.favorite || flag.muted || flag.pinnedAt);
+  return [...rest, ...extra];
+}
+
+export function flagKey(flag: { creatorId: string; fanKey: string }): string {
+  return `${flag.creatorId}\u001f${flag.fanKey}`;
+}
+
+/** La marca resultante de aplicar un parche a la actual. Fijar pone la hora; desfijar la quita. */
+export function patchedFlag(current: FanFlag | null, target: { creatorId: string; fanKey: string }, patch: FanFlagPatch, nowIso: string): FanFlag {
+  return {
+    creatorId: target.creatorId,
+    fanKey: target.fanKey,
+    favorite: patch.favorite ?? current?.favorite ?? false,
+    muted: patch.muted ?? current?.muted ?? false,
+    pinnedAt: patch.pinned === undefined ? current?.pinnedAt ?? null : patch.pinned ? current?.pinnedAt ?? nowIso : null,
+  };
 }
