@@ -11,8 +11,8 @@ import { FAN_SEGMENT_IDS, countSegments, fanSegments, spendSegmentOf, isNewFan, 
 
 export type Basis = "net" | "gross";
 export type Granularity = "hour" | "day" | "week" | "month";
-export type Channel = "subs" | "messages" | "tips" | "posts" | "referrals" | "streams";
-export const CHANNELS: readonly Channel[] = ["subs", "messages", "tips", "posts", "referrals", "streams"];
+export type Channel = "subs" | "messages" | "tips" | "posts" | "referrals" | "streams" | "other";
+export const CHANNELS: readonly Channel[] = ["subs", "messages", "tips", "posts", "referrals", "streams", "other"];
 export const CHANNEL_LABELS: Record<Channel, string> = {
   subs: "Suscripciones",
   messages: "Mensajes",
@@ -20,6 +20,7 @@ export const CHANNEL_LABELS: Record<Channel, string> = {
   posts: "Posts",
   referrals: "Referidos",
   streams: "Directos",
+  other: "Sin desglosar",
 };
 
 export const OF_NET_SHARE = 0.8;
@@ -80,6 +81,10 @@ export type InsightData = {
   fans: InsightFan[];
   fansSyncedCreatorIds: string[];
   earningsSyncedCreatorIds: string[];
+  /** Creadoras cuyos fans salen de los chats sincronizados porque la lista de fans no se pudo leer. */
+  fansFromChatsCreatorIds?: string[];
+  /** Creadoras cuyas ventas salen de las notificaciones de compra porque no hay ingresos leídos. Dato parcial. */
+  salesFromNotificationCreatorIds?: string[];
   messages: InsightMessage[];
   attributions: InsightAttribution[];
   staff: InsightStaff[];
@@ -219,10 +224,12 @@ export function salesOf(data: Pick<InsightData, "transactions" | "earnings">, cu
       net: amountOf(tx, "net"),
     });
   }
+  // Días con gráfico por tipo: ahí manda el desglose. Un día que solo tiene el total entra como «Sin desglosar».
+  const typedDays = new Set(data.earnings.filter((row) => row.kind !== "total").map((row) => `${row.creatorId}|${row.day}`));
   for (const row of data.earnings) {
-    if (row.kind === "total") continue;
     if (txDays.has(`${row.creatorId}|${row.day}`)) continue;
-    const channel = channelOf(row.kind);
+    if (row.kind === "total" && typedDays.has(`${row.creatorId}|${row.day}`)) continue;
+    const channel = row.kind === "total" ? "other" : channelOf(row.kind);
     if (!channel) continue;
     const at = dayStart(row.day).getTime() + 12 * 3_600_000;
     if (at >= cutAt.getTime()) continue;

@@ -26,6 +26,10 @@ import {
   type SummaryView,
 } from "../../../src/lib/dashboard-insights.ts";
 import type { FanSegmentId } from "../../../src/lib/fan-segments.ts";
+import type { CreatorSyncStatus } from "../../../src/lib/sync-status.ts";
+
+/** Estado por separado de chats, ingresos y fans de cada creadora visible. Sin cifras de dinero. */
+export type SourceRow = { creatorId: string; name: string } & CreatorSyncStatus;
 
 export type InsightRequest = {
   from?: string | null;
@@ -70,6 +74,7 @@ export type DashboardInsightsView = {
   newSubs: NewSubsView;
   segments: { counts: Record<FanSegmentId | "unknown", number> | null; fans: SegmentFan[] };
   alerts: InsightAlert[];
+  sources: SourceRow[];
 };
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -156,6 +161,7 @@ export function buildInsightsView(input: {
       newSubs,
       segments,
       alerts: insightAlertsOf(data, query, cutAt, now, true),
+      sources: [],
     };
   }
 
@@ -198,6 +204,7 @@ export function buildInsightsView(input: {
     newSubs,
     segments,
     alerts: ownAlerts,
+    sources: [],
   };
 }
 
