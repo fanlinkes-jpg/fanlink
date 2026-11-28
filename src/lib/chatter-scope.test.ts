@@ -155,7 +155,7 @@ test("notificaciones: un miembro no lee las de una cuenta no asignada", () => {
 async function database() {
   const dir = await mkdtemp(path.join(tmpdir(), "fanlink-scope-"));
   const pg = new PGlite(dir);
-  for (const name of ["0002_workspace.sql", "0003_of_sessions.sql", "0004_staff_and_connection.sql"]) {
+  for (const name of ["0002_workspace.sql", "0003_of_sessions.sql", "0004_staff_and_connection.sql", "0063_staff_employees.sql"]) {
     await pg.exec(await readFile(path.join(root, "migrations", name), "utf8"));
   }
   return { pg, sql: { query: async <T>(text: string, params: unknown[] = []) => (await pg.query<T>(text, params)).rows } };

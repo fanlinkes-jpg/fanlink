@@ -112,7 +112,7 @@ test("las migraciones 0037+ no tienen DROP ni DELETE y se aplican dos veces", as
 test("la 0037+ funciona encima de las 0028–0031 antiguas y no borra esas filas", async () => {
   const db = new PGlite();
   try {
-    for (const file of ["0007_of_reads.sql", "0008_sync_schedule.sql", "0009_of_chats.sql", "0013_chat_price.sql", "0019_chat_author.sql"]) {
+    for (const file of ["0007_of_reads.sql", "0008_sync_schedule.sql", "0009_of_chats.sql", "0013_chat_price.sql", "0019_chat_author.sql", "0063_staff_employees.sql", "0064_outbound_author_name.sql"]) {
       await db.exec(await readFile(path.join(root, "migrations", file), "utf8"));
     }
     await db.exec(OLD_0028);
