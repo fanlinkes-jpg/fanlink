@@ -1,6 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { AtSign, Bell, ChevronLeft, ChevronRight, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, RefreshCw, ScrollText, Send, Type, BellOff, Images, Pin, Search, Star, StickyNote, Pencil } from "lucide-react";
+import { AtSign, Bell, Check, CheckCheck, ChevronLeft, ChevronRight, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, RefreshCw, ScrollText, Send, Type, BellOff, EllipsisVertical, Images, Pin, Search, Star, StickyNote, Pencil } from "lucide-react";
 import { broadcastOnlineFans, cancelOnlineBroadcast, chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, markChatOpened, readChatVault, readFanPurchases, readThreadHistory, readVisibleFanSpend, recordChatOutbound, resolveOnlineOutbound, reviewChatOutbound, runFanChatMenu, saveFanFlag, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
 import { OnlineFansPanel, type OnlineBroadcastPayload } from "@/features/online-fans-panel";
 import type { OnlineFanRow } from "@/lib/online-fan-row";
@@ -50,9 +50,9 @@ import { spendTone } from "@/lib/spend-tiers";
 import { rowSpendCents } from "@/lib/row-spend";
 import { FanSpendLabel } from "@/lib/fan-spend-label";
 import { useInboxSelection } from "@/lib/inbox-selection";
-import { ChatMediaPlayer } from "@/features/chat-media-player";
-import { MediaStrip } from "@/features/media-strip";
-import { bubbleBlocks, bubblePriceLabel } from "@/lib/chat-bubble";
+import { MessageMedia, type MessageSlide } from "@/features/message-media";
+import { bubbleBlocks, bubbleText, mediaTags, pricePill, readState, tagLine } from "@/lib/chat-bubble";
+import { withDateSeparators } from "@/lib/chat-dates";
 import { mergeHistoryMessages, rememberThreadMessages, scrollAnchor, scrollDeltaForAnchor, type ScrollAnchor } from "@/lib/chat-history";
 import { VAULT_THUMB_MISSING, vaultMediaSrc } from "@/lib/chat-media";
 import { VaultBrowser } from "@/features/vault-browser";
@@ -186,7 +186,7 @@ function threadMark(creatorId: string, threadKey: string): string {
   return `${creatorId}:${threadKey}`;
 }
 
-function ThreadMessage({ message, find }: { message: {
+function ThreadMessage({ message, find, watermark }: { watermark?: string | null; message: {
   creatorId: string;
   threadKey: string;
   messageKey: string;
@@ -195,51 +195,80 @@ function ThreadMessage({ message, find }: { message: {
   authorName: string | null;
   automatic: boolean | null;
   mediaCount: number | null;
-  media: Array<{ kind: "foto" | "video" | "audio" | null; locked?: boolean | null }> | null;
+  media: Array<{ kind: "foto" | "video" | "audio" | null; locked?: boolean | null; seconds?: number | null; tags?: Array<{ name: string | null; username: string | null }> | null }> | null;
   priceCents: number | null;
   purchased: boolean | null;
   sentAt?: string;
   seen?: boolean | null;
 }; find?: { query: string; active: boolean; flash: boolean } }) {
-  const slides = message.media ?? [];
-  const hasMedia = (message.mediaCount ?? 0) > 0 || slides.length > 0;
+  const media = message.media ?? [];
+  const hasMedia = (message.mediaCount ?? 0) > 0 || media.length > 0;
   const messageLocked = message.purchased === true
     ? false
     : message.priceCents != null && message.priceCents > 0 && message.purchased === false;
   const slideLocked = (slide: { locked?: boolean | null }) => message.purchased === true ? false : messageLocked || slide.locked === true;
-  const openSlides = slides.length === 0
-    ? (hasMedia && !messageLocked ? [{ kind: "video" as const, index: 0 }] : [])
-    : slides.flatMap((slide, index) => (slideLocked(slide) ? [] : [{ kind: slide.kind, index }]));
-  const lockedCount = slides.length === 0
-    ? (hasMedia && messageLocked ? 1 : 0)
-    : slides.filter((slide) => slideLocked(slide)).length;
+  const slides: MessageSlide[] = media.length === 0
+    ? (hasMedia ? [{ index: 0, kind: "video", locked: messageLocked, seconds: null }] : [])
+    : media.map((slide, index) => ({ index, kind: slide.kind, locked: slideLocked(slide), seconds: slide.seconds ?? null }));
   const layout = bubbleBlocks({
-    mediaCount: openSlides.length,
+    mediaCount: slides.length,
     priceCents: message.priceCents,
     body: message.body,
   });
   const who = message.fromFan ? "" : message.authorName ? authorLabel(message.authorName, false) : authorLabel(null, message.automatic);
-  const pay = bubblePriceLabel(message);
+  const pill = pricePill(message);
+  const tags = tagLine(mediaTags(message.media));
+  const text = bubbleText(message.body, slides.length > 0 || pill != null);
   const when = message.sentAt ? madridClock(message.sentAt) : "";
-  const seen = message.seen === true ? "Leído" : "";
-  const players = openSlides.map((slide) => (
-    <ChatMediaPlayer key={`${message.messageKey}-${slide.index}`} creatorId={message.creatorId} threadKey={message.threadKey} messageKey={message.messageKey} index={slide.index} kind={slide.kind} compact={layout.layout === "carousel"} />
-  ));
+  const read = readState(message);
+  const marked = (value: string) => find && find.query
+    ? highlightParts(value, find.query).map((part, index) => part.hit ? <mark key={index} className="rounded bg-[#ffe58f] px-0.5">{part.text}</mark> : <span key={index}>{part.text}</span>)
+    : value;
+  const hasBubble = slides.length > 0 || message.body || pill != null;
+  const footer = pill != null || who || when || read != null;
   return (
     <li data-message-id={message.messageKey} className={message.fromFan ? "" : "text-right"} data-layout={layout.layout} data-automatic={message.automatic ? "1" : "0"}>
-      {(openSlides.length > 0 || message.body || pay) ? (
-      <div className={`inline-block max-w-[78%] rounded-3xl px-4 py-2.5 text-left text-[15px] leading-relaxed shadow-[0_1px_2px_rgba(29,36,51,0.06)] ${message.fromFan ? "border border-[#eceff5] bg-white" : "bg-[#e3edff]"} ${find?.active || find?.flash ? "ring-2 ring-[#ffb020] ring-offset-2" : ""}`}>
-        {layout.layout === "carousel" ? <MediaStrip>{players}</MediaStrip> : players}
-        {pay ? <p className="text-[11px] font-medium text-[#1d2433]">{pay}</p> : null}
-        {message.body ? <p>{find && find.query ? highlightParts(message.body, find.query).map((part, index) => part.hit ? <mark key={index} className="rounded bg-[#ffe58f] px-0.5">{part.text}</mark> : <span key={index}>{part.text}</span>) : message.body}</p> : null}
+      {hasBubble ? (
+      <div className={`inline-flex flex-col overflow-hidden rounded-[22px] text-left text-[15px] leading-relaxed text-[#1d2433] shadow-[0_1px_3px_rgba(29,36,51,0.08),0_6px_18px_-8px_rgba(29,36,51,0.12)] ${slides.length > 0 ? "w-[70%] max-w-[380px]" : "max-w-[70%]"} ${message.fromFan ? "border border-[#eceff5] bg-white" : "bg-[#e3edff]"} ${find?.active || find?.flash ? "ring-2 ring-[#ffb020] ring-offset-2" : ""}`}>
+        {slides.length > 0 ? (
+          <MessageMedia
+            ids={{ creatorId: message.creatorId, threadKey: message.threadKey, messageKey: message.messageKey }}
+            slides={slides}
+            watermark={message.fromFan ? null : watermark ?? null}
+            tagged={tags != null}
+            priceLabel={pill ? `${pill.money} · ${pill.label}` : null}
+          />
+        ) : null}
+        {tags ? (
+          <p className="flex items-center gap-1.5 bg-[#d3e4ff]/70 px-4 py-1.5 text-xs text-[#2456c7]" title={tags}>
+            <AtSign className="h-3.5 w-3.5 shrink-0" aria-hidden />
+            <span className="shrink-0 font-medium">Etiquetas</span>
+            <span className="truncate">· {tags}</span>
+          </p>
+        ) : null}
+        {text.title || text.paragraphs.length > 0 ? (
+          <div className="space-y-2 px-4 py-3">
+            {text.title ? <p className="font-semibold tracking-[-0.01em] text-[#111827]">{marked(text.title)}</p> : null}
+            {text.paragraphs.map((paragraph, index) => <p key={index}>{marked(paragraph)}</p>)}
+          </div>
+        ) : null}
+        {footer ? (
+          <div className={`flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 pb-2.5 text-[11px] text-[#7a8496] ${text.title || text.paragraphs.length > 0 ? "" : "pt-2.5"}`}>
+            {pill ? (
+              <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 font-semibold ring-1 ring-inset ${pill.state === "pagado" ? "bg-[#e6f6ec] text-[#13693a] ring-[#bfe5cd]" : pill.state === "no pagado" ? "bg-[#fff3e0] text-[#9a5b00] ring-[#f6dcae]" : "bg-[#f1f3f7] text-[#6d7585] ring-[#e1e5ec]"}`}>
+                {pill.money}<span className="font-medium opacity-80">· {pill.label}</span>
+              </span>
+            ) : <span />}
+            <span className="ml-auto inline-flex items-center gap-1.5">
+              {who ? <span>{who}</span> : null}
+              {who && when ? <span aria-hidden>·</span> : null}
+              {when ? <span>{when}</span> : null}
+              {read === "leido" ? <CheckCheck className="h-3.5 w-3.5 text-[#3b6cff]" aria-label="Leído" /> : read === "enviado" ? <Check className="h-3.5 w-3.5" aria-label="Enviado" /> : null}
+            </span>
+          </div>
+        ) : null}
       </div>
       ) : null}
-      {lockedCount > 0 ? (
-        <p className={`mt-1 flex items-center gap-1 text-[#8a96a3] ${message.fromFan ? "" : "justify-end"}`} aria-label="Medios bloqueados">
-          {Array.from({ length: lockedCount }, (_, index) => <Lock key={index} className="h-3.5 w-3.5" aria-hidden />)}
-        </p>
-      ) : null}
-      {who || when || seen ? <p className="mt-1.5 text-[11px] text-[#8a93a3]">{[who, when, seen].filter(Boolean).join(" · ")}</p> : null}
     </li>
   );
 }
@@ -260,7 +289,7 @@ function OutboundBubbleView({
   const caption = bubbleCaption(job.state, job.reason);
   return (
     <li className="text-right">
-      <div className="inline-block max-w-[78%] rounded-3xl bg-[#e3edff] px-4 py-2.5 text-left text-[15px] leading-relaxed shadow-[0_1px_2px_rgba(29,36,51,0.06)]">
+      <div className="inline-block max-w-[70%] rounded-3xl bg-[#e3edff] px-4 py-2.5 text-left text-[15px] leading-relaxed shadow-[0_1px_2px_rgba(29,36,51,0.06)]">
         {job.vault.length > 0 ? <VaultThumbRow creatorId={job.creatorId} pieces={job.vault} /> : null}
         {job.body ? <p>{job.body}</p> : null}
       </div>
@@ -322,6 +351,7 @@ export function RealChatsPage() {
   const [insightsOpen, setInsightsOpen] = useState(false);
   const [insightsTab, setInsightsTab] = useState<"Insights" | "Ventas" | "Notas">("Insights");
   const [galleryOpen, setGalleryOpen] = useState(false);
+  const [refreshSpin, setRefreshSpin] = useState(false);
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState("");
   const [findIndex, setFindIndex] = useState(0);
@@ -854,13 +884,33 @@ export function RealChatsPage() {
       stickToBottom.current = false;
       return;
     }
-    if (seenThread.current !== openThread) {
-      seenThread.current = openThread;
-      stickToBottom.current = true;
-    }
     if (!stickToBottom.current) return;
     node.scrollTop = node.scrollHeight;
+    const frame = requestAnimationFrame(() => {
+      if (stickToBottom.current && !scrollMark.current && threadBox.current) threadBox.current.scrollTop = threadBox.current.scrollHeight;
+    });
+    return () => cancelAnimationFrame(frame);
   }, [threadTail, openThread, messages.length]);
+  useLayoutEffect(() => {
+    // Al abrir otro chat: ancla vieja fuera y a leer desde el último mensaje.
+    if (seenThread.current === openThread) return;
+    seenThread.current = openThread;
+    scrollMark.current = null;
+    stickToBottom.current = true;
+    const node = threadBox.current;
+    if (node) node.scrollTop = node.scrollHeight;
+  }, [openThread]);
+  // Lo que cambia de alto después (fotos, vídeos, historial que llega, separadores) no suelta el final.
+  useEffect(() => {
+    const node = threadBox.current;
+    if (!node || typeof ResizeObserver === "undefined") return;
+    const follow = () => {
+      if (stickToBottom.current && !scrollMark.current) node.scrollTop = node.scrollHeight;
+    };
+    const observer = new ResizeObserver(follow);
+    for (const child of Array.from(node.children)) observer.observe(child);
+    return () => observer.disconnect();
+  }, [openThread, messages.length, threadTail]);
   useEffect(() => {
     const node = threadBox.current;
     if (!node || typeof ResizeObserver === "undefined") return;
@@ -870,6 +920,9 @@ export function RealChatsPage() {
     observer.observe(node);
     return () => observer.disconnect();
   }, [openThread]);
+  const headerOnline = selected ? fanShowsOnline(selected.online, selected.lastSeenAt, presenceNow, fanListedOnline(onlineKeys, selected.fanKey, selected.threadKey)) : false;
+  const headerSeen = selected ? lastSeenLabel(selected.lastSeenAt, presenceNow, headerOnline) : null;
+  const watermarkHandle = creators.find((creator) => creator.id === selected?.creatorId)?.handle?.trim() || null;
   const creatorName = creators.find((creator) => creator.id === inboxCreator)?.name ?? "Cuenta";
   const slash = slashQuery(draft);
   const scriptHits = matchScripts(scripts, slash != null ? slash : libraryQuery);
@@ -1570,16 +1623,38 @@ export function RealChatsPage() {
       <section className="hidden h-full min-h-0 min-w-0 flex-1 md:flex">
         <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <header className="relative flex shrink-0 items-center justify-between gap-3 border-b border-[#e6e8ee] px-4 py-3">
-              <div className="flex min-w-0 items-center gap-2">
-                {selected ? <FanFace name={fanTitle(selected)} url={selected.avatarUrl} online={fanShowsOnline(selected.online, selected.lastSeenAt, presenceNow, fanListedOnline(onlineKeys, selected.fanKey, selected.threadKey))} /> : null}
+              <div className="flex min-w-0 items-center gap-3">
+                {selected ? <FanFace name={fanTitle(selected)} url={selected.avatarUrl} online={headerOnline} /> : null}
                 <div className="min-w-0">
                 <div className="flex min-w-0 items-center gap-1">
-                <button type="button" className="block max-w-full truncate text-left text-base font-semibold" onClick={() => { setFanMenu((open) => !open); setRenaming(false); }} aria-expanded={fanMenu} aria-label="Opciones del fan">
+                <button type="button" className="block max-w-full truncate text-left text-lg font-semibold tracking-[-0.01em]" onClick={() => { setFanMenu((open) => !open); setRenaming(false); }} aria-expanded={fanMenu} aria-label="Opciones del fan">
                   {selected ? fanTitle(selected) : syncPhaseLabel(syncPhase)}
                 </button>
-                {selected?.fanKey ? <button type="button" aria-label="Renombrar fan" title="Renombrar (solo en el CRM)" className="shrink-0 rounded p-1 text-[#6d7585] hover:bg-[#eef2ff]" onClick={startRename}><Pencil className="h-3.5 w-3.5" /></button> : null}
+                {selected?.fanKey ? <button type="button" aria-label="Renombrar fan" title="Renombrar (solo en el CRM)" className="shrink-0 rounded p-1 text-[#8a93a3] transition-colors hover:text-[#1d2433]" onClick={startRename}><Pencil className="h-3.5 w-3.5" /></button> : null}
                 </div>
-                {selected && lastSeenLabel(selected.lastSeenAt, presenceNow, fanShowsOnline(selected.online, selected.lastSeenAt, presenceNow, fanListedOnline(onlineKeys, selected.fanKey, selected.threadKey))) ? <p className="truncate text-xs text-[#6d7585]">{lastSeenLabel(selected.lastSeenAt, presenceNow, fanShowsOnline(selected.online, selected.lastSeenAt, presenceNow, fanListedOnline(onlineKeys, selected.fanKey, selected.threadKey)))}</p> : null}
+                {selected ? (
+                  <div className="mt-0.5 flex min-w-0 flex-wrap items-center text-xs text-[#6d7585]">
+                    {headerOnline ? (
+                      <span className="inline-flex items-center gap-1.5 font-medium text-[#1d2433]"><span className="h-2 w-2 rounded-full bg-[#22c55e]" aria-hidden />Disponible ahora</span>
+                    ) : headerSeen ? <span className="truncate">{headerSeen}</span> : null}
+                    {selected.fanKey ? (
+                      <>
+                        <span className="mx-1.5 h-4 w-px shrink-0 bg-[#e3e7ee]" aria-hidden />
+                        <button type="button" aria-label="Favorito" aria-pressed={flagFor(selected)?.favorite === true} title="Favorito (CRM)" className={`rounded p-1 text-[#8a93a3] transition-colors hover:text-[#1d2433] ${flagFor(selected)?.favorite ? "!text-[#f5a300]" : ""}`} onClick={() => setFlag({ favorite: !(flagFor(selected)?.favorite === true) })}><Star className="h-4 w-4" fill={flagFor(selected)?.favorite ? "currentColor" : "none"} /></button>
+                        <span className="mx-1.5 h-4 w-px shrink-0 bg-[#e3e7ee]" aria-hidden />
+                        <button type="button" aria-label={isMuted(selected) ? "Activar avisos" : "Silenciar avisos"} aria-pressed={isMuted(selected)} title={isMuted(selected) ? "Avisos silenciados (CRM)" : "Silenciar avisos (CRM)"} className={`rounded p-1 text-[#8a93a3] transition-colors hover:text-[#1d2433] ${isMuted(selected) ? "!text-[#b42318]" : ""}`} onClick={toggleMuted}>{isMuted(selected) ? <BellOff className="h-4 w-4" /> : <Bell className="h-4 w-4" />}</button>
+                        <span className="mx-1.5 h-4 w-px shrink-0 bg-[#e3e7ee]" aria-hidden />
+                        <button type="button" aria-label="Nota" title="Nota de la creadora" className="rounded p-1 text-[#8a93a3] transition-colors hover:text-[#1d2433]" onClick={() => { setInsightsTab("Notas"); setInsightsOpen(true); }}><StickyNote className="h-4 w-4" /></button>
+                        <span className="mx-1.5 h-4 w-px shrink-0 bg-[#e3e7ee]" aria-hidden />
+                        <button type="button" aria-label={flagFor(selected)?.pinnedAt ? "Desfijar chat" : "Fijar chat"} aria-pressed={Boolean(flagFor(selected)?.pinnedAt)} title="Fijar arriba de la lista (CRM)" className={`rounded p-1 text-[#8a93a3] transition-colors hover:text-[#1d2433] ${flagFor(selected)?.pinnedAt ? "!text-[#2456c7]" : ""}`} onClick={() => setFlag({ pinned: !flagFor(selected)?.pinnedAt })}><Pin className="h-4 w-4" fill={flagFor(selected)?.pinnedAt ? "currentColor" : "none"} /></button>
+                      </>
+                    ) : null}
+                    <span className="mx-1.5 h-4 w-px shrink-0 bg-[#e3e7ee]" aria-hidden />
+                    <button type="button" className="inline-flex items-center gap-1 rounded p-1 text-[#8a93a3] transition-colors hover:text-[#1d2433]" onClick={() => setGalleryOpen(true)}><Images className="h-4 w-4" aria-hidden /><span className="text-xs">Galería</span></button>
+                    <span className="mx-1.5 h-4 w-px shrink-0 bg-[#e3e7ee]" aria-hidden />
+                    <button type="button" className="inline-flex items-center gap-1 rounded p-1 text-[#8a93a3] transition-colors hover:text-[#1d2433]" aria-pressed={findOpen} onClick={() => setFindOpen((open) => !open)}><Search className="h-4 w-4" aria-hidden /><span className="text-xs">Encontrar</span></button>
+                  </div>
+                ) : null}
                 </div>
                 {fanMenu && selected ? (
                   <>
@@ -1655,24 +1730,10 @@ export function RealChatsPage() {
                   </>
                 ) : null}
               </div>
-              <div className="flex items-center gap-1.5">
-                {selected?.fanKey ? (
-                  <>
-                    <button type="button" aria-label="Favorito" aria-pressed={flagFor(selected)?.favorite === true} title="Favorito (CRM)" className={`rounded-lg p-1.5 hover:bg-[#fff7e0] ${flagFor(selected)?.favorite ? "text-[#f5a300]" : "text-[#6d7585]"}`} onClick={() => setFlag({ favorite: !(flagFor(selected)?.favorite === true) })}><Star className="h-4 w-4" fill={flagFor(selected)?.favorite ? "currentColor" : "none"} /></button>
-                    <button type="button" aria-label={isMuted(selected) ? "Activar avisos" : "Silenciar avisos"} aria-pressed={isMuted(selected)} title={isMuted(selected) ? "Avisos silenciados (CRM)" : "Silenciar avisos (CRM)"} className={`rounded-lg p-1.5 hover:bg-[#eef2ff] ${isMuted(selected) ? "text-[#b42318]" : "text-[#6d7585]"}`} onClick={toggleMuted}>{isMuted(selected) ? <BellOff className="h-4 w-4" /> : <Bell className="h-4 w-4" />}</button>
-                    <button type="button" aria-label="Nota" title="Nota de la creadora" className="rounded-lg p-1.5 text-[#6d7585] hover:bg-[#eef2ff]" onClick={() => { setInsightsTab("Notas"); setInsightsOpen(true); }}><StickyNote className="h-4 w-4" /></button>
-                    <button type="button" aria-label={flagFor(selected)?.pinnedAt ? "Desfijar chat" : "Fijar chat"} aria-pressed={Boolean(flagFor(selected)?.pinnedAt)} title="Fijar arriba de la lista (CRM)" className={`rounded-lg p-1.5 hover:bg-[#eef2ff] ${flagFor(selected)?.pinnedAt ? "text-[#2456c7]" : "text-[#6d7585]"}`} onClick={() => setFlag({ pinned: !flagFor(selected)?.pinnedAt })}><Pin className="h-4 w-4" fill={flagFor(selected)?.pinnedAt ? "currentColor" : "none"} /></button>
-                  </>
-                ) : null}
-                {selected ? (
-                  <>
-                    <button type="button" className="flex items-center gap-1 rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => setGalleryOpen(true)}><Images className="h-3.5 w-3.5" aria-hidden />Galería</button>
-                    <button type="button" className="flex items-center gap-1 rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" aria-pressed={findOpen} onClick={() => setFindOpen((open) => !open)}><Search className="h-3.5 w-3.5" aria-hidden />Encontrar</button>
-                  </>
-                ) : null}
-                <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => void refresh()}>Recargar</button>
-                <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => { setInsightsTab("Insights"); setInsightsOpen(true); }}>Ficha del fan</button>
-                <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => { setFanMenu((open) => !open); setRenaming(false); }} aria-label="Menú" aria-expanded={fanMenu}>Menú</button>
+              <div className="flex shrink-0 items-center gap-1">
+                {selected ? <button type="button" className="rounded-lg px-2.5 py-1 text-xs font-medium text-[#6d7585] hover:bg-[#f1f4fa] hover:text-[#1d2433]" onClick={() => { setInsightsTab("Insights"); setInsightsOpen(true); }}>Ficha del fan</button> : null}
+                <button type="button" aria-label="Recargar" title="Recargar" className="rounded-full p-2 text-[#6d7585] hover:bg-[#f1f4fa] hover:text-[#1d2433]" onClick={() => { setRefreshSpin(true); void Promise.resolve(refresh()).finally(() => setTimeout(() => setRefreshSpin(false), 400)); }}><RefreshCw className={`h-4 w-4 ${refreshSpin ? "animate-spin" : ""}`} aria-hidden /></button>
+                <button type="button" aria-label="Menú" title="Menú" className="rounded-full p-2 text-[#6d7585] hover:bg-[#f1f4fa] hover:text-[#1d2433]" onClick={() => { setFanMenu((open) => !open); setRenaming(false); }} aria-expanded={fanMenu}><EllipsisVertical className="h-4 w-4" aria-hidden /></button>
               </div>
             </header>
             {findOpen && selected ? (
@@ -1709,7 +1770,7 @@ export function RealChatsPage() {
             ) : null}
             <div className="relative min-h-0 flex-1">
             {olderBusy ? <p className="pointer-events-none absolute inset-x-0 top-2 z-10 text-center text-xs text-[#6d7585]">Cargando mensajes anteriores…</p> : null}
-            <ol ref={threadBox} className="h-full space-y-4 overflow-y-auto bg-[#fbfcfe] px-[max(1rem,calc((100%-760px)/2))] py-6" onScroll={(event) => {
+            <ol ref={threadBox} onLoadCapture={() => { if (stickToBottom.current && !scrollMark.current && threadBox.current) threadBox.current.scrollTop = threadBox.current.scrollHeight; }} onLoadedMetadataCapture={() => { if (stickToBottom.current && !scrollMark.current && threadBox.current) threadBox.current.scrollTop = threadBox.current.scrollHeight; }} className="h-full space-y-4 overflow-y-auto [overflow-anchor:none] bg-[#fbfcfe] px-[max(1rem,calc((100%-760px)/2))] py-6" onScroll={(event) => {
               const node = event.currentTarget;
               stickToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80;
               if (node.scrollTop > 24 || !selected || olderLock.current || historyDone) return;
@@ -1741,12 +1802,23 @@ export function RealChatsPage() {
               }).finally(() => {
                 olderLock.current = false;
                 setOlderBusy(false);
+                // Pasado el ajuste del historial, el ancla vieja ya no manda.
+                setTimeout(() => { if (!olderLock.current) scrollMark.current = null; }, 1500);
               });
             }}>
               {historyDone ? <li className="text-center text-xs text-[#6d7585]">Inicio de la conversación</li> : null}
               {!selected || (messages.length === 0 && pendingForThread(unmatchedPending(pendingOut), selected).length === 0 && jobList.every((job) => job.creatorId !== selected.creatorId || job.threadKey !== selected.threadKey)) ? <li className="text-sm text-[#6d7585]">{selected ? "Sin datos" : syncPhaseLabel(syncPhase)}</li> : null}
-              {messages.map((message) => (
-                <ThreadMessage key={message.messageKey} message={message} find={findOpen || flashKey === message.messageKey ? { query: findOpen ? findQuery : "", active: activeFindKey === message.messageKey, flash: flashKey === message.messageKey } : undefined} />
+              {withDateSeparators(messages, Date.now()).map(({ message, separator }) => (
+                <Fragment key={message.messageKey}>
+                  {separator ? (
+                    <li className="flex items-center gap-3 py-1 text-[11px] font-medium uppercase tracking-[0.08em] text-[#8a93a3]" data-date-separator={separator} aria-label={separator}>
+                      <span className="h-px flex-1 bg-[#e3e7ee]" />
+                      <span>{separator}</span>
+                      <span className="h-px flex-1 bg-[#e3e7ee]" />
+                    </li>
+                  ) : null}
+                  <ThreadMessage message={message} watermark={watermarkHandle} find={findOpen || flashKey === message.messageKey ? { query: findOpen ? findQuery : "", active: activeFindKey === message.messageKey, flash: flashKey === message.messageKey } : undefined} />
+                </Fragment>
               ))}
               {pendingBesideLocal(pendingForThread(unmatchedPending(pendingOut), selected), jobList).map((item) => {
                 const recovered = draftFromPending(item);
