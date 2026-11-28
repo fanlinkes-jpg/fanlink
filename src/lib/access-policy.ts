@@ -8,6 +8,14 @@ export const TEAM_PERMS = [
   "analitica",
   "equipo",
   "ajustes",
+  /** Todas las creadoras y todos sus chats, sin asignación. */
+  "todas",
+  /** Cifras de la agencia: totales, ingresos y comisiones. */
+  "estadisticas",
+  /** Banco. */
+  "banco",
+  /** Estados de cuenta. */
+  "estados",
 ] as const;
 
 export type TeamPerm = (typeof TEAM_PERMS)[number];
@@ -84,12 +92,12 @@ export function assertOwnerForce(access: TeamAccess | null): void {
   throw new WorkspaceAccessError("Solo la dueña puede forzar la sincronización.");
 }
 
-export type CreatorScope = { role: TeamRole; creatorIds: readonly string[] };
+export type CreatorScope = { role: TeamRole; creatorIds: readonly string[]; perms?: readonly string[] };
 
 /** La dueña ve todas las cuentas. Un miembro solo las que tienen una asignación activa (`creator_grant`). */
 export function canAccessCreator(access: CreatorScope | null, creatorId: string): boolean {
   if (!access || !creatorId) return false;
-  if (access.role === "owner") return true;
+  if (seesAllCreators(access)) return true;
   return access.creatorIds.includes(creatorId);
 }
 
@@ -105,19 +113,38 @@ export function canOperateCreator(access: TeamAccess | null, creatorId: string, 
 /** Cuentas cuyas conversaciones, fichas, bóveda y contadores puede leer esta persona: la dueña todas, un miembro las asignadas. */
 export function creatorIdsForChats(access: CreatorScope | null, allCreatorIds: string[]): string[] {
   if (!access) return [];
-  if (access.role === "owner") return allCreatorIds;
+  if (seesAllCreators(access)) return allCreatorIds;
   const allowed = new Set(access.creatorIds);
   return [...new Set(allCreatorIds.filter((id) => allowed.has(id)))];
 }
 
-/** Totales de la agencia, ingresos y comisiones: solo la dueña. */
-export function canSeeAgencyEarnings(access: { role: TeamRole } | null): boolean {
-  return access?.role === "owner";
+/** Totales de la agencia, ingresos y comisiones: la dueña y quien tenga el permiso «estadisticas» (Admin, Supervisor). */
+export function canSeeAgencyEarnings(access: { role: TeamRole; perms?: readonly string[] } | null): boolean {
+  if (!access) return false;
+  return access.role === "owner" || (access.perms?.includes("estadisticas") ?? false);
+}
+
+/** Banco: la dueña y quien tenga el permiso «banco». */
+export function canSeeBank(access: { role: TeamRole; perms?: readonly string[] } | null): boolean {
+  if (!access) return false;
+  return access.role === "owner" || (access.perms?.includes("banco") ?? false);
+}
+
+/** Estados de cuenta: la dueña y quien tenga el permiso «estados». */
+export function canSeeStatements(access: { role: TeamRole; perms?: readonly string[] } | null): boolean {
+  if (!access) return false;
+  return access.role === "owner" || (access.perms?.includes("estados") ?? false);
+}
+
+/** Todas las creadoras sin asignación: la dueña y quien tenga «todas». */
+export function seesAllCreators(access: { role: TeamRole; perms?: readonly string[] } | null): boolean {
+  if (!access) return false;
+  return access.role === "owner" || (access.perms?.includes("todas") ?? false);
 }
 
 export function canSeeChatterFigures(access: TeamAccess | null, subjectUserId: string): boolean {
   if (!access) return false;
-  if (access.role === "owner") return true;
+  if (access.role === "owner" || canSeeAgencyEarnings(access)) return true;
   return access.userId === subjectUserId;
 }
 
@@ -146,18 +173,20 @@ function maskCampaign(campaign: unknown): unknown {
  */
 export function scopeWorkspaceFor(access: TeamAccess | null, slice: WorkspaceSlice): WorkspaceSlice {
   if (!access) return emptyWorkspace();
-  if (canSeeAgencyEarnings(access)) return slice;
+  const money = canSeeAgencyEarnings(access);
+  if (access.role === "owner") return slice;
   const allowed = new Set(access.creatorIds);
-  const keep = (record: WorkspaceRecord) => allowed.has(recordScope(record));
+  const all = seesAllCreators(access);
+  const keep = (record: WorkspaceRecord) => all || allowed.has(recordScope(record));
   return {
     ...slice,
-    creators: slice.creators.filter(keep).map(maskCreatorMoney),
+    creators: slice.creators.filter(keep).map((record) => (money ? record : maskCreatorMoney(record))),
     fans: slice.fans.filter(keep),
     messages: slice.messages.filter(keep),
     vault: slice.vault.filter(keep),
     links: slice.links.filter(keep),
-    campaigns: slice.campaigns.map(maskCampaign),
-    history: [],
+    campaigns: money ? slice.campaigns : slice.campaigns.map(maskCampaign),
+    history: money ? slice.history : [],
   };
 }
 
@@ -168,6 +197,7 @@ function mergeRecords(
   restore?: (before: WorkspaceRecord, after: WorkspaceRecord) => WorkspaceRecord,
 ): WorkspaceRecord[] {
   const allowed = new Set(access.creatorIds);
+  const all = seesAllCreators(access);
   const nextById = new Map(next.map((record) => [record.id, record]));
   const merged: WorkspaceRecord[] = [];
   const seen = new Set<string>();
@@ -176,7 +206,7 @@ function mergeRecords(
     const after = nextById.get(before.id);
     if (after) {
       merged.push(restore ? restore(before, after) : after);
-    } else if (!allowed.has(recordScope(before))) {
+    } else if (!all && !allowed.has(recordScope(before))) {
       merged.push(before);
     }
   }
@@ -189,8 +219,10 @@ function mergeRecords(
  * dinero que no recibió se conservan. Lo que toque fuera de sus cuentas queda en `assertWorkspaceChange`.
  */
 export function mergeScopedWorkspace(access: TeamAccess, prev: WorkspaceSlice, next: WorkspaceSlice): WorkspaceSlice {
-  if (canSeeAgencyEarnings(access)) return next;
+  if (access.role === "owner") return next;
+  const money = canSeeAgencyEarnings(access);
   const keepMoney = (before: WorkspaceRecord, after: WorkspaceRecord): WorkspaceRecord => {
+    if (money) return after;
     const restored: Record<string, unknown> = { ...after };
     for (const key of CREATOR_MONEY_KEYS) if (key in before) restored[key] = (before as Record<string, unknown>)[key];
     return restored as WorkspaceRecord;
@@ -276,7 +308,7 @@ function assertRecords(
     if (!access.perms.includes(perm)) {
       throw new WorkspaceAccessError(message);
     }
-    if (!access.creatorIds.includes(creatorId)) {
+    if (!seesAllCreators(access) && !access.creatorIds.includes(creatorId)) {
       throw new WorkspaceAccessError(message);
     }
   }

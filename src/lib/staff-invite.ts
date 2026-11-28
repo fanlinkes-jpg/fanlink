@@ -1,12 +1,14 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { TEAM_PERMS, WorkspaceAccessError, type TeamAccess } from "./access-policy.ts";
+import { WorkspaceAccessError, type TeamAccess } from "./access-policy.ts";
 import {
-  INVITED_DEFAULT_PERMS,
   readInvitableLevel,
+  readRoles,
   readStaffLevel,
   type EmployeeRow,
   type InvitableLevel,
+  type StaffLevel,
 } from "./staff-levels.ts";
+import { effectivePerms } from "./staff-roles.ts";
 import type { SqlQuery } from "./workspace-store.ts";
 
 export const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -43,15 +45,31 @@ function cleanCreatorIds(value: unknown): string[] {
 export type InviteInput = {
   name: string;
   email: string;
-  level: string;
+  /** Rol principal. Si se indica `roles`, manda el primero de la lista. */
+  level?: string;
+  /** Varios roles; los permisos de cada uno se suman. */
+  roles?: string[];
   creatorIds: string[];
-  /** Si no se indica, entra solo con «mensajes». */
+  /** Permisos marcados en el pop-up. Si no se indican, el preset de los roles. */
   perms?: string[];
 };
 
-function cleanPerms(value: unknown): string[] {
-  const list = Array.isArray(value) ? value : [];
-  return TEAM_PERMS.filter((perm) => list.includes(perm));
+/** Roles pedidos, sin repetir y sin Owner. Vacío o con uno no válido: error. */
+export function cleanRoles(input: { level?: string; roles?: string[] }): InvitableLevel[] {
+  const asked = input.roles && input.roles.length > 0 ? input.roles : input.level ? [input.level] : [];
+  const roles: InvitableLevel[] = [];
+  for (const item of asked) {
+    const role = readInvitableLevel(item);
+    if (!role) throw new WorkspaceAccessError("Elige un rol válido. El rol Owner no se puede asignar.");
+    if (!roles.includes(role)) roles.push(role);
+  }
+  if (roles.length === 0) throw new WorkspaceAccessError("Elige al menos un rol.");
+  return roles;
+}
+
+/** Los permisos finales salen siempre del servidor: lista pedida (o preset) pasada por las reglas de los roles. */
+function permsFor(roles: readonly StaffLevel[], requested: unknown): string[] {
+  return effectivePerms(roles, Array.isArray(requested) ? (requested as string[]) : null);
 }
 
 type InviteRow = {
@@ -59,6 +77,7 @@ type InviteRow = {
   name: string;
   email: string;
   level: string;
+  roles?: unknown;
   perms: unknown;
   creator_ids: unknown;
   created_by: string;
@@ -72,6 +91,7 @@ export type Invite = {
   name: string;
   email: string;
   level: InvitableLevel;
+  roles: InvitableLevel[];
   perms: string[];
   creatorIds: string[];
   createdBy: string;
@@ -96,11 +116,13 @@ function safeJson(text: string): unknown {
 }
 
 function toInvite(row: InviteRow): Invite {
+  const level = readInvitableLevel(row.level) ?? "chatter";
   return {
     id: row.id,
     name: row.name,
     email: row.email,
-    level: readInvitableLevel(row.level) ?? "chatter",
+    level,
+    roles: readRoles(row.roles, level).filter((role): role is InvitableLevel => role !== "owner"),
     perms: asList(row.perms),
     creatorIds: asList(row.creator_ids),
     createdBy: row.created_by,
@@ -112,14 +134,12 @@ function requireOwner(actor: TeamAccess): void {
   if (actor.role !== "owner") throw new WorkspaceAccessError("Solo la dueña puede gestionar empleados.");
 }
 
-function validate(input: InviteInput): { name: string; email: string; level: InvitableLevel; creatorIds: string[] } {
+function validate(input: InviteInput): { name: string; email: string; roles: InvitableLevel[]; creatorIds: string[] } {
   const name = cleanName(input.name);
   if (!name) throw new WorkspaceAccessError("Escribe el nombre del empleado (hasta 80 caracteres).");
   const email = normalizeEmail(input.email);
   if (!email) throw new WorkspaceAccessError("El correo no es válido.");
-  const level = readInvitableLevel(input.level);
-  if (!level) throw new WorkspaceAccessError("Elige un rol válido. El rol Owner no se puede asignar.");
-  return { name, email, level, creatorIds: cleanCreatorIds(input.creatorIds) };
+  return { name, email, roles: cleanRoles(input), creatorIds: cleanCreatorIds(input.creatorIds) };
 }
 
 async function emailTaken(sql: SqlQuery, email: string): Promise<boolean> {
@@ -140,7 +160,7 @@ export async function createInvite(
 ): Promise<{ id: string; token: string; expiresAt: string }> {
   requireOwner(actor);
   const clean = validate(input);
-  const perms = input.perms === undefined ? [...INVITED_DEFAULT_PERMS] : cleanPerms(input.perms);
+  const perms = permsFor(clean.roles, input.perms);
   if (await emailTaken(sql, clean.email)) {
     throw new WorkspaceAccessError("Ya hay un empleado con ese correo.");
   }
@@ -152,19 +172,20 @@ export async function createInvite(
   const token = newToken();
   const expiresAt = new Date(now.getTime() + INVITE_TTL_MS).toISOString();
   await sql.query(
-    `insert into staff_invite (id, token_hash, name, email, level, perms, creator_ids, created_by, created_at, expires_at)
-     values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10)`,
+    `insert into staff_invite (id, token_hash, name, email, level, roles, perms, creator_ids, created_by, created_at, expires_at)
+     values ($1, $2, $3, $4, $5, $11::jsonb, $6::jsonb, $7::jsonb, $8, $9, $10)`,
     [
       id,
       hashToken(token),
       clean.name,
       clean.email,
-      clean.level,
+      clean.roles[0],
       JSON.stringify(perms),
       JSON.stringify(clean.creatorIds),
       actor.userId,
       now.toISOString(),
       expiresAt,
+      JSON.stringify(clean.roles),
     ],
   );
   return { id, token, expiresAt };
@@ -195,7 +216,7 @@ export type InviteState = "ok" | "invalid" | "expired" | "used" | "revoked";
 async function readByToken(sql: SqlQuery, token: string): Promise<InviteRow | null> {
   if (!token || token.length > 200) return null;
   const rows = await sql.query<InviteRow>(
-    `select id, name, email, level, perms, creator_ids, created_by, expires_at, used_at, revoked_at
+    `select id, name, email, level, roles, perms, creator_ids, created_by, expires_at, used_at, revoked_at
      from staff_invite where token_hash = $1`,
     [hashToken(token)],
   );
@@ -230,7 +251,7 @@ export async function claimInvite(
     const claimed = await sql.query<InviteRow>(
       `update staff_invite set used_at = $2
        where token_hash = $1 and used_at is null and revoked_at is null and expires_at > $2
-       returning id, name, email, level, perms, creator_ids, created_by, expires_at, used_at, revoked_at`,
+       returning id, name, email, level, roles, perms, creator_ids, created_by, expires_at, used_at, revoked_at`,
       [hashToken(token), now.toISOString()],
     );
     if (claimed[0]) return { ok: true, invite: toInvite(claimed[0]) };
@@ -248,13 +269,13 @@ export async function releaseInvite(sql: SqlQuery, inviteId: string): Promise<vo
 export async function activateInvitedStaff(sql: SqlQuery, invite: Invite, userId: string): Promise<void> {
   await sql.query("insert into workspace_member (user_id) values ($1) on conflict (user_id) do nothing", [userId]);
   await sql.query(
-    `insert into staff_profile (user_id, display_name, role, perms, level, status, email)
-     values ($1, $2, 'member', $3::jsonb, $4, 'active', $5)
+    `insert into staff_profile (user_id, display_name, role, perms, level, roles, status, email)
+     values ($1, $2, 'member', $3::jsonb, $4, $6::jsonb, 'active', $5)
      on conflict (user_id) do update set
-       display_name = excluded.display_name, perms = excluded.perms, level = excluded.level,
+       display_name = excluded.display_name, perms = excluded.perms, level = excluded.level, roles = excluded.roles,
        status = 'active', disabled_at = null, email = excluded.email
      where staff_profile.role = 'member'`,
-    [userId, invite.name, JSON.stringify(invite.perms), invite.level, invite.email],
+    [userId, invite.name, JSON.stringify(permsFor(invite.roles, invite.perms)), invite.level, invite.email, JSON.stringify(invite.roles)],
   );
   for (const creatorId of invite.creatorIds) {
     await sql.query(
@@ -270,6 +291,7 @@ type ProfileListRow = {
   display_name: string;
   role: string;
   level: string;
+  roles: unknown;
   status: string;
   email: string | null;
   auth_email: string | null;
@@ -277,12 +299,13 @@ type ProfileListRow = {
   phone: string | null;
   alerts_enabled: boolean | string | null;
   quiet_minutes: number | string | null;
+  last_seen_at: Date | string | null;
 };
 
 export async function listEmployees(sql: SqlQuery, now: Date = new Date()): Promise<EmployeeRow[]> {
   const profiles = await sql.query<ProfileListRow>(
-    `select p.user_id, p.display_name, p.role, p.level, p.status, p.email, u."email" as auth_email,
-            p.perms, a.phone, a.alerts_enabled, a.quiet_minutes
+    `select p.user_id, p.display_name, p.role, p.level, p.roles, p.status, p.email, u."email" as auth_email,
+            p.perms, a.phone, a.alerts_enabled, a.quiet_minutes, p.last_seen_at
      from staff_profile p
      left join "user" u on u."id" = p.user_id
      left join staff_alert a on a.user_id = p.user_id
@@ -292,24 +315,30 @@ export async function listEmployees(sql: SqlQuery, now: Date = new Date()): Prom
     "select user_id, creator_id from creator_grant order by creator_id",
   );
   const invites = await sql.query<InviteRow>(
-    `select id, name, email, level, perms, creator_ids, created_by, expires_at, used_at, revoked_at
+    `select id, name, email, level, roles, perms, creator_ids, created_by, expires_at, used_at, revoked_at
      from staff_invite where used_at is null and revoked_at is null order by created_at, id`,
   );
-  const members: EmployeeRow[] = profiles.map((row) => ({
-    id: row.user_id,
-    kind: "member",
-    name: row.display_name,
-    email: row.email ?? row.auth_email,
-    level: row.role === "owner" ? "owner" : readStaffLevel(row.level),
-    status: row.status === "disabled" ? "disabled" : "active",
-    creatorIds: grants.filter((grant) => grant.user_id === row.user_id).map((grant) => grant.creator_id),
-    perms: row.role === "owner" ? [...TEAM_PERMS] : cleanPerms(typeof row.perms === "string" ? safeJson(row.perms) : row.perms),
-    phone: row.phone ?? null,
-    alertsEnabled: row.alerts_enabled === true || row.alerts_enabled === "t" || row.alerts_enabled === "true",
-    quietMinutes: Number(row.quiet_minutes ?? 15) || 15,
-    expiresAt: null,
-    expired: false,
-  }));
+  const members: EmployeeRow[] = profiles.map((row) => {
+    const level = row.role === "owner" ? "owner" : readStaffLevel(row.level);
+    const roles = row.role === "owner" ? (["owner"] as StaffLevel[]) : readRoles(row.roles, level);
+    return {
+      id: row.user_id,
+      kind: "member",
+      name: row.display_name,
+      email: row.email ?? row.auth_email,
+      level,
+      roles,
+      status: row.status === "disabled" ? "disabled" : "active",
+      creatorIds: grants.filter((grant) => grant.user_id === row.user_id).map((grant) => grant.creator_id),
+      perms: row.role === "owner" ? [...effectivePerms(["owner"])] : permsFor(roles, typeof row.perms === "string" ? safeJson(row.perms) : row.perms),
+      phone: row.phone ?? null,
+      alertsEnabled: row.alerts_enabled === true || row.alerts_enabled === "t" || row.alerts_enabled === "true",
+      quietMinutes: Number(row.quiet_minutes ?? 15) || 15,
+      lastSeenAt: row.last_seen_at ? iso(row.last_seen_at) : null,
+      expiresAt: null,
+      expired: false,
+    };
+  });
   const pending: EmployeeRow[] = invites.map((row) => {
     const invite = toInvite(row);
     return {
@@ -318,12 +347,14 @@ export async function listEmployees(sql: SqlQuery, now: Date = new Date()): Prom
       name: invite.name,
       email: invite.email,
       level: invite.level,
+      roles: invite.roles,
       status: "invited",
       creatorIds: invite.creatorIds,
-      perms: cleanPerms(invite.perms),
+      perms: permsFor(invite.roles, invite.perms),
       phone: null,
       alertsEnabled: false,
       quietMinutes: 15,
+      lastSeenAt: null,
       expiresAt: invite.expiresAt,
       expired: stateOf(row, now) === "expired",
     };
@@ -331,7 +362,7 @@ export async function listEmployees(sql: SqlQuery, now: Date = new Date()): Prom
   return [...members, ...pending];
 }
 
-export type EmployeeEdit = { name: string; level: string; creatorIds: string[]; perms: string[] };
+export type EmployeeEdit = { name: string; level?: string; roles?: string[]; creatorIds: string[]; perms?: string[] };
 
 async function memberOf(sql: SqlQuery, userId: string): Promise<{ role: string; status: string } | null> {
   const rows = await sql.query<{ role: string; status: string }>(
@@ -353,21 +384,26 @@ export async function editEmployee(sql: SqlQuery, actor: TeamAccess, id: string,
   requireOwner(actor);
   const name = cleanName(input.name);
   if (!name) throw new WorkspaceAccessError("Escribe el nombre del empleado (hasta 80 caracteres).");
-  const level = readInvitableLevel(input.level);
-  if (!level) throw new WorkspaceAccessError("Elige un rol válido. El rol Owner no se puede asignar.");
+  const roles = cleanRoles(input);
   const creatorIds = cleanCreatorIds(input.creatorIds);
-  const perms = cleanPerms(input.perms);
+  const perms = permsFor(roles, input.perms);
   if (kind === "invite") {
     const updated = await sql.query(
-      `update staff_invite set name = $2, level = $3, creator_ids = $4::jsonb, perms = $5::jsonb
+      `update staff_invite set name = $2, level = $3, creator_ids = $4::jsonb, perms = $5::jsonb, roles = $6::jsonb
        where id = $1 and used_at is null and revoked_at is null returning id`,
-      [id, name, level, JSON.stringify(creatorIds), JSON.stringify(perms)],
+      [id, name, roles[0], JSON.stringify(creatorIds), JSON.stringify(perms), JSON.stringify(roles)],
     );
     if (!updated[0]) throw new WorkspaceAccessError("Esa invitación ya no está pendiente.");
     return;
   }
   await editableMember(sql, actor, id);
-  await sql.query("update staff_profile set display_name = $2, level = $3, perms = $4::jsonb where user_id = $1", [id, name, level, JSON.stringify(perms)]);
+  await sql.query("update staff_profile set display_name = $2, level = $3, perms = $4::jsonb, roles = $5::jsonb where user_id = $1", [
+    id,
+    name,
+    roles[0],
+    JSON.stringify(perms),
+    JSON.stringify(roles),
+  ]);
   const current = await sql.query<{ creator_id: string }>("select creator_id from creator_grant where user_id = $1", [id]);
   const have = new Set(current.map((row) => row.creator_id));
   const want = new Set(creatorIds);
@@ -378,6 +414,34 @@ export async function editEmployee(sql: SqlQuery, actor: TeamAccess, id: string,
   }
   for (const creatorId of have) {
     if (!want.has(creatorId)) await sql.query("delete from creator_grant where user_id = $1 and creator_id = $2", [id, creatorId]);
+  }
+}
+
+/** Mismos roles para varias personas. Sus permisos pasan al preset de esos roles. */
+export async function setEmployeeRoles(
+  sql: SqlQuery,
+  actor: TeamAccess,
+  targets: Array<{ id: string; kind: "member" | "invite" }>,
+  rolesInput: string[],
+): Promise<void> {
+  requireOwner(actor);
+  const roles = cleanRoles({ roles: rolesInput });
+  const perms = permsFor(roles, null);
+  for (const target of targets) {
+    if (target.kind === "invite") {
+      await sql.query(
+        "update staff_invite set level = $2, roles = $3::jsonb, perms = $4::jsonb where id = $1 and used_at is null and revoked_at is null",
+        [target.id, roles[0], JSON.stringify(roles), JSON.stringify(perms)],
+      );
+      continue;
+    }
+    await editableMember(sql, actor, target.id);
+    await sql.query("update staff_profile set level = $2, roles = $3::jsonb, perms = $4::jsonb where user_id = $1", [
+      target.id,
+      roles[0],
+      JSON.stringify(roles),
+      JSON.stringify(perms),
+    ]);
   }
 }
 
@@ -415,9 +479,18 @@ export async function deleteEmployee(sql: SqlQuery, actor: TeamAccess, id: strin
 }
 
 /** Lo que hace falta antes de dejar entrar: la ficha existe y no está desactivada. */
-export async function isStaffDisabled(sql: SqlQuery, userId: string): Promise<boolean> {
-  const rows = await sql.query<{ status: string }>("select status from staff_profile where user_id = $1", [userId]);
-  return rows[0]?.status === "disabled";
+export async function isStaffDisabled(sql: SqlQuery, userId: string, sessionCreatedAt?: Date | string | null): Promise<boolean> {
+  const rows = await sql.query<{ status: string; sessions_valid_after: Date | string | null }>(
+    "select status, sessions_valid_after from staff_profile where user_id = $1",
+    [userId],
+  );
+  const row = rows[0];
+  if (row?.status === "disabled") return true;
+  // Una contraseña restablecida invalida las sesiones anteriores aunque su cookie siga en caché.
+  if (row?.sessions_valid_after && sessionCreatedAt) {
+    return new Date(sessionCreatedAt).getTime() < new Date(row.sessions_valid_after).getTime();
+  }
+  return false;
 }
 
 export function validatePassword(password: unknown): string {
@@ -426,4 +499,84 @@ export function validatePassword(password: unknown): string {
   }
   if (password.length > MAX_PASSWORD_LENGTH) throw new WorkspaceAccessError("La contraseña es demasiado larga.");
   return password;
+}
+
+export const RESET_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** Enlace de reseteo de contraseña para un empleado activo con correo. El token solo se devuelve aquí. */
+export async function createPasswordReset(
+  sql: SqlQuery,
+  actor: TeamAccess,
+  userId: string,
+  now: Date = new Date(),
+): Promise<{ id: string; token: string; expiresAt: string; email: string; name: string }> {
+  await editableMember(sql, actor, userId);
+  const rows = await sql.query<{ email: string | null; auth_email: string | null; display_name: string }>(
+    `select p.email, u."email" as auth_email, p.display_name
+     from staff_profile p left join "user" u on u."id" = p.user_id where p.user_id = $1`,
+    [userId],
+  );
+  const email = rows[0]?.email ?? rows[0]?.auth_email ?? null;
+  if (!email) throw new WorkspaceAccessError("Esa persona no tiene correo ni cuenta de acceso.");
+  await sql.query("update staff_reset set revoked_at = $2 where user_id = $1 and used_at is null and revoked_at is null", [userId, now.toISOString()]);
+  const id = randomUUID();
+  const token = newToken();
+  const expiresAt = new Date(now.getTime() + RESET_TTL_MS).toISOString();
+  await sql.query(
+    "insert into staff_reset (id, token_hash, user_id, created_by, created_at, expires_at) values ($1, $2, $3, $4, $5, $6)",
+    [id, hashToken(token), userId, actor.userId, now.toISOString(), expiresAt],
+  );
+  return { id, token, expiresAt, email, name: rows[0]?.display_name ?? email };
+}
+
+export type ResetState = "ok" | "invalid" | "expired" | "used" | "revoked";
+
+type ResetRow = { id: string; user_id: string; expires_at: Date | string; used_at: Date | string | null; revoked_at: Date | string | null };
+
+function resetStateOf(row: ResetRow, now: Date): ResetState {
+  if (row.used_at) return "used";
+  if (row.revoked_at) return "revoked";
+  if (new Date(row.expires_at).getTime() <= now.getTime()) return "expired";
+  return "ok";
+}
+
+export async function inspectPasswordReset(sql: SqlQuery, token: string, now: Date = new Date()): Promise<{ state: ResetState; name?: string }> {
+  if (!token || token.length > 200) return { state: "invalid" };
+  const rows = await sql.query<ResetRow & { display_name: string | null }>(
+    `select r.id, r.user_id, r.expires_at, r.used_at, r.revoked_at, p.display_name
+     from staff_reset r left join staff_profile p on p.user_id = r.user_id where r.token_hash = $1`,
+    [hashToken(token)],
+  );
+  const row = rows[0];
+  if (!row) return { state: "invalid" };
+  const state = resetStateOf(row, now);
+  return state === "ok" ? { state, name: row.display_name ?? undefined } : { state };
+}
+
+/** Consume el token de forma atómica y devuelve a quién pertenece. */
+export async function claimPasswordReset(
+  sql: SqlQuery,
+  token: string,
+  now: Date = new Date(),
+): Promise<{ ok: true; id: string; userId: string } | { ok: false; state: Exclude<ResetState, "ok"> }> {
+  if (token && token.length <= 200) {
+    const claimed = await sql.query<{ id: string; user_id: string }>(
+      `update staff_reset set used_at = $2
+       where token_hash = $1 and used_at is null and revoked_at is null and expires_at > $2
+       returning id, user_id`,
+      [hashToken(token), now.toISOString()],
+    );
+    if (claimed[0]) return { ok: true, id: claimed[0].id, userId: claimed[0].user_id };
+  }
+  const state = (await inspectPasswordReset(sql, token, now)).state;
+  return { ok: false, state: state === "ok" ? "used" : state };
+}
+
+export async function releasePasswordReset(sql: SqlQuery, id: string): Promise<void> {
+  await sql.query("update staff_reset set used_at = null where id = $1", [id]);
+}
+
+/** Tras cambiar la contraseña: las sesiones anteriores dejan de valer. */
+export async function revokeSessionsBefore(sql: SqlQuery, userId: string, at: Date = new Date()): Promise<void> {
+  await sql.query("update staff_profile set sessions_valid_after = $2 where user_id = $1", [userId, at.toISOString()]);
 }

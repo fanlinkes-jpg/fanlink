@@ -16,6 +16,17 @@ export function inviteEmail(input: { name: string; link: string; agency?: string
   };
 }
 
+export function resetEmail(input: { name: string; link: string; agency?: string }): { subject: string; html: string; text: string } {
+  const who = input.agency?.trim() || "Fanlink";
+  const name = escapeHtml(input.name);
+  const link = escapeHtml(input.link);
+  return {
+    subject: `${who}: restablece tu contraseña`,
+    text: `Hola ${input.name},\n\nAbre este enlace para elegir una contraseña nueva:\n${input.link}\n\nEl enlace es de un solo uso y caduca en 24 horas. Si no lo has pedido, ignora este correo.`,
+    html: `<p>Hola ${name},</p><p>Abre este enlace para elegir una contraseña nueva:</p><p><a href="${link}">${link}</a></p><p>El enlace es de un solo uso y caduca en 24 horas. Si no lo has pedido, ignora este correo.</p>`,
+  };
+}
+
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char] ?? char);
 }
@@ -25,16 +36,32 @@ export async function sendInviteMail(
   env: MailEnv = process.env,
   fetchImpl: typeof fetch = fetch,
 ): Promise<MailResult> {
+  return sendMail(input.to, inviteEmail(input), env, fetchImpl);
+}
+
+export async function sendResetMail(
+  input: { to: string; name: string; link: string; agency?: string },
+  env: MailEnv = process.env,
+  fetchImpl: typeof fetch = fetch,
+): Promise<MailResult> {
+  return sendMail(input.to, resetEmail(input), env, fetchImpl);
+}
+
+async function sendMail(
+  to: string,
+  mail: { subject: string; html: string; text: string },
+  env: MailEnv,
+  fetchImpl: typeof fetch,
+): Promise<MailResult> {
   const apiKey = env.RESEND_API_KEY?.trim();
   if (!apiKey) return { sent: false, reason: "no-key" };
   const from = env.FANLINK_MAIL_FROM?.trim();
   if (!from) return { sent: false, reason: "no-from" };
-  const mail = inviteEmail(input);
   try {
     const response = await fetchImpl("https://api.resend.com/emails", {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ from, to: [input.to], subject: mail.subject, html: mail.html, text: mail.text }),
+      body: JSON.stringify({ from, to: [to], subject: mail.subject, html: mail.html, text: mail.text }),
     });
     if (!response.ok) {
       const detail = (await response.text().catch(() => "")).slice(0, 200);

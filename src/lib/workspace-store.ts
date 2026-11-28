@@ -10,7 +10,8 @@ import {
   type WorkspaceSlice,
   WorkspaceAccessError,
 } from "./access-policy.ts";
-import { readStaffLevel, type StaffLevel } from "./staff-levels.ts";
+import { readRoles, readStaffLevel, type StaffLevel } from "./staff-levels.ts";
+import { restrictPerms } from "./staff-roles.ts";
 
 export interface SqlQuery {
   query<T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<T[]>;
@@ -27,6 +28,7 @@ type ProfileRow = {
   role: string;
   perms: unknown;
   level?: string | null;
+  roles?: unknown;
   status?: string | null;
 };
 
@@ -34,6 +36,8 @@ export type StaffAccess = TeamAccess & {
   displayName: string;
   devMode: boolean;
   level: StaffLevel;
+  /** Todos los roles. Los permisos ya vienen sumados en `perms`. */
+  roles: StaffLevel[];
   /** disabled: la ficha existe pero no ve nada. */
   status: "active" | "disabled";
 };
@@ -62,30 +66,65 @@ export async function ensureStaff(sql: SqlQuery, userId: string, devMode: boolea
       [userId, displayName, role, JSON.stringify(perms), role === "owner" ? "owner" : "chatter"],
     );
   }
+  // Última conexión: como mucho una escritura por minuto y persona.
+  await sql.query(
+    "update staff_profile set last_seen_at = now() where user_id = $1 and (last_seen_at is null or last_seen_at < now() - interval '1 minute')",
+    [userId],
+  );
   return readAccess(sql, userId, devMode);
 }
 
 export async function readAccess(sql: SqlQuery, userId: string, devMode: boolean): Promise<StaffAccess> {
-  const profiles = await sql.query<ProfileRow>("select user_id, display_name, role, perms, level, status from staff_profile where user_id = $1", [userId]);
+  const profiles = await sql.query<ProfileRow>("select user_id, display_name, role, perms, level, roles, status from staff_profile where user_id = $1", [userId]);
   const profile = profiles[0];
   if (!profile) {
-    return { userId, role: "member", perms: [], creatorIds: [], displayName: "Miembro", devMode, level: "chatter", status: "active" };
+    return { userId, role: "member", perms: [], creatorIds: [], displayName: "Miembro", devMode, level: "chatter", roles: ["chatter"], status: "active" };
   }
   const level = profile.role === "owner" ? "owner" : readStaffLevel(profile.level);
+  const roles = profile.role === "owner" ? (["owner"] as StaffLevel[]) : readRoles(profile.roles, level);
   if (profile.status === "disabled" && profile.role !== "owner") {
-    return { userId, role: "member", perms: [], creatorIds: [], displayName: profile.display_name, devMode, level, status: "disabled" };
+    return { userId, role: "member", perms: [], creatorIds: [], displayName: profile.display_name, devMode, level, roles, status: "disabled" };
   }
   const grants = await sql.query<GrantRow>("select creator_id from creator_grant where user_id = $1 order by creator_id", [userId]);
+  const isOwner = profile.role === "owner";
+  // Un chatter nunca recibe dinero de agencia, aunque la ficha lo traiga marcado: se quita al leer.
+  const perms = isOwner ? readPerms(profile.perms) : restrictPerms(roles, readPerms(profile.perms));
+  const creatorIds = grants.map((row) => row.creator_id);
+  if (!isOwner && perms.includes("todas")) {
+    for (const id of await everyCreatorId(sql)) if (!creatorIds.includes(id)) creatorIds.push(id);
+    creatorIds.sort();
+  }
   return {
     userId,
-    role: profile.role === "owner" ? "owner" : "member",
-    perms: readPerms(profile.perms),
-    creatorIds: grants.map((row) => row.creator_id),
+    role: isOwner ? "owner" : "member",
+    perms,
+    creatorIds,
     displayName: profile.display_name,
     devMode,
     level,
+    roles,
     status: "active",
   };
+}
+
+/** Toda cuenta que el espacio conoce: sesiones guardadas y creadoras del espacio compartido. */
+async function everyCreatorId(sql: SqlQuery): Promise<string[]> {
+  const ids = new Set<string>();
+  try {
+    for (const row of await sql.query<{ creator_id: string }>("select creator_id from of_session_account")) {
+      if (row.creator_id?.trim()) ids.add(row.creator_id);
+    }
+  } catch {
+    // Sin tabla de sesiones no hay cuentas que sumar.
+  }
+  try {
+    const state = await sql.query<{ state: unknown }>("select state from workspace_state where id = 1");
+    const slice = parseSlice(state[0]?.state ?? null);
+    for (const creator of slice?.creators ?? []) if (creator?.id) ids.add(creator.id);
+  } catch {
+    // Sin estado compartido tampoco.
+  }
+  return [...ids];
 }
 
 export type StaffAlert = {
@@ -251,6 +290,7 @@ async function readState(sql: SqlQuery): Promise<{ version: number; state: Works
 }
 
 function parseSlice(value: unknown): WorkspaceSlice {
+  if (value == null) return emptyWorkspace();
   if (typeof value === "string") return JSON.parse(value) as WorkspaceSlice;
   return value as WorkspaceSlice;
 }
