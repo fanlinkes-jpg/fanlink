@@ -13,6 +13,7 @@ import { mergeOnlineAccounts, type OnlineFan } from "./online-fans.ts";
 import { SESSION_EXPIRED_LABEL, signedReadsBlocked } from "./session-link.ts";
 import type { ReadSql } from "./store.ts";
 import { parseCreatorId, type Account } from "../types.ts";
+import { saveSnapshot } from "../metrics/insights-store.ts";
 import { blockedVisibleSpend, canReadFanSpend, runVisibleFanSpend, spendReadsBlocked } from "./visible-spend.ts";
 
 type StaffAccess = {
@@ -38,6 +39,13 @@ export function bindSignedViews(next: SignedViewDeps): void {
 function bound(): SignedViewDeps {
   if (!deps) throw new Error("Las vistas firmadas no están enchufadas.");
   return deps;
+}
+
+/** Un recuento de fans online solo vale si la lectura salió bien (sin 401, sin 429 y sin motivo de error). */
+export function onlineCountUsable(read: { fans: unknown[]; reason: string | null; status?: number | null }): boolean {
+  if (read.status === 401 || read.status === 429) return false;
+  if (read.fans.length > 0) return true;
+  return read.reason == null || read.reason === "Nadie en línea";
 }
 
 function sendAccount(account: Account): SendAccount {
@@ -101,6 +109,10 @@ export async function listOnlineFansView(userId: string, input: { creatorId: str
   const notices = read.status === 401 || read.reason === SESSION_EXPIRED_LABEL
     ? [`${input.creatorId}: ${SESSION_EXPIRED_LABEL}`]
     : [];
+  // Lo ya leído sirve al dashboard (fans online): no pide nada más a OnlyFans.
+  if (onlineCountUsable(read)) {
+    await saveSnapshot(await kit.sql(), { creatorId: input.creatorId, metric: "online", takenAt: new Date(), value: read.fans.length }).catch(() => undefined);
+  }
   return { fans: read.fans, reason: read.reason, notices, cap: ONLINE_FAN_CAP, send };
 }
 

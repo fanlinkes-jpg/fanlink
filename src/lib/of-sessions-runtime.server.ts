@@ -70,6 +70,12 @@ import { listFanProfiles, saveFanProfile } from "../../server/of-sessions/sync/f
 import { listFanFlags, saveFanFlag, type FanFlagPatch } from "../../server/of-sessions/sync/fan-flags.ts";
 import { listFanNotes, saveFanNote } from "../../server/of-sessions/sync/fan-note.ts";
 import { intervalMinFromEnv, startSyncLoop, type ScheduleAccount } from "../../server/of-sessions/sync/schedule.ts";
+import { startCutLoop } from "../../server/of-sessions/sync/cut-loop.ts";
+import { cutHoursFromEnv, lastCut, nextCut, onlineSnapshotMinFromEnv } from "@/lib/dashboard-cuts";
+import { lastFinishedCut, loadInsightData, noteCut, saveSnapshot } from "../../server/of-sessions/metrics/insights-store.ts";
+import { buildInsightsView, insightSince, normalizeInsightRequest, type DashboardInsightsView, type InsightRequest } from "../../server/of-sessions/metrics/insights-view.ts";
+import { accountOnAllowlist, allowTokens } from "../../server/of-sessions/send/gate.ts";
+import { onlineCountUsable } from "../../server/of-sessions/sync/signed-views.ts";
 import { notificationSyncState, saveNotificationRead } from "../../server/of-sessions/sync/notification-store.ts";
 import {
   listCreatorReads,
@@ -192,6 +198,11 @@ function bootSyncLoop(sessions: SessionManager): void {
   if (process.env.FANLINK_SYNC_ENABLED === "false") return;
   if (process.execArgv.includes("--test")) return;
   if (globalRef.__ofSyncLoop__) return;
+  const cutHours = cutHoursFromEnv(process.env.FANLINK_DASHBOARD_CUTS);
+  if (cutHours) {
+    globalRef.__ofSyncLoop__ = bootDashboardCuts(sessions, cutHours);
+    return;
+  }
   globalRef.__ofSyncLoop__ = startSyncLoop({
     intervalMin: async () => readSyncIntervalMin(await getSql(), intervalMinFromEnv(process.env.FANLINK_SYNC_INTERVAL_MIN)),
     inProgressIds: () => new Set(sessions.readingIds()),
@@ -211,6 +222,65 @@ function bootSyncLoop(sessions: SessionManager): void {
       await saveCreatorRead(sql, account.creatorId, read);
       await syncAssignments(sql, account.creatorId);
     },
+  });
+}
+
+/** Allowlist de lecturas del dashboard. Sin `FANLINK_READ_ALLOW_ACCOUNTS`, la misma del envío. Vacía: no se lee nada. */
+function readAllowlist(): string | undefined {
+  const own = process.env.FANLINK_READ_ALLOW_ACCOUNTS;
+  return own && own.trim() ? own : process.env.FANLINK_SEND_ALLOW_ACCOUNTS;
+}
+
+/**
+ * Dashboard por cortes (00:00, 08:00 y 16:00 Europe/Madrid, `FANLINK_DASHBOARD_CUTS`): en cada corte se lee
+ * una cuenta de la allowlist cada vez (estadísticas, fans y fans online), con margen entre cuentas y
+ * respetando la pausa por 429. Entre cortes no se pide nada salvo que `FANLINK_ONLINE_SNAPSHOT_MIN` lo active.
+ */
+function bootDashboardCuts(sessions: SessionManager, hours: number[]): { stop: () => void } {
+  const onlineMin = onlineSnapshotMinFromEnv(process.env.FANLINK_ONLINE_SNAPSHOT_MIN);
+  const lastOnline = new Map<string, string>();
+  const allow = readAllowlist();
+  console.info(`[fanlink:corte] cortes=${hours.join(",")} online_min=${onlineMin} allowlist=${allowTokens(allow).length > 0 ? "sí" : "vacía (no se lee nada)"}`);
+  const readOnline = async (accountId: string, creatorId: string) => {
+    const read = await sessions.readOnlineFans(accountId);
+    lastOnline.set(accountId, new Date().toISOString());
+    if (onlineCountUsable(read)) {
+      await saveSnapshot(await getSql(), { creatorId, metric: "online", takenAt: new Date(), value: read.fans.length });
+    }
+    console.info(`[fanlink:corte] online cuenta=${creatorId} fans=${read.fans.length} motivo=${read.reason ?? "ok"}`);
+  };
+  return startCutLoop({
+    hours,
+    onlineMin,
+    accounts: async () => {
+      const [base, accounts] = await Promise.all([scheduleAccounts(sessions), sessions.listAccounts()]);
+      return base.map((row) => {
+        const account = accounts.find((item) => item.id === row.accountId);
+        return {
+          ...row,
+          allowed: account ? accountOnAllowlist(allow, { creatorId: account.creatorId, accountId: account.id, handle: account.identityHandle, userId: account.identityUserId, label: account.label }) : false,
+          paused: accountPause(row.accountId) != null,
+          lastOnlineAt: lastOnline.get(row.accountId) ?? null,
+        };
+      });
+    },
+    cutStarted: async (cutAt) => noteCut(await getSql(), cutAt, false, 0),
+    cutFinished: async (cutAt, read) => noteCut(await getSql(), cutAt, true, read),
+    sync: async (row) => {
+      const prior = await listCreatorReads(await getSql(), [row.creatorId]);
+      const read = await sessions.readCreatorData(row.accountId, true, txCursorOf(prior[0]));
+      logCreatorRead(row.creatorId, read);
+      if (read.alreadyRunning) return;
+      if (read.loginRequired) await sessions.markLoginRequired(row.accountId);
+      const blocked = blockKind(0, read.reason ?? "");
+      if (blocked) noteAccountBlock(row.accountId, blocked);
+      const sql = await getSql();
+      await saveCreatorRead(sql, row.creatorId, read);
+      await syncAssignments(sql, row.creatorId);
+      if (blocked || read.loginRequired) return;
+      await readOnline(row.accountId, row.creatorId).catch(() => undefined);
+    },
+    online: async (row) => readOnline(row.accountId, row.creatorId),
   });
 }
 
@@ -947,17 +1017,11 @@ export async function listDashboardView(userId: string): Promise<{
   });
 }
 
-export async function listTeamMetricViews(userId: string): Promise<Array<{
-  userId: string;
-  name: string;
-  grossCents: number | null;
-  ppvSent: number | null;
-  ppvBought: number | null;
-  firstReplyMinutes: number | null;
-  threads: number | null;
-}>> {
-  const access = await accessFor(userId);
-  const sql = await getSql();
+/**
+ * Atribución de ventas sobre todo el histórico, guardada en of_sale_attribution (se escribe una vez por venta).
+ * La usan Equipo y el Dashboard.
+ */
+async function refreshAttributions(sql: Awaited<ReturnType<typeof getSql>>) {
   const sales = await sql.query<{ tx_key: string; creator_id: string; fan_key: string | null; kind: string; occurred_at: Date | string; gross_cents: number | string }>(
     "select tx_key, creator_id, fan_key, kind, occurred_at, gross_cents from of_transaction where kind in ('tip', 'subscription', 'renewal')",
   );
@@ -1015,6 +1079,87 @@ export async function listTeamMetricViews(userId: string): Promise<Array<{
   ];
   const launches = await readMassLaunches(sql);
   await persistAttributions(sql, attributeSales({ messages: allMessages, sales: allSales, launches }));
+  return { allMessages, allSales, launches, nameOf };
+}
+
+let attributionRefreshedAt = 0;
+
+/** Dashboard (CDF-20). Solo lee la base: las lecturas de OnlyFans salen en los cortes. */
+export async function getDashboardInsightsView(userId: string, request: InsightRequest | null): Promise<DashboardInsightsView> {
+  const access = await accessFor(userId);
+  const now = new Date();
+  const hours = cutHoursFromEnv(process.env.FANLINK_DASHBOARD_CUTS);
+  const cutAt = hours ? lastCut(now, hours) : now;
+  const query = normalizeInsightRequest(request, now);
+  const accounts = await (await getOfSessionManager()).listAccounts();
+  const ids = creatorIdsForReads(access, accounts, "dashboard");
+  const sql = await getSql();
+  if (Date.now() - attributionRefreshedAt > 10 * 60_000) {
+    attributionRefreshedAt = Date.now();
+    await refreshAttributions(sql).catch((error: unknown) => console.info(`[fanlink:dashboard] atribución sin actualizar: ${error instanceof Error ? error.message.slice(0, 80) : "error"}`));
+  }
+  const stateRows = await sql.query<{ state: unknown }>("select state from workspace_state where id = 1");
+  const raw = stateRows[0]?.state;
+  const state = (typeof raw === "string" ? JSON.parse(raw) : raw) as { creators?: Array<{ id?: string; name?: string; tag?: string }> } | null;
+  const known = new Map((state?.creators ?? []).flatMap((creator) => (creator.id ? [[creator.id, creator] as const] : [])));
+  const creators = ids.map((id) => {
+    const record = known.get(id);
+    const account = accounts.find((item) => item.creatorId === id);
+    return { id, name: record?.name?.trim() || account?.label || id, tag: record?.tag?.trim() || null };
+  });
+  const data = await loadInsightData(sql, creators, insightSince(query));
+  const syncRows = ids.length === 0 ? [] : await sql.query<{ creator_id: string; earnings_synced_at: Date | string | null; fans_synced_at: Date | string | null }>(
+    "select creator_id, earnings_synced_at, fans_synced_at from of_sync_state where creator_id = any($1::text[])",
+    [ids],
+  );
+  const asIso = (value: Date | string | null) => (value == null ? null : new Date(value).toISOString());
+  const lastReads = new Map(syncRows.map((row) => {
+    const values = [asIso(row.earnings_synced_at), asIso(row.fans_synced_at)].filter((item): item is string => item != null).sort();
+    return [row.creator_id, values.at(-1) ?? null] as const;
+  }));
+  const lastReadAt = [...lastReads.values()].filter((item): item is string => item != null).sort().at(-1) ?? null;
+  const view = buildInsightsView({
+    access,
+    data,
+    query,
+    cutAt,
+    now,
+    lastReads,
+    updated: {
+      cutAt: hours ? (await lastFinishedCut(sql)) ?? cutAt.toISOString() : null,
+      lastReadAt,
+      nextCutAt: hours ? nextCut(now, hours).toISOString() : null,
+      cutsEnabled: hours != null,
+      hours: hours ?? [],
+    },
+  });
+  // Alertas de sesión y lectura, al momento (no piden nada a OnlyFans).
+  const live = dashboardViewFor({ access, accounts, reads: await listCreatorReads(sql, ids), pauses: listAccountPauses(), now });
+  const extra = live.alerts
+    .filter((alert) => alert.kind === "session" || alert.kind === "sync")
+    .map((alert) => ({
+      kind: alert.kind,
+      level: alert.kind === "session" ? ("alta" as const) : ("media" as const),
+      text: alert.text,
+      action: canOperateCreator(access, accounts.find((account) => alert.text.startsWith(`${account.label}:`))?.creatorId ?? "", "equipo")
+        ? { label: "Reconectar", href: "/administrar?tab=creadoras" }
+        : null,
+    }));
+  return { ...view, alerts: [...extra, ...view.alerts] };
+}
+
+export async function listTeamMetricViews(userId: string): Promise<Array<{
+  userId: string;
+  name: string;
+  grossCents: number | null;
+  ppvSent: number | null;
+  ppvBought: number | null;
+  firstReplyMinutes: number | null;
+  threads: number | null;
+}>> {
+  const access = await accessFor(userId);
+  const sql = await getSql();
+  const { allMessages, allSales, launches, nameOf } = await refreshAttributions(sql);
   const inScope = (creatorId: string) => seesAllCreators(access) || access.creatorIds.includes(creatorId);
   const scopedSales = allSales.filter((row) => inScope(row.creatorId));
   return presentTeamMetrics(
