@@ -25,7 +25,7 @@ export const FUNCTION_TABS = [
 ] as const;
 
 export type FunctionTabId = (typeof FUNCTION_TABS)[number]["id"];
-export type AdminTab = "creadoras" | "empleados" | "chatters";
+export type AdminTab = "creadoras" | "empleados";
 
 export type DashboardZone =
   | { kind: "metricas"; screen: ScreenId }
@@ -72,7 +72,7 @@ export const NAV_LINKS: NavLink[] = [
     roles: STAFF_ROLES,
     anyPerm: FUNCTION_PERMS,
   },
-  { id: "administrar", label: "Personal", hint: "Creadoras y chatters", to: "/administrar", roles: AGENCY_ROLES, perm: "equipo" },
+  { id: "administrar", label: "Personal", hint: "Creadoras y empleados", to: "/administrar", roles: AGENCY_ROLES, perm: "equipo" },
   { id: "proxys", label: "Proxy", hint: "IP de cada cuenta", to: "/proxys", roles: AGENCY_ROLES, perm: "equipo" },
   { id: "configuracion", label: "Configuración", hint: "Plan, facturación y ajustes", to: "/configuracion", roles: AGENCY_ROLES },
 ];
@@ -199,8 +199,8 @@ export function visibleFunctionTabs(role: NavRole | null, access: TeamAccess | n
 }
 
 export function adminTab(value: unknown): AdminTab {
-  if (value === "empleados") return "empleados";
-  if (value === "chatters" || value === "equipos") return "chatters";
+  // Chatters era la pestaña antigua; ahora es Empleados.
+  if (value === "empleados" || value === "chatters" || value === "equipos") return "empleados";
   return "creadoras";
 }
 
@@ -225,7 +225,7 @@ export function legacyRedirect(pathname: string, search: Record<string, unknown>
     case "/creadoras":
       return { to: "/administrar", search: { tab: "creadoras" } };
     case "/equipo":
-      return { to: "/administrar", search: { tab: "chatters" } };
+      return { to: "/administrar", search: { tab: "empleados" } };
     case "/campanas":
       return { to: "/funciones", search: { tab: "masivos" } };
     case "/listas":

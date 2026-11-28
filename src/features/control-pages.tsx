@@ -8,7 +8,7 @@ import { messageValue, useCrm, type Platform, type Role } from "@/lib/crm";
 import { CONNECTION_LABEL, IDENTITY_STATE_LABEL, SESSION_STATUS_LABEL, sessionActionLabel, type SessionStatus } from "@/lib/of-sessions";
 import { SESSION_EXPIRED_LABEL, signedReadsBlocked } from "../../server/of-sessions/sync/session-link.ts";
 import { hasPerm } from "@/lib/access-policy";
-import { listTeam, saveStaffDisplayName, updateStaffAccess, updateStaffAlert } from "@/lib/workspace";
+import { saveStaffDisplayName } from "@/lib/workspace";
 import { useCreatorSessions } from "@/lib/use-creator-sessions";
 import { useOfReads } from "@/lib/use-of-reads";
 import type { CreatorEarningView, CreatorReadView } from "@/lib/of-sessions";
@@ -264,28 +264,24 @@ const SHIFT_STYLE = {
   libre: "bg-[#f3f4f6] text-[#8b93a3]",
 } as const;
 
-export function TeamPage() {
+/** Lo que queda de la antigua pestaña Chatters: sesión, métricas y turnos. Los permisos, las creadoras y los avisos están en Editar de cada empleado. */
+export function TeamExtras() {
   const creators = useCrm((s) => s.creators);
   const employees = useCrm((s) => s.employees);
-  const togglePerm = useCrm((s) => s.togglePerm);
   const cycleShift = useCrm((s) => s.cycleShift);
   const addEmployee = useCrm((s) => s.addEmployee);
   const [name, setName] = useState("");
   const [role, setRole] = useState<Role>("Chatter");
   const [teamRows, setTeamRows] = useState<TeamMetricView[]>([]);
-  const perms = ["mensajes", "precios", "vault", "campanas", "analitica", "equipo", "ajustes"] as const;
   const today = (new Date().getDay() + 6) % 7;
   useEffect(() => {
     void listTeamMetrics().then(setTeamRows).catch(() => setTeamRows([]));
   }, []);
 
   return (
-    <div className="space-y-4 p-4 md:p-6">
-      <div>
-        <h1 className="font-display text-2xl font-semibold">Empleados</h1>
-        <p className="text-sm text-muted">Los turnos de abajo son de la consola. El acceso real está en el servidor y no cambia al elegir a otra persona.</p>
-      </div>
-      <TeamAccessPanel creatorIds={creators.map((creator) => creator.id)} />
+    <div className="space-y-4">
+      <p className="text-sm text-muted">Los turnos de abajo son de la consola. El acceso real está en el servidor y no cambia al elegir a otra persona.</p>
+      <SessionPanel />
 
       <div className="overflow-x-auto rounded-xl border border-line bg-white">
         <p className="border-b border-line px-4 py-3 text-sm font-semibold">Métricas</p>
@@ -382,35 +378,6 @@ export function TeamPage() {
           </Select>
           <Button type="submit">Añadir</Button>
         </form>
-      </Panel>
-      <Panel title="Permisos" bodyClass="overflow-x-auto">
-        <table className="w-full min-w-[720px] text-left text-sm">
-          <thead className="text-xs text-muted">
-            <tr>
-              <th className="py-2 pr-3 font-medium">Persona</th>
-              {perms.map((p) => <th key={p} className="px-2 py-2 font-medium capitalize">{p}</th>)}
-            </tr>
-          </thead>
-          <tbody>
-            {employees.map((e) => (
-              <tr key={e.id} className="border-t border-line">
-                <td className="py-2 pr-3">{e.name}</td>
-                {perms.map((p) => (
-                  <td key={p} className="px-2 py-2">
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4 accent-primary"
-                      checked={e.perms.includes(p)}
-                      disabled={e.role === "Dueña"}
-                      onChange={() => togglePerm(e.id, p)}
-                      aria-label={`${e.name} ${p}`}
-                    />
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
       </Panel>
     </div>
   );
@@ -1000,94 +967,6 @@ export function SettingsPage({ embedded = false }: { embedded?: boolean } = {}) 
   );
 }
 
-function MemberGrants({
-  person,
-  creatorIds,
-  onSave,
-  onAlert,
-}: {
-  person: { userId: string; displayName: string; perms: string[]; creatorIds: string[]; phone: string | null; alertsEnabled: boolean; quietMinutes: number };
-  creatorIds: string[];
-  onSave: (userId: string, perms: string[], creatorIds: string[]) => Promise<void>;
-  onAlert: (userId: string, phone: string, enabled: boolean, quietMinutes: number) => Promise<void>;
-}) {
-  const perms = ["mensajes", "precios", "vault", "campanas", "analitica", "equipo", "ajustes"] as const;
-  return (
-    <div className="mt-3 rounded-lg border border-line p-3 text-sm">
-      <p className="font-medium">{person.displayName}</p>
-      <div className="mt-2 flex flex-wrap gap-3">
-        {perms.map((perm) => (
-          <label key={perm} className="flex items-center gap-1 text-xs">
-            <input
-              type="checkbox"
-              checked={person.perms.includes(perm)}
-              onChange={() => {
-                const next = person.perms.includes(perm) ? person.perms.filter((item) => item !== perm) : [...person.perms, perm];
-                void onSave(person.userId, next, person.creatorIds);
-              }}
-            />
-            {perm}
-          </label>
-        ))}
-      </div>
-      <AlertFields person={person} onAlert={onAlert} />
-      <p className="mt-3 text-xs text-muted">Asignación opcional. El chat es común y no depende de estas cuentas.</p>
-      <div className="mt-2 flex flex-wrap gap-3">
-        {creatorIds.map((creatorId) => (
-          <label key={creatorId} className="flex items-center gap-1 text-xs">
-            <input
-              type="checkbox"
-              checked={person.creatorIds.includes(creatorId)}
-              onChange={() => {
-                const next = person.creatorIds.includes(creatorId)
-                  ? person.creatorIds.filter((item) => item !== creatorId)
-                  : [...person.creatorIds, creatorId];
-                void onSave(person.userId, person.perms, next);
-              }}
-            />
-            {creatorId}
-          </label>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function AlertFields({
-  person,
-  onAlert,
-}: {
-  person: { userId: string; phone: string | null; alertsEnabled: boolean; quietMinutes: number };
-  onAlert: (userId: string, phone: string, enabled: boolean, quietMinutes: number) => Promise<void>;
-}) {
-  const [phone, setPhone] = useState(person.phone ?? "");
-  const [enabled, setEnabled] = useState(person.alertsEnabled);
-  const [quiet, setQuiet] = useState(String(person.quietMinutes));
-  return (
-    <form
-      className="mt-3 flex flex-wrap items-end gap-2"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void onAlert(person.userId, phone, enabled, Number(quiet) || 15);
-      }}
-    >
-      <label className="text-xs text-muted">
-        WhatsApp
-        <input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="+34600000000" className="mt-1 block h-8 rounded-md border border-line px-2 text-sm" />
-      </label>
-      <label className="flex items-center gap-1 text-xs">
-        <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
-        Avisos
-      </label>
-      <label className="text-xs text-muted">
-        Minutos entre avisos del mismo fan
-        <input value={quiet} onChange={(event) => setQuiet(event.target.value)} inputMode="numeric" className="mt-1 block h-8 w-16 rounded-md border border-line px-2 text-sm" />
-      </label>
-      <button type="submit" className="rounded-md border border-line px-2 py-1 text-xs">Guardar aviso</button>
-    </form>
-  );
-}
-
 function OwnName({ name }: { name: string }) {
   const [value, setValue] = useState(name);
   const [busy, setBusy] = useState(false);
@@ -1115,52 +994,11 @@ function OwnName({ name }: { name: string }) {
   );
 }
 
-function TeamAccessPanel({ creatorIds }: { creatorIds: string[] }) {
+function SessionPanel() {
   const access = useCrm((s) => s.teamAccess);
-  const [staff, setStaff] = useState<Array<{ userId: string; displayName: string; role: "owner" | "member"; perms: string[]; creatorIds: string[]; phone: string | null; alertsEnabled: boolean; quietMinutes: number }>>([]);
-  const [notice, setNotice] = useState("");
-
-  useEffect(() => {
-    if (access?.role !== "owner") return;
-    let cancel = false;
-    void listTeam()
-      .then((result) => {
-        if (!cancel) setStaff(result.staff);
-      })
-      .catch((error: unknown) => {
-        if (!cancel) setNotice(error instanceof Error ? error.message : "No se ha podido leer el equipo.");
-      });
-    return () => {
-      cancel = true;
-    };
-  }, [access?.role]);
-
   if (!access) return null;
-
-  async function saveMember(userId: string, perms: string[], memberCreatorIds: string[]) {
-    setNotice("");
-    try {
-      await updateStaffAccess({ data: { userId, perms, creatorIds: memberCreatorIds } });
-      const result = await listTeam();
-      setStaff(result.staff);
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "No se ha podido guardar el acceso.");
-    }
-  }
-
-  async function saveAlert(userId: string, phone: string, enabled: boolean, quietMinutes: number) {
-    setNotice("");
-    try {
-      await updateStaffAlert({ data: { userId, phone, enabled, quietMinutes } });
-      const result = await listTeam();
-      setStaff(result.staff);
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "No se ha podido guardar el aviso.");
-    }
-  }
-
   return (
-    <Panel title="Acceso del servidor">
+    <Panel title="Tu sesión">
       <p className="text-sm">Sesión autenticada: {access.displayName}. {access.role === "owner" ? "Dueña" : "Miembro"}.</p>
       <OwnName name={access.displayName} />
       {access.devMode && (
@@ -1169,13 +1007,6 @@ function TeamAccessPanel({ creatorIds }: { creatorIds: string[] }) {
       {access.role !== "owner" && (
         <p className="mt-2 text-sm text-muted">Los permisos y las creadoras los asigna la dueña. No se eligen en un desplegable.</p>
       )}
-      {notice && <p className="mt-2 text-sm text-[#8a5a12]">{notice}</p>}
-      {access.role === "owner" &&
-        staff
-          .filter((person) => person.role === "member")
-          .map((person) => (
-            <MemberGrants key={person.userId} person={person} creatorIds={creatorIds} onSave={saveMember} onAlert={saveAlert} />
-          ))}
     </Panel>
   );
 }

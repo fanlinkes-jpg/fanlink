@@ -15,6 +15,9 @@ import {
 } from "@/lib/employees";
 import { INVITABLE_LEVELS, LEVEL_LABELS, type EmployeeStatus } from "@/lib/staff-levels";
 import { initialOf } from "@/lib/initial";
+import { TEAM_PERMS } from "@/lib/access-policy";
+import { updateStaffAlert } from "@/lib/workspace";
+import { TeamExtras } from "@/features/control-pages";
 
 const STATUS_LABEL: Record<EmployeeStatus, string> = {
   active: "Activado",
@@ -104,8 +107,9 @@ export function EmployeesPage() {
 
   if (!allowed) {
     return (
-      <div className="p-4 md:p-6">
+      <div className="space-y-4 p-4 md:p-6">
         <p className="rounded-lg border border-line bg-surface p-4 text-sm text-muted">Solo la dueña gestiona a los empleados.</p>
+        <TeamExtras />
       </div>
     );
   }
@@ -220,6 +224,7 @@ export function EmployeesPage() {
         />
       )}
       {!editing && delivery && <DeliveryDialog delivery={delivery} onClose={() => setDelivery(null)} />}
+      <TeamExtras />
     </div>
   );
 }
@@ -293,6 +298,20 @@ function DeliveryDialog({ delivery, onClose }: { delivery: InviteDelivery; onClo
   );
 }
 
+const PERM_LABEL: Record<(typeof TEAM_PERMS)[number], string> = {
+  mensajes: "Mensajes",
+  precios: "Precios",
+  vault: "Vault",
+  campanas: "Campañas",
+  analitica: "Analítica",
+  equipo: "Equipo",
+  ajustes: "Ajustes",
+};
+
+function SectionTitle({ children }: { children: string }) {
+  return <h3 className="border-t border-line pt-3 text-xs font-semibold uppercase tracking-wide text-muted">{children}</h3>;
+}
+
 function EmployeeDialog({
   target,
   creators,
@@ -309,15 +328,20 @@ function EmployeeDialog({
   onSaved: () => void;
 }) {
   const row = target === "new" ? null : target;
+  const isMember = row?.kind === "member";
   const [name, setName] = useState(row?.name ?? "");
   const [email, setEmail] = useState(row?.email ?? "");
   const [level, setLevel] = useState<string>(row && row.level !== "owner" ? row.level : "chatter");
   const [picked, setPicked] = useState<string[]>(row?.creatorIds ?? []);
+  const [perms, setPerms] = useState<string[]>(row?.perms ?? ["mensajes"]);
+  const [phone, setPhone] = useState(row?.phone ?? "");
+  const [alerts, setAlerts] = useState(row?.alertsEnabled ?? false);
+  const [quiet, setQuiet] = useState(String(row?.quietMinutes ?? 15));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  function toggle(id: string) {
-    setPicked((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
+  function toggle(list: string[], set: (next: string[]) => void, id: string) {
+    set(list.includes(id) ? list.filter((item) => item !== id) : [...list, id]);
   }
 
   async function submit(event: React.FormEvent) {
@@ -326,11 +350,15 @@ function EmployeeDialog({
     setError(null);
     try {
       if (row) {
-        await editEmployee({ data: { id: row.id, kind: row.kind, name, level, creatorIds: picked } });
+        await editEmployee({ data: { id: row.id, kind: row.kind, name, level, creatorIds: picked, perms } });
+        if (isMember) {
+          const alertChanged = phone.trim() !== (row.phone ?? "") || alerts !== row.alertsEnabled || (Number(quiet) || 15) !== row.quietMinutes;
+          if (alertChanged) await updateStaffAlert({ data: { userId: row.id, phone, enabled: alerts, quietMinutes: Number(quiet) || 15 } });
+        }
         toast.success("Cambios guardados");
         onSaved();
       } else {
-        const result = await inviteEmployee({ data: { name, email, level, creatorIds: picked } });
+        const result = await inviteEmployee({ data: { name, email, level, creatorIds: picked, perms } });
         onDelivery(result);
         toast.success(result.mail.sent ? `Invitación enviada a ${result.email}` : "Invitación creada");
       }
@@ -363,8 +391,9 @@ function EmployeeDialog({
             type="email"
             value={email}
             onChange={(event) => setEmail(event.target.value)}
-            required
+            required={!row}
             disabled={Boolean(row)}
+            placeholder={row && !row.email ? "Sin correo (cuenta antigua)" : undefined}
             aria-label="Correo"
           />
         </label>
@@ -374,21 +403,59 @@ function EmployeeDialog({
             {INVITABLE_LEVELS.map((item) => <option key={item} value={item}>{LEVEL_LABELS[item]}</option>)}
           </Select>
         </label>
-        <fieldset className="text-sm">
-          <legend className="mb-1 font-medium">Asignar creadoras</legend>
+
+        <SectionTitle>Permisos</SectionTitle>
+        <fieldset className="text-sm" aria-label="Permisos">
+          <div className="grid grid-cols-2 gap-1">
+            {TEAM_PERMS.map((perm) => (
+              <label key={perm} className="flex items-center gap-2">
+                <input type="checkbox" className="h-4 w-4 accent-primary" checked={perms.includes(perm)} onChange={() => toggle(perms, setPerms, perm)} />
+                {PERM_LABEL[perm]}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+
+        <SectionTitle>Creadoras asignadas</SectionTitle>
+        <fieldset className="text-sm" aria-label="Creadoras asignadas">
+          <p className="mb-1 text-xs text-muted">Solo ve las conversaciones, la bóveda y los datos de estas creadoras.</p>
           {creators.length === 0 ? (
             <p className="text-xs text-muted">Todavía no hay creadoras.</p>
           ) : (
             <div className="max-h-44 space-y-1 overflow-y-auto rounded-md border border-line p-2">
               {creators.map((item) => (
                 <label key={item.id} className="flex items-center gap-2">
-                  <input type="checkbox" className="h-4 w-4 accent-primary" checked={picked.includes(item.id)} onChange={() => toggle(item.id)} />
+                  <input type="checkbox" className="h-4 w-4 accent-primary" checked={picked.includes(item.id)} onChange={() => toggle(picked, setPicked, item.id)} />
                   {item.name}
                 </label>
               ))}
             </div>
           )}
         </fieldset>
+
+        {row && (
+          <>
+            <SectionTitle>Avisos por teléfono</SectionTitle>
+            {isMember ? (
+              <fieldset className="space-y-2 text-sm" aria-label="Avisos por teléfono">
+                <label className="block text-xs text-muted">
+                  WhatsApp
+                  <Field value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="+34600000000" aria-label="WhatsApp" className="mt-1" />
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" className="h-4 w-4 accent-primary" checked={alerts} onChange={(event) => setAlerts(event.target.checked)} />
+                  Avisos
+                </label>
+                <label className="block text-xs text-muted">
+                  Minutos entre avisos del mismo fan
+                  <Field value={quiet} onChange={(event) => setQuiet(event.target.value)} inputMode="numeric" aria-label="Minutos entre avisos del mismo fan" className="mt-1 w-24" />
+                </label>
+              </fieldset>
+            ) : (
+              <p className="text-xs text-muted">Se configuran cuando acepte la invitación.</p>
+            )}
+          </>
+        )}
         {error && <p role="alert" className="text-sm text-danger">{error}</p>}
         <div className="flex justify-end gap-2 pt-1">
           <Button type="button" variant="ghost" onClick={onClose}>Cancelar</Button>
