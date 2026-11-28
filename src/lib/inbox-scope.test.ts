@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { creatorChipBadges, creatorWithPending, inboxCreators, inboxThreadList, INBOX_CREATOR_KEY, readInboxCreator, rememberInboxCreator, resolveInboxCreator, rowsForCreator, showsCreatorRail, unreadByCreator, visibleCreatorBadges, writeInboxCreator } from "./inbox-scope.ts";
+import { chatUnreadTotal, unreadBubbleText, creatorChipBadges, creatorWithPending, inboxCreators, inboxThreadList, INBOX_CREATOR_KEY, readInboxCreator, rememberInboxCreator, resolveInboxCreator, rowsForCreator, showsCreatorRail, unreadByCreator, visibleCreatorBadges, writeInboxCreator } from "./inbox-scope.ts";
 
 const creators = [{ id: "jose" }, { id: "baby" }, { id: "allison" }];
 
@@ -134,4 +134,48 @@ test("una creadora no ve chats, fans, avisos ni bóveda de otra", () => {
   assert.deepEqual(rowsForCreator(vault, "allison").map((row) => row.id), ["medio-allison"]);
   assert.deepEqual(rowsForCreator(chats, "all"), []);
   assert.deepEqual(rowsForCreator(chats, null), []);
+});
+
+test("el badge de Mensajes de la creadora usa la cifra de OnlyFans si la hay", () => {
+  const threads = [
+    { creatorId: "3zk7kbr", unread: 3 },
+    { creatorId: "3zk7kbr", unread: 4 },
+    { creatorId: "otra", unread: 2 },
+  ];
+  const badges = creatorChipBadges({
+    threads,
+    notices: [{ creatorId: "3zk7kbr", unread: 10 }],
+    visibleIds: ["3zk7kbr", "otra"],
+    ofChats: [{ creatorId: "3zk7kbr", count: 6 }],
+  });
+  assert.deepEqual(badges["3zk7kbr"], { messages: 6, notices: 10 });
+  assert.deepEqual(badges.otra, { messages: 2, notices: 0 });
+  const sin = creatorChipBadges({ threads, notices: [], visibleIds: ["3zk7kbr"] });
+  assert.deepEqual(sin["3zk7kbr"], { messages: 7, notices: 0 });
+});
+
+test("el total del icono de Mensajes suma los badges rojos de las creadoras visibles", () => {
+  const threads = [
+    { creatorId: "a", unread: 2 },
+    { creatorId: "a", unread: 3 },
+    { creatorId: "b", unread: 4 },
+    { creatorId: "oculta", unread: 50 },
+    { creatorId: "c", unread: null },
+  ];
+  assert.equal(chatUnreadTotal({ threads, visibleIds: ["a", "b", "c"] }), 9);
+  assert.equal(chatUnreadTotal({ threads, visibleIds: ["a", "all"] }), 5);
+  assert.equal(chatUnreadTotal({ threads, visibleIds: [] }), 0);
+  // La cifra de OnlyFans manda sobre el recuento de hilos, igual que en el badge por creadora.
+  assert.equal(chatUnreadTotal({ threads, visibleIds: ["a", "b"], ofChats: [{ creatorId: "a", count: 7 }] }), 11);
+  const badges = creatorChipBadges({ threads, notices: [], visibleIds: ["a", "b"], ofChats: [{ creatorId: "a", count: 7 }] });
+  assert.equal(chatUnreadTotal({ threads, visibleIds: ["a", "b"], ofChats: [{ creatorId: "a", count: 7 }] }), badges.a.messages + badges.b.messages);
+});
+
+test("la burbuja se oculta en 0 y pasa a 99+", () => {
+  assert.equal(unreadBubbleText(0), "");
+  assert.equal(unreadBubbleText(-3), "");
+  assert.equal(unreadBubbleText(1), "1");
+  assert.equal(unreadBubbleText(99), "99");
+  assert.equal(unreadBubbleText(100), "99+");
+  assert.equal(unreadBubbleText(1500), "99+");
 });

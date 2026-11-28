@@ -90,6 +90,27 @@ export function creatorChipBadges(input: {
   return badges;
 }
 
+/**
+ * Chats sin leer del menú lateral: la suma de los badges rojos por creadora que el usuario puede ver.
+ * Es el mismo dato que `creatorChipBadges` (la cifra de OnlyFans manda sobre el recuento de hilos).
+ */
+export function chatUnreadTotal(input: {
+  threads: readonly { creatorId: string; unread: number | null }[];
+  visibleIds: readonly string[];
+  ofChats?: readonly { creatorId: string; count: number }[];
+}): number {
+  const badges = creatorChipBadges({ threads: input.threads, notices: [], visibleIds: input.visibleIds, ofChats: input.ofChats });
+  let total = 0;
+  for (const badge of Object.values(badges)) total += badge.messages;
+  return total;
+}
+
+/** Texto de la burbuja: vacío si no hay nada, «99+» a partir de 100. */
+export function unreadBubbleText(count: number): string {
+  if (!Number.isFinite(count) || count <= 0) return "";
+  return count > 99 ? "99+" : String(Math.floor(count));
+}
+
 /** Badges que se pintan. El menú no suma un total, y una cuenta sin chip no tiene badge. */
 export function visibleCreatorBadges(
   threads: readonly { creatorId: string; unread: number | null }[],
