@@ -12,11 +12,13 @@ export function inboxPillCounts(input: {
   status: "loading" | "error" | "ready";
   threads: readonly PillThread[];
   messages: readonly PillMessage[] | null;
+  /** `chatMessagesCount` de OnlyFans para la cuenta elegida. Si viene, manda sobre el recuento local. */
+  ofUnread?: number | null;
 }): PillCounts {
   if (input.status !== "ready") return { todos: null, sinLeer: null, propinas: null };
   const todos = input.threads.length;
   const unreadKnown = input.threads.some((thread) => thread.unread != null);
-  const sinLeer = unreadKnown ? input.threads.filter((thread) => thread.unread != null && thread.unread > 0).length : null;
+  const sinLeer = input.ofUnread != null ? input.ofUnread : unreadKnown ? input.threads.filter((thread) => thread.unread != null && thread.unread > 0).length : null;
   const tipped = tipThreads(input.messages, input.threads);
   const propinasKnown = input.messages != null || input.threads.some((thread) => thread.tipsCents != null);
   return {

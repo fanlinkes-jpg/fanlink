@@ -41,6 +41,8 @@ export async function saveNotificationRead(
     reason: string | null;
     captured: boolean;
     counts?: NotificationCounts | null;
+    /** `chatMessagesCount` de /users/me: chats con no leídos, la cifra de Mensajes de OnlyFans. */
+    chatUnread?: number | null;
     status?: number | null;
     motivo?: string | null;
   },
@@ -58,9 +60,12 @@ export async function saveNotificationRead(
        consecutive_failures = case when $4 = 'ok' then 0 else of_notification_sync.consecutive_failures + 1 end,
        last_status = excluded.last_status,
        last_reason = excluded.last_reason,
-       unread_counts = coalesce(excluded.unread_counts, of_notification_sync.unread_counts),
+       unread_counts = case
+         when excluded.unread_counts is null then of_notification_sync.unread_counts
+         else coalesce(of_notification_sync.unread_counts, '{}'::jsonb) || jsonb_strip_nulls(excluded.unread_counts)
+       end,
        last_http_status = coalesce(excluded.last_http_status, of_notification_sync.last_http_status)`,
-    [creatorId, syncedAt, failed ? 1 : 0, failed ? "error" : "ok", motivo, read.counts ? JSON.stringify(read.counts) : null, read.status ?? null],
+    [creatorId, syncedAt, failed ? 1 : 0, failed ? "error" : "ok", motivo, storedCounts(read.counts ?? null, read.chatUnread ?? null), read.status ?? null],
   );
   const keepRef = await hasNotificationColumn(sql, "message_ref");
   for (const item of read.items) {
@@ -276,11 +281,19 @@ export async function listNotificationRows(
   return { rows: page, nextCursor };
 }
 
+/** Los contadores de pestañas y, aparte, `chats`. Null si no hay nada que guardar. */
+function storedCounts(counts: NotificationCounts | null, chatUnread: number | null): string | null {
+  if (!counts && chatUnread == null) return null;
+  return JSON.stringify({ ...(counts ?? {}), ...(chatUnread != null ? { chats: chatUnread } : {}) });
+}
+
 export type NotificationSyncState = {
   syncedAt: string | null;
   motivo: string | null;
   status: number | null;
   counts: NotificationCounts | null;
+  /** Chats con no leídos según OnlyFans (`chatMessagesCount`). Null si nunca vino. */
+  chatUnread: number | null;
   ok: boolean;
 };
 
@@ -296,13 +309,14 @@ export async function notificationSyncState(sql: NotificationSql, creatorId: str
     [creatorId],
   );
   const row = rows[0];
-  if (!row) return { syncedAt: null, motivo: null, status: null, counts: null, ok: false };
+  if (!row) return { syncedAt: null, motivo: null, status: null, counts: null, chatUnread: null, ok: false };
   const ok = row.last_status === "ok";
   return {
     syncedAt: asIso(row.last_attempt_at),
     motivo: row.last_reason,
     status: row.last_http_status == null ? null : Number(row.last_http_status),
     counts: ok ? asCounts(row.unread_counts) : null,
+    chatUnread: chatUnreadOf(row.unread_counts),
     ok,
   };
 }
@@ -474,6 +488,12 @@ function listsOf(value: string | null): string[] | null {
   if (value == null) return null;
   if (value === "") return [];
   return value.split("\n").filter((item) => item.length > 0);
+}
+
+function chatUnreadOf(value: NotificationCounts | string | null): number | null {
+  const parsed = typeof value === "string" ? safeJson(value) : value;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  return countOrNull((parsed as Record<string, unknown>).chats);
 }
 
 function asCounts(value: NotificationCounts | string | null): NotificationCounts | null {

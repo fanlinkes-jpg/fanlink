@@ -3,7 +3,8 @@ import type { NotificationCounts, ParsedNotification } from "../../../src/lib/no
 import {
   NOTIFICATION_LIST_LIMIT,
   OF_NOTIFICATION_LIST_TYPES,
-  newTagsCountOf,
+  meCountsOf,
+  type OfMeCounts,
   ofTabForListType,
   noticePayloadTraces,
   parseNotificationCounts,
@@ -27,7 +28,12 @@ import type { StorageStateFile } from "../sessions/storage-state.ts";
  *   respuesta {list, hasMore}. Sin skip_users: con skip_users=all OnlyFans
  *   quita el user (XcelerateManagement api/poller.py).
  * - GET /api2/v2/users/notifications/count  sin query, {all, <type>: n}
- * - GET /api2/v2/users/me  solo para newTagsCount (Etiquetas). Si no viene, null.
+ * - GET /api2/v2/users/me  contadores de la barra lateral: notificationsCount
+ *   (Notificaciones), chatMessagesCount (Mensajes) y newTagsCount (Etiquetas).
+ *   Si una clave no viene, null.
+ * - GET /api2/v2/release-forms/mentions?limit&offset&format=infinite
+ *   respuesta {list, hasMore, lastId}: la lista de la pestaña Etiquetas (catálogo,
+ *   módulo 783434). No es un type de /users/notifications.
  * - POST /api2/v2/users/notifications/read            marca todas, sin cuerpo
  * - POST /api2/v2/users/notifications/read/{type}    marca un tipo, sin cuerpo
  *   El catálogo (202600, símbolos B y F) dice que el cuerpo es none y la
@@ -68,10 +74,13 @@ export type CollectedNotifications = {
   retryAfterMs: number;
   /** Foto de users/me de esta misma lectura. No es una petición extra. */
   avatarUrl?: string | null;
+  /** `chatMessagesCount` de users/me de esta misma lectura. Null si no vino. */
+  chatUnread?: number | null;
 };
 
 export type MarkNotificationsResult = {
   wrote: boolean;
+  chatUnread?: number | null;
   motivo: string;
   counts: NotificationCounts | null;
   routes: NotificationRouteLog[];
@@ -122,8 +131,11 @@ export function notificationMarkTypePath(type: string): string {
   return `/api2/v2/users/notifications/read/${encodeURIComponent(type)}`;
 }
 
+export const TAG_MENTIONS_PATH = `/api2/v2/release-forms/mentions?limit=${NOTIFICATION_LIST_LIMIT}&offset=0&format=infinite`;
+
 export function notificationListPath(type?: string | null): string {
   if (!type) return NOTIFICATION_LIST_PATH;
+  if (type === "tags") return TAG_MENTIONS_PATH;
   return `${NOTIFICATION_LIST_PATH}&type=${encodeURIComponent(type)}`;
 }
 
@@ -184,14 +196,14 @@ export async function fetchSignedNotifications(state: StorageStateFile, deps: Si
   if (countPage.ok) rememberListPlan(deps.accountId, nextCounts);
 
   const mePage = await request(NOTIFICATION_ME_PATH);
-  const tags = mePage.ok ? newTagsCountOf(mePage.body) : null;
+  const me = mePage.ok ? meCountsOf(mePage.body) : NO_ME_COUNTS;
   const avatarUrl = mePage.ok ? creatorAvatarOf(mePage.body) : null;
-  routes.push(routeLog("etiquetas", mePage, tags ?? 0));
+  routes.push(routeLog("etiquetas", mePage, me.tags ?? 0));
   if (mePage.retryAfterMs > 0) {
     return {
       ...stoppedRead(mePage, items, routes),
       captured: true,
-      counts: withTags(nextCounts, null),
+      counts: nextCounts,
       motivo: "ok",
       reason: null,
       countMotivo,
@@ -200,16 +212,17 @@ export async function fetchSignedNotifications(state: StorageStateFile, deps: Si
       avatarUrl,
     };
   }
-  const withTagCounts = nextCounts ? withTags(nextCounts, tags != null ? tags : nextCounts.tags) : null;
-  const empty = items.length === 0 && withTagCounts?.all === 0;
+  const merged = withMe(nextCounts, me);
+  const empty = items.length === 0 && merged?.all === 0;
   return {
     items,
-    counts: withTagCounts,
+    counts: merged,
+    chatUnread: me.chats,
     reason: empty ? "sin notificaciones" : null,
     motivo: empty ? "sin notificaciones" : "ok",
     countMotivo,
     routes,
-    jsonPaths: [NOTIFICATION_LIST_PATH, NOTIFICATION_COUNT_PATH, NOTIFICATION_ME_PATH],
+    jsonPaths: [notificationListPath(listType), NOTIFICATION_COUNT_PATH, NOTIFICATION_ME_PATH],
     captured: true,
     sessionRejected: false,
     signatureRejected: false,
@@ -317,17 +330,29 @@ export async function markSignedNotificationsRead(
       signatureRejected: false,
     };
   }
-  return { wrote: true, motivo: "ok", counts, routes, retryAfterMs: 0, sessionRejected: false, signatureRejected: false };
+  // Sin /users/me el contador volvería a quedar sin Etiquetas ni el total de la barra lateral.
+  const mePage = await request(NOTIFICATION_ME_PATH, "GET");
+  const me = mePage.ok ? meCountsOf(mePage.body) : NO_ME_COUNTS;
+  routes.push(routeLog("etiquetas", mePage, me.tags ?? 0));
+  return { wrote: true, motivo: "ok", counts: withMe(counts, me), chatUnread: me.chats, routes, retryAfterMs: 0, sessionRejected: false, signatureRejected: false };
 }
 
-function withTags(counts: NotificationCounts | null, tags: number | null): NotificationCounts | null {
-  if (!counts && tags == null) return null;
+const NO_ME_COUNTS: OfMeCounts = { notifications: null, chats: null, tags: null };
+
+/**
+ * El total y Etiquetas salen de /users/me, que es lo que la barra lateral de OnlyFans enseña
+ * (Notificaciones = `notificationsCount`, Etiquetas = `newTagsCount`).
+ * `all` de /notifications/count no cuenta Etiquetas, y por eso el badge decía 1 con 10 en OnlyFans.
+ * Una clave que /users/me no trae deja el valor del contador tal cual.
+ */
+export function withMe(counts: NotificationCounts | null, me: OfMeCounts): NotificationCounts | null {
+  if (!counts && me.tags == null && me.notifications == null) return null;
   return {
-    all: counts?.all ?? null,
+    all: me.notifications ?? counts?.all ?? null,
     subscriptions: counts?.subscriptions ?? null,
     purchases: counts?.purchases ?? null,
     tips: counts?.tips ?? null,
-    tags,
+    tags: me.tags ?? counts?.tags ?? null,
     comments: counts?.comments ?? null,
     mentions: counts?.mentions ?? null,
     likes: counts?.likes ?? null,

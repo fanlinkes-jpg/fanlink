@@ -42,7 +42,9 @@ export type NotificationTab = (typeof NOTIFICATION_TABS)[number];
 
 /**
  * El `type` de GET /api2/v2/users/notifications, el de cada pestaña del centro.
- * Etiquetas no está: OnlyFans las cuenta en /users/me (`newTagsCount`).
+ * Etiquetas no es un type de ese endpoint: su lista es GET /api2/v2/release-forms/mentions
+ * (catálogo OF Manager, módulo 783434) y su contador es `newTagsCount` de /users/me.
+ * Aquí entra como el pseudo-type `tags` para que la cola y la caché por pestaña lo traten igual.
  * Promociones es `message`. Una emisión en directo solo entra ahí si OnlyFans
  * la devuelve con ese type.
  */
@@ -50,6 +52,7 @@ export const OF_NOTIFICATION_LIST_TYPES = [
   "subscribed",
   "purchases",
   "tip",
+  "tags",
   "commented",
   "mentioned",
   "favorited",
@@ -62,6 +65,7 @@ const OF_LIST_TAB: Record<OfNotificationListType, NotificationTab> = {
   subscribed: "subscriptions",
   purchases: "purchases",
   tip: "tips",
+  tags: "tags",
   commented: "comments",
   mentioned: "mentions",
   favorited: "likes",
@@ -110,13 +114,13 @@ export function noticesForOfTab<T extends { ofType?: string | null; kind?: Notif
 
 /**
  * El número de la pestaña es el de no leídas de OnlyFans. La lista es la página
- * de ese type, que puede incluir leídas o no traer las etiquetas.
+ * de ese type, que puede incluir leídas.
  */
 export function ofTabListNote(input: { tab: NotificationTab; unread: number | null; listed: number }): string | null {
   if (input.unread == null || input.unread <= 0) return null;
   if (input.listed === input.unread) return null;
   if (input.tab === "tags" && input.listed === 0) {
-    return `${input.unread} no leídas. OnlyFans las cuenta en el perfil, no en esta lista.`;
+    return `${input.unread} no leídas. La lista de etiquetas de OnlyFans aún no ha traído ninguna.`;
   }
   return `${input.unread} no leídas. La lista es la página de OnlyFans para esta pestaña.`;
 }
@@ -295,6 +299,35 @@ export function tabOf(kind: NotificationKind): NotificationTab {
 
 export function isNotificationTab(value: string): value is NotificationTab {
   return (NOTIFICATION_TABS as readonly string[]).includes(value);
+}
+
+const CHAT_KINDS: ReadonlySet<NotificationKind> = new Set(["like", "ppv", "tip", "subscription", "renewal"]);
+
+/**
+ * Solo los avisos de un fan que gasta o reacciona (me gusta, compra de PPV, propina,
+ * suscripción o renovación) llevan a su conversación. Etiquetas, promociones, comentarios,
+ * menciones, OnlyFans y el resto solo se ven.
+ */
+export function notificationOpensChat(kind: NotificationKind): boolean {
+  return CHAT_KINDS.has(kind);
+}
+
+const ACTION_TEXT: Partial<Record<NotificationKind, string>> = {
+  like: "Le ha gustado una publicación",
+  ppv: "Ha comprado un mensaje de pago",
+  tip: "Ha enviado una propina",
+  subscription: "Se ha suscrito",
+  renewal: "Ha renovado la suscripción",
+  tag: "Te ha etiquetado",
+  mention: "Te ha mencionado",
+  comment: "Ha comentado",
+  promotion: "Promoción",
+  system: "Aviso de OnlyFans",
+};
+
+/** La acción según el tipo, para cuando OnlyFans no manda texto. No inventa datos: nombra el tipo. */
+export function notificationActionText(kind: NotificationKind): string | null {
+  return ACTION_TEXT[kind] ?? null;
 }
 
 export function kindLabel(kind: NotificationKind): string {
@@ -480,6 +513,7 @@ export type ParseNotificationOptions = {
 };
 
 export function parseNotificationPayload(value: unknown, options: ParseNotificationOptions = {}): ParsedNotification[] {
+  if (options.listType === "tags") return dedupe(parseTagMentions(value, options));
   const found: ParsedNotification[] = [];
   if (Array.isArray(value)) collectArray(value, found, true, options);
   else walk(value, found, 0, false, options);
@@ -523,6 +557,69 @@ function countSource(value: unknown): Record<string, unknown> | null {
     if (countNumber(inner.all) != null || "subscribed" in inner || "tip" in inner || "purchases" in inner) return inner;
   }
   return raw;
+}
+
+/**
+ * GET /api2/v2/release-forms/mentions → {list, hasMore, lastId}. Cada fila es una etiqueta:
+ * no trae `type` de notificación, por eso no pasa por `notificationFrom`.
+ * Sin id ni fecha no hay clave estable y la fila se descarta.
+ */
+function parseTagMentions(value: unknown, options: ParseNotificationOptions): ParsedNotification[] {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>).list : value;
+  if (!Array.isArray(source)) return [];
+  const out: ParsedNotification[] = [];
+  for (const item of source) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const base = item as Record<string, unknown>;
+    const inner = nested(base, ["releaseForm", "form", "mention", "tag"]);
+    const record: Record<string, unknown> = inner ? { ...inner, ...base } : base;
+    const occurredAt = firstTime(record, ["createdAt", "created_at", "date", "createdDate", "publishedAt", "postedAt"]);
+    const fan = fanOf(record);
+    const self = options.accountUserId != null && fan.fanKey === options.accountUserId;
+    const id = firstString(record, ["id", "releaseFormId", "formId", "guid"]);
+    const key = id ? `tag:${id}` : occurredAt ? ["tag", occurredAt, fan.fanKey ?? ""].join("\u001f") : null;
+    if (!key) continue;
+    const card = fanCard(record);
+    out.push({
+      key,
+      kind: "tag",
+      body: notificationText(record),
+      fanKey: self ? null : fan.fanKey,
+      fanName: self ? null : fan.fanName,
+      threadKey: null,
+      amountCents: null,
+      occurredAt,
+      pending: false,
+      ofUnread: unreadFlag(record) ?? (typeof record.isNew === "boolean" ? record.isNew : null),
+      fanHandle: card.fanHandle,
+      avatarUrl: card.avatarUrl,
+      lists: card.lists,
+      renewAuto: null,
+      fanSeenAt: card.fanSeenAt,
+      postRef: card.postRef,
+      postLink: card.postLink,
+      postText: card.postText,
+      ofType: "tags",
+      messageRef: null,
+    });
+  }
+  return out;
+}
+
+/**
+ * Lo que la barra lateral de OnlyFans enseña, de GET /users/me:
+ * `notificationsCount` (Notificaciones), `chatMessagesCount` (Mensajes) y `newTagsCount` (Etiquetas).
+ * Cada uno es null si la clave no viene. Nunca un 0 inventado.
+ */
+export type OfMeCounts = { notifications: number | null; chats: number | null; tags: number | null };
+
+export function meCountsOf(value: unknown): OfMeCounts {
+  const raw = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+  return {
+    notifications: raw ? countNumber(raw.notificationsCount) : null,
+    chats: raw ? countNumber(raw.chatMessagesCount) : null,
+    tags: raw ? countNumber(raw.newTagsCount) : null,
+  };
 }
 
 /** `newTagsCount` de GET /users/me. Si la clave no está, null. */
