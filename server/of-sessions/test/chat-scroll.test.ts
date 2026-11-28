@@ -74,6 +74,19 @@ test("al abrir un chat largo con medios, la conversación queda en el último me
     await page.getByRole("button", { name: /Fan Uno/ }).click();
     await page.locator("ol[data-thread-scroll] [data-message-id='m149']").waitFor({ timeout: 60_000 });
     await assertAtBottom(page, "m149", "volver al primero");
+    // Subir un píxel con la rueda mientras el chat acaba de abrirse: ningún reintento la devuelve abajo.
+    await page.getByRole("button", { name: /Fan Dos/ }).click();
+    await page.locator("ol[data-thread-scroll] [data-message-id='n149']").waitFor({ timeout: 60_000 });
+    const listBox = await page.locator("ol[data-thread-scroll]").boundingBox();
+    await page.mouse.move((listBox?.x ?? 0) + (listBox?.width ?? 0) / 2, (listBox?.y ?? 0) + (listBox?.height ?? 0) / 2);
+    await page.mouse.wheel(0, -3);
+    const held: number[] = [];
+    for (let index = 0; index < 12; index += 1) {
+      await page.waitForTimeout(300);
+      held.push((await gap(page, "n149")).gap);
+    }
+    assert.ok(held[0] >= 2, `no subió: ${JSON.stringify(held)}`);
+    for (const value of held) assert.ok(value >= held[0] - 1, `tiró hacia abajo tras subir: ${JSON.stringify(held)}`);
     // Si la persona sube, no se la arrastra de vuelta.
     const box = await page.locator("ol[data-thread-scroll]").boundingBox();
     await page.mouse.move((box?.x ?? 0) + (box?.width ?? 0) / 2, (box?.y ?? 0) + (box?.height ?? 0) / 2);

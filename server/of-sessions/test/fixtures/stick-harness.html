@@ -1,0 +1,20 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      html, body, #root { height: 100%; margin: 0; }
+      html { scroll-behavior: smooth; }
+      .shell { display: flex; flex-direction: column; height: 100%; }
+      .bar { flex: none; }
+      .wrap { position: relative; flex: 1 1 0; min-height: 0; }
+      ol { height: 100%; overflow-y: auto; margin: 0; padding: 12px 16px; list-style: none; overflow-anchor: none; box-sizing: border-box; }
+      li { margin: 0 0 12px; padding: 8px 12px; background: #eef; border-radius: 12px; min-height: 40px; }
+      li.tall { min-height: 220px; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./stick-harness.tsx"></script>
+  </body>
+</html>
