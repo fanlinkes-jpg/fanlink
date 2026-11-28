@@ -22,7 +22,7 @@ import { sessionErrorText } from "@/lib/use-creator-sessions";
 import { inboxCreators, inboxThreadList, readInboxCreator, resolveInboxCreator, rowsForCreator, writeInboxCreator } from "@/lib/inbox-scope";
 import { useCreatorNoticeBadges } from "@/lib/use-creator-notice-badges";
 import { useAutoTranslate, useComposerLanguage, useTranslateMode } from "@/lib/ui-prefs";
-import { ComposerTranslationPanel, MessageTranslateButton, TranslateNotice } from "@/features/translate-ui";
+import { ComposerTranslationPanel, MessageTranslateButton, TranslateNotice, TranslateSpinner } from "@/features/translate-ui";
 import { useFanLanguage, useTranslated, useTranslatorSupport } from "@/lib/use-translator";
 import { translateNotice } from "@/lib/translator";
 import { SfwMedia } from "@/components/sfw-media";
@@ -271,7 +271,7 @@ function ThreadMessage({ message, find, watermark, fanLanguage = null }: { water
             {shown.paragraphs.map((paragraph, index) => <p key={index}>{marked(paragraph)}</p>)}
             {translatable ? (
               <div className="flex flex-wrap items-center justify-end gap-2 text-[11px] text-[#6d7585]" data-translation={translated.state}>
-                {active && translated.state === "loading" ? <span>Traduciendo…</span> : null}
+                {active && translated.state === "loading" ? <TranslateSpinner progress={translated.progress} /> : null}
                 {active && translated.state === "done" && translated.same ? <span>Ya está en {languageLabelOf(target)}</span> : null}
                 {active && !supported ? <span role="status" className="text-[#8a5a12]">{translateNotice("unsupported")}</span> : null}
                 {active && translated.state === "error" ? <TranslateNotice code={translated.code} source={translated.source} target={translated.target} /> : null}

@@ -4,11 +4,51 @@
  * El módulo no toca `window`: recibe el host (por defecto `globalThis`) para poder probarlo con un mock.
  */
 
+/**
+ * Idiomas que ofrece el Translator de Chrome (lista de la documentación de Chrome, que puede crecer).
+ * Español primero, es el valor por defecto; el resto, por nombre. Si Chrome no tiene un par concreto,
+ * `availability` lo dice y el mensaje enseña «Chrome no ofrece esa traducción».
+ */
 export const TRANSLATE_LANGUAGES = [
   { id: "es", label: "Español" },
-  { id: "en", label: "Inglés" },
-  { id: "pt", label: "Portugués" },
   { id: "de", label: "Alemán" },
+  { id: "ar", label: "Árabe" },
+  { id: "bn", label: "Bengalí" },
+  { id: "bg", label: "Búlgaro" },
+  { id: "kn", label: "Canarés" },
+  { id: "cs", label: "Checo" },
+  { id: "zh", label: "Chino (simplificado)" },
+  { id: "zh-Hant", label: "Chino (tradicional)" },
+  { id: "ko", label: "Coreano" },
+  { id: "hr", label: "Croata" },
+  { id: "da", label: "Danés" },
+  { id: "sk", label: "Eslovaco" },
+  { id: "sl", label: "Esloveno" },
+  { id: "fi", label: "Finés" },
+  { id: "fr", label: "Francés" },
+  { id: "el", label: "Griego" },
+  { id: "he", label: "Hebreo" },
+  { id: "hi", label: "Hindi" },
+  { id: "nl", label: "Holandés" },
+  { id: "hu", label: "Húngaro" },
+  { id: "id", label: "Indonesio" },
+  { id: "en", label: "Inglés" },
+  { id: "it", label: "Italiano" },
+  { id: "ja", label: "Japonés" },
+  { id: "lt", label: "Lituano" },
+  { id: "mr", label: "Maratí" },
+  { id: "no", label: "Noruego" },
+  { id: "pl", label: "Polaco" },
+  { id: "pt", label: "Portugués" },
+  { id: "ro", label: "Rumano" },
+  { id: "ru", label: "Ruso" },
+  { id: "sv", label: "Sueco" },
+  { id: "th", label: "Tailandés" },
+  { id: "ta", label: "Tamil" },
+  { id: "te", label: "Telugu" },
+  { id: "tr", label: "Turco" },
+  { id: "uk", label: "Ucraniano" },
+  { id: "vi", label: "Vietnamita" },
 ] as const;
 
 export type TranslateLanguage = (typeof TRANSLATE_LANGUAGES)[number]["id"];
@@ -18,12 +58,23 @@ export function isTranslateLanguage(value: unknown): value is TranslateLanguage 
 }
 
 export function languageLabel(code: string): string {
-  return TRANSLATE_LANGUAGES.find((item) => item.id === baseLanguage(code))?.label ?? code.toUpperCase();
+  const clean = code.trim();
+  return TRANSLATE_LANGUAGES.find((item) => item.id.toLowerCase() === clean.toLowerCase())?.label
+    ?? TRANSLATE_LANGUAGES.find((item) => item.id === baseLanguage(clean))?.label
+    ?? clean.toUpperCase();
 }
 
-/** `pt-BR` → `pt`. Minúsculas. */
+/**
+ * Código para la API. `pt-BR` → `pt`, `iw` → `he`. El chino conserva su variante porque Chrome
+ * distingue `zh` y `zh-Hant`; el resto, minúsculas y sin región.
+ */
 export function baseLanguage(code: string): string {
-  return code.trim().toLowerCase().split(/[-_]/)[0] ?? "";
+  const clean = code.trim().replace(/_/g, "-");
+  if (/^zh-(hant|tw|hk|mo)/i.test(clean)) return "zh-Hant";
+  const base = clean.toLowerCase().split("-")[0] ?? "";
+  if (base === "iw") return "he";
+  if (base === "nb" || base === "nn") return "no";
+  return base;
 }
 
 export type Availability = "unsupported" | "unavailable" | "downloadable" | "downloading" | "available";
@@ -61,11 +112,9 @@ export class TranslateError extends Error {
 export function translateNotice(code: TranslateErrorCode, source: string | null = null, target: string | null = null): string {
   switch (code) {
     case "unsupported":
-      return "Este navegador no tiene el traductor integrado. Usa Chrome 138 o superior en escritorio.";
+      return "La traducción no está disponible en este navegador.";
     case "needs-download":
-      return source && target
-        ? `Falta el paquete de idioma ${source.toUpperCase()} → ${target.toUpperCase()}. Pulsa Descargar.`
-        : "Falta un paquete de idioma. Pulsa Descargar.";
+      return "Falta descargar el idioma. Haz clic en la página y se descargará solo.";
     case "download-failed":
       return "No se pudo descargar el paquete de idioma. Inténtalo otra vez con un clic.";
     case "pair-unavailable":
@@ -150,7 +199,7 @@ function monitorFor(onProgress?: ProgressFn): ((monitor: MonitorLike) => void) |
 
 /**
  * Crea (o reutiliza) el traductor del par. Si el paquete hay que descargarlo, Chrome exige un gesto del
- * usuario: sin él, error `needs-download` y la interfaz enseña el botón Descargar.
+ * usuario: sin él, error `needs-download`; la interfaz reintenta sola con el siguiente clic.
  */
 export async function prepareTranslator(
   host: TranslatorHost,
@@ -192,11 +241,12 @@ async function prepareDetector(host: TranslatorHost, options: { onProgress?: Pro
   const availability = await detectorAvailability(host);
   if (availability === "unavailable" || availability === "unsupported") return null;
   const gesture = options.gesture ?? userActive(host);
-  if ((availability === "downloadable" || availability === "downloading") && !gesture) return null;
+  if ((availability === "downloadable" || availability === "downloading") && !gesture) throw new TranslateError("needs-download");
   const created = host.LanguageDetector!.create({ monitor: monitorFor(options.onProgress) });
   detectors.set(host, created);
-  return created.catch(() => {
+  return created.catch((error: unknown) => {
     detectors.delete(host);
+    if (error instanceof Error && error.name === "NotAllowedError") throw new TranslateError("needs-download");
     return null as unknown as DetectorLike;
   });
 }
@@ -208,10 +258,10 @@ export async function downloadDetector(host: TranslatorHost, onProgress?: Progre
 
 export type Detected = { language: string; confidence: number };
 
-export async function detectLanguage(host: TranslatorHost, text: string): Promise<Detected | null> {
+export async function detectLanguage(host: TranslatorHost, text: string, options: { onProgress?: ProgressFn; gesture?: boolean } = {}): Promise<Detected | null> {
   const clean = text.trim();
   if (!clean) return null;
-  const detector = await prepareDetector(host);
+  const detector = await prepareDetector(host, options);
   if (!detector) return null;
   try {
     const found = await detector.detect(clean);
@@ -230,9 +280,15 @@ const MIN_DETECT_CHARS = 8;
  * Idioma de origen: el pedido; si no, el detectado con confianza suficiente; si no, el de respaldo
  * (el idioma habitual del fan). Sin ninguno, `detect-failed`.
  */
-export async function resolveSource(host: TranslatorHost, text: string, requested: string | null, fallback: string | null): Promise<string> {
+export async function resolveSource(
+  host: TranslatorHost,
+  text: string,
+  requested: string | null,
+  fallback: string | null,
+  options: { onProgress?: ProgressFn; gesture?: boolean } = {},
+): Promise<string> {
   if (requested) return baseLanguage(requested);
-  const detected = text.trim().length >= MIN_DETECT_CHARS ? await detectLanguage(host, text) : null;
+  const detected = text.trim().length >= MIN_DETECT_CHARS ? await detectLanguage(host, text, options) : null;
   if (detected && detected.confidence >= MIN_CONFIDENCE) return detected.language;
   if (fallback) return baseLanguage(fallback);
   if (detected) return detected.language;
@@ -250,7 +306,7 @@ export async function translateText(
   const target = baseLanguage(options.target);
   const trimmed = text.trim();
   if (!trimmed) return { text, source: options.source ? baseLanguage(options.source) : target, target, same: true };
-  const source = await resolveSource(host, trimmed, options.source, options.fallbackSource ?? null);
+  const source = await resolveSource(host, trimmed, options.source, options.fallbackSource ?? null, { onProgress: options.onProgress, gesture: options.gesture });
   if (source === target) return { text, source, target, same: true };
   const cacheKey = `${source}>${target}\u0000${trimmed}`;
   const hit = results.get(cacheKey);
@@ -274,7 +330,7 @@ export async function translateMany(
   options: { source: string | null; fallbackSource?: string | null; target: string; gesture?: boolean; onProgress?: ProgressFn },
 ): Promise<{ texts: string[]; source: string; same: boolean }> {
   const joined = texts.join("\n");
-  const source = await resolveSource(host, joined, options.source, options.fallbackSource ?? null);
+  const source = await resolveSource(host, joined, options.source, options.fallbackSource ?? null, { onProgress: options.onProgress, gesture: options.gesture });
   const out: string[] = [];
   let same = true;
   for (const text of texts) {
@@ -289,7 +345,7 @@ export async function translateMany(
 export async function fanLanguageOf(host: TranslatorHost, fanTexts: readonly string[]): Promise<string | null> {
   const votes = new Map<string, number>();
   for (const text of fanTexts.slice(-6)) {
-    const found = await detectLanguage(host, text);
+    const found = await detectLanguage(host, text).catch(() => null);
     if (!found || found.confidence < MIN_CONFIDENCE || !isTranslateLanguage(found.language)) continue;
     votes.set(found.language, (votes.get(found.language) ?? 0) + text.trim().length * found.confidence);
   }
