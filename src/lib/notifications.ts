@@ -1427,9 +1427,16 @@ function collectDirectoryAvatars(value: unknown, fallbackId: string | null, map:
 }
 
 function unreadFlag(record: Record<string, unknown>): boolean | null {
-  if (record.isRead === true) return false;
-  if (record.isRead === false) return true;
+  if (record.isRead === true || record.read === true) return false;
+  if (record.isRead === false || record.read === false) return true;
   return null;
+}
+
+/** Leído en CRM cuando OnlyFans lo marca leído; si no trae el campo, usa el visto local. */
+export function notificationOfRead(input: { ofUnread: boolean | null; seenAt: string | null }): boolean {
+  if (input.ofUnread === false) return true;
+  if (input.ofUnread === true) return false;
+  return Boolean(input.seenAt);
 }
 
 function threadFromLink(record: Record<string, unknown>): string | null {

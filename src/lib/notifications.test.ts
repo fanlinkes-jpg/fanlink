@@ -46,6 +46,7 @@ import {
   unreadCount,
   canReadCreatorNotifications,
   notesResponseApplies,
+  notificationOfRead,
   visibleNotifications,
   SIN_DATOS,
   type NotificationRecord,
@@ -141,6 +142,16 @@ test("el chatter solo ve las notificaciones de sus cuentas y la dueña ve todas"
   assert.equal(canReadCreatorNotifications(owner, "c-alba"), true);
   assert.deepEqual(visibleNotifications(rows, owner, "c-nora").map((row) => row.key), ["ajena"]);
   assert.deepEqual(visibleNotifications(rows, owner, "c-alba").map((row) => row.key), ["propia"]);
+});
+
+test("el leído del CRM sigue a isRead de OnlyFans", () => {
+  const read = parseNotificationPayload([{ id: "1", type: "purchases", isRead: true, createdAt: "2026-11-01T00:00:00.000Z", text: "compra" }], {})[0];
+  assert.equal(read?.ofUnread, false);
+  const unread = parseNotificationPayload([{ id: "2", type: "purchases", read: false, createdAt: "2026-11-01T00:00:00.000Z", text: "compra" }], {})[0];
+  assert.equal(unread?.ofUnread, true);
+  assert.equal(notificationOfRead({ ofUnread: false, seenAt: null }), true);
+  assert.equal(notificationOfRead({ ofUnread: true, seenAt: "2026-11-02T00:00:00.000Z" }), false);
+  assert.equal(notificationOfRead({ ofUnread: null, seenAt: "2026-11-02T00:00:00.000Z" }), true);
 });
 
 test("descarta respuestas de notificaciones de otra creadora o pestaña", () => {

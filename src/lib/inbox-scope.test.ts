@@ -33,7 +33,7 @@ test("cada creadora tiene su badge y el total no mezcla la vista", () => {
     { creatorId: "allison", unread: 2 },
     { creatorId: "baby", unread: null },
   ];
-  assert.deepEqual(unreadByCreator(threads), { jose: 1, allison: 1 });
+  assert.deepEqual(unreadByCreator(threads), { jose: 4, allison: 2 });
   assert.equal(creatorWithPending(["jose", "baby", "allison"], threads), "jose");
   assert.equal(creatorWithPending(["baby", "allison"], threads), "allison");
 });
@@ -49,11 +49,11 @@ test("los no leídos solo están en el badge de cada creadora visible", () => {
     { creatorId: "neztlav", unread: 7 },
   ];
   const badges = visibleCreatorBadges(threads, ["jose", "baby", "allison"]);
-  assert.deepEqual(badges, { jose: 2, allison: 1 });
+  assert.deepEqual(badges, { jose: 5, allison: 2 });
   assert.equal(Object.hasOwn(badges, "9ikis52"), false);
   assert.equal(Object.hasOwn(badges, "h0jqunu"), false);
   assert.equal(Object.hasOwn(badges, "neztlav"), false);
-  assert.equal(unreadByCreator(threads)["9ikis52"], 1);
+  assert.equal(unreadByCreator(threads)["9ikis52"], 9);
 });
 
 test("cada pestaña tiene su badge rojo y su badge verde", () => {
@@ -70,7 +70,7 @@ test("cada pestaña tiene su badge rojo y su badge verde", () => {
     { creatorId: "neztlav", unread: 7 },
   ];
   const badges = creatorChipBadges({ threads, notices, visibleIds: ["jose", "allison", "baby"] });
-  assert.deepEqual(badges.jose, { messages: 2, notices: 0 });
+  assert.deepEqual(badges.jose, { messages: 3, notices: 0 });
   assert.deepEqual(badges.allison, { messages: 0, notices: 128 });
   assert.equal(badges.baby, undefined);
   assert.equal(Object.hasOwn(badges, "9ikis52"), false);

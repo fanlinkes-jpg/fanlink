@@ -8,7 +8,9 @@ import {
   isOwnerOnlyKind,
   kindsForTab,
   notificationLabels,
+  notificationOfRead,
   ofListType,
+  ofNoticeTotal,
   tabOf,
   NOTIFICATION_KINDS,
   NOTIFICATION_PAGE_SIZE,
@@ -88,7 +90,7 @@ export async function saveNotificationRead(
          occurred_at = coalesce(excluded.occurred_at, of_notification.occurred_at),
          pending = of_notification.pending or excluded.pending,
          synced_at = excluded.synced_at,
-         of_unread = coalesce(excluded.of_unread, of_notification.of_unread),
+         of_unread = case when excluded.of_unread is not null then excluded.of_unread else of_notification.of_unread end,
          fan_handle = coalesce(excluded.fan_handle, of_notification.fan_handle),
          avatar_url = coalesce(excluded.avatar_url, of_notification.avatar_url),
          fan_lists = coalesce(excluded.fan_lists, of_notification.fan_lists),
@@ -369,7 +371,7 @@ export async function notificationPageFor(
           amountCents: access.role === "owner" || isFanSpendKind(row.kind) ? row.amountCents : null,
           occurredAt: row.occurredAt,
           pending: row.pending,
-          seen: Boolean(row.seenAt),
+          seen: notificationOfRead({ ofUnread: row.ofUnread ?? null, seenAt: row.seenAt }),
           ofUnread: row.ofUnread ?? null,
           fanHandle: row.fanHandle ?? null,
           avatarUrl: row.avatarUrl ?? null,
@@ -421,7 +423,8 @@ async function fanlinkBubble(
   sync: NotificationSyncState,
   unread: number,
 ): Promise<number | null> {
-  if (sync.ok) return unread;
+  if (sync.ok) return ofNoticeTotal(sync.counts);
+  if (sync.counts) return ofNoticeTotal(sync.counts);
   if (sync.status !== 429) return null;
   const stored = await sql.query<{ n: number }>(
     "select 1 as n from of_notification where creator_id = $1 limit 1",

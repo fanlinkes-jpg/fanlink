@@ -19,18 +19,6 @@ export function clearUnreadMarks(): void {
   markedReadAt.clear();
 }
 
-function keepMarkedUnread(creatorId: string, threadKey: string, startedAt: string | undefined, _incoming: number | null): boolean {
-  const key = `${creatorId}\0${threadKey}`;
-  const marked = markedReadAt.get(key);
-  if (marked == null || !startedAt) return false;
-  const started = Date.parse(startedAt);
-  if (!Number.isFinite(started) || started >= marked) {
-    markedReadAt.delete(key);
-    return false;
-  }
-  return true;
-}
-
 export type StoredThread = ChatThread & { creatorId: string; syncedAt: string };
 export type StoredChatMessage = ChatMessage & {
   creatorId: string;
@@ -84,7 +72,7 @@ export async function saveChatRead(
            creator_id, thread_key, fan_key, fan_handle, fan_name, last_message_at, excerpt, unread, synced_at, origin,
            last_from_fan, spent_cents, subscribes_cents, tips_cents, posts_cents, messages_cents,
            avatar_url, is_online, sub_price_cents, sub_expires_at, renew_auto, fan_lists${keepSeen ? ", last_seen_at" : ""}
-         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22${keepSeen ? ", $24" : ""})
+         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22${keepSeen ? ", $23" : ""})
          on conflict (creator_id, thread_key) do update set
            fan_key = coalesce(excluded.fan_key, of_chat_thread.fan_key),
            fan_handle = coalesce(excluded.fan_handle, of_chat_thread.fan_handle),
@@ -99,7 +87,7 @@ export async function saveChatRead(
              when of_chat_thread.last_message_at is null or excluded.last_message_at >= of_chat_thread.last_message_at then excluded.excerpt
              else of_chat_thread.excerpt
            end,
-           unread = case when $23::boolean then of_chat_thread.unread else excluded.unread end,
+           unread = excluded.unread,
            synced_at = excluded.synced_at,
            last_from_fan = case
              when excluded.last_message_at is null then of_chat_thread.last_from_fan
@@ -145,7 +133,6 @@ export async function saveChatRead(
           thread.subExpiresAt,
           thread.renewAuto,
           thread.lists?.length ? thread.lists.join("\n") : null,
-          keepMarkedUnread(creatorId, thread.threadKey, read.startedAt, thread.unread),
           ...(keepSeen ? [thread.lastSeenAt ?? null] : []),
         ],
       );

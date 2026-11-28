@@ -88,6 +88,14 @@ test("el total es Sin datos al cargar, si falla o si nadie trae unreadMessagesCo
   assert.equal(unreadTotalFor("ready", known, "3zk7kbr"), 1);
 });
 
+test("isRead true sin unreadMessagesCount guarda cero no leídos", () => {
+  const row = chat("9");
+  row.isRead = true;
+  const threads = parseChatList({ list: [row] }, "42");
+  assert.equal(threads[0]?.unread, 0);
+  assert.deepEqual(unreadChatRow(threads[0]?.unread ?? null), { bold: false, badge: null });
+});
+
 test("sin unreadMessagesCount no se inventa un 0 y el log lleva creator=", () => {
   const lines: string[] = [];
   const threads = parseChatList({ list: [chat("9")] }, "42");
@@ -249,7 +257,7 @@ test("una lista empezada antes de marcar leído no repone el número", async () 
       messages: [],
     });
     const stale = await sql.query<{ unread: number | null }>("select unread from of_chat_thread where thread_key = '25'");
-    assert.equal(stale[0]?.unread, 0);
+    assert.equal(stale[0]?.unread, 3);
     await saveChatRead(sql, "3zk7kbr", {
       reason: null,
       jsonPaths: [],
@@ -268,11 +276,11 @@ test("una lista empezada antes de marcar leído no repone el número", async () 
       jsonPaths: [],
       list: "full",
       startedAt: "2026-11-14T00:00:06.000Z",
-      threads: [storedThread("8", 3)],
+      threads: [storedThread("8", 0)],
       messages: [],
     });
     const again = await sql.query<{ unread: number | null }>("select unread from of_chat_thread where thread_key = '8'");
-    assert.equal(again[0]?.unread, 3);
+    assert.equal(again[0]?.unread, 0);
   } finally {
     clearUnreadMarks();
     await pg.close();
