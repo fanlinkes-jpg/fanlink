@@ -29,6 +29,11 @@ export type FanInsightProps = {
   onNotes: (value: string) => void;
   transactions: Array<{ occurredAt: string; grossCents: number; kind: string }>;
   ppvPrices: number[];
+  /** Compras y PPV de todo el hilo guardado. Null mientras no han llegado. */
+  purchases?: Array<{ sentAt: string; priceCents: number }> | null;
+  messagesCents?: number | null;
+  subscribesCents?: number | null;
+  postsCents?: number | null;
   lists?: string[] | null;
   profile?: FanProfileFields | null;
   onProfile?: (profile: FanProfileFields) => void;
@@ -51,6 +56,10 @@ export function FanInsights(props: FanInsightProps) {
     notes: props.notes,
     transactions: props.transactions,
     ppvPrices: props.ppvPrices,
+    purchases: props.purchases ?? null,
+    messagesCents: props.messagesCents ?? null,
+    subscribesCents: props.subscribesCents ?? null,
+    postsCents: props.postsCents ?? null,
   });
   return (
     <aside className="flex min-h-0 flex-1 flex-col bg-[#f7f8fb]">
@@ -62,7 +71,7 @@ export function FanInsights(props: FanInsightProps) {
         {tab === "Notas" ? (
           <CreatorNote note={props.creatorNote ?? null} onSave={props.onCreatorNote} />
         ) : tab === "Ventas" ? (
-          <SalesPane messages={props.threadMessages ?? []} onCopy={props.onCopyDraft} />
+          <SalesPane messages={props.threadMessages ?? []} purchases={props.purchases ?? null} onCopy={props.onCopyDraft} />
         ) : (
           <div className="space-y-3">
             <Card title="Comportamiento de gasto">
@@ -149,8 +158,8 @@ function CreatorNote({
   );
 }
 
-function SalesPane({ messages, onCopy }: { messages: PpvSource[]; onCopy?: (body: string, priceCents: number) => void }) {
-  const timeline = ppvTimeline(messages);
+function SalesPane({ messages, purchases, onCopy }: { messages: PpvSource[]; purchases: Array<{ sentAt: string; priceCents: number }> | null; onCopy?: (body: string, priceCents: number) => void }) {
+  const timeline = ppvTimeline(messages, purchases);
   return (
     <div className="space-y-3">
       <Card title="PPV">

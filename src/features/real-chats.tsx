@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AtSign, Bell, ChevronLeft, ChevronRight, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, RefreshCw, ScrollText, Send, Type } from "lucide-react";
-import { broadcastOnlineFans, cancelOnlineBroadcast, chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, markChatOpened, readChatVault, readThreadHistory, readVisibleFanSpend, recordChatOutbound, resolveOnlineOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
+import { broadcastOnlineFans, cancelOnlineBroadcast, chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, markChatOpened, readChatVault, readFanPurchases, readThreadHistory, readVisibleFanSpend, recordChatOutbound, resolveOnlineOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
 import { OnlineFansPanel, type OnlineBroadcastPayload } from "@/features/online-fans-panel";
 import type { OnlineFanRow } from "@/lib/online-fan-row";
 import { unreadChatRow } from "../../server/of-sessions/sync/unread-chats.ts";
@@ -26,6 +26,7 @@ import { clearOpenThread, peekOpenThread } from "@/lib/open-thread";
 import { useChatFanCards } from "@/lib/use-chat-fan-cards";
 import { chatFanCardFor, fanCardTransactions } from "@/lib/chat-fan-cards";
 import { FanInsights } from "@/features/fan-insights";
+import { mergePpvSources } from "@/lib/ppv-timeline";
 import { MessagePriceDialog } from "@/features/message-price-dialog";
 import { FULL_EMOJIS, QUICK_EMOJIS, TEXT_COLORS, authorLabel, matchScripts, mentionToken, ppvPreviewMissing, slashQuery, vaultOfferFlagsAfterPrice, wrapSelection } from "@/lib/composer-tools";
 import { REAL_SEND_OFF_REASON } from "@/lib/chat-send-session";
@@ -1997,11 +1998,15 @@ function InsightPane({
 }: {
   thread: {
     creatorId: string;
+    threadKey?: string | null;
     fanKey: string | null;
     fanName: string | null;
     fanHandle: string | null;
     spentCents: number | null;
     tipsCents: number | null;
+    subscribesCents?: number | null;
+    postsCents?: number | null;
+    messagesCents?: number | null;
     subPriceCents: number | null;
     subExpiresAt: string | null;
     renewAuto: boolean | null;
@@ -2018,6 +2023,19 @@ function InsightPane({
   onCreatorNote: (body: string) => void;
 }) {
   const card = chatFanCardFor(cards, thread.creatorId, thread.fanKey);
+  const [stored, setStored] = useState<Awaited<ReturnType<typeof readFanPurchases>> | null>(null);
+  const threadKey = thread.threadKey ?? thread.fanKey;
+  useEffect(() => {
+    setStored(null);
+    if (!threadKey) return;
+    let stop = false;
+    // Lectura de la base local. No llama a OnlyFans.
+    void readFanPurchases({ data: { creatorId: thread.creatorId, threadKey } })
+      .then((value) => { if (!stop) setStored(value); })
+      .catch(() => { if (!stop) setStored(null); });
+    return () => { stop = true; };
+  }, [thread.creatorId, threadKey, messages.length]);
+  const allPpvs = mergePpvSources(messages, stored?.ppvs);
   const tipSum = card && card.tips.length > 0 ? card.tips.reduce((sum, tip) => sum + tip.amountCents, 0) : null;
   const crm = crmFans.find((fan) => {
     if (fan.creatorId !== thread.creatorId) return false;
@@ -2035,6 +2053,10 @@ function InsightPane({
       subscribedAt={card?.subscribedAt ?? null}
       renewAuto={thread.renewAuto ?? card?.renewAuto ?? null}
       subPriceCents={thread.subPriceCents}
+      messagesCents={thread.messagesCents ?? null}
+      subscribesCents={thread.subscribesCents ?? null}
+      postsCents={thread.postsCents ?? null}
+      purchases={stored ? stored.points : null}
       notes={crm?.notes ?? ""}
       notesEditable={crm != null}
       onNotes={(value) => {
@@ -2047,7 +2069,7 @@ function InsightPane({
       lists={thread.lists ?? null}
       profile={thread.fanKey ? profiles.find((item) => item.creatorId === thread.creatorId && item.fanKey === thread.fanKey) ?? { creatorId: thread.creatorId, fanKey: thread.fanKey, nickname: null, birthday: null, timezone: null, source: null, salaryCents: null, lastPayDate: null } : null}
       onProfile={onProfile}
-      threadMessages={messages}
+      threadMessages={allPpvs}
       onCopyDraft={onCopyDraft}
       creatorNote={thread.fanKey ? (notes.find((item) => item.creatorId === thread.creatorId && item.fanKey === thread.fanKey) ?? null) : null}
       onCreatorNote={onCreatorNote}
