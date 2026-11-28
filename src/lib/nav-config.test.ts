@@ -141,7 +141,7 @@ test("la analítica y el resto de rutas viejas apuntan a su sitio nuevo", () => 
   assert.deepEqual(legacyRedirect("/ajustes"), { to: "/configuracion", hash: "ajustes" });
   assert.deepEqual(legacyRedirect("/proximamente/facturacion"), { to: "/configuracion", hash: "facturacion" });
   assert.deepEqual(legacyRedirect("/creadoras"), { to: "/administrar", search: { tab: "creadoras" } });
-  assert.deepEqual(legacyRedirect("/equipo"), { to: "/administrar", search: { tab: "chatters" } });
+  assert.deepEqual(legacyRedirect("/equipo"), { to: "/administrar", search: { tab: "empleados" } });
   assert.deepEqual(legacyRedirect("/campanas"), { to: "/funciones", search: { tab: "masivos" } });
   assert.deepEqual(legacyRedirect("/listas"), { to: "/funciones", search: { tab: "listas" } });
   assert.deepEqual(legacyRedirect("/automatizaciones"), { to: "/funciones", search: { tab: "auto-seguir" } });

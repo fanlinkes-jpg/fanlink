@@ -42,7 +42,7 @@ test("el beforeLoad de Personal y de Mensajes inteligentes redirige", () => {
   assert.match(routeSource("enlaces.tsx"), /legacyRedirectThrow\("\/enlaces"\)/);
   assert.match(routeSource("proximamente.$seccion.tsx"), /legacyRedirectThrow\(path\)/);
   assert.deepEqual(redirectOf("/creadoras"), { to: "/administrar", hash: undefined, search: { tab: "creadoras" } });
-  assert.deepEqual(redirectOf("/equipo"), { to: "/administrar", hash: undefined, search: { tab: "chatters" } });
+  assert.deepEqual(redirectOf("/equipo"), { to: "/administrar", hash: undefined, search: { tab: "empleados" } });
   assert.deepEqual(redirectOf("/campanas"), { to: "/funciones", hash: undefined, search: { tab: "masivos" } });
   assert.deepEqual(redirectOf("/listas"), { to: "/funciones", hash: undefined, search: { tab: "listas" } });
   assert.deepEqual(redirectOf("/automatizaciones"), { to: "/funciones", hash: undefined, search: { tab: "auto-seguir" } });

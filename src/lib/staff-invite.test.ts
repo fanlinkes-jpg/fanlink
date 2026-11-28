@@ -203,11 +203,11 @@ test("editar cambia nombre, nivel y creadoras", async () => {
     const actor = await owner(sql);
     await sql.query("insert into staff_profile (user_id, display_name, role, perms, level) values ('u1', 'Marta', 'member', '[]', 'chatter')");
     await sql.query("insert into creator_grant (user_id, creator_id) values ('u1', 'allison'), ('u1', 'jose')");
-    await editEmployee(sql, actor, "u1", "member", { name: "Marta R.", level: "analyst", creatorIds: ["jose", "luna"] });
+    await editEmployee(sql, actor, "u1", "member", { name: "Marta R.", level: "analyst", creatorIds: ["jose", "luna"], perms: ["mensajes", "precios", "inventado"] });
     const row = (await listEmployees(sql)).find((item) => item.id === "u1");
-    assert.deepEqual([row?.name, row?.level, row?.creatorIds], ["Marta R.", "analyst", ["jose", "luna"]]);
-    await assert.rejects(editEmployee(sql, actor, "u1", "member", { name: "x", level: "owner", creatorIds: [] }), /Owner/);
-    await assert.rejects(editEmployee(sql, actor, "duena", "member", { name: "x", level: "chatter", creatorIds: [] }), /dueña/);
+    assert.deepEqual([row?.name, row?.level, row?.creatorIds, row?.perms], ["Marta R.", "analyst", ["jose", "luna"], ["mensajes", "precios"]]);
+    await assert.rejects(editEmployee(sql, actor, "u1", "member", { name: "x", level: "owner", creatorIds: [], perms: [] }), /Owner/);
+    await assert.rejects(editEmployee(sql, actor, "duena", "member", { name: "x", level: "chatter", creatorIds: [], perms: [] }), /dueña/);
   } finally {
     await pg.close();
   }
@@ -295,4 +295,38 @@ test("correo: con clave llama a Resend con el enlace y no filtra errores", async
   }) as unknown as typeof fetch;
   assert.equal((await sendInviteMail({ to: "a@b.es", name: "Ana", link }, env, down)).sent, false);
   assert.match(inviteEmail({ name: "Ana", link }).subject, /invitado/);
+});
+
+test("un miembro antiguo sin invitación sale en la lista con sus permisos, creadoras y avisos", async () => {
+  const { pg, sql } = await database();
+  try {
+    await owner(sql);
+    await sql.query("insert into staff_profile (user_id, display_name, role, perms) values ('viejo', 'Antiguo', 'member', '[\"mensajes\",\"vault\"]'::jsonb)");
+    await sql.query("insert into creator_grant (user_id, creator_id) values ('viejo', 'allison')");
+    await sql.query("insert into staff_alert (user_id, phone, alerts_enabled, quiet_minutes) values ('viejo', '+34600000000', true, 30)");
+    const row = (await listEmployees(sql)).find((item) => item.id === "viejo");
+    assert.deepEqual(
+      row && { kind: row.kind, email: row.email, status: row.status, level: row.level, perms: row.perms, creatorIds: row.creatorIds, phone: row.phone, alertsEnabled: row.alertsEnabled, quietMinutes: row.quietMinutes },
+      { kind: "member", email: null, status: "active", level: "chatter", perms: ["mensajes", "vault"], creatorIds: ["allison"], phone: "+34600000000", alertsEnabled: true, quietMinutes: 30 },
+    );
+    const ownerRow = (await listEmployees(sql)).find((item) => item.level === "owner");
+    assert.equal(ownerRow?.perms.length, 7);
+  } finally {
+    await pg.close();
+  }
+});
+
+test("una invitación guarda sus permisos y se pueden editar antes de aceptar", async () => {
+  const { pg, sql } = await database();
+  try {
+    const actor = await owner(sql);
+    const created = await createInvite(sql, actor, { ...INPUT, perms: ["mensajes", "vault"] }, NOW);
+    await editEmployee(sql, actor, created.id, "invite", { name: "Marta", level: "analyst", creatorIds: ["jose"], perms: ["analitica"] });
+    const invite = (await listEmployees(sql, NOW)).find((item) => item.kind === "invite");
+    assert.deepEqual([invite?.name, invite?.level, invite?.creatorIds, invite?.perms], ["Marta", "analyst", ["jose"], ["analitica"]]);
+    const claimed = await claimInvite(sql, created.token, NOW);
+    assert.equal(claimed.ok && claimed.invite.perms.join(","), "analitica");
+  } finally {
+    await pg.close();
+  }
 });

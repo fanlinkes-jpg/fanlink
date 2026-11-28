@@ -435,7 +435,7 @@ function ExistingLink({ screen }: { screen: ScreenId }) {
     case "fans":
       return <a href="/#informes-fans" className="text-sm font-medium text-primary">Ver informes de fans</a>;
     case "chatters":
-      return <Link to="/administrar" search={{ tab: "chatters" }} className="text-sm font-medium text-primary">Abrir chatters</Link>;
+      return <Link to="/administrar" search={{ tab: "empleados" }} className="text-sm font-medium text-primary">Abrir empleados</Link>;
     case "campanas":
       return <Link to="/funciones" search={{ tab: "masivos" }} className="text-sm font-medium text-primary">Abrir campañas</Link>;
     case "resumen":
