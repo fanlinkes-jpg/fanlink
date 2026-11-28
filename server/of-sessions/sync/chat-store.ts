@@ -66,13 +66,14 @@ export async function saveChatRead(
   await sql.query("begin");
   try {
     const keepSeen = await threadHasColumn(sql, "last_seen_at");
+    const keepSub = await threadHasColumn(sql, "sub_started_at");
     for (const thread of read.threads) {
       await sql.query(
         `insert into of_chat_thread (
            creator_id, thread_key, fan_key, fan_handle, fan_name, last_message_at, excerpt, unread, synced_at, origin,
            last_from_fan, spent_cents, subscribes_cents, tips_cents, posts_cents, messages_cents,
-           avatar_url, is_online, sub_price_cents, sub_expires_at, renew_auto, fan_lists${keepSeen ? ", last_seen_at" : ""}
-         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22${keepSeen ? ", $23" : ""})
+           avatar_url, is_online, sub_price_cents, sub_expires_at, renew_auto, fan_lists${keepSeen ? ", last_seen_at" : ""}${keepSub ? ", sub_started_at, sub_months" : ""}
+         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22${keepSeen ? ", $23" : ""}${keepSub ? `, $${keepSeen ? 24 : 23}, $${keepSeen ? 25 : 24}` : ""})
          on conflict (creator_id, thread_key) do update set
            fan_key = coalesce(excluded.fan_key, of_chat_thread.fan_key),
            fan_handle = coalesce(excluded.fan_handle, of_chat_thread.fan_handle),
@@ -101,10 +102,11 @@ export async function saveChatRead(
            messages_cents = coalesce(excluded.messages_cents, of_chat_thread.messages_cents),
            avatar_url = coalesce(excluded.avatar_url, of_chat_thread.avatar_url),
            is_online = coalesce(excluded.is_online, of_chat_thread.is_online),
-           sub_price_cents = coalesce(excluded.sub_price_cents, of_chat_thread.sub_price_cents),
+           sub_price_cents = case when excluded.sub_price_cents > 0 then excluded.sub_price_cents else coalesce(of_chat_thread.sub_price_cents, excluded.sub_price_cents) end,
            sub_expires_at = coalesce(excluded.sub_expires_at, of_chat_thread.sub_expires_at),
            renew_auto = coalesce(excluded.renew_auto, of_chat_thread.renew_auto),
            fan_lists = coalesce(excluded.fan_lists, of_chat_thread.fan_lists)
+           ${keepSub ? ", sub_started_at = coalesce(excluded.sub_started_at, of_chat_thread.sub_started_at), sub_months = coalesce(excluded.sub_months, of_chat_thread.sub_months)" : ""}
            ${keepSeen ? `, last_seen_at = case
              when excluded.last_seen_at is null then of_chat_thread.last_seen_at
              when of_chat_thread.last_seen_at is null or excluded.last_seen_at > of_chat_thread.last_seen_at then excluded.last_seen_at
@@ -134,6 +136,7 @@ export async function saveChatRead(
           thread.renewAuto,
           thread.lists?.length ? thread.lists.join("\n") : null,
           ...(keepSeen ? [thread.lastSeenAt ?? null] : []),
+          ...(keepSub ? [thread.subStartedAt ?? null, thread.subMonths ?? null] : []),
         ],
       );
     }
@@ -271,6 +274,7 @@ async function threadHasColumn(sql: ReadSql, column: string): Promise<boolean> {
 
 export async function saveFanCards(sql: ReadSql, creatorId: string, users: ChatUser[]): Promise<void> {
   const keepSeen = await threadHasColumn(sql, "last_seen_at");
+  const keepSub = await threadHasColumn(sql, "sub_started_at");
   for (const user of users) {
     if (!user.id) continue;
     await sql.query(
@@ -284,7 +288,7 @@ export async function saveFanCards(sql: ReadSql, creatorId: string, users: ChatU
          posts_cents = coalesce(posts_cents, $9),
          messages_cents = coalesce(messages_cents, $10),
          is_online = coalesce($11, is_online),
-         sub_price_cents = coalesce(sub_price_cents, $12),
+         sub_price_cents = case when $12::integer > 0 then $12::integer else coalesce(sub_price_cents, $12::integer) end,
          sub_expires_at = coalesce(sub_expires_at, $13),
          renew_auto = coalesce(renew_auto, $14)
          ${keepSeen ? `, last_seen_at = case
@@ -292,6 +296,7 @@ export async function saveFanCards(sql: ReadSql, creatorId: string, users: ChatU
            when last_seen_at is null or $15::timestamptz > last_seen_at then $15::timestamptz
            else last_seen_at
          end` : ""}
+         ${keepSub ? `, sub_started_at = coalesce(sub_started_at, $${keepSeen ? 16 : 15}::timestamptz), sub_months = coalesce(sub_months, $${keepSeen ? 17 : 16}::integer)` : ""}
        where creator_id = $1 and (fan_key = $2 or thread_key = $2)`,
       [
         creatorId,
@@ -309,6 +314,7 @@ export async function saveFanCards(sql: ReadSql, creatorId: string, users: ChatU
         user.subExpiresAt,
         user.renewAuto,
         ...(keepSeen ? [user.lastSeenAt] : []),
+        ...(keepSub ? [user.subStartedAt ?? null, user.subMonths ?? null] : []),
       ],
     );
   }
@@ -334,7 +340,7 @@ export async function listChats(
   const threads = await sql.query<ThreadRow>(
     `select creator_id, thread_key, fan_key, fan_handle, fan_name, last_message_at, excerpt, unread, synced_at,
             last_from_fan, spent_cents, subscribes_cents, tips_cents, posts_cents, messages_cents,
-            avatar_url, is_online, sub_price_cents, sub_expires_at, renew_auto, fan_lists${await threadHasColumn(sql, "last_seen_at") ? ", last_seen_at" : ""}
+            avatar_url, is_online, sub_price_cents, sub_expires_at, renew_auto, fan_lists${await threadHasColumn(sql, "last_seen_at") ? ", last_seen_at" : ""}${await threadHasColumn(sql, "sub_started_at") ? ", sub_started_at, sub_months" : ""}
      from of_chat_thread where creator_id in (${filter})
      order by last_message_at desc nulls last`,
     creatorIds,
@@ -415,6 +421,8 @@ export async function listChats(
       lastSeenAt: iso(row.last_seen_at),
       subPriceCents: centsOrNull(row.sub_price_cents),
       subExpiresAt: iso(row.sub_expires_at),
+      subStartedAt: iso(row.sub_started_at),
+      subMonths: row.sub_months == null ? null : Number(row.sub_months),
       renewAuto: flagOrNull(row.renew_auto),
       lists: row.fan_lists ? row.fan_lists.split("\n").filter(Boolean) : null,
       syncedAt: iso(row.synced_at) ?? "",
@@ -488,6 +496,8 @@ type ThreadRow = {
   avatar_url: string | null;
   is_online: boolean | string | null;
   last_seen_at: Date | string | null;
+  sub_started_at?: Date | string | null;
+  sub_months?: number | string | null;
   sub_price_cents: number | string | null;
   sub_expires_at: Date | string | null;
   renew_auto: boolean | string | null;

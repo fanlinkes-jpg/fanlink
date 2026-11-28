@@ -34,6 +34,9 @@ export type ChatThread = {
   lastSeenAt?: string | null;
   subPriceCents: number | null;
   subExpiresAt: string | null;
+  /** Inicio de la suscripción y duración en meses (`subscribeAt`, `duration`). */
+  subStartedAt?: string | null;
+  subMonths?: number | null;
   renewAuto: boolean | null;
   /** Nombres de listas de OnlyFans. Null si el JSON no las trae. */
   lists?: string[] | null;
@@ -104,6 +107,8 @@ export type ChatUser = {
   lastSeenAt: string | null;
   subPriceCents: number | null;
   subExpiresAt: string | null;
+  subStartedAt?: string | null;
+  subMonths?: number | null;
   renewAuto: boolean | null;
 };
 
@@ -291,6 +296,8 @@ function combineThread(left: ChatThread, right: ChatThread): ChatThread {
     lastSeenAt: newer.lastSeenAt ?? older.lastSeenAt ?? null,
     subPriceCents: newer.subPriceCents ?? older.subPriceCents,
     subExpiresAt: newer.subExpiresAt ?? older.subExpiresAt,
+    subStartedAt: newer.subStartedAt ?? older.subStartedAt ?? null,
+    subMonths: newer.subMonths ?? older.subMonths ?? null,
     renewAuto: newer.renewAuto ?? older.renewAuto,
     lists: newer.lists ?? older.lists ?? null,
   };
@@ -347,6 +354,8 @@ export function mergeUsers(current: ChatUser[], incoming: ChatUser[]): ChatUser[
       lastSeenAt: row.lastSeenAt ?? prev.lastSeenAt ?? null,
       subPriceCents: row.subPriceCents ?? prev.subPriceCents,
       subExpiresAt: row.subExpiresAt ?? prev.subExpiresAt,
+      subStartedAt: row.subStartedAt ?? prev.subStartedAt ?? null,
+      subMonths: row.subMonths ?? prev.subMonths ?? null,
       renewAuto: row.renewAuto ?? prev.renewAuto,
     } : row);
   }
@@ -372,6 +381,8 @@ export function applyUserDirectory(threads: ChatThread[], users: ChatUser[]): Ch
       lastSeenAt: user.lastSeenAt ?? thread.lastSeenAt ?? null,
       subPriceCents: thread.subPriceCents ?? user.subPriceCents,
       subExpiresAt: thread.subExpiresAt ?? user.subExpiresAt,
+      subStartedAt: thread.subStartedAt ?? user.subStartedAt ?? null,
+      subMonths: thread.subMonths ?? user.subMonths ?? null,
       renewAuto: thread.renewAuto ?? user.renewAuto,
     };
   });
@@ -714,7 +725,7 @@ export function fromFanFlag(fromUserId: string | null, fanKey: string | null, ac
   return null;
 }
 
-function emptySpend(): Pick<ChatThread, "spentCents" | "subscribesCents" | "tipsCents" | "postsCents" | "messagesCents" | "avatarUrl" | "online" | "lastSeenAt" | "subPriceCents" | "subExpiresAt" | "renewAuto"> {
+function emptySpend(): Pick<ChatThread, "spentCents" | "subscribesCents" | "tipsCents" | "postsCents" | "messagesCents" | "avatarUrl" | "online" | "lastSeenAt" | "subPriceCents" | "subExpiresAt" | "subStartedAt" | "subMonths" | "renewAuto"> {
   return {
     spentCents: null,
     subscribesCents: null,
@@ -726,6 +737,8 @@ function emptySpend(): Pick<ChatThread, "spentCents" | "subscribesCents" | "tips
     lastSeenAt: null,
     subPriceCents: null,
     subExpiresAt: null,
+    subStartedAt: null,
+    subMonths: null,
     renewAuto: null,
   };
 }
@@ -758,13 +771,15 @@ function mergeSpend(
     lastSeenAt: left.lastSeenAt ?? right.lastSeenAt,
     subPriceCents: left.subPriceCents ?? right.subPriceCents,
     subExpiresAt: left.subExpiresAt ?? right.subExpiresAt,
+    subStartedAt: left.subStartedAt ?? right.subStartedAt ?? null,
+    subMonths: left.subMonths ?? right.subMonths ?? null,
     renewAuto: left.renewAuto ?? right.renewAuto,
   };
 }
 
 function readFanSpend(
   record: Record<string, unknown> | null,
-): Pick<ChatThread, "spentCents" | "subscribesCents" | "tipsCents" | "postsCents" | "messagesCents" | "avatarUrl" | "online" | "lastSeenAt" | "subPriceCents" | "subExpiresAt" | "renewAuto"> | null {
+): Pick<ChatThread, "spentCents" | "subscribesCents" | "tipsCents" | "postsCents" | "messagesCents" | "avatarUrl" | "online" | "lastSeenAt" | "subPriceCents" | "subExpiresAt" | "subStartedAt" | "subMonths" | "renewAuto"> | null {
   if (!record) return null;
   const nestedSpend = nested(record.subscribedOnData) ?? nested(record.subscribedByData);
   const source = nestedSpend ?? record;
@@ -776,25 +791,57 @@ function readFanSpend(
   const avatarUrl = clean(record.avatar, 400);
   const online = onlineFlag(record.isOnline) ?? onlineFlag(record.online);
   const lastSeenAt = iso(record.lastSeen ?? record.last_seen ?? record.seenAt);
-  const subPriceCents = subscriptionPriceCents(source);
-  const subExpiresAt = iso(source.expiredAt ?? source.expireDate);
+  const sub = readSubscription(source);
+  const subPriceCents = sub.priceCents;
+  const subExpiresAt = sub.expiresAt;
+  const subStartedAt = sub.startedAt;
+  const subMonths = sub.months;
   const renewRaw = source.autoRenew ?? source.renewedAuto ?? source.isAutoRenew ?? source.subscribedOnAutoprolong ?? source.subscribedByAutoprolong ?? source.autoprolong ?? record.autoRenew ?? record.subscribedOnAutoprolong ?? record.subscribedByAutoprolong;
   const renewAuto = renewRaw === true || renewRaw === false ? renewRaw : null;
-  const card = { spentCents, subscribesCents, tipsCents, postsCents, messagesCents, avatarUrl, online, lastSeenAt, subPriceCents, subExpiresAt, renewAuto };
+  const card = { spentCents, subscribesCents, tipsCents, postsCents, messagesCents, avatarUrl, online, lastSeenAt, subPriceCents, subExpiresAt, subStartedAt, subMonths, renewAuto };
   const parts = [subscribesCents, tipsCents, postsCents, messagesCents].filter((value) => value != null);
-  if (spentCents == null && parts.length === 0 && !avatarUrl && online == null && !lastSeenAt && subPriceCents == null && !subExpiresAt && renewAuto == null) return null;
+  if (spentCents == null && parts.length === 0 && !avatarUrl && online == null && !lastSeenAt && subPriceCents == null && !subExpiresAt && !subStartedAt && renewAuto == null) return null;
   return card;
 }
 
 /**
  * `price` viene a 0 cuando OnlyFans no lo rellena para este fan (Maik: Infloww dice $9.99).
- * Se usa el primer importe positivo de los campos de precio. Si todos son 0, es gratis.
+ * Se usa el primer importe positivo de los campos de precio, en el orden de las fuentes dadas.
+ * Si todos son 0, es gratis. Si ninguno viene, null.
  */
-export function subscriptionPriceCents(source: Record<string, unknown>): number | null {
-  const found = [source.price, source.subscribePrice, source.currentSubscribePrice, source.regularPrice].map(money);
+export function subscriptionPriceCents(...sources: Array<Record<string, unknown> | null | undefined>): number | null {
+  const found = sources.flatMap((source) => source
+    ? [source.price, source.subscribePrice, source.currentSubscribePrice, source.regularPrice].map(money)
+    : []);
   const positive = found.find((value) => value != null && value > 0);
   if (positive != null) return positive;
   return found.find((value) => value != null) ?? null;
+}
+
+/**
+ * Suscripción del fan en `subscribedOnData`/`subscribedByData`: precio, inicio, meses y caducidad.
+ * Si trae la lista `subscribes`, la vigente (`isCurrent`, o la de inicio más reciente) completa lo que falte.
+ */
+export function readSubscription(source: Record<string, unknown>): {
+  priceCents: number | null;
+  startedAt: string | null;
+  months: number | null;
+  expiresAt: string | null;
+} {
+  const list = Array.isArray(source.subscribes)
+    ? source.subscribes.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+    : [];
+  const current = list.find((item) => item.isCurrent === true)
+    ?? [...list].sort((left, right) => String(iso(right.startDate ?? right.date) ?? "").localeCompare(String(iso(left.startDate ?? left.date) ?? "")))[0]
+    ?? null;
+  const monthsRaw = source.duration ?? source.subscribedOnDuration ?? current?.duration;
+  const monthsMatch = typeof monthsRaw === "number" ? monthsRaw : typeof monthsRaw === "string" ? Number(/^\d+/.exec(monthsRaw.trim())?.[0]) : Number.NaN;
+  return {
+    priceCents: subscriptionPriceCents(source, current),
+    startedAt: iso(source.subscribeAt ?? source.subscribedAt ?? source.startDate ?? current?.startDate ?? current?.date),
+    months: Number.isFinite(monthsMatch) && monthsMatch > 0 && monthsMatch <= 120 ? Math.round(monthsMatch) : null,
+    expiresAt: iso(source.expiredAt ?? source.expireDate ?? current?.expireDate),
+  };
 }
 
 function onlineFlag(value: unknown): boolean | null {

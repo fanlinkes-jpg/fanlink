@@ -1,5 +1,7 @@
 import { purchasedPpvSeries, type PpvPoint } from "../../../src/lib/composer-tools.ts";
+import { decodeMedia } from "./history.ts";
 import type { ReadSql } from "./store.ts";
+import type { PpvMedia } from "../../../src/lib/ppv-timeline.ts";
 
 export type PricedMessage = {
   messageKey: string;
@@ -11,12 +13,26 @@ export type PricedMessage = {
   mediaCount: number | null;
   mediaSeconds: number | null;
   mediaPreview: string | null;
+  media: PpvMedia[];
 };
 
 /** `ppvs`: todos los PPV propios guardados del hilo, no solo los cargados en pantalla. */
-export type FanPurchaseSeries = { maxCents: number | null; avgCents: number | null; points: PpvPoint[]; ppvs?: PricedMessage[] };
+/** Puesto del gasto del fan entre los hilos de la creadora (en neto, como lo guarda OnlyFans). */
+export type SpendRank = { fans: number; above: number; mineCents: number };
 
-const EMPTY: FanPurchaseSeries = { maxCents: null, avgCents: null, points: [], ppvs: [] };
+export type FanPurchaseSeries = {
+  maxCents: number | null;
+  avgCents: number | null;
+  points: PpvPoint[];
+  ppvs?: PricedMessage[];
+  rank?: SpendRank | null;
+  /** Contracargos guardados del fan. Hoy ninguna lectura los guarda, así que 0 no prueba que no existan. */
+  chargebacks?: number;
+};
+
+const EMPTY: FanPurchaseSeries = { maxCents: null, avgCents: null, points: [], ppvs: [], rank: null, chargebacks: 0 };
+const MAX_PPVS = 300;
+const MAX_MEDIA_PER_PPV = 12;
 
 /**
  * Compras reales del fan: movimientos de mensaje, avisos de compra y PPV
@@ -50,12 +66,12 @@ export async function fanPurchaseSeries(sql: ReadSql, creatorId: string, threadK
   );
   type PricedRow = {
     message_key: string; body: string | null; sent_at: Date | string; price_cents: number | string; purchased: boolean | string | null;
-    media_count?: number | string | null; media_seconds?: number | string | null; media_preview?: string | null;
+    media_count?: number | string | null; media_seconds?: number | string | null; media_preview?: string | null; media_json?: string | null;
   };
-  const where = "from of_chat_message where creator_id = $1 and thread_key = $2 and from_fan is not true and price_cents > 0 order by sent_at desc limit 2000";
+  const where = `from of_chat_message where creator_id = $1 and thread_key = $2 and from_fan is not true and price_cents > 0 order by sent_at desc limit ${MAX_PPVS}`;
   // Si la base aún no tiene las columnas de medios, se lee sin ellas.
   const priced = await sql
-    .query<PricedRow>(`select message_key, body, sent_at, price_cents, purchased, media_count, media_seconds, media_preview ${where}`, [creatorId, threadKey])
+    .query<PricedRow>(`select message_key, body, sent_at, price_cents, purchased, media_count, media_seconds, media_preview, media_json ${where}`, [creatorId, threadKey])
     .catch(() => sql.query<PricedRow>(`select message_key, body, sent_at, price_cents, purchased ${where}`, [creatorId, threadKey]))
     .catch(() => [] as PricedRow[]);
   const series = purchasedPpvSeries(
@@ -86,8 +102,45 @@ export async function fanPurchaseSeries(sql: ReadSql, creatorId: string, threadK
       mediaCount: row.media_count == null ? null : Number(row.media_count),
       mediaSeconds: row.media_seconds == null ? null : Number(row.media_seconds),
       mediaPreview: row.media_preview ?? null,
+      media: (decodeMedia(row.media_json ?? null) ?? []).slice(0, MAX_MEDIA_PER_PPV).map((item) => ({
+        kind: item.kind,
+        seconds: item.seconds,
+        preview: item.preview,
+        locked: item.locked,
+      })),
     })),
+    rank: await spendRank(sql, creatorId, threadKey),
+    chargebacks: await chargebackCount(sql, creatorId, fanKey),
   };
+}
+
+async function spendRank(sql: ReadSql, creatorId: string, threadKey: string): Promise<SpendRank | null> {
+  try {
+    const rows = await sql.query<{ mine: number | string | null; fans: number | string; above: number | string }>(
+      `select (select spent_cents from of_chat_thread where creator_id = $1 and thread_key = $2) as mine,
+              count(*) filter (where spent_cents is not null) as fans,
+              count(*) filter (where spent_cents > (select spent_cents from of_chat_thread where creator_id = $1 and thread_key = $2)) as above
+       from of_chat_thread where creator_id = $1`,
+      [creatorId, threadKey],
+    );
+    const row = rows[0];
+    if (!row || row.mine == null) return null;
+    return { fans: Number(row.fans), above: Number(row.above), mineCents: Number(row.mine) };
+  } catch {
+    return null;
+  }
+}
+
+async function chargebackCount(sql: ReadSql, creatorId: string, fanKey: string): Promise<number> {
+  try {
+    const rows = await sql.query<{ n: number | string }>(
+      "select count(*) as n from of_transaction where creator_id = $1 and fan_key = $2 and kind in ('chargeback', 'refund')",
+      [creatorId, fanKey],
+    );
+    return Number(rows[0]?.n ?? 0);
+  } catch {
+    return 0;
+  }
 }
 
 export function emptyFanPurchases(): FanPurchaseSeries {
