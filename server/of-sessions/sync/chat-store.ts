@@ -314,9 +314,20 @@ export async function saveFanCards(sql: ReadSql, creatorId: string, users: ChatU
   }
 }
 
+/**
+ * `full`: hasta 60 mensajes por hilo (uso interno, no para el navegador).
+ * `digest`: lo mínimo para la bandeja. Por hilo, el último mensaje, el último propio y hasta 2 de
+ *   propina o compra, sin medios y con el texto recortado. El hilo abierto (`open`) va completo (60).
+ * `none`: solo hilos.
+ */
+export type ChatMessageMode = "full" | "digest" | "none";
+export const DIGEST_BODY_CHARS = 500;
+export const OPEN_THREAD_MESSAGES = 60;
+
 export async function listChats(
   sql: ReadSql,
   creatorIds: string[],
+  options: { messages?: ChatMessageMode; open?: { creatorId: string; threadKey: string } | null } = {},
 ): Promise<{ threads: StoredThread[]; messages: StoredChatMessage[]; meta: ChatMeta[] }> {
   if (!creatorIds.length) return { threads: [], messages: [], meta: [] };
   const filter = creatorIds.map((_, index) => `$${index + 1}`).join(", ");
@@ -328,7 +339,39 @@ export async function listChats(
      order by last_message_at desc nulls last`,
     creatorIds,
   );
-  const messages = await sql.query<MessageRow>(
+  const mode = options.messages ?? "full";
+  const messages = mode === "none" ? [] : mode === "digest"
+    ? await sql.query<MessageRow>(
+      `select creator_id, message_key, thread_key, fan_key, from_fan, body, sent_at, price_cents, purchased, synced_at,
+              author_id, author_name, seen, automatic, media_count, media_seconds, media_preview,
+              media_json, liked, reply_body, event_kind, event_cents
+       from (
+         select m.creator_id, m.message_key, m.thread_key, m.fan_key, m.from_fan,
+                case when is_open then m.body else left(m.body, ${DIGEST_BODY_CHARS}) end as body,
+                m.sent_at, m.price_cents, m.purchased, m.synced_at,
+                m.author_id, p.display_name as author_name, m.seen, m.automatic, m.media_count, m.media_seconds, m.media_preview,
+                case when is_open then m.media_json else null end as media_json,
+                m.liked, m.reply_body, m.event_kind, m.event_cents,
+                recent_rank, own_rank, event_rank, is_open
+         from (
+           select m.*,
+                  (m.creator_id = $${creatorIds.length + 1} and m.thread_key = $${creatorIds.length + 2}) as is_open,
+                  row_number() over (partition by m.creator_id, m.thread_key order by m.sent_at desc) as recent_rank,
+                  row_number() over (partition by m.creator_id, m.thread_key, m.from_fan order by m.sent_at desc) as own_rank,
+                  row_number() over (partition by m.creator_id, m.thread_key, (m.event_kind is not null) order by m.sent_at desc) as event_rank
+           from of_chat_message m
+           where m.creator_id in (${filter})
+         ) m
+         left join staff_profile p on p.user_id = m.author_id
+       ) recent
+       where recent_rank = 1
+          or (from_fan is not true and own_rank = 1)
+          or (event_kind is not null and event_rank <= 2)
+          or (is_open and recent_rank <= ${OPEN_THREAD_MESSAGES})
+       order by sent_at`,
+      [...creatorIds, options.open?.creatorId ?? "", options.open?.threadKey ?? ""],
+    )
+    : await sql.query<MessageRow>(
     `select creator_id, message_key, thread_key, fan_key, from_fan, body, sent_at, price_cents, purchased, synced_at,
             author_id, author_name, seen, automatic, media_count, media_seconds, media_preview,
             media_json, liked, reply_body, event_kind, event_cents
