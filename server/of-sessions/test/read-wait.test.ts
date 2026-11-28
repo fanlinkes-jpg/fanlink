@@ -7,8 +7,8 @@ test("en OnlyFans se espera a los datos y se prueba la otra pantalla de fans", (
   assert.equal(sectionWaitMs("fixture", 1_000), 1_000);
   const pages = fanPageUrls("onlyfans", "https://onlyfans.com/my/subscribers/active");
   assert.deepEqual(pages, [
-    "https://onlyfans.com/my/subscribers/active",
     "https://onlyfans.com/my/collections/subscribers/active",
+    "https://onlyfans.com/my/subscribers/active",
   ]);
   assert.deepEqual(fanPageUrls("fixture", "http://127.0.0.1/my/subscribers/active"), ["http://127.0.0.1/my/subscribers/active"]);
 });

@@ -1,6 +1,6 @@
 import { useCrm } from "@/lib/crm";
 import { useCreatorSessions } from "@/lib/use-creator-sessions";
-import { ProxyForm } from "@/features/control-pages";
+import { ProxyForm } from "@/components/proxy-form";
 
 export function ProxysPage() {
   const creators = useCrm((s) => s.creators);
