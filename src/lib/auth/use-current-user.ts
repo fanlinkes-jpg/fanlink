@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { useCrm } from "../crm";
 import { authClient, authEnabled } from "./client";
 
 /** Normalized user shape used across the app, auth on or off. */
@@ -58,9 +59,27 @@ const DEV_STATE: CurrentUserState = { user: DEV_USER, isPending: false };
  * call keeps a stable hook order across every render of a given component.
  */
 export function useCurrentUserState(): CurrentUserState {
-  if (!authEnabled) return DEV_STATE;
+  if (!authEnabled) {
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- authEnabled is constant for the app's lifetime
+    return useLocalUserState();
+  }
   // eslint-disable-next-line react-hooks/rules-of-hooks -- authEnabled is constant for the app's lifetime
   return useSessionUserState();
+}
+
+/**
+ * Con la autenticación apagada (npm run dev) sigue mandando el usuario local. Si alguien entró con
+ * una invitación (correo y contraseña), el servidor lo devuelve en teamAccess y la consola lo usa.
+ */
+function useLocalUserState(): CurrentUserState {
+  const access = useCrm((state) => state.teamAccess);
+  return useMemo(() => {
+    if (!access || access.devMode || !access.userId || access.userId === DEV_USER.id) return DEV_STATE;
+    return {
+      user: { id: access.userId, displayName: access.displayName, primaryEmail: null, profileImageUrl: null, isDevFallback: false },
+      isPending: false,
+    };
+  }, [access]);
 }
 
 function useSessionUserState(): CurrentUserState {

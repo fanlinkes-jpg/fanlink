@@ -1,7 +1,9 @@
 import { getRequest } from "@tanstack/react-start/server";
 import { isLoopbackHost } from "@/lib/loopback";
 import { gateIdentityEnabled } from "./gate-identity.server";
-import { auth, authConfigured } from "./server";
+import { getSql } from "../db";
+import { isStaffDisabled } from "../staff-invite";
+import { auth, authConfigured, SESSION_TOKEN_COOKIE } from "./server";
 
 /**
  * Server-side session resolution (server-only).
@@ -68,7 +70,24 @@ export async function getSessionUser(
   }
   const session = await auth.api.getSession({ headers });
   if (!session?.user) return null;
+  // Desactivar corta la sesión aunque la cookie en caché siga viva unos minutos.
+  if (await isStaffDisabled(await getSql(), session.user.id)) return null;
   return { id: session.user.id, email: session.user.email ?? null };
+}
+
+/**
+ * Con la autenticación apagada (npm run dev en el Mac) un empleado invitado entra con su cookie
+ * de correo y contraseña. Sin cookie se sigue usando el usuario local de siempre.
+ * Devuelve null si no hay cookie de sesión. Lanza si la persona está desactivada.
+ */
+async function localEmployeeId(): Promise<string | null> {
+  const request = getRequest();
+  if (!request) return null;
+  if (!(request.headers.get("cookie") ?? "").includes(SESSION_TOKEN_COOKIE)) return null;
+  const session = await auth.api.getSession({ headers: request.headers });
+  if (!session?.user) return null;
+  if (await isStaffDisabled(await getSql(), session.user.id)) throw new UnauthorizedError();
+  return session.user.id;
 }
 
 /**
@@ -100,7 +119,7 @@ export async function requireUserId(bearerToken?: string): Promise<string> {
       );
     }
     assertLocalDevRequest();
-    return DEV_USER_ID;
+    return (await localEmployeeId()) ?? DEV_USER_ID;
   }
   const user = await getSessionUser(bearerToken);
   if (!user) throw new UnauthorizedError();

@@ -1,10 +1,9 @@
 /**
  * Local email/password sign-in (this app's Better Auth DB — not the broker).
  *
- * Off by default. To enable: set `emailAndPasswordEnabled` to `true` below,
- * then build sign-up / sign-in forms with `authClient.signUp.email` /
- * `authClient.signIn.email` from `@/lib/auth/client` (see the auth skill).
- *
- * Do NOT edit `server.ts` for this — that file is frozen pre-wired config.
+ * On only for invited employees: `server.ts` sets `disableSignUp`, so nobody can
+ * register. The only way to get a password account is accepting a `staff_invite`
+ * (`/invitacion/<token>`), which creates the user server-side. The owner keeps
+ * signing in as before.
  */
-export const emailAndPasswordEnabled = false;
+export const emailAndPasswordEnabled = true;

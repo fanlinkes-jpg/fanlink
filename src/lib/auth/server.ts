@@ -211,7 +211,11 @@ export const auth = betterAuth({
   session: { cookieCache: { enabled: true, maxAge: 300 } },
 
   // Local email/password — toggled only via `./email-password` (not a plugin).
-  ...(emailAndPasswordEnabled ? { emailAndPassword: { enabled: true } } : {}),
+  // `disableSignUp`: no free registration. Password accounts are created only by
+  // accepting a staff invitation (see `src/lib/staff-invite.ts`).
+  ...(emailAndPasswordEnabled
+    ? { emailAndPassword: { enabled: true, disableSignUp: true, autoSignIn: false } }
+    : {}),
 
   // `__Host-` prefixed cookies: the browser REFUSES any same-named cookie that
   // carries a `Domain` attribute, so a sibling `*.grok.me` app cannot "toss" a
