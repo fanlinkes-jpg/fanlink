@@ -29,7 +29,7 @@ import {
   listEmployees,
   setEmployeeRoles,
 } from "./staff-invite.ts";
-import { describePerms, effectivePerms, presetPerms, restrictPerms, ROLE_PRESETS, PERM_GROUPS } from "./staff-roles.ts";
+import { describePerms, effectivePerms, isPermLocked, presetPerms, restrictPerms, ROLE_PRESETS, PERM_GROUPS } from "./staff-roles.ts";
 import { INVITABLE_LEVELS, lastSeenLabel } from "./staff-levels.ts";
 import { ensureStaff, readAccess } from "./workspace-store.ts";
 import { presentTeamMetrics } from "../../server/of-sessions/metrics/present-team.ts";
@@ -219,6 +219,21 @@ test("restrictPerms: el servidor aplica las reglas aunque la interfaz mande otra
   assert.deepEqual(effectivePerms(["chatter"], ["mensajes", "precios"]), ["mensajes", "precios"]);
   assert.deepEqual(effectivePerms(["analyst"], null), presetPerms(["analyst"]));
   assert.deepEqual(effectivePerms(["owner"], []), [...TEAM_PERMS]);
+  // Chatter + Team Manager: ni el texto ni las casillas pueden dejar Banco, porque el servidor lo quita.
+  const both = presetPerms(["chatter", "team_manager"]);
+  assert.equal(both.includes("banco"), false);
+  assert.deepEqual(restrictPerms(["chatter", "team_manager"], [...both, "banco", "estados", "estadisticas", "todas"]), both);
+  assert.equal(isPermLocked(["chatter", "team_manager"], "banco"), true);
+  assert.equal(isPermLocked(["chatter", "team_manager"], "equipo"), false);
+  // Si otro rol sí concede el dinero, se suma.
+  assert.equal(isPermLocked(["chatter", "admin"], "banco"), false);
+  assert.ok(effectivePerms(["chatter", "analyst"], presetPerms(["chatter", "analyst"])).includes("estadisticas"));
+  assert.equal(isPermLocked(["chatter", "analyst"], "estadisticas"), false);
+  assert.equal(isPermLocked(["chatter", "analyst"], "banco"), true);
+  assert.equal(isPermLocked(["account_manager"], "banco"), false);
+  const summary = describePerms(effectivePerms(["chatter", "team_manager"], [...both, "banco"]));
+  assert.ok(summary.cannot.includes("abrir el Banco"));
+  assert.equal(summary.can.includes("abrir el Banco"), false);
 });
 
 test("restablecer contraseña: enlace de un solo uso que caduca, solo para la dueña", async () => {

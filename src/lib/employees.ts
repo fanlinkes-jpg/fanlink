@@ -105,3 +105,38 @@ async function readAgency(sql: { query<T>(text: string, params?: unknown[]): Pro
   const rows = await sql.query<{ agency: string | null }>("select state->>'agency' as agency from workspace_state where id = 1");
   return rows[0]?.agency?.trim() || undefined;
 }
+
+export type { ShiftBoardView, ShiftCopy, ShiftNoticeView, ShiftPersonView } from "@/lib/staff-shifts-store";
+
+/** Horarios de Turnos. El chatter solo ve el suyo; editar exige el permiso de equipo. */
+export const listShiftBoard = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const { staffContext } = await import("@/lib/employees-runtime.server");
+    const { listShiftBoard: read } = await import("@/lib/staff-shifts-store");
+    const { sql, actor } = await staffContext(context.userId);
+    return read(sql, actor);
+  });
+
+export const saveEmployeeShift = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { userId: string; weekday: number; off: boolean; start?: string | null; end?: string | null; copy?: "none" | "weekdays" | "week" }) => input)
+  .handler(async ({ context, data }) => {
+    const { staffContext } = await import("@/lib/employees-runtime.server");
+    const { saveShifts } = await import("@/lib/staff-shifts-store");
+    const { sql, actor } = await staffContext(context.userId);
+    const week = await saveShifts(sql, actor, data);
+    const { listShiftBoard: read } = await import("@/lib/staff-shifts-store");
+    const board = await read(sql, actor);
+    return { week, board };
+  });
+
+export const markShiftNoticesRead = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const { staffContext } = await import("@/lib/employees-runtime.server");
+    const { markShiftNoticesRead: mark } = await import("@/lib/staff-shifts-store");
+    const { sql, actor } = await staffContext(context.userId);
+    await mark(sql, actor.userId);
+    return { ok: true as const };
+  });

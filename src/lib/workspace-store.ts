@@ -71,6 +71,8 @@ export async function ensureStaff(sql: SqlQuery, userId: string, devMode: boolea
     "update staff_profile set last_seen_at = now() where user_id = $1 and (last_seen_at is null or last_seen_at < now() - interval '1 minute')",
     [userId],
   );
+  // Revisa retrasos de turno como mucho una vez por minuto, sin bloquear la entrada.
+  void import("./staff-shifts-store.ts").then((mod) => mod.scanLateShiftsSoon(sql));
   return readAccess(sql, userId, devMode);
 }
 

@@ -43,11 +43,16 @@ export const ROLE_PRESETS: Record<StaffLevel, readonly TeamPerm[]> = {
   chatter: ["mensajes"],
 };
 
-/** El chatter nunca recibe estos, ni marcándolos a mano: el servidor los quita. */
+/** El chatter nunca recibe estos, ni marcándolos a mano, salvo que otro de sus roles los conceda. El servidor los quita. */
 export const CHATTER_DENIED: readonly TeamPerm[] = ["estadisticas", "banco", "estados", "todas"];
 
-function onlyChatter(roles: readonly StaffLevel[]): boolean {
-  return roles.length > 0 && roles.every((role) => role === "chatter");
+/** El chatter no recibe dinero ni «todas» salvo que otro de sus roles lo conceda (Admin, Supervisor, Analyst…). */
+function hasChatter(roles: readonly StaffLevel[]): boolean {
+  return roles.includes("chatter") && !roles.includes("owner");
+}
+
+function roleGrants(roles: readonly StaffLevel[], perm: TeamPerm): boolean {
+  return roles.some((role) => ROLE_PRESETS[role].includes(perm));
 }
 
 export function presetPerms(roles: readonly StaffLevel[]): TeamPerm[] {
@@ -58,7 +63,8 @@ export function presetPerms(roles: readonly StaffLevel[]): TeamPerm[] {
 export function restrictPerms(roles: readonly StaffLevel[], perms: readonly string[]): TeamPerm[] {
   if (roles.includes("owner")) return [...TEAM_PERMS];
   const clean = TEAM_PERMS.filter((perm) => perms.includes(perm));
-  return onlyChatter(roles) ? clean.filter((perm) => !CHATTER_DENIED.includes(perm)) : clean;
+  if (!hasChatter(roles)) return clean;
+  return clean.filter((perm) => !CHATTER_DENIED.includes(perm) || roleGrants(roles, perm));
 }
 
 /**
@@ -70,7 +76,10 @@ export function effectivePerms(roles: readonly StaffLevel[], requested?: readonl
 }
 
 export function isPermLocked(roles: readonly StaffLevel[], perm: TeamPerm): boolean {
-  return onlyChatter(roles) && CHATTER_DENIED.includes(perm);
+  if (!CHATTER_DENIED.includes(perm)) return false;
+  if (roles.includes("owner")) return false;
+  if (!hasChatter(roles)) return false;
+  return !roleGrants(roles, perm);
 }
 
 const CAN: Record<TeamPerm, string> = {
@@ -98,7 +107,17 @@ const CANNOT: Partial<Record<TeamPerm, string>> = {
 
 /** Resumen legible de lo que podrá y no podrá hacer con estos permisos. */
 export function describePerms(perms: readonly string[]): { can: string[]; cannot: string[] } {
-  const can = TEAM_PERMS.filter((perm) => perms.includes(perm)).map((perm) => CAN[perm]);
-  const cannot = TEAM_PERMS.filter((perm) => !perms.includes(perm)).flatMap((perm) => (CANNOT[perm] ? [CANNOT[perm] as string] : []));
+  const has = new Set(perms);
+  const can = TEAM_PERMS.filter((perm) => has.has(perm)).map((perm) => CAN[perm]);
+  const cannot: string[] = [];
+  for (const perm of TEAM_PERMS) {
+    if (has.has(perm) || !CANNOT[perm]) continue;
+    // Si ya puede abrir el Banco o los Estados, no digas que «no verá el dinero».
+    if (perm === "estadisticas" && (has.has("banco") || has.has("estados"))) {
+      cannot.push("ver los totales de la agencia");
+      continue;
+    }
+    cannot.push(CANNOT[perm] as string);
+  }
   return { can, cannot };
 }
