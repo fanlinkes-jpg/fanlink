@@ -17,6 +17,10 @@ export type StoredCreatorRead = {
   consecutiveFailures: number;
   lastStatus: "idle" | "ok" | "error";
   lastReason: string | null;
+  /** Última lectura de chats. Es otra fuente que la de ingresos y fans. */
+  chatSyncedAt?: string | null;
+  chatStatus?: "idle" | "ok" | "error";
+  chatReason?: string | null;
   jsonPaths: string[];
   earnings: StoredEarning[];
   fans: StoredFan[];
@@ -217,6 +221,11 @@ export async function listCreatorReads(sql: ReadSql, creatorIds: string[]): Prom
      from of_sync_state where creator_id in (${filter})`,
     creatorIds,
   );
+  // Los chats viven en otras columnas (migración 0009). Una base más antigua sigue leyéndose sin ellas.
+  const chatStates = await sql.query<{ creator_id: string; chat_synced_at: Date | string | null; chat_status: string | null; chat_reason: string | null }>(
+    `select creator_id, chat_synced_at, chat_status, chat_reason from of_sync_state where creator_id in (${filter})`,
+    creatorIds,
+  ).catch(() => []);
   const earnings = await sql.query<EarningDb>(
     `select creator_id, day::text as day, kind, amount_cents, currency, synced_at
      from of_earning where creator_id in (${filter}) order by day`,
@@ -241,6 +250,12 @@ export async function listCreatorReads(sql: ReadSql, creatorIds: string[]): Prom
     earningsSyncedAt: iso(state.earnings_synced_at),
     fansSyncedAt: iso(state.fans_synced_at),
     lastReason: state.last_reason,
+    chatSyncedAt: iso(chatStates.find((row) => row.creator_id === state.creator_id)?.chat_synced_at ?? null),
+    chatStatus: (() => {
+      const status = chatStates.find((row) => row.creator_id === state.creator_id)?.chat_status;
+      return status === "ok" || status === "error" ? status : ("idle" as const);
+    })(),
+    chatReason: chatStates.find((row) => row.creator_id === state.creator_id)?.chat_reason ?? null,
     lastAttemptAt: iso(state.last_attempt_at),
     consecutiveFailures: Number(state.consecutive_failures ?? 0),
     lastStatus: state.last_status === "ok" || state.last_status === "error" ? state.last_status : "idle",
@@ -356,6 +371,9 @@ type StateRow = {
   last_attempt_at: Date | string | null;
   consecutive_failures: number | string | null;
   last_status: string | null;
+  chat_synced_at?: Date | string | null;
+  chat_status?: string | null;
+  chat_reason?: string | null;
 };
 
 type EarningDb = {

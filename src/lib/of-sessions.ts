@@ -66,7 +66,7 @@ export const connectCreatorSession = createServerFn({ method: "POST" })
     return connectCreator(context.userId, data);
   });
 
-export type EarningKind = "total" | "subscription" | "tip" | "message" | "post";
+export type EarningKind = "total" | "subscription" | "tip" | "message" | "post" | "stream" | "referral";
 
 export type CreatorEarningView = {
   day: string;
@@ -103,6 +103,10 @@ export type CreatorReadView = {
   earningsSyncedAt: string | null;
   fansSyncedAt: string | null;
   lastReason: string | null;
+  /** Chats: otra fuente que ingresos y fans. */
+  chatSyncedAt?: string | null;
+  chatStatus?: "idle" | "ok" | "error";
+  chatReason?: string | null;
   lastAttemptAt: string | null;
   consecutiveFailures: number;
   lastStatus: "idle" | "ok" | "error";
