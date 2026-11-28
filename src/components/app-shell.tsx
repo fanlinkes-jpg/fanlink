@@ -1,12 +1,11 @@
 import { ClientOnly, Link, useRouterState } from "@tanstack/react-router";
 import { readInboxCreator, resolveInboxCreator, showsCreatorRail, writeInboxCreator } from "@/lib/inbox-scope";
 import { CreatorRail } from "@/components/creator-rail";
-import { bindUiUser, COMPOSER_LANGUAGES, setSfwEnabled, useComposerLanguage, useSfw } from "@/lib/ui-prefs";
-import { AutoTranslateSwitch, TranslateMenu } from "@/features/translate-ui";
-import { useEffect, useState, type ReactNode } from "react";
+import { bindUiUser, setSfwEnabled, useSfw } from "@/lib/ui-prefs";
+import { AutoTranslateSwitch, TranslateMenu, TranslateMenuButton } from "@/features/translate-ui";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Home,
-  Languages,
   LayoutDashboard,
   LayoutGrid,
   Menu,
@@ -139,25 +138,30 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
 }
 
 function HeaderTools({ devMode, displayName }: { devMode: boolean; displayName: string }) {
-  const language = useComposerLanguage();
   const sfw = useSfw();
   const [open, setOpen] = useState(false);
-  const current = COMPOSER_LANGUAGES.find((item) => item.id === language) ?? COMPOSER_LANGUAGES[0];
+  const menu = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (event: PointerEvent) => {
+      if (menu.current && !menu.current.contains(event.target as Node)) setOpen(false);
+    };
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", away);
+    document.addEventListener("keydown", key);
+    return () => {
+      document.removeEventListener("pointerdown", away);
+      document.removeEventListener("keydown", key);
+    };
+  }, [open]);
   const localHint = "Modo local de un solo operador. Solo vale en localhost y no aísla a un equipo.";
   return (
     <div className="flex shrink-0 items-center gap-2">
-      <div className="relative">
-        <button
-          type="button"
-          aria-label="Traducción"
-          aria-expanded={open}
-          onClick={() => setOpen((value) => !value)}
-          className={cn("flex h-8 items-center gap-1 rounded-lg px-2", open ? "bg-[#ff7a2f]" : "bg-white/10")}
-        >
-          <Languages className="h-4 w-4" />
-          <span className="text-[10px] font-semibold uppercase">{current.id}</span>
-        </button>
-        {open ? <TranslateMenu onClose={() => setOpen(false)} /> : null}
+      <div className="relative" ref={menu}>
+        <TranslateMenuButton open={open} onToggle={() => setOpen((value) => !value)} />
+        {open ? <TranslateMenu /> : null}
       </div>
       <AutoTranslateSwitch />
       <button

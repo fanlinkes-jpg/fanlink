@@ -34,13 +34,13 @@ test("el idioma de arriba y el del compositor es el mismo, y SFW es por usuario"
   assert.equal(readSfw(storage, "dev-user"), false);
 });
 
-test("el idioma admite es, en, pt y de, y la traducción automática y su modo son por usuario", () => {
+test("el idioma admite la lista amplia, y la traducción automática y su modo son por usuario", () => {
   const storage = memory();
-  for (const id of ["es", "en", "pt", "de"] as const) {
+  for (const id of ["es", "en", "pt", "de", "fr", "zh-Hant", "ja"] as const) {
     writeComposerLanguage(storage, "u1", id);
     assert.equal(readComposerLanguage(storage, "u1"), id);
   }
-  storage.setItem("fanlink.ui.u1.language", "fr");
+  storage.setItem("fanlink.ui.u1.language", "klingon");
   assert.equal(readComposerLanguage(storage, "u1"), "es");
   assert.equal(readTranslateAuto(storage, "u1"), false);
   writeTranslateAuto(storage, "u1", true);

@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  TRANSLATE_LANGUAGES,
   TranslateError,
   baseLanguage,
   detectLanguage,
   downloadDetector,
   downloadPair,
   fanLanguageOf,
+  languageLabel,
   pairAvailability,
   prepareTranslator,
   resetTranslatorCaches,
@@ -82,16 +84,18 @@ test("sin Translator el navegador no es compatible y el aviso lo dice claro", as
   assert.equal(translatorSupported(host), false);
   assert.equal(await pairAvailability(host, "en", "es"), "unsupported");
   await assert.rejects(() => translateText(host, "hello", { source: "en", target: "es" }), (error: unknown) => error instanceof TranslateError && error.code === "unsupported");
-  assert.match(translateNotice("unsupported"), /Chrome 138/);
+  assert.match(translateNotice("unsupported"), /no está disponible/);
+  assert.doesNotMatch(translateNotice("unsupported"), /Chrome|gratis/i);
   assert.doesNotMatch(translateNotice("unsupported"), /Sin datos/);
 });
 
-test("un paquete por descargar no se baja sin gesto del usuario: pide el botón Descargar", async () => {
+test("un paquete por descargar no se baja sin gesto del usuario: la descarga espera al siguiente clic", async () => {
   resetTranslatorCaches();
   const { host, calls } = fakeHost({ gesture: false });
   await assert.rejects(() => prepareTranslator(host, "en", "es"), (error: unknown) => error instanceof TranslateError && error.code === "needs-download" && error.source === "en" && error.target === "es");
   assert.equal(calls.creates, 0);
-  assert.match(translateNotice("needs-download", "en", "es"), /EN → ES.*Descargar/);
+  assert.match(translateNotice("needs-download", "en", "es"), /Haz clic/);
+  assert.doesNotMatch(translateNotice("needs-download", "en", "es"), /Descargar|Chrome/);
 });
 
 test("con un clic baja el paquete, informa del progreso y luego traduce sin gesto", async () => {
@@ -151,10 +155,10 @@ test("el idioma de origen se detecta con confianza, y si es dudoso o el texto co
   await assert.rejects(() => resolveSource(none.host, "Wie geht es dir heute?", null, null), (error: unknown) => error instanceof TranslateError && error.code === "detect-failed");
 });
 
-test("el detector sin descargar no se usa sin gesto, y downloadDetector lo deja listo con un clic", async () => {
+test("el detector sin descargar pide un gesto, y downloadDetector lo deja listo con un clic", async () => {
   resetTranslatorCaches();
   const { host } = fakeHost({ detector: "downloadable", gesture: false });
-  assert.equal(await detectLanguage(host, "Hello my friend"), null);
+  await assert.rejects(() => detectLanguage(host, "Hello my friend"), (error: unknown) => error instanceof TranslateError && error.code === "needs-download");
   assert.equal(await downloadDetector(host), true);
   assert.deepEqual(await detectLanguage(host, "Hello my friend"), { language: "en", confidence: 0.95 });
 });
@@ -181,7 +185,7 @@ test("varios párrafos salen en orden con un solo origen, y vacíos no se traduc
   assert.equal(calls.translate.length, 3);
 });
 
-test("el idioma del fan sale de sus mensajes y solo entre es, en, pt y de", async () => {
+test("el idioma del fan sale de sus mensajes y vale cualquier idioma de la lista", async () => {
   resetTranslatorCaches();
   const lines: Record<string, string> = { hello: "en", hola: "es", ciao: "it", "good morning my dear": "en", "buenos días mi amor": "es" };
   const { host } = fakeHost({
@@ -189,7 +193,9 @@ test("el idioma del fan sale de sus mensajes y solo entre es, en, pt y de", asyn
     detect: (text) => [{ detectedLanguage: lines[text] ?? "en", confidence: 0.9 }],
   });
   assert.equal(await fanLanguageOf(host, ["good morning my dear", "buenos días mi amor", "good morning my dear"]), "en");
-  assert.equal(await fanLanguageOf(host, ["ciao"]), null);
+  assert.equal(await fanLanguageOf(host, ["ciao"]), "it");
+  const unknown = fakeHost({ detector: "available", detect: () => [{ detectedLanguage: "xx", confidence: 0.9 }] });
+  assert.equal(await fanLanguageOf(unknown.host, ["???"]), null);
   assert.equal(await fanLanguageOf(host, []), null);
   const doubtful = fakeHost({ detector: "available", detect: () => [{ detectedLanguage: "en", confidence: 0.3 }] });
   assert.equal(await fanLanguageOf(doubtful.host, ["hello there friend"]), null);
@@ -203,4 +209,16 @@ test("traducir lo que escribe el chatter: del suyo al idioma del fan, sin enviar
   assert.equal(out.target, "en");
   assert.equal(out.text, "[en] Hola cariño, ¿cómo estás?");
   assert.deepEqual(calls.create, ["es>en"]);
+});
+
+test("la lista de idiomas es amplia, empieza por español y normaliza códigos", () => {
+  assert.equal(TRANSLATE_LANGUAGES[0]?.id, "es");
+  assert.ok(TRANSLATE_LANGUAGES.length >= 30);
+  assert.equal(new Set(TRANSLATE_LANGUAGES.map((item) => item.id)).size, TRANSLATE_LANGUAGES.length);
+  assert.equal(languageLabel("fr"), "Francés");
+  assert.equal(languageLabel("pt-BR"), "Portugués");
+  assert.equal(baseLanguage("iw"), "he");
+  assert.equal(baseLanguage("zh-TW"), "zh-Hant");
+  assert.equal(baseLanguage("zh-Hans-CN"), "zh");
+  assert.equal(baseLanguage("pt_BR"), "pt");
 });
