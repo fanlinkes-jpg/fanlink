@@ -1,9 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { AtSign, Bell, ChevronLeft, ChevronRight, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, RefreshCw, ScrollText, Send, Type } from "lucide-react";
-import { broadcastOnlineFans, cancelOnlineBroadcast, chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, markChatOpened, readChatVault, readFanPurchases, readThreadHistory, readVisibleFanSpend, recordChatOutbound, resolveOnlineOutbound, reviewChatOutbound, runFanChatMenu, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
+import { AtSign, Bell, ChevronLeft, ChevronRight, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, RefreshCw, ScrollText, Send, Type, BellOff, Images, Pin, Search, Star, StickyNote, Pencil } from "lucide-react";
+import { broadcastOnlineFans, cancelOnlineBroadcast, chatSendAccess, discardChatOutbound, listCreatorChats, listOnlineFans, loadMoreChats, loadOlderMessages, markChatOpened, readChatVault, readFanPurchases, readThreadHistory, readVisibleFanSpend, recordChatOutbound, resolveOnlineOutbound, reviewChatOutbound, runFanChatMenu, saveFanFlag, saveFanNote, saveFanProfile, syncCreatorChats, type CreatorChatList } from "@/lib/of-sessions";
 import { OnlineFansPanel, type OnlineBroadcastPayload } from "@/features/online-fans-panel";
 import type { OnlineFanRow } from "@/lib/online-fan-row";
+import { pinnedFirst } from "../../server/of-sessions/sync/fan-flags.ts";
+import { ChatGalleryPanel } from "@/features/chat-gallery-panel";
+import { ChatFindBar } from "@/features/chat-find-bar";
+import { findMessages, highlightParts, stepMatch } from "@/lib/chat-find";
 import { unreadChatRow } from "../../server/of-sessions/sync/unread-chats.ts";
 import { inboxPillCounts, matchesInboxPill, tipThreads, type InboxPill } from "../../server/of-sessions/sync/chat-pills.ts";
 import { accountFigure, everyAccountBlocked, SESSION_EXPIRED_LABEL } from "../../server/of-sessions/sync/session-link.ts";
@@ -182,7 +186,7 @@ function threadMark(creatorId: string, threadKey: string): string {
   return `${creatorId}:${threadKey}`;
 }
 
-function ThreadMessage({ message }: { message: {
+function ThreadMessage({ message, find }: { message: {
   creatorId: string;
   threadKey: string;
   messageKey: string;
@@ -196,7 +200,7 @@ function ThreadMessage({ message }: { message: {
   purchased: boolean | null;
   sentAt?: string;
   seen?: boolean | null;
-} }) {
+}; find?: { query: string; active: boolean; flash: boolean } }) {
   const slides = message.media ?? [];
   const hasMedia = (message.mediaCount ?? 0) > 0 || slides.length > 0;
   const messageLocked = message.purchased === true
@@ -224,10 +228,10 @@ function ThreadMessage({ message }: { message: {
   return (
     <li data-message-id={message.messageKey} className={message.fromFan ? "" : "text-right"} data-layout={layout.layout} data-automatic={message.automatic ? "1" : "0"}>
       {(openSlides.length > 0 || message.body || pay) ? (
-      <div className={`inline-block max-w-[70%] rounded-2xl px-3 py-2 text-left text-sm ${message.fromFan ? "bg-[#f4f6fb]" : "bg-[#e7f0ff]"}`}>
+      <div className={`inline-block max-w-[78%] rounded-3xl px-4 py-2.5 text-left text-[15px] leading-relaxed shadow-[0_1px_2px_rgba(29,36,51,0.06)] ${message.fromFan ? "border border-[#eceff5] bg-white" : "bg-[#e3edff]"} ${find?.active || find?.flash ? "ring-2 ring-[#ffb020] ring-offset-2" : ""}`}>
         {layout.layout === "carousel" ? <MediaStrip>{players}</MediaStrip> : players}
         {pay ? <p className="text-[11px] font-medium text-[#1d2433]">{pay}</p> : null}
-        {message.body ? <p>{message.body}</p> : null}
+        {message.body ? <p>{find && find.query ? highlightParts(message.body, find.query).map((part, index) => part.hit ? <mark key={index} className="rounded bg-[#ffe58f] px-0.5">{part.text}</mark> : <span key={index}>{part.text}</span>) : message.body}</p> : null}
       </div>
       ) : null}
       {lockedCount > 0 ? (
@@ -235,7 +239,7 @@ function ThreadMessage({ message }: { message: {
           {Array.from({ length: lockedCount }, (_, index) => <Lock key={index} className="h-3.5 w-3.5" aria-hidden />)}
         </p>
       ) : null}
-      {who || when || seen ? <p className="mt-1 text-[10px] text-[#6d7585]">{[who, when, seen].filter(Boolean).join(" · ")}</p> : null}
+      {who || when || seen ? <p className="mt-1.5 text-[11px] text-[#8a93a3]">{[who, when, seen].filter(Boolean).join(" · ")}</p> : null}
     </li>
   );
 }
@@ -256,7 +260,7 @@ function OutboundBubbleView({
   const caption = bubbleCaption(job.state, job.reason);
   return (
     <li className="text-right">
-      <div className="inline-block max-w-[70%] rounded-2xl bg-[#e7f0ff] px-3 py-2 text-left text-sm">
+      <div className="inline-block max-w-[78%] rounded-3xl bg-[#e3edff] px-4 py-2.5 text-left text-[15px] leading-relaxed shadow-[0_1px_2px_rgba(29,36,51,0.06)]">
         {job.vault.length > 0 ? <VaultThumbRow creatorId={job.creatorId} pieces={job.vault} /> : null}
         {job.body ? <p>{job.body}</p> : null}
       </div>
@@ -316,6 +320,12 @@ export function RealChatsPage() {
   const [onlineSend, setOnlineSend] = useState<{ enabled: boolean; reason: string | null }>({ enabled: false, reason: "Envío a todos desactivado" });
   const [onlineCap, setOnlineCap] = useState(100);
   const [insightsOpen, setInsightsOpen] = useState(false);
+  const [insightsTab, setInsightsTab] = useState<"Insights" | "Ventas" | "Notas">("Insights");
+  const [galleryOpen, setGalleryOpen] = useState(false);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const [findIndex, setFindIndex] = useState(0);
+  const [flashKey, setFlashKey] = useState<string | null>(null);
   const [tagHandle, setTagHandle] = useState<string | null>(null);
   const [menu, setMenu] = useState(false);
   const [fanMenu, setFanMenu] = useState(false);
@@ -628,6 +638,8 @@ export function RealChatsPage() {
     creators: inboxScope,
     remembered: rememberedInbox,
   }).threads;
+  const flags = data?.flags ?? [];
+  const pinnedThreads = pinnedFirst(threads, flags);
   const accountMessages = rowsForCreator(data?.messages ?? [], inboxCreator);
   const scopeIds = inboxCreator ? [inboxCreator] : [];
   const sessionRows = rowsForCreator(data?.accounts ?? [], inboxCreator);
@@ -641,7 +653,7 @@ export function RealChatsPage() {
   });
   const tipped = tipThreads(accountMessages, threads);
   const inbox = useInboxSelection({
-    threads: threads.map((thread) => ({ ...thread, id: `${thread.creatorId}:${thread.threadKey}` })),
+    threads: pinnedThreads.map((thread) => ({ ...thread, id: `${thread.creatorId}:${thread.threadKey}` })),
     matches: (thread) => matchesInboxPill(thread, filter, tipped),
     hidden: (thread) => marks.hidden.includes(threadMark(thread.creatorId, thread.threadKey)),
     showHidden,
@@ -733,18 +745,28 @@ export function RealChatsPage() {
     storedHistory?.messages ?? [],
   );
   const historyDone = storedHistory?.done === true;
+  const findKeys = findOpen ? findMessages(messages, findQuery) : [];
+  const activeFindKey = findOpen ? findKeys[findIndex] ?? null : null;
+  const openedThread = selected ? `${selected.creatorId}:${selected.threadKey}` : null;
+  useEffect(() => {
+    setGalleryOpen(false);
+    setFindOpen(false);
+    setFindQuery("");
+    setFindIndex(0);
+    setFlashKey(null);
+  }, [openedThread]);
   const meta = data?.meta.find((item) => item.creatorId === selected?.creatorId);
   const running = selected ? data?.runningCreatorIds.includes(selected.creatorId) : false;
   const syncPhase = chatPhase(data, creatorId === "all" ? selected?.creatorId ?? null : creatorId, Boolean(running));
   const canForce = teamAccess?.role === "owner" && selected != null;
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (dialog != null || insightsOpen) return;
+      if (dialog != null || insightsOpen || galleryOpen) return;
       inbox.onArrow(event);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [dialog, insightsOpen, inbox.onArrow]);
+  }, [dialog, insightsOpen, galleryOpen, inbox.onArrow]);
   useEffect(() => {
     if (dialog == null) return;
     const onKey = (event: KeyboardEvent) => {
@@ -1239,12 +1261,67 @@ export function RealChatsPage() {
     return fanNickname(thread.creatorId, thread.fanKey) || thread.fanName || thread.fanHandle || "Fan";
   }
 
+  function flagFor(thread: { creatorId: string; fanKey: string | null }) {
+    return thread.fanKey ? flags.find((item) => item.creatorId === thread.creatorId && item.fanKey === thread.fanKey) ?? null : null;
+  }
+
+  function isMuted(thread: { creatorId: string; fanKey: string | null; threadKey: string }): boolean {
+    return flagFor(thread)?.muted === true || marks.muted.includes(threadMark(thread.creatorId, thread.threadKey));
+  }
+
+  /** Favorito, avisos y fijado. Solo del CRM: se guardan en la base y los ve todo el equipo. No llaman a OnlyFans. */
+  function setFlag(patch: { favorite?: boolean; muted?: boolean; pinned?: boolean }) {
+    if (!selected?.fanKey) return;
+    const target = { creatorId: selected.creatorId, fanKey: selected.fanKey };
+    setData((current) => {
+      if (!current) return current;
+      const rest = (current.flags ?? []).filter((item) => !(item.creatorId === target.creatorId && item.fanKey === target.fanKey));
+      const before = (current.flags ?? []).find((item) => item.creatorId === target.creatorId && item.fanKey === target.fanKey);
+      const next = {
+        ...target,
+        favorite: patch.favorite ?? before?.favorite ?? false,
+        muted: patch.muted ?? before?.muted ?? false,
+        pinnedAt: patch.pinned === undefined ? before?.pinnedAt ?? null : patch.pinned ? before?.pinnedAt ?? new Date().toISOString() : null,
+      };
+      return { ...current, flags: [...rest, next] };
+    });
+    void saveFanFlag({ data: { ...target, patch } }).then(() => refresh()).catch((err: unknown) => { setError(sessionErrorText(err)); void refresh(); });
+  }
+
+  function toggleMuted() {
+    if (!selected) return;
+    const next = !isMuted(selected);
+    const id = threadMark(selected.creatorId, selected.threadKey);
+    if (!next && marks.muted.includes(id)) saveMarks({ ...marks, muted: marks.muted.filter((item) => item !== id) });
+    setFlag({ muted: next });
+  }
+
+  function startRename() {
+    if (!selected) return;
+    setRenameValue(fanNickname(selected.creatorId, selected.fanKey) ?? "");
+    setRenaming(true);
+    setFanMenu(true);
+  }
+
+  function jumpToMessage(messageKey: string) {
+    setFlashKey(messageKey);
+    setTimeout(() => {
+      const el = threadBox.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(messageKey)}"]`);
+      if (el) {
+        stickToBottom.current = false;
+        el.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
+    }, 0);
+    setTimeout(() => setFlashKey((current) => (current === messageKey ? null : current)), 2500);
+  }
+
   function saveMarks(next: { hidden: string[]; muted: string[] }) {
     setMarks(next);
     localStorage.setItem(CHAT_MARKS_KEY, JSON.stringify(next));
   }
 
   function toggleMark(kind: "hidden" | "muted") {
+    if (kind === "muted") { toggleMuted(); return; }
     if (!selected) return;
     const id = threadMark(selected.creatorId, selected.threadKey);
     const has = marks[kind].includes(id);
@@ -1467,7 +1544,10 @@ export function RealChatsPage() {
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-1">
                       <span className={`truncate text-sm ${unread.bold ? "font-bold text-[#1d2433]" : "font-medium"}`}>{fanTitle(thread)}</span>
-                      {unread.badge != null && !marks.muted.includes(threadMark(thread.creatorId, thread.threadKey)) ? <span className="shrink-0 rounded-full bg-[#3b6cff] px-1.5 text-[10px] font-semibold text-white" aria-label={`${unread.badge} sin leer`}>{unread.badge}</span> : null}
+                      {flagFor(thread)?.pinnedAt ? <Pin className="h-3 w-3 shrink-0 text-[#2456c7]" aria-label="Fijado" /> : null}
+                      {flagFor(thread)?.favorite ? <Star className="h-3 w-3 shrink-0 text-[#f5a300]" fill="currentColor" aria-label="Favorito" /> : null}
+                      {isMuted(thread) ? <BellOff className="h-3 w-3 shrink-0 text-[#8a93a3]" aria-label="Avisos silenciados" /> : null}
+                      {unread.badge != null && !isMuted(thread) ? <span className="shrink-0 rounded-full bg-[#3b6cff] px-1.5 text-[10px] font-semibold text-white" aria-label={`${unread.badge} sin leer`}>{unread.badge}</span> : null}
                       {thread.online === false && !online && !seen ? <span className="rounded bg-[#f3f4f6] px-1 text-[10px] text-[#6d7585]">OFF</span> : null}
                     </span>
                     <span className="flex items-baseline gap-2 text-xs text-[#6d7585]">
@@ -1493,9 +1573,12 @@ export function RealChatsPage() {
               <div className="flex min-w-0 items-center gap-2">
                 {selected ? <FanFace name={fanTitle(selected)} url={selected.avatarUrl} online={fanShowsOnline(selected.online, selected.lastSeenAt, presenceNow, fanListedOnline(onlineKeys, selected.fanKey, selected.threadKey))} /> : null}
                 <div className="min-w-0">
-                <button type="button" className="block max-w-full truncate text-left font-medium" onClick={() => { setFanMenu((open) => !open); setRenaming(false); }} aria-expanded={fanMenu} aria-label="Opciones del fan">
+                <div className="flex min-w-0 items-center gap-1">
+                <button type="button" className="block max-w-full truncate text-left text-base font-semibold" onClick={() => { setFanMenu((open) => !open); setRenaming(false); }} aria-expanded={fanMenu} aria-label="Opciones del fan">
                   {selected ? fanTitle(selected) : syncPhaseLabel(syncPhase)}
                 </button>
+                {selected?.fanKey ? <button type="button" aria-label="Renombrar fan" title="Renombrar (solo en el CRM)" className="shrink-0 rounded p-1 text-[#6d7585] hover:bg-[#eef2ff]" onClick={startRename}><Pencil className="h-3.5 w-3.5" /></button> : null}
+                </div>
                 {selected && lastSeenLabel(selected.lastSeenAt, presenceNow, fanShowsOnline(selected.online, selected.lastSeenAt, presenceNow, fanListedOnline(onlineKeys, selected.fanKey, selected.threadKey))) ? <p className="truncate text-xs text-[#6d7585]">{lastSeenLabel(selected.lastSeenAt, presenceNow, fanShowsOnline(selected.online, selected.lastSeenAt, presenceNow, fanListedOnline(onlineKeys, selected.fanKey, selected.threadKey)))}</p> : null}
                 </div>
                 {fanMenu && selected ? (
@@ -1521,7 +1604,7 @@ export function RealChatsPage() {
                           <button type="button" className="block w-full px-4 py-3 text-left hover:bg-[#f4f7ff] disabled:text-[#b0b6c0]" disabled={!selected.fanKey} onClick={() => { setRenameValue(fanNickname(selected.creatorId, selected.fanKey) ?? selected.fanName ?? ""); setRenaming(true); }}>Renombrar</button>
                           <div className="my-1 border-t border-[#e6e8ee]" />
                           <button type="button" className="block w-full px-4 py-3 text-left hover:bg-[#f4f7ff]" onClick={() => toggleMark("hidden")}>{marks.hidden.includes(threadMark(selected.creatorId, selected.threadKey)) ? "Mostrar chat" : "Ocultar chat"}</button>
-                          <button type="button" className="block w-full px-4 py-3 text-left text-[#2456c7] hover:bg-[#f4f7ff]" onClick={() => toggleMark("muted")}>{marks.muted.includes(threadMark(selected.creatorId, selected.threadKey)) ? "Activar avisos" : "Silenciar avisos"}</button>
+                          <button type="button" className="block w-full px-4 py-3 text-left text-[#2456c7] hover:bg-[#f4f7ff]" onClick={() => { toggleMuted(); setFanMenu(false); }}>{isMuted(selected) ? "Activar avisos" : "Silenciar avisos"}</button>
                           <div className="my-1 border-t border-[#e6e8ee]" />
                           {fanAction ? (
                             <div className="px-4 py-3">
@@ -1572,12 +1655,36 @@ export function RealChatsPage() {
                   </>
                 ) : null}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5">
+                {selected?.fanKey ? (
+                  <>
+                    <button type="button" aria-label="Favorito" aria-pressed={flagFor(selected)?.favorite === true} title="Favorito (CRM)" className={`rounded-lg p-1.5 hover:bg-[#fff7e0] ${flagFor(selected)?.favorite ? "text-[#f5a300]" : "text-[#6d7585]"}`} onClick={() => setFlag({ favorite: !(flagFor(selected)?.favorite === true) })}><Star className="h-4 w-4" fill={flagFor(selected)?.favorite ? "currentColor" : "none"} /></button>
+                    <button type="button" aria-label={isMuted(selected) ? "Activar avisos" : "Silenciar avisos"} aria-pressed={isMuted(selected)} title={isMuted(selected) ? "Avisos silenciados (CRM)" : "Silenciar avisos (CRM)"} className={`rounded-lg p-1.5 hover:bg-[#eef2ff] ${isMuted(selected) ? "text-[#b42318]" : "text-[#6d7585]"}`} onClick={toggleMuted}>{isMuted(selected) ? <BellOff className="h-4 w-4" /> : <Bell className="h-4 w-4" />}</button>
+                    <button type="button" aria-label="Nota" title="Nota de la creadora" className="rounded-lg p-1.5 text-[#6d7585] hover:bg-[#eef2ff]" onClick={() => { setInsightsTab("Notas"); setInsightsOpen(true); }}><StickyNote className="h-4 w-4" /></button>
+                    <button type="button" aria-label={flagFor(selected)?.pinnedAt ? "Desfijar chat" : "Fijar chat"} aria-pressed={Boolean(flagFor(selected)?.pinnedAt)} title="Fijar arriba de la lista (CRM)" className={`rounded-lg p-1.5 hover:bg-[#eef2ff] ${flagFor(selected)?.pinnedAt ? "text-[#2456c7]" : "text-[#6d7585]"}`} onClick={() => setFlag({ pinned: !flagFor(selected)?.pinnedAt })}><Pin className="h-4 w-4" fill={flagFor(selected)?.pinnedAt ? "currentColor" : "none"} /></button>
+                  </>
+                ) : null}
+                {selected ? (
+                  <>
+                    <button type="button" className="flex items-center gap-1 rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => setGalleryOpen(true)}><Images className="h-3.5 w-3.5" aria-hidden />Galería</button>
+                    <button type="button" className="flex items-center gap-1 rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" aria-pressed={findOpen} onClick={() => setFindOpen((open) => !open)}><Search className="h-3.5 w-3.5" aria-hidden />Encontrar</button>
+                  </>
+                ) : null}
                 <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => void refresh()}>Recargar</button>
-                <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => setInsightsOpen(true)}>Ficha del fan</button>
+                <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => { setInsightsTab("Insights"); setInsightsOpen(true); }}>Ficha del fan</button>
                 <button type="button" className="rounded-lg border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => { setFanMenu((open) => !open); setRenaming(false); }} aria-label="Menú" aria-expanded={fanMenu}>Menú</button>
               </div>
             </header>
+            {findOpen && selected ? (
+              <ChatFindBar
+                query={findQuery}
+                onQuery={(value) => { setFindQuery(value); setFindIndex(0); const keys = findMessages(messages, value); if (keys.length > 0) jumpToMessage(keys[0]); }}
+                count={findKeys.length}
+                index={findIndex}
+                onStep={(direction) => { const next = stepMatch(findIndex, findKeys.length, direction); setFindIndex(next); if (findKeys[next]) jumpToMessage(findKeys[next]); }}
+                onClose={() => { setFindOpen(false); setFindQuery(""); setFindIndex(0); }}
+              />
+            ) : null}
             {menu && selected ? (
               <div className="shrink-0 border-b border-[#e6e8ee] px-4 py-2 text-xs text-[#6d7585]">
                 {headerSyncLabel(syncPhase)}
@@ -1602,7 +1709,7 @@ export function RealChatsPage() {
             ) : null}
             <div className="relative min-h-0 flex-1">
             {olderBusy ? <p className="pointer-events-none absolute inset-x-0 top-2 z-10 text-center text-xs text-[#6d7585]">Cargando mensajes anteriores…</p> : null}
-            <ol ref={threadBox} className="h-full space-y-3 overflow-y-auto px-4 py-4" onScroll={(event) => {
+            <ol ref={threadBox} className="h-full space-y-4 overflow-y-auto bg-[#fbfcfe] px-[max(1rem,calc((100%-760px)/2))] py-6" onScroll={(event) => {
               const node = event.currentTarget;
               stickToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80;
               if (node.scrollTop > 24 || !selected || olderLock.current || historyDone) return;
@@ -1639,7 +1746,7 @@ export function RealChatsPage() {
               {historyDone ? <li className="text-center text-xs text-[#6d7585]">Inicio de la conversación</li> : null}
               {!selected || (messages.length === 0 && pendingForThread(unmatchedPending(pendingOut), selected).length === 0 && jobList.every((job) => job.creatorId !== selected.creatorId || job.threadKey !== selected.threadKey)) ? <li className="text-sm text-[#6d7585]">{selected ? "Sin datos" : syncPhaseLabel(syncPhase)}</li> : null}
               {messages.map((message) => (
-                <ThreadMessage key={message.messageKey} message={message} />
+                <ThreadMessage key={message.messageKey} message={message} find={findOpen || flashKey === message.messageKey ? { query: findOpen ? findQuery : "", active: activeFindKey === message.messageKey, flash: flashKey === message.messageKey } : undefined} />
               ))}
               {pendingBesideLocal(pendingForThread(unmatchedPending(pendingOut), selected), jobList).map((item) => {
                 const recovered = draftFromPending(item);
@@ -1677,7 +1784,7 @@ export function RealChatsPage() {
               {messages.some((message) => message.fromFan) && fanTranslation ? <li className="text-[10px] text-[#6d7585]">Traducción: Sin datos</li> : null}
             </ol>
             </div>
-            <form className="relative shrink-0 border-t border-[#e6e8ee] p-2" onSubmit={(event) => event.preventDefault()}>
+            <form className="relative shrink-0 border-t border-[#e6e8ee] px-[max(0.5rem,calc((100%-760px)/2))] py-3" onSubmit={(event) => event.preventDefault()}>
               {panel && panel !== "guiones" && panel !== "vault" && panel !== "etiqueta" ? (
                 <div role="region" aria-label={panelLabel(panel)} className="absolute inset-x-2 bottom-full z-20 mb-1 max-h-52 overflow-y-auto rounded-xl border border-[#e6e8ee] bg-white p-3 text-sm shadow-lg">
                   <ComposerPanelBody
@@ -1911,6 +2018,7 @@ export function RealChatsPage() {
             </form>
         </div>
       </section>
+      {galleryOpen && selected ? <ChatGalleryPanel messages={messages} onClose={() => setGalleryOpen(false)} onJump={(key) => { setGalleryOpen(false); jumpToMessage(key); }} /> : null}
       {insightsOpen ? (
         <div className="fixed inset-0 z-50">
           <button type="button" className="absolute inset-0 bg-black/30" aria-label="Cerrar ficha" onClick={() => setInsightsOpen(false)} />
@@ -1920,7 +2028,7 @@ export function RealChatsPage() {
             </div>
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
               {selected ? (
-                <InsightPane thread={selected} cards={fanCards.fans} crmFans={crmFans} messages={messages} profiles={data?.profiles ?? []} notes={data?.notes ?? []} onNotes={saveNote} onProfile={(profile) => { void saveFanProfile({ data: profile }).then(() => refresh()); }} onCopyDraft={(body, price) => { replaceDraft(body); setDraftPrice(price); setPriceLabel(`$${(price / 100).toFixed(2)}`); setInsightsOpen(false); }} onCreatorNote={(body) => { if (!selected.fanKey) return; void saveFanNote({ data: { creatorId: selected.creatorId, fanKey: selected.fanKey, body } }).then(() => refresh()); }} />
+                <InsightPane thread={selected} cards={fanCards.fans} crmFans={crmFans} messages={messages} profiles={data?.profiles ?? []} notes={data?.notes ?? []} onNotes={saveNote} onProfile={(profile) => { void saveFanProfile({ data: profile }).then(() => refresh()); }} onCopyDraft={(body, price) => { replaceDraft(body); setDraftPrice(price); setPriceLabel(`$${(price / 100).toFixed(2)}`); setInsightsOpen(false); }} onCreatorNote={(body) => { if (!selected.fanKey) return; void saveFanNote({ data: { creatorId: selected.creatorId, fanKey: selected.fanKey, body } }).then(() => refresh()); }} initialTab={insightsTab} />
               ) : (
                 <FanInsights
                   name={null}
@@ -1998,6 +2106,7 @@ function InsightPane({
   onProfile,
   onCopyDraft,
   onCreatorNote,
+  initialTab,
 }: {
   thread: {
     creatorId: string;
@@ -2026,6 +2135,7 @@ function InsightPane({
   onProfile: (profile: CreatorChatList["profiles"][number]) => void;
   onCopyDraft: (body: string, priceCents: number) => void;
   onCreatorNote: (body: string) => void;
+  initialTab?: "Insights" | "Ventas" | "Notas";
 }) {
   const card = chatFanCardFor(cards, thread.creatorId, thread.fanKey);
   const [stored, setStored] = useState<Awaited<ReturnType<typeof readFanPurchases>> | null>(null);
@@ -2049,6 +2159,7 @@ function InsightPane({
   });
   return (
     <FanInsights
+      initialTab={initialTab}
       name={thread.fanName}
       handle={thread.fanHandle}
       spentCents={thread.spentCents ?? card?.spentCents ?? null}
