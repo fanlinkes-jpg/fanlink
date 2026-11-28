@@ -250,9 +250,14 @@ export const setSyncInterval = createServerFn({ method: "POST" })
 
 export const listCreatorChats = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
-  .handler(async ({ context }): Promise<CreatorChatList> => {
+  .validator((input: { open?: { creatorId: string; threadKey: string } | null } | undefined) => ({
+    open: input?.open && typeof input.open.creatorId === "string" && typeof input.open.threadKey === "string"
+      ? { creatorId: input.open.creatorId.slice(0, 80), threadKey: input.open.threadKey.slice(0, 80) }
+      : null,
+  }))
+  .handler(async ({ context, data }): Promise<CreatorChatList> => {
     const { listCreatorChatViews } = await import("./of-sessions-runtime.server");
-    return listCreatorChatViews(context.userId);
+    return listCreatorChatViews(context.userId, data.open);
   });
 
 export const syncCreatorChats = createServerFn({ method: "POST" })

@@ -399,10 +399,12 @@ export function RealChatsPage() {
   const vaultCreator = useRef<string | null>(null);
   const vaultThread = useRef<string | null>(null);
   const offerPriceId = useRef<string | null>(null);
+  // Hilo abierto: la lista trae sus mensajes recientes completos. El resto va resumido.
+  const openThreadRef = useRef<{ creatorId: string; threadKey: string } | null>(null);
 
   async function refresh() {
     try {
-      const list = await listCreatorChats();
+      const list = await listCreatorChats({ data: { open: openThreadRef.current } });
       setData(list);
       const nextPending = list.pending.flatMap((item) => (
         item.threadKey ? [{
@@ -723,6 +725,7 @@ export function RealChatsPage() {
   useEffect(() => () => {
     if (spendTimer.current) clearTimeout(spendTimer.current);
   }, []);
+  openThreadRef.current = selected ? { creatorId: selected.creatorId, threadKey: selected.threadKey } : null;
   const historyKey = selected ? `${selected.creatorId}:${selected.threadKey}` : "";
   const storedHistory = historyKey ? threadHistory[historyKey] : undefined;
   const messages = mergeHistoryMessages(

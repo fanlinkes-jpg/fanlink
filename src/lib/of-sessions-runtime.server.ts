@@ -688,7 +688,7 @@ export async function setSyncIntervalView(
   return { intervalMin, chatIntervalMin };
 }
 
-export async function listCreatorChatViews(userId: string): Promise<CreatorChatList> {
+export async function listCreatorChatViews(userId: string, open: { creatorId: string; threadKey: string } | null = null): Promise<CreatorChatList> {
   const access = await accessFor(userId);
   const sessions = await getOfSessionManager();
   const accounts = await applyDerivedConnections(sessions, await sessions.listAccounts());
@@ -697,7 +697,8 @@ export async function listCreatorChatViews(userId: string): Promise<CreatorChatL
     accounts.flatMap((account) => (account.creatorId ? [account.creatorId] : [])),
   );
   const sql = await getSql();
-  const stored = await listChats(sql, creatorIds);
+  // Resumen acotado: el historial va por readThreadHistory y el hilo abierto por `open`.
+  const stored = await listChats(sql, creatorIds, { messages: "digest", open });
   const running = new Set(sessions.readingIds());
   return {
     runningCreatorIds: visibleRunning(accounts, null, running),
@@ -1438,7 +1439,7 @@ export async function loadMoreChatsView(userId: string, input: { creatorId: stri
   const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
   if (!account) return { ok: false };
   const sql = await getSql();
-  const previous = (await listChats(sql, [input.creatorId])).threads.map((thread) => thread.threadKey);
+  const previous = (await listChats(sql, [input.creatorId], { messages: "none" })).threads.map((thread) => thread.threadKey);
   const ran = await sessions.runQueued(account.id, async (context) => {
     const page = await context.newPage();
     try {
