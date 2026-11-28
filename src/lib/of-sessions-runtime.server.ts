@@ -65,6 +65,7 @@ import { liveViewGate } from "../../server/of-sessions/live/desk.ts";
 import { issueLiveTicket } from "../../server/of-sessions/live/tickets.ts";
 import { liveViewSectionAccess } from "../../server/of-sessions/live/sections.ts";
 import { listFanProfiles, saveFanProfile } from "../../server/of-sessions/sync/fan-profile.ts";
+import { listFanFlags, saveFanFlag, type FanFlagPatch } from "../../server/of-sessions/sync/fan-flags.ts";
 import { listFanNotes, saveFanNote } from "../../server/of-sessions/sync/fan-note.ts";
 import { intervalMinFromEnv, startSyncLoop, type ScheduleAccount } from "../../server/of-sessions/sync/schedule.ts";
 import { saveNotificationRead } from "../../server/of-sessions/sync/notification-store.ts";
@@ -758,6 +759,7 @@ export async function listCreatorChatViews(userId: string, open: { creatorId: st
     })),
     pending: await pendingWithMatches(sql, creatorIds),
     profiles: await listFanProfiles(sql, creatorIds),
+    flags: await listFanFlags(sql, creatorIds),
     notes: await listFanNotes(sql, creatorIds),
     accounts: accounts.flatMap((account) => account.creatorId && creatorIds.includes(account.creatorId) ? [{
       creatorId: account.creatorId,
@@ -1032,6 +1034,26 @@ export async function saveFanProfileView(
   if (!input.fanKey.trim()) throw new WorkspaceAccessError("Sin datos del fan.");
   await saveFanProfile(await getSql(), { ...input, updatedBy: access.userId });
   return { ok: true };
+}
+
+/** Favorito, avisos y fijado: solo del CRM, compartidos por el equipo. No llama a OnlyFans. */
+export async function saveFanFlagView(
+  userId: string,
+  input: { creatorId: string; fanKey: string; patch: FanFlagPatch },
+) {
+  const access = await accessFor(userId);
+  if (access.role !== "owner" && !access.perms.includes("mensajes")) {
+    throw new WorkspaceAccessError("No tienes permiso para escribir.");
+  }
+  if (access.role !== "owner" && !access.creatorIds.includes(input.creatorId)) {
+    throw new WorkspaceAccessError("Esa cuenta no es tuya.");
+  }
+  if (!input.fanKey.trim() || !input.creatorId.trim()) throw new WorkspaceAccessError("Sin datos del fan.");
+  const patch: FanFlagPatch = {};
+  if (typeof input.patch.favorite === "boolean") patch.favorite = input.patch.favorite;
+  if (typeof input.patch.muted === "boolean") patch.muted = input.patch.muted;
+  if (typeof input.patch.pinned === "boolean") patch.pinned = input.patch.pinned;
+  return saveFanFlag(await getSql(), { creatorId: input.creatorId, fanKey: input.fanKey, patch, updatedBy: access.userId });
 }
 
 export async function recordChatOutboundView(

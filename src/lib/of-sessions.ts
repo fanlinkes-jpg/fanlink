@@ -200,6 +200,8 @@ export type CreatorChatList = {
     authorName: string | null;
     updatedAt: string;
   }>;
+  /** Favorito, avisos silenciados y fijado por fan. Solo del CRM. */
+  flags: Array<{ creatorId: string; fanKey: string; favorite: boolean; muted: boolean; pinnedAt: string | null }>;
   profiles: Array<{
     creatorId: string;
     fanKey: string;
@@ -326,6 +328,14 @@ export const saveFanProfile = createServerFn({ method: "POST" })
   .handler(async ({ context, data }) => {
     const { saveFanProfileView } = await import("./of-sessions-runtime.server");
     return saveFanProfileView(context.userId, data);
+  });
+
+export const saveFanFlag = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string; fanKey: string; patch: { favorite?: boolean; muted?: boolean; pinned?: boolean } }) => input)
+  .handler(async ({ context, data }) => {
+    const { saveFanFlagView } = await import("./of-sessions-runtime.server");
+    return saveFanFlagView(context.userId, data);
   });
 
 export const chatSendAccess = createServerFn({ method: "GET" })
