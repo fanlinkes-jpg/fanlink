@@ -25,7 +25,7 @@ export const FUNCTION_TABS = [
 ] as const;
 
 export type FunctionTabId = (typeof FUNCTION_TABS)[number]["id"];
-export type AdminTab = "creadoras" | "chatters";
+export type AdminTab = "creadoras" | "empleados" | "chatters";
 
 export type DashboardZone =
   | { kind: "metricas"; screen: ScreenId }
@@ -199,6 +199,7 @@ export function visibleFunctionTabs(role: NavRole | null, access: TeamAccess | n
 }
 
 export function adminTab(value: unknown): AdminTab {
+  if (value === "empleados") return "empleados";
   if (value === "chatters" || value === "equipos") return "chatters";
   return "creadoras";
 }

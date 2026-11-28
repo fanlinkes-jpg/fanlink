@@ -31,9 +31,12 @@ import { Route as ProxysRouteImport } from './routes/proxys'
 import { Route as VaultRouteImport } from './routes/vault'
 import { Route as ApiChatLiveRouteImport } from './routes/api/chat-live'
 import { Route as ApiChatMediaRouteImport } from './routes/api/chat-media'
+import { Route as ApiInvitationRouteImport } from './routes/api/invitation'
+import { Route as ApiStaffLoginRouteImport } from './routes/api/staff-login'
 import { Route as ApiVaultMediaRouteImport } from './routes/api/vault-media'
 import { Route as ApiVaultQueryRouteImport } from './routes/api/vault-query'
 import { Route as ApiVaultSendRouteImport } from './routes/api/vault-send'
+import { Route as InvitacionTokenRouteImport } from './routes/invitacion.$token'
 import { Route as ProximamenteSeccionRouteImport } from './routes/proximamente.$seccion'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 
@@ -147,6 +150,16 @@ const ApiChatMediaRoute = ApiChatMediaRouteImport.update({
   path: '/api/chat-media',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiInvitationRoute = ApiInvitationRouteImport.update({
+  id: '/api/invitation',
+  path: '/api/invitation',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiStaffLoginRoute = ApiStaffLoginRouteImport.update({
+  id: '/api/staff-login',
+  path: '/api/staff-login',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiVaultMediaRoute = ApiVaultMediaRouteImport.update({
   id: '/api/vault-media',
   path: '/api/vault-media',
@@ -160,6 +173,11 @@ const ApiVaultQueryRoute = ApiVaultQueryRouteImport.update({
 const ApiVaultSendRoute = ApiVaultSendRouteImport.update({
   id: '/api/vault-send',
   path: '/api/vault-send',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const InvitacionTokenRoute = InvitacionTokenRouteImport.update({
+  id: '/invitacion/$token',
+  path: '/invitacion/$token',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProximamenteSeccionRoute = ProximamenteSeccionRouteImport.update({
@@ -196,9 +214,12 @@ export interface FileRoutesByFullPath {
   '/vault': typeof VaultRoute
   '/api/chat-live': typeof ApiChatLiveRoute
   '/api/chat-media': typeof ApiChatMediaRoute
+  '/api/invitation': typeof ApiInvitationRoute
+  '/api/staff-login': typeof ApiStaffLoginRoute
   '/api/vault-media': typeof ApiVaultMediaRoute
   '/api/vault-query': typeof ApiVaultQueryRoute
   '/api/vault-send': typeof ApiVaultSendRoute
+  '/invitacion/$token': typeof InvitacionTokenRoute
   '/proximamente/$seccion': typeof ProximamenteSeccionRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
@@ -225,9 +246,12 @@ export interface FileRoutesByTo {
   '/vault': typeof VaultRoute
   '/api/chat-live': typeof ApiChatLiveRoute
   '/api/chat-media': typeof ApiChatMediaRoute
+  '/api/invitation': typeof ApiInvitationRoute
+  '/api/staff-login': typeof ApiStaffLoginRoute
   '/api/vault-media': typeof ApiVaultMediaRoute
   '/api/vault-query': typeof ApiVaultQueryRoute
   '/api/vault-send': typeof ApiVaultSendRoute
+  '/invitacion/$token': typeof InvitacionTokenRoute
   '/proximamente/$seccion': typeof ProximamenteSeccionRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
@@ -255,9 +279,12 @@ export interface FileRoutesById {
   '/vault': typeof VaultRoute
   '/api/chat-live': typeof ApiChatLiveRoute
   '/api/chat-media': typeof ApiChatMediaRoute
+  '/api/invitation': typeof ApiInvitationRoute
+  '/api/staff-login': typeof ApiStaffLoginRoute
   '/api/vault-media': typeof ApiVaultMediaRoute
   '/api/vault-query': typeof ApiVaultQueryRoute
   '/api/vault-send': typeof ApiVaultSendRoute
+  '/invitacion/$token': typeof InvitacionTokenRoute
   '/proximamente/$seccion': typeof ProximamenteSeccionRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
@@ -286,9 +313,12 @@ export interface FileRouteTypes {
     | '/vault'
     | '/api/chat-live'
     | '/api/chat-media'
+    | '/api/invitation'
+    | '/api/staff-login'
     | '/api/vault-media'
     | '/api/vault-query'
     | '/api/vault-send'
+    | '/invitacion/$token'
     | '/proximamente/$seccion'
     | '/api/auth/$'
   fileRoutesByTo: FileRoutesByTo
@@ -315,9 +345,12 @@ export interface FileRouteTypes {
     | '/vault'
     | '/api/chat-live'
     | '/api/chat-media'
+    | '/api/invitation'
+    | '/api/staff-login'
     | '/api/vault-media'
     | '/api/vault-query'
     | '/api/vault-send'
+    | '/invitacion/$token'
     | '/proximamente/$seccion'
     | '/api/auth/$'
   id:
@@ -344,9 +377,12 @@ export interface FileRouteTypes {
     | '/vault'
     | '/api/chat-live'
     | '/api/chat-media'
+    | '/api/invitation'
+    | '/api/staff-login'
     | '/api/vault-media'
     | '/api/vault-query'
     | '/api/vault-send'
+    | '/invitacion/$token'
     | '/proximamente/$seccion'
     | '/api/auth/$'
   fileRoutesById: FileRoutesById
@@ -374,9 +410,12 @@ export interface RootRouteChildren {
   VaultRoute: typeof VaultRoute
   ApiChatLiveRoute: typeof ApiChatLiveRoute
   ApiChatMediaRoute: typeof ApiChatMediaRoute
+  ApiInvitationRoute: typeof ApiInvitationRoute
+  ApiStaffLoginRoute: typeof ApiStaffLoginRoute
   ApiVaultMediaRoute: typeof ApiVaultMediaRoute
   ApiVaultQueryRoute: typeof ApiVaultQueryRoute
   ApiVaultSendRoute: typeof ApiVaultSendRoute
+  InvitacionTokenRoute: typeof InvitacionTokenRoute
   ProximamenteSeccionRoute: typeof ProximamenteSeccionRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
 }
@@ -537,6 +576,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiChatMediaRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/invitation': {
+      id: '/api/invitation'
+      path: '/api/invitation'
+      fullPath: '/api/invitation'
+      preLoaderRoute: typeof ApiInvitationRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/staff-login': {
+      id: '/api/staff-login'
+      path: '/api/staff-login'
+      fullPath: '/api/staff-login'
+      preLoaderRoute: typeof ApiStaffLoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/vault-media': {
       id: '/api/vault-media'
       path: '/api/vault-media'
@@ -556,6 +609,13 @@ declare module '@tanstack/react-router' {
       path: '/api/vault-send'
       fullPath: '/api/vault-send'
       preLoaderRoute: typeof ApiVaultSendRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/invitacion/$token': {
+      id: '/invitacion/$token'
+      path: '/invitacion/$token'
+      fullPath: '/invitacion/$token'
+      preLoaderRoute: typeof InvitacionTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/proximamente/$seccion': {
@@ -598,9 +658,12 @@ const rootRouteChildren: RootRouteChildren = {
   VaultRoute: VaultRoute,
   ApiChatLiveRoute: ApiChatLiveRoute,
   ApiChatMediaRoute: ApiChatMediaRoute,
+  ApiInvitationRoute: ApiInvitationRoute,
+  ApiStaffLoginRoute: ApiStaffLoginRoute,
   ApiVaultMediaRoute: ApiVaultMediaRoute,
   ApiVaultQueryRoute: ApiVaultQueryRoute,
   ApiVaultSendRoute: ApiVaultSendRoute,
+  InvitacionTokenRoute: InvitacionTokenRoute,
   ProximamenteSeccionRoute: ProximamenteSeccionRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
 }
