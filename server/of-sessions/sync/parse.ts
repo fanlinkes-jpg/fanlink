@@ -76,8 +76,8 @@ const KIND_KEYS: Record<string, EarningKind> = {
   posts: "post",
 };
 
-const DATE_KEYS = ["date", "day", "time", "period", "from", "timestamp"];
-const LIST_KEYS = ["list", "earnings", "rows", "items", "data", "chart", "subscribers", "users"];
+const DATE_KEYS = ["date", "day", "time", "period", "from", "timestamp", "startDate", "start", "label", "x"];
+const LIST_KEYS = ["list", "earnings", "rows", "items", "data", "chart", "subscribers", "users", "response", "payload", "result", "points", "values", "series", "days", "graph", "entries", "records"];
 const SECRET = /password|token|cookie|secret|sess|authorization|csrf/i;
 
 export type SectionOutcome = "ok" | "empty" | "changed" | "pending";
@@ -303,8 +303,12 @@ export function chartEarnings(rows: EarningRow[]): Array<{ day: string; amountCe
 }
 
 function walkEarnings(value: unknown, currency: string, rows: EarningRow[], depth: number): void {
-  if (!value || typeof value !== "object" || depth > 4 || rows.length > 500) return;
+  if (!value || typeof value !== "object" || depth > 6 || rows.length > 500) return;
   if (Array.isArray(value)) {
+    if (value.length === 2 && dayOf(value[0]) && cents(value[1]) != null) {
+      walkEarnings({ date: value[0], total: value[1] }, currency, rows, depth + 1);
+      return;
+    }
     for (const item of value.slice(0, 120)) walkEarnings(item, currency, rows, depth + 1);
     return;
   }
@@ -312,8 +316,18 @@ function walkEarnings(value: unknown, currency: string, rows: EarningRow[], dept
   const nextCurrency = clean(record.currency, 8)?.toUpperCase() ?? currency;
   pushEarningPoint(record, nextCurrency, rows);
   for (const [key, child] of Object.entries(record)) {
-    if (SECRET.test(key) || !LIST_KEYS.includes(key)) continue;
-    walkEarnings(child, nextCurrency, rows, depth + 1);
+    if (SECRET.test(key)) continue;
+    if (LIST_KEYS.includes(key)) {
+      walkEarnings(child, nextCurrency, rows, depth + 1);
+      continue;
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(key)) {
+      if (child && typeof child === "object" && !Array.isArray(child)) {
+        walkEarnings({ date: key, ...(child as Record<string, unknown>) }, nextCurrency, rows, depth + 1);
+      } else if (typeof child === "number" || typeof child === "string") {
+        walkEarnings({ date: key, total: child }, nextCurrency, rows, depth + 1);
+      }
+    }
   }
 }
 
@@ -322,7 +336,7 @@ const KIND_PRIORITY: Array<{ kind: EarningKind; keys: string[] }> = [
   { kind: "tip", keys: ["tips", "tip"] },
   { kind: "message", keys: ["messages", "message", "chat_messages", "chat", "ppv"] },
   { kind: "post", keys: ["posts", "post"] },
-  { kind: "total", keys: ["total", "gross", "amount", "earnings"] },
+  { kind: "total", keys: ["total", "gross", "amount", "earnings", "sum", "value", "summ", "income", "totalAmount", "totalSumm", "chartAmount", "net"] },
 ];
 
 function pushEarningPoint(record: Record<string, unknown>, currency: string, rows: EarningRow[]): void {
@@ -541,7 +555,10 @@ function nestedRecord(value: unknown): Record<string, unknown> | null {
 
 function cents(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value) && value >= 0) return Math.round(value * 100);
-  if (typeof value === "string" && /^\d+(\.\d{1,2})?$/.test(value.trim())) return Math.round(Number(value) * 100);
+  if (typeof value === "string") {
+    const text = value.trim().replace(/^[€$]/, "").replace(/,/g, "").trim();
+    if (/^\d+(\.\d{1,2})?$/.test(text)) return Math.round(Number(text) * 100);
+  }
   return null;
 }
 

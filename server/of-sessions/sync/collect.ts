@@ -236,6 +236,7 @@ async function openFanPages(
   pending: Promise<void>[],
 ): Promise<void> {
   const urls = fanPageUrls(site.id, site.subscribersUrl);
+  let fansRedirect = false;
   for (let index = 0; index < urls.length; index += 1) {
     if (notes.fansOutcome === "ok" || notes.fansOutcome === "empty") break;
     const url = urls[index] ?? "";
@@ -252,10 +253,10 @@ async function openFanPages(
       () => notes.fans.length > 0,
       slice,
     );
-    notes.fansRedirect = redirected;
+    fansRedirect = redirected;
     logSection("lectura", "fans", page.url(), notes.fansDataUrl, notes.fans.length);
-    if (redirected) break;
   }
+  notes.fansRedirect = fansRedirect && notes.fansOutcome !== "ok" && notes.fansOutcome !== "empty";
 }
 
 async function loginVisible(page: Page, site: SiteAdapter): Promise<boolean> {

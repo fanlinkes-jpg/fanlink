@@ -20,7 +20,7 @@ export function fanPageUrls(siteId: string, subscribersUrl: string | undefined):
   if (siteId !== "onlyfans") return [subscribersUrl];
   const modern = "https://onlyfans.com/my/collections/subscribers/active";
   if (modern === subscribersUrl) return [subscribersUrl];
-  return [subscribersUrl, modern];
+  return [modern, subscribersUrl];
 }
 
 export function logApiResponse(channel: "lectura" | "chat", url: string, status: number): void {
