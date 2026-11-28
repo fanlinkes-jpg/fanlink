@@ -32,12 +32,14 @@ import { Route as VaultRouteImport } from './routes/vault'
 import { Route as ApiChatLiveRouteImport } from './routes/api/chat-live'
 import { Route as ApiChatMediaRouteImport } from './routes/api/chat-media'
 import { Route as ApiInvitationRouteImport } from './routes/api/invitation'
+import { Route as ApiPasswordResetRouteImport } from './routes/api/password-reset'
 import { Route as ApiStaffLoginRouteImport } from './routes/api/staff-login'
 import { Route as ApiVaultMediaRouteImport } from './routes/api/vault-media'
 import { Route as ApiVaultQueryRouteImport } from './routes/api/vault-query'
 import { Route as ApiVaultSendRouteImport } from './routes/api/vault-send'
 import { Route as InvitacionTokenRouteImport } from './routes/invitacion.$token'
 import { Route as ProximamenteSeccionRouteImport } from './routes/proximamente.$seccion'
+import { Route as RestablecerTokenRouteImport } from './routes/restablecer.$token'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 
 const IndexRoute = IndexRouteImport.update({
@@ -155,6 +157,11 @@ const ApiInvitationRoute = ApiInvitationRouteImport.update({
   path: '/api/invitation',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPasswordResetRoute = ApiPasswordResetRouteImport.update({
+  id: '/api/password-reset',
+  path: '/api/password-reset',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiStaffLoginRoute = ApiStaffLoginRouteImport.update({
   id: '/api/staff-login',
   path: '/api/staff-login',
@@ -183,6 +190,11 @@ const InvitacionTokenRoute = InvitacionTokenRouteImport.update({
 const ProximamenteSeccionRoute = ProximamenteSeccionRouteImport.update({
   id: '/proximamente/$seccion',
   path: '/proximamente/$seccion',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RestablecerTokenRoute = RestablecerTokenRouteImport.update({
+  id: '/restablecer/$token',
+  path: '/restablecer/$token',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
@@ -215,12 +227,14 @@ export interface FileRoutesByFullPath {
   '/api/chat-live': typeof ApiChatLiveRoute
   '/api/chat-media': typeof ApiChatMediaRoute
   '/api/invitation': typeof ApiInvitationRoute
+  '/api/password-reset': typeof ApiPasswordResetRoute
   '/api/staff-login': typeof ApiStaffLoginRoute
   '/api/vault-media': typeof ApiVaultMediaRoute
   '/api/vault-query': typeof ApiVaultQueryRoute
   '/api/vault-send': typeof ApiVaultSendRoute
   '/invitacion/$token': typeof InvitacionTokenRoute
   '/proximamente/$seccion': typeof ProximamenteSeccionRoute
+  '/restablecer/$token': typeof RestablecerTokenRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRoutesByTo {
@@ -247,12 +261,14 @@ export interface FileRoutesByTo {
   '/api/chat-live': typeof ApiChatLiveRoute
   '/api/chat-media': typeof ApiChatMediaRoute
   '/api/invitation': typeof ApiInvitationRoute
+  '/api/password-reset': typeof ApiPasswordResetRoute
   '/api/staff-login': typeof ApiStaffLoginRoute
   '/api/vault-media': typeof ApiVaultMediaRoute
   '/api/vault-query': typeof ApiVaultQueryRoute
   '/api/vault-send': typeof ApiVaultSendRoute
   '/invitacion/$token': typeof InvitacionTokenRoute
   '/proximamente/$seccion': typeof ProximamenteSeccionRoute
+  '/restablecer/$token': typeof RestablecerTokenRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRoutesById {
@@ -280,12 +296,14 @@ export interface FileRoutesById {
   '/api/chat-live': typeof ApiChatLiveRoute
   '/api/chat-media': typeof ApiChatMediaRoute
   '/api/invitation': typeof ApiInvitationRoute
+  '/api/password-reset': typeof ApiPasswordResetRoute
   '/api/staff-login': typeof ApiStaffLoginRoute
   '/api/vault-media': typeof ApiVaultMediaRoute
   '/api/vault-query': typeof ApiVaultQueryRoute
   '/api/vault-send': typeof ApiVaultSendRoute
   '/invitacion/$token': typeof InvitacionTokenRoute
   '/proximamente/$seccion': typeof ProximamenteSeccionRoute
+  '/restablecer/$token': typeof RestablecerTokenRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRouteTypes {
@@ -314,12 +332,14 @@ export interface FileRouteTypes {
     | '/api/chat-live'
     | '/api/chat-media'
     | '/api/invitation'
+    | '/api/password-reset'
     | '/api/staff-login'
     | '/api/vault-media'
     | '/api/vault-query'
     | '/api/vault-send'
     | '/invitacion/$token'
     | '/proximamente/$seccion'
+    | '/restablecer/$token'
     | '/api/auth/$'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -346,12 +366,14 @@ export interface FileRouteTypes {
     | '/api/chat-live'
     | '/api/chat-media'
     | '/api/invitation'
+    | '/api/password-reset'
     | '/api/staff-login'
     | '/api/vault-media'
     | '/api/vault-query'
     | '/api/vault-send'
     | '/invitacion/$token'
     | '/proximamente/$seccion'
+    | '/restablecer/$token'
     | '/api/auth/$'
   id:
     | '__root__'
@@ -378,12 +400,14 @@ export interface FileRouteTypes {
     | '/api/chat-live'
     | '/api/chat-media'
     | '/api/invitation'
+    | '/api/password-reset'
     | '/api/staff-login'
     | '/api/vault-media'
     | '/api/vault-query'
     | '/api/vault-send'
     | '/invitacion/$token'
     | '/proximamente/$seccion'
+    | '/restablecer/$token'
     | '/api/auth/$'
   fileRoutesById: FileRoutesById
 }
@@ -411,12 +435,14 @@ export interface RootRouteChildren {
   ApiChatLiveRoute: typeof ApiChatLiveRoute
   ApiChatMediaRoute: typeof ApiChatMediaRoute
   ApiInvitationRoute: typeof ApiInvitationRoute
+  ApiPasswordResetRoute: typeof ApiPasswordResetRoute
   ApiStaffLoginRoute: typeof ApiStaffLoginRoute
   ApiVaultMediaRoute: typeof ApiVaultMediaRoute
   ApiVaultQueryRoute: typeof ApiVaultQueryRoute
   ApiVaultSendRoute: typeof ApiVaultSendRoute
   InvitacionTokenRoute: typeof InvitacionTokenRoute
   ProximamenteSeccionRoute: typeof ProximamenteSeccionRoute
+  RestablecerTokenRoute: typeof RestablecerTokenRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
 }
 
@@ -583,6 +609,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiInvitationRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/password-reset': {
+      id: '/api/password-reset'
+      path: '/api/password-reset'
+      fullPath: '/api/password-reset'
+      preLoaderRoute: typeof ApiPasswordResetRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/staff-login': {
       id: '/api/staff-login'
       path: '/api/staff-login'
@@ -625,6 +658,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProximamenteSeccionRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/restablecer/$token': {
+      id: '/restablecer/$token'
+      path: '/restablecer/$token'
+      fullPath: '/restablecer/$token'
+      preLoaderRoute: typeof RestablecerTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/auth/$': {
       id: '/api/auth/$'
       path: '/api/auth/$'
@@ -659,12 +699,14 @@ const rootRouteChildren: RootRouteChildren = {
   ApiChatLiveRoute: ApiChatLiveRoute,
   ApiChatMediaRoute: ApiChatMediaRoute,
   ApiInvitationRoute: ApiInvitationRoute,
+  ApiPasswordResetRoute: ApiPasswordResetRoute,
   ApiStaffLoginRoute: ApiStaffLoginRoute,
   ApiVaultMediaRoute: ApiVaultMediaRoute,
   ApiVaultQueryRoute: ApiVaultQueryRoute,
   ApiVaultSendRoute: ApiVaultSendRoute,
   InvitacionTokenRoute: InvitacionTokenRoute,
   ProximamenteSeccionRoute: ProximamenteSeccionRoute,
+  RestablecerTokenRoute: RestablecerTokenRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
 }
 export const routeTree = rootRouteImport
