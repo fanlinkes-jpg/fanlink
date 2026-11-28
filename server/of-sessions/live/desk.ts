@@ -324,6 +324,47 @@ export function liveHistoryGuardSource(chatUrl = "", section: LiveSection = "cha
   })();`;
 }
 
+/**
+ * Solo presentación, sin tocar el UA, la huella ni hacer peticiones: en Operativa el menú de secciones es el nuestro,
+ * así que se oculta la barra lateral de navegación de OnlyFans (`header.l-header`), los pies globales y el margen que
+ * esa barra reserva, para que el contenido de la sección ocupe todo el ancho del panel. Las cabeceras propias de cada
+ * pantalla (`.g-page__header`) se quedan. Los selectores salen del CSS público de OnlyFans.
+ */
+export const LIVE_DESK_PRESENTATION_CSS = [
+  "header.l-header, .l-header, .l-footer, .l-footer-static { display: none !important; }",
+  ".container.m-main-container { max-width: none !important; width: 100% !important; margin-left: 0 !important; margin-right: 0 !important; padding-left: 0 !important; padding-right: 0 !important; }",
+  ".m-main-container #content { max-width: 100% !important; width: 100% !important; margin-left: 0 !important; margin-right: 0 !important; }",
+  ".container.m-main-container #content > .b-chats > .b-chats__conversations, .container.m-main-container #content > .b-settings, .container.m-main-container #content > .container, .container.m-main-container #content > .g-sides-gaps, .container.m-main-container #content > .l-container { max-width: none !important; width: 100% !important; margin-left: 0 !important; margin-right: 0 !important; }",
+].join("\n");
+
+/**
+ * Pone la hoja una sola vez, también en cada carga nueva de la página. Vale como script de inicio y como evaluate.
+ * Con `on` en falso la quita y la deja apagada: la página del navegador se reutiliza entre salas, y los scripts de inicio
+ * de una sala anterior siguen ahí; el último que se añade manda.
+ */
+export function liveDeskPresentationSource(on = true): string {
+  return `(() => {
+    window.__fanlinkDeskLook = ${on ? "true" : "false"};
+    const css = ${JSON.stringify(LIVE_DESK_PRESENTATION_CSS)};
+    const put = () => {
+      const have = document.getElementById("fanlink-desk-presentation");
+      if (!window.__fanlinkDeskLook) {
+        if (have) have.remove();
+        return;
+      }
+      if (have) return;
+      const root = document.head || document.documentElement;
+      if (!root) return;
+      const style = document.createElement("style");
+      style.id = "fanlink-desk-presentation";
+      style.textContent = css;
+      root.appendChild(style);
+    };
+    put();
+    document.addEventListener("DOMContentLoaded", put);
+  })();`;
+}
+
 /** Un clic en solo lectura solo vale si abre otro hilo del chat. */
 export function liveThreadClick(href: string | null): boolean {
   if (!href) return false;

@@ -4,7 +4,7 @@ import { parseChatMessages } from "../sync/chats.ts";
 import { markLivePage } from "./pages.ts";
 import { liveChromeOrigin, widevineProbe } from "./chrome.ts";
 import { hideLiveProcess, liveProcessHideEnabled, tuckLiveWindow } from "./window.ts";
-import { deskCommand, LIVE_BLOCKED_NOTICE, liveCastFps, liveCastQuality, liveCastStall, liveControlAllowed, liveFrameAllowed, liveFps, liveHistoryGuardSource, liveLog, liveOpenPageAllowed, livePageMetrics, liveQuality, liveSocketGuardSource, liveThreadClick, liveTypingEnabled, mapPointer, type DeskInput } from "./desk.ts";
+import { deskCommand, LIVE_BLOCKED_NOTICE, liveCastFps, liveCastQuality, liveCastStall, liveControlAllowed, liveFrameAllowed, liveFps, liveDeskPresentationSource, liveHistoryGuardSource, liveLog, liveOpenPageAllowed, livePageMetrics, liveQuality, liveSocketGuardSource, liveThreadClick, liveTypingEnabled, mapPointer, type DeskInput } from "./desk.ts";
 import { lastLivePage, rememberLivePage, safeLivePage } from "./last-page.ts";
 import { deskPageOpenPrefix, deskPagePathMatches, deskPageUrl, liveSectionPageUrl, parseDeskPage, type DeskPage, type DeskPageId, type LiveSection } from "./sections.ts";
 import { BROWSER_FINGERPRINT } from "../sessions/browser-factory.ts";
@@ -97,12 +97,15 @@ export async function startLiveCast(input: {
     const history = liveHistoryGuardSource(safeUrl, section);
     const sockets = liveSocketGuardSource(typing);
     const open = openPrefixSource(deskPageOpenPrefix(deskPage));
+    // Solo Operativa: oculta la barra lateral de OnlyFans, que ya sustituye nuestro menú. El chat de Mensajes no la toca.
+    const look = liveDeskPresentationSource(section === "notifications");
     await page.addInitScript({ content: open });
     await page.addInitScript({ content: history });
     await page.addInitScript({ content: sockets });
+    await page.addInitScript({ content: look });
     await page.evaluate((sources) => {
       for (const source of sources) Function(source)();
-    }, [open, history, sockets]).catch(() => undefined);
+    }, [open, history, sockets, look]).catch(() => undefined);
   };
   page.on("popup", (popup) => {
     void popup.close().catch(() => undefined);
