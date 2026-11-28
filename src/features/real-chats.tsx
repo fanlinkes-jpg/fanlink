@@ -54,7 +54,7 @@ import { useStickToBottom } from "@/features/use-stick-to-bottom";
 import { MessageMedia, type MessageSlide } from "@/features/message-media";
 import { bubbleBlocks, bubbleText, mediaTags, pricePill, readState, tagLine } from "@/lib/chat-bubble";
 import { withDateSeparators } from "@/lib/chat-dates";
-import { mergeHistoryMessages, rememberThreadMessages, scrollAnchor, scrollDeltaForAnchor, type ScrollAnchor } from "@/lib/chat-history";
+import { mergeHistoryMessages, rememberThreadMessages } from "@/lib/chat-history";
 import { VAULT_THUMB_MISSING, vaultMediaSrc } from "@/lib/chat-media";
 import { VaultBrowser } from "@/features/vault-browser";
 
@@ -398,31 +398,12 @@ export function RealChatsPage() {
   const fileBox = useRef<HTMLInputElement>(null);
   const savedRange = useRef<Range | null>(null);
   const olderLock = useRef(false);
-  const scrollMark = useRef<ScrollAnchor | null>(null);
-  function pinThreadScroll(node: HTMLElement) {
-    const rows = [...node.querySelectorAll<HTMLElement>("[data-message-id]")].flatMap((el) => {
-      const id = el.dataset.messageId;
-      if (!id) return [];
-      const rect = el.getBoundingClientRect();
-      return [{ id, top: rect.top, height: rect.height }];
-    });
-    scrollMark.current = scrollAnchor(rows, node.getBoundingClientRect().top);
-  }
-  function restoreThreadScroll(node: HTMLElement) {
-    const mark = scrollMark.current;
-    if (!mark) return;
-    const el = node.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(mark.id)}"]`);
-    if (!el) return;
-    const delta = scrollDeltaForAnchor(mark, el.getBoundingClientRect().top, node.getBoundingClientRect().top);
-    if (Math.abs(delta) > 0.5) node.scrollTop += delta;
-  }
   const [olderBusy, setOlderBusy] = useState(false);
   const [threadHistory, setThreadHistory] = useState<Record<string, { done: boolean; messages: NonNullable<CreatorChatList["messages"]> }>>({});
   const listLock = useRef(false);
   const pendingRef = useRef(pendingOut);
   const threadBox = useRef<HTMLOListElement>(null);
   const stickToBottom = useRef(true);
-  const seenThread = useRef<string | null>(null);
   const [libraryQuery, setLibraryQuery] = useState("");
   const [tagQuery, setTagQuery] = useState("");
   const [ofVault, setOfVault] = useState<Array<{ id: string; title: string; kind: "foto" | "video" | "audio" | "gif" | null }>>([]);
@@ -868,7 +849,6 @@ export function RealChatsPage() {
     const key = `${selected.creatorId}:${selected.threadKey}`;
     const creatorId = selected.creatorId;
     const threadKey = selected.threadKey;
-    if (threadBox.current && !stickToBottom.current) pinThreadScroll(threadBox.current);
     let stop = false;
     void readThreadHistory({ data: { creatorId, threadKey } }).then((page) => {
       if (stop) return;
@@ -878,33 +858,12 @@ export function RealChatsPage() {
       stop = true;
     };
   }, [confirmMark, selected?.creatorId, selected?.threadKey]);
-  useLayoutEffect(() => {
-    // Historial antiguo que entra por arriba: se conserva el mensaje que se estaba leyendo.
-    const node = threadBox.current;
-    if (node && scrollMark.current) restoreThreadScroll(node);
-  }, [threadTail, openThread, messages.length]);
   const stickBottom = useStickToBottom({
     box: threadBox,
     stick: stickToBottom,
     threadKey: openThread,
     tail: `${threadTail}:${messages.length}`,
-    blocked: () => scrollMark.current != null,
   });
-  useLayoutEffect(() => {
-    // Al abrir otro chat, la ancla vieja ya no vale.
-    if (seenThread.current === openThread) return;
-    seenThread.current = openThread;
-    scrollMark.current = null;
-  }, [openThread]);
-  useEffect(() => {
-    const node = threadBox.current;
-    if (!node || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => {
-      if (scrollMark.current) restoreThreadScroll(node);
-    });
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [openThread]);
   const headerOnline = selected ? fanShowsOnline(selected.online, selected.lastSeenAt, presenceNow, fanListedOnline(onlineKeys, selected.fanKey, selected.threadKey)) : false;
   const headerSeen = selected ? lastSeenLabel(selected.lastSeenAt, presenceNow, headerOnline) : null;
   const watermarkHandle = creators.find((creator) => creator.id === selected?.creatorId)?.handle?.trim() || null;
@@ -1759,8 +1718,6 @@ export function RealChatsPage() {
               stickBottom.noteScroll(node);
               if (node.scrollTop > 24 || !selected || olderLock.current || historyDone) return;
               olderLock.current = true;
-              // Pegado al final, el historial que entra por arriba no mueve la lectura: se sigue abajo.
-              if (!stickToBottom.current) pinThreadScroll(node);
               setOlderBusy(true);
               const creatorId = selected.creatorId;
               const threadKey = selected.threadKey;
@@ -1782,13 +1739,9 @@ export function RealChatsPage() {
                   stored?.done ?? !page.hasMore,
                 ));
                 void refresh();
-              }).catch(() => {
-                scrollMark.current = null;
-              }).finally(() => {
+              }).catch(() => undefined).finally(() => {
                 olderLock.current = false;
                 setOlderBusy(false);
-                // Pasado el ajuste del historial, el ancla vieja ya no manda.
-                setTimeout(() => { if (!olderLock.current) scrollMark.current = null; }, 1500);
               });
             }}>
               {historyDone ? <li className="text-center text-xs text-[#6d7585]">Inicio de la conversación</li> : null}
