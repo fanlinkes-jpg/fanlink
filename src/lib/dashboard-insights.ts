@@ -7,7 +7,7 @@
  * - Días, horas y semanas en Europe/Madrid.
  */
 import { addMadridDays, madridInstant, madridParts, durationMinutes, windowStartingOn, cellStatus, type ShiftSlot, type ShiftStatus } from "./staff-shifts.ts";
-import { countSegments, fanSegments, spendSegmentOf, isNewFan, type FanSegmentId } from "./fan-segments.ts";
+import { FAN_SEGMENT_IDS, countSegments, fanSegments, spendSegmentOf, isNewFan, type FanSegmentId } from "./fan-segments.ts";
 
 export type Basis = "net" | "gross";
 export type Granularity = "hour" | "day" | "week" | "month";
@@ -927,7 +927,7 @@ export function newSubsOf(data: InsightData, query: InsightQuery, cutAt: Date, n
     welcome: hasMessages ? { replied, waiting, avgMinutes: minutes.length > 0 ? Math.round(sumOf(minutes, (value) => value) / minutes.length) : null, interactionRate: replied + waiting > 0 ? replied / (replied + waiting) : null } : null,
     purchase,
     duration: durationKnown ? { active, expired, buckets: DURATION_BUCKETS } : null,
-    segments: anySpend ? (["whale", "top", "spender", "low", "new"] as FanSegmentId[]).map((id) => ({ id, count: counts[id] })) : null,
+    segments: anySpend ? FAN_SEGMENT_IDS.map((id) => ({ id, count: counts[id] })) : null,
   };
 }
 

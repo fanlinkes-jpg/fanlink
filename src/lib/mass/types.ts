@@ -40,7 +40,7 @@ export type MassSegment = {
   activeWithinDays?: number;
   purchasedWithinDays?: number;
   subscription?: MassSubscription;
-  /** Segmentos del Dashboard (Whale, Top spender, Spender, Low spender, New). Basta con estar en uno. */
+  /** Segmentos del Dashboard (Whale, Top spender, Spender, Low spender, Freeloader, New). Basta con estar en uno. */
   fanSegments?: FanSegmentId[];
   excludeFanKeys?: string[];
   excludeOfListIds?: string[];
