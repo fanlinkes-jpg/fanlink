@@ -5,7 +5,8 @@ import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { PGlite } from "@electric-sql/pglite";
-import { WorkspaceAccessError, type TeamAccess } from "./access-policy.ts";
+import { TEAM_PERMS, WorkspaceAccessError, type TeamAccess } from "./access-policy.ts";
+import { presetPerms } from "./staff-roles.ts";
 import {
   INVITE_TTL_MS,
   activateInvitedStaff,
@@ -157,7 +158,7 @@ test("aceptar activa la ficha con su nivel y sus creadoras; la lista las enseña
     const access = await readAccess(sql, "u-marta", false);
     assert.deepEqual(
       { role: access.role, perms: access.perms, creatorIds: access.creatorIds, level: access.level, status: access.status },
-      { role: "member", perms: ["mensajes"], creatorIds: ["allison", "jose"], level: "supervisor", status: "active" },
+      { role: "member", perms: presetPerms(["supervisor"]), creatorIds: ["allison", "jose"], level: "supervisor", status: "active" },
     );
     const rows = await listEmployees(sql, NOW);
     assert.deepEqual(rows.map((row) => [row.name, row.level, row.status]), [
@@ -310,7 +311,7 @@ test("un miembro antiguo sin invitación sale en la lista con sus permisos, crea
       { kind: "member", email: null, status: "active", level: "chatter", perms: ["mensajes", "vault"], creatorIds: ["allison"], phone: "+34600000000", alertsEnabled: true, quietMinutes: 30 },
     );
     const ownerRow = (await listEmployees(sql)).find((item) => item.level === "owner");
-    assert.equal(ownerRow?.perms.length, 7);
+    assert.equal(ownerRow?.perms.length, TEAM_PERMS.length);
   } finally {
     await pg.close();
   }
