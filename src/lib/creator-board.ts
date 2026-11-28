@@ -15,6 +15,12 @@ export function todayKey(now = new Date()): string {
 export function todaySalesCents(read: SalesSource | undefined, now = new Date()): number | null {
   if (!read || !read.earningsSyncedAt) return null;
   const key = todayKey(now);
+  // Una lectura de otro día no sabe nada de hoy: Sin datos, no un cero.
+  const syncedParts = madridDay(read.earningsSyncedAt);
+  if (syncedParts) {
+    const syncedDay = `${syncedParts.year}-${String(syncedParts.month).padStart(2, "0")}-${String(syncedParts.day).padStart(2, "0")}`;
+    if (syncedDay !== key) return null;
+  }
   if (read.transactions) {
     return read.transactions.reduce((sum, item) => {
       const parts = madridDay(item.occurredAt);
@@ -24,7 +30,10 @@ export function todaySalesCents(read: SalesSource | undefined, now = new Date())
     }, 0);
   }
   if (read.earnings) {
-    return read.earnings.filter((item) => item.day === key && item.kind === "total").reduce((sum, item) => sum + item.amountCents, 0);
+    const today = read.earnings.filter((item) => item.day === key);
+    const totals = today.filter((item) => item.kind === "total");
+    const rows = totals.length > 0 ? totals : today;
+    return rows.reduce((sum, item) => sum + item.amountCents, 0);
   }
   return null;
 }

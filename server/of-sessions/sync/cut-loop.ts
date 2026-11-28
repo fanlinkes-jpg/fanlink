@@ -51,6 +51,11 @@ export function startCutLoop(deps: {
   online: (account: CutAccount) => Promise<void>;
   cutStarted?: (cutAt: Date) => Promise<void>;
   cutFinished?: (cutAt: Date, read: number) => Promise<void>;
+  /**
+   * Se pregunta una vez al arrancar. Si dice que sí (no hay ningún corte guardado), se lee cada cuenta
+   * autorizada una vez aunque ya se hubiera intentado tras el último corte. Siempre de una en una, con margen.
+   */
+  firstCut?: () => Promise<boolean>;
   now?: () => Date;
   sleep?: (ms: number) => Promise<void>;
   random?: () => number;
@@ -70,13 +75,25 @@ export function startCutLoop(deps: {
     let currentCut: number | null = null;
     let readThisCut = 0;
     await sleep(60_000);
+    let forcing = false;
+    try {
+      forcing = (await deps.firstCut?.()) === true;
+    } catch {
+      forcing = false;
+    }
+    if (forcing) log("[fanlink:corte] no hay ningún corte guardado: lectura inicial, una cuenta cada vez");
+    const forced = new Set<string>();
     while (!stopped) {
       try {
         const at = now();
         const cutAt = lastCut(at, deps.hours);
         const accounts = await deps.accounts();
         if (stopped) return;
-        const pick = pickCutAccount(accounts, at, deps.hours);
+        // En la lectura inicial cuenta como «pendiente» toda cuenta que aún no se ha leído en este arranque.
+        const view = forcing
+          ? accounts.map((account) => (forced.has(account.accountId) ? account : { ...account, lastAttemptAt: null, consecutiveFailures: 0 }))
+          : accounts;
+        const pick = pickCutAccount(view, at, deps.hours);
         if (pick) {
           if (currentCut !== cutAt.getTime()) {
             currentCut = cutAt.getTime();
@@ -85,6 +102,7 @@ export function startCutLoop(deps: {
             log(`[fanlink:corte] empieza corte=${cutAt.toISOString()}`);
           }
           await deps.sync(pick, cutAt);
+          forced.add(pick.accountId);
           readThisCut += 1;
           await sleep(Math.round(marginMin + Math.min(1, Math.max(0, random())) * Math.max(0, marginMax - marginMin)));
           continue;
@@ -94,6 +112,7 @@ export function startCutLoop(deps: {
           log(`[fanlink:corte] terminado corte=${cutAt.toISOString()} cuentas=${readThisCut}`);
           currentCut = null;
         }
+        if (forcing && !pick) forcing = false;
         const online = pickOnlineAccount(accounts, at, deps.onlineMin);
         if (online) {
           await deps.online(online);

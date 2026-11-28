@@ -5,6 +5,7 @@ import { getSql } from "@/lib/db";
 import { ensureStaff } from "@/lib/workspace-store";
 import { beginCreatorLogin } from "../../server/of-sessions/connect.ts";
 import { messages, publicSyncReason } from "../../server/of-sessions/messages.ts";
+import { syncStatusOf } from "./sync-status.ts";
 import { parseCreatorId } from "../../server/of-sessions/types.ts";
 import { assertNoCredentials } from "../../server/of-sessions/credentials.ts";
 import { loadCrmSessionConfig } from "../../server/of-sessions/config.ts";
@@ -264,6 +265,7 @@ function bootDashboardCuts(sessions: SessionManager, hours: number[]): { stop: (
         };
       });
     },
+    firstCut: async () => (await lastFinishedCut(await getSql())) == null,
     cutStarted: async (cutAt) => noteCut(await getSql(), cutAt, false, 0),
     cutFinished: async (cutAt, read) => noteCut(await getSql(), cutAt, true, read),
     sync: async (row) => {
@@ -949,6 +951,9 @@ function presentRead(owner: boolean, row: Awaited<ReturnType<typeof listCreatorR
     earningsSyncedAt: owner ? row.earningsSyncedAt : null,
     fansSyncedAt: row.fansSyncedAt,
     lastReason: publicSyncReason(row.lastReason),
+    chatSyncedAt: row.chatSyncedAt ?? null,
+    chatStatus: row.chatStatus ?? "idle",
+    chatReason: publicSyncReason(row.chatReason ?? null),
     lastAttemptAt: row.lastAttemptAt,
     consecutiveFailures: row.consecutiveFailures,
     lastStatus: row.lastStatus,
@@ -1126,7 +1131,8 @@ export async function getDashboardInsightsView(userId: string, request: InsightR
     now,
     lastReads,
     updated: {
-      cutAt: hours ? (await lastFinishedCut(sql)) ?? cutAt.toISOString() : null,
+      // Sin corte guardado no se finge uno: el panel avisa.
+      cutAt: hours ? await lastFinishedCut(sql) : null,
       lastReadAt,
       nextCutAt: hours ? nextCut(now, hours).toISOString() : null,
       cutsEnabled: hours != null,
@@ -1134,7 +1140,32 @@ export async function getDashboardInsightsView(userId: string, request: InsightR
     },
   });
   // Alertas de sesión y lectura, al momento (no piden nada a OnlyFans).
-  const live = dashboardViewFor({ access, accounts, reads: await listCreatorReads(sql, ids), pauses: listAccountPauses(), now });
+  const storedReads = await listCreatorReads(sql, ids);
+  const live = dashboardViewFor({ access, accounts, reads: storedReads, pauses: listAccountPauses(), now });
+  const allow = readAllowlist();
+  const sources = creators.map((creator) => {
+    const read = storedReads.find((item) => item.creatorId === creator.id);
+    const account = accounts.find((item) => item.creatorId === creator.id);
+    const readAllowed = hours && account
+      ? accountOnAllowlist(allow, { creatorId: account.creatorId, accountId: account.id, handle: account.identityHandle, userId: account.identityUserId, label: account.label })
+      : null;
+    return {
+      creatorId: creator.id,
+      name: creator.name,
+      ...syncStatusOf({
+        earningsSyncedAt: read?.earningsSyncedAt ?? null,
+        fansSyncedAt: read?.fansSyncedAt ?? null,
+        chatSyncedAt: read?.chatSyncedAt ?? null,
+        chatStatus: read?.chatStatus ?? null,
+        chatReason: read?.chatReason ?? null,
+        lastStatus: read?.lastStatus ?? null,
+        lastReason: publicSyncReason(read?.lastReason ?? null),
+        readAllowed,
+        earningsFallback: data.salesFromNotificationCreatorIds?.includes(creator.id) ? "notificaciones" : null,
+        fansFallback: data.fansFromChatsCreatorIds?.includes(creator.id) ? "chats" : null,
+      }),
+    };
+  });
   const extra = live.alerts
     .filter((alert) => alert.kind === "session" || alert.kind === "sync")
     .map((alert) => ({
@@ -1145,7 +1176,7 @@ export async function getDashboardInsightsView(userId: string, request: InsightR
         ? { label: "Reconectar", href: "/administrar?tab=creadoras" }
         : null,
     }));
-  return { ...view, alerts: [...extra, ...view.alerts] };
+  return { ...view, sources, alerts: [...extra, ...view.alerts] };
 }
 
 export async function listTeamMetricViews(userId: string): Promise<Array<{

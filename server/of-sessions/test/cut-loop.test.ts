@@ -55,3 +55,64 @@ test("fans online entre cortes: apagado por defecto (0 minutos)", () => {
   assert.equal(pickOnlineAccount([account({ lastOnlineAt: "2026-11-28T09:50:00Z" })], NOW, 30), null);
   assert.equal(pickOnlineAccount([account({ allowed: false })], NOW, 30), null);
 });
+
+import { startCutLoop } from "../sync/cut-loop.ts";
+
+async function runLoop(firstCut: (() => Promise<boolean>) | undefined, accounts: CutAccount[]): Promise<{ synced: string[]; finished: number; started: number }> {
+  const synced: string[] = [];
+  let finished = 0;
+  let started = 0;
+  let ticks = 0;
+  const loop = startCutLoop({
+    hours: HOURS,
+    onlineMin: 0,
+    accounts: async () => accounts,
+    sync: async (row) => {
+      synced.push(row.accountId);
+    },
+    online: async () => undefined,
+    firstCut,
+    cutStarted: async () => {
+      started += 1;
+    },
+    cutFinished: async () => {
+      finished += 1;
+    },
+    now: () => NOW,
+    sleep: async () => {
+      ticks += 1;
+      await new Promise((resolve) => setImmediate(resolve));
+    },
+    random: () => 0,
+    marginMinMs: 1,
+    marginMaxMs: 1,
+    log: () => undefined,
+  });
+  while (ticks < 12) await new Promise((resolve) => setImmediate(resolve));
+  loop.stop();
+  return { synced, finished, started };
+}
+
+test("sin ningún corte guardado se lee al arrancar aunque ya hubiera un intento tras el último corte", async () => {
+  const done = account({ lastAttemptAt: "2026-11-28T07:10:00Z" });
+  const withFirst = await runLoop(async () => true, [done, account({ accountId: "a2", creatorId: "c-b", lastAttemptAt: "2026-11-28T07:20:00Z" })]);
+  assert.deepEqual(withFirst.synced.sort(), ["a1", "a2"]);
+  assert.equal(withFirst.started, 1);
+  assert.equal(withFirst.finished, 1);
+  const without = await runLoop(async () => false, [done]);
+  assert.deepEqual(without.synced, []);
+});
+
+test("la lectura inicial respeta la allowlist, las pausas y las sesiones caídas", async () => {
+  const result = await runLoop(async () => true, [
+    account({ accountId: "x", allowed: false }),
+    account({ accountId: "y", paused: true }),
+    account({ accountId: "z", status: "expired" as CutAccount["status"] }),
+  ]);
+  assert.deepEqual(result.synced, []);
+});
+
+test("la lectura inicial lee cada cuenta una sola vez", async () => {
+  const result = await runLoop(async () => true, [account({ lastAttemptAt: "2026-11-28T07:10:00Z" })]);
+  assert.deepEqual(result.synced, ["a1"]);
+});
