@@ -6,7 +6,7 @@ import { liveChromeOrigin, widevineProbe } from "./chrome.ts";
 import { hideLiveProcess, liveProcessHideEnabled, tuckLiveWindow } from "./window.ts";
 import { deskCommand, LIVE_BLOCKED_NOTICE, liveCastFps, liveCastQuality, liveCastStall, liveControlAllowed, liveFrameAllowed, liveFps, liveHistoryGuardSource, liveLog, liveOpenPageAllowed, livePageMetrics, liveQuality, liveSocketGuardSource, liveThreadClick, liveTypingEnabled, mapPointer, type DeskInput } from "./desk.ts";
 import { lastLivePage, rememberLivePage, safeLivePage } from "./last-page.ts";
-import { liveSectionPageUrl, type LiveSection } from "./sections.ts";
+import { deskPageOpenPrefix, deskPagePathMatches, deskPageUrl, liveSectionPageUrl, parseDeskPage, type DeskPage, type DeskPageId, type LiveSection } from "./sections.ts";
 import { BROWSER_FINGERPRINT } from "../sessions/browser-factory.ts";
 import { isLiveChallengeText, isLiveLoginText, LIVE_CHALLENGE_NOTICE, LIVE_LOGIN_NOTICE } from "./challenge.ts";
 import { loginUserAgentOverride } from "./fingerprint.ts";
@@ -18,8 +18,15 @@ export type LiveFrame = { jpeg: Buffer; width: number; height: number };
 export type LiveCast = {
   send(input: DeskInput): Promise<void>;
   acceptFile(file: { name: string; mimeType: string; buffer: Buffer } | null): void;
+  /** Cambia de entrada del menú de Operativa en la misma página del navegador. Sin efecto fuera de Operativa. */
+  goto?(page: DeskPageId | null): Promise<void>;
   stop(): Promise<void>;
 };
+
+/** Prefijo de una zona cerrada que la dueña eligió en el menú. La guarda de la página lo lee en cada comprobación. */
+function openPrefixSource(prefix: string): string {
+  return `window.__fanlinkOpenPrefix = ${JSON.stringify(prefix)};`;
+}
 
 export async function startLiveCast(input: {
   context: BrowserContext;
@@ -28,6 +35,7 @@ export async function startLiveCast(input: {
   fanKey: string | null;
   accountUserId: string | null;
   section?: LiveSection;
+  page?: DeskPageId | null;
   onFrame: (frame: LiveFrame) => void;
   onFile: () => void;
   onOwnMessage: (message: { messageId: string; body: string; priceCents: number | null; sentAt: string }) => void;
@@ -50,9 +58,10 @@ export async function startLiveCast(input: {
   }
   markLivePage(page);
   const typing = liveTypingEnabled();
+  let deskPage: DeskPage | null = section === "notifications" ? parseDeskPage(input.page ?? null) : null;
   const homeUrl = section === "chat"
     ? chatPageUrl("https://onlyfans.com/my/chats", input.threadKey, "onlyfans")
-    : (lastLivePage(input.accountId) ?? liveSectionPageUrl(section));
+    : deskPage ? deskPageUrl(deskPage) : (lastLivePage(input.accountId) ?? liveSectionPageUrl(section));
   let safeUrl = homeUrl;
   const fingerprint = BROWSER_FINGERPRINT.viewport;
   let viewport: { width: number; height: number } = { width: fingerprint.width, height: fingerprint.height };
@@ -87,11 +96,13 @@ export async function startLiveCast(input: {
     guardsArmed = true;
     const history = liveHistoryGuardSource(safeUrl, section);
     const sockets = liveSocketGuardSource(typing);
+    const open = openPrefixSource(deskPageOpenPrefix(deskPage));
+    await page.addInitScript({ content: open });
     await page.addInitScript({ content: history });
     await page.addInitScript({ content: sockets });
     await page.evaluate((sources) => {
       for (const source of sources) Function(source)();
-    }, [history, sockets]).catch(() => undefined);
+    }, [open, history, sockets]).catch(() => undefined);
   };
   page.on("popup", (popup) => {
     void popup.close().catch(() => undefined);
@@ -105,7 +116,7 @@ export async function startLiveCast(input: {
     const url = frame.url();
     if (!url || url === "about:blank" || url.startsWith("chrome-error:")) return;
     void keepHidden("navegacion");
-    if (liveFrameAllowed(url, section)) {
+    if (liveFrameAllowed(url, section, deskPage)) {
       if (section === "notifications" && liveOpenPageAllowed(url)) {
         const safe = safeLivePage(url);
         if (safe) {
@@ -241,8 +252,12 @@ export async function startLiveCast(input: {
   windowWatch.unref?.();
   await keepHidden("antes");
   const here = page.url();
-  const already = here.includes("onlyfans.com") && liveFrameAllowed(here, section);
-  if (!already) await page.goto(safeUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
+  const already = here.includes("onlyfans.com") && (deskPage ? onDeskPage(here, deskPage) : liveFrameAllowed(here, section));
+  if (!already) {
+    // Antes de cargar, para que las guardas de una sala anterior no devuelvan la página al inicio.
+    await page.addInitScript({ content: openPrefixSource(deskPageOpenPrefix(deskPage)) }).catch(() => undefined);
+    await page.goto(safeUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
+  }
   await documentChecked;
   const drm = await page.evaluate(widevineProbe).catch(() => false);
   const binary = input.context.browser()?.version() ?? "desconocida";
@@ -410,6 +425,20 @@ export async function startLiveCast(input: {
       fileWait?.(file);
       fileWait = null;
     },
+    async goto(next) {
+      if (stopped || reportedClosed || section !== "notifications") return;
+      const target = parseDeskPage(next ?? null);
+      if (!target || target.id === deskPage?.id) return;
+      deskPage = target;
+      safeUrl = deskPageUrl(target);
+      const source = openPrefixSource(deskPageOpenPrefix(target));
+      await page.addInitScript({ content: source }).catch(() => undefined);
+      await page.evaluate(source).catch(() => undefined);
+      goingHome = true;
+      await page.goto(safeUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined).finally(() => {
+        goingHome = false;
+      });
+    },
     async stop() {
       if (stopped) return;
       stopped = true;
@@ -454,6 +483,15 @@ function reusableLivePage(context: BrowserContext, needle: string): Page | null 
     }
   });
   return blank ?? pages[0] ?? null;
+}
+
+function onDeskPage(raw: string, page: DeskPage): boolean {
+  try {
+    const url = new URL(raw);
+    return (url.hostname === "onlyfans.com" || url.hostname === "www.onlyfans.com") && deskPagePathMatches(page, url.pathname);
+  } catch {
+    return false;
+  }
 }
 
 function pathOf(raw: string): string {

@@ -1,4 +1,4 @@
-import { liveSectionPrefixes, liveSectionPathAllowed, type LiveSection } from "./sections.ts";
+import { deskPagePathMatches, liveSectionPrefixes, liveSectionPathAllowed, type DeskPage, type LiveSection } from "./sections.ts";
 
 export type LiveRole = "control" | "view";
 
@@ -267,7 +267,9 @@ export function liveHistoryGuardSource(chatUrl = "", section: LiveSection = "cha
           }
           return false;
         }
-        if (parts.some((part) => allow.denied.includes(part))) return false;
+        const open = window.__fanlinkOpenPrefix || "";
+        const underOpen = open !== "" && (path === open || path.startsWith(open + "/"));
+        if (!underOpen && parts.some((part) => allow.denied.includes(part))) return false;
         if (path.includes("/cdn-cgi/")) return true;
         if (allow.pageOnly) {
           return allow.prefixes.some((prefix) => path === prefix || path.startsWith(prefix + "/"));
@@ -295,6 +297,9 @@ export function liveHistoryGuardSource(chatUrl = "", section: LiveSection = "cha
     const watch = () => {
       const heading = document.querySelector("h1");
       const text = (heading && heading.textContent ? heading.textContent : "").trim();
+      const open = window.__fanlinkOpenPrefix || "";
+      const here = location.pathname.toLowerCase();
+      if (open !== "" && (here === open || here.startsWith(open + "/"))) return;
       if (chatUrl && banned.test(text)) location.replace(chatUrl);
     };
     const arm = () => {
@@ -610,10 +615,27 @@ export function liveOpenPageAllowed(raw: string): boolean {
 }
 
 /** El marco principal de Operativa puede recorrer OnlyFans, menos las zonas cerradas. */
-export function liveFrameAllowed(raw: string, section: LiveSection): boolean {
+export function liveFrameAllowed(raw: string, section: LiveSection, page: DeskPage | null = null): boolean {
   if (liveRequestAllowed(raw, "GET", false, section)) return true;
   if (section !== "notifications") return false;
-  return liveOpenPageAllowed(raw);
+  return liveOpenPageAllowed(raw) || liveDeskPageOpen(raw, page);
+}
+
+/**
+ * Estados, estadísticas, banca y ajustes solo se abren si la dueña los eligió en el menú de Operativa,
+ * y solo con la ruta de esa entrada. Cualquier otra zona cerrada sigue cerrada.
+ */
+export function liveDeskPageOpen(raw: string, page: DeskPage | null): boolean {
+  if (!page?.restricted) return false;
+  let url: URL;
+  try {
+    url = new URL(raw, "https://onlyfans.com");
+  } catch {
+    return false;
+  }
+  const host = url.hostname.toLowerCase();
+  if (host !== "onlyfans.com" && host !== "www.onlyfans.com") return false;
+  return deskPagePathMatches(page, url.pathname);
 }
 
 /** El reto se resuelve en el visor. No habilita el envío ni los archivos. */

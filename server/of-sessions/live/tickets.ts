@@ -1,4 +1,4 @@
-import type { LiveSection } from "./sections.ts";
+import type { DeskPageId, LiveSection } from "./sections.ts";
 
 export type LiveTicket = {
   userId: string;
@@ -8,6 +8,8 @@ export type LiveTicket = {
   fanKey: string | null;
   accountUserId: string | null;
   section: LiveSection;
+  /** Entrada del menú de Operativa. Solo con la sección «notifications». */
+  page: DeskPageId | null;
 };
 
 const tickets = globalTickets();
@@ -20,9 +22,9 @@ function globalTickets(): Map<string, LiveTicket & { expires: number }> {
   return holder.__fanlinkLiveTickets;
 }
 
-export function issueLiveTicket(ticket: Omit<LiveTicket, "section"> & { section?: LiveSection }, now = Date.now()): string {
+export function issueLiveTicket(ticket: Omit<LiveTicket, "section" | "page"> & { section?: LiveSection; page?: DeskPageId | null }, now = Date.now()): string {
   const id = crypto.randomUUID();
-  tickets.set(id, { ...ticket, section: ticket.section ?? "chat", expires: now + 30_000 });
+  tickets.set(id, { ...ticket, section: ticket.section ?? "chat", page: ticket.page ?? null, expires: now + 30_000 });
   return id;
 }
 
