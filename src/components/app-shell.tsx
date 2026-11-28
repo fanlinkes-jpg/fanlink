@@ -3,7 +3,8 @@ import { unreadBubbleText, readInboxCreator, resolveInboxCreator, showsCreatorRa
 import { CreatorRail } from "@/components/creator-rail";
 import { bindUiUser, setSfwEnabled, useSfw } from "@/lib/ui-prefs";
 import { TranslateControl } from "@/features/translate-ui";
-import { useEffect, useState, type ComponentType, type ReactNode } from "react";
+import { useEffect, useState, type ComponentType, type FocusEvent, type PointerEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
   Home,
   LayoutGrid,
@@ -24,7 +25,6 @@ import {
   canAccessPath,
   navRoleFromAccess,
   pathMatchesNavLink,
-  sidebarTooltip,
   visibleNavBlocks,
   type NavLink,
 } from "@/lib/nav-config";
@@ -55,6 +55,10 @@ function NavRouteLink({
   item: NavLink;
   className?: string;
   onClick?: () => void;
+  onPointerEnter?: (event: PointerEvent<HTMLAnchorElement>) => void;
+  onPointerLeave?: (event: PointerEvent<HTMLAnchorElement>) => void;
+  onFocus?: (event: FocusEvent<HTMLAnchorElement>) => void;
+  onBlur?: (event: FocusEvent<HTMLAnchorElement>) => void;
   "aria-label"?: string;
   title?: string;
   children: ReactNode;
@@ -161,6 +165,40 @@ function HeaderTools({ devMode, displayName }: { devMode: boolean; displayName: 
   );
 }
 
+type SidebarTip = { label: string; left: number; top: number };
+
+/**
+ * Tooltip de la barra lateral. Va en un portal sobre `body`, con position fixed y z-index alto: ni el overflow de un
+ * contenedor ni el z-index del contenido lo recortan o tapan, y no depende de `:hover` de CSS (que Tailwind 4 solo
+ * activa con `(hover: hover)`). Aparece con un fundido de 150 ms.
+ */
+function SidebarTooltip({ tip }: { tip: SidebarTip | null }) {
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    if (!tip) {
+      setShown(false);
+      return;
+    }
+    const frame = requestAnimationFrame(() => setShown(true));
+    return () => cancelAnimationFrame(frame);
+  }, [tip?.label, tip?.top]);
+  if (!tip || typeof document === "undefined") return null;
+  return createPortal(
+    <div
+      role="tooltip"
+      data-sidebar-tooltip
+      style={{ position: "fixed", left: tip.left, top: tip.top, transform: "translateY(-50%)" }}
+      className={cn(
+        "pointer-events-none z-[1000] whitespace-nowrap rounded-md bg-[#1d2433] px-2.5 py-1.5 text-xs font-medium text-white shadow-lg transition-opacity duration-150",
+        shown ? "opacity-100" : "opacity-0",
+      )}
+    >
+      {tip.label}
+    </div>,
+    document.body,
+  );
+}
+
 /** Burbuja roja con los chats sin leer. Sin número no se pinta. */
 function UnreadBubble({ text, inline }: { text: string; inline?: boolean }) {
   return (
@@ -203,6 +241,12 @@ function ShellFrame({
   const hasChat = blocks.some((block) => block.id === "chat");
   const chatUnread = useChatUnreadTotal(creators.map((creator) => creator.id), hasChat);
   const chatBubble = unreadBubbleText(chatUnread);
+  const [tip, setTip] = useState<SidebarTip | null>(null);
+  const showTip = (label: string, node: HTMLElement) => {
+    const box = node.getBoundingClientRect();
+    setTip({ label, left: box.right + 8, top: box.top + box.height / 2 });
+  };
+  const hideTip = () => setTip(null);
 
   return (
     <div className="flex h-dvh max-h-dvh min-h-0 overflow-hidden bg-bg text-fg">
@@ -215,24 +259,25 @@ function ShellFrame({
             <NavRouteLink
               key={block.id}
               item={block}
-              aria-label={block.id === "chat" && chatBubble ? `${sidebarTooltip(block)}, ${chatBubble} sin leer` : sidebarTooltip(block)}
+              onPointerEnter={(event) => showTip(block.label, event.currentTarget)}
+              onPointerLeave={hideTip}
+              onFocus={(event) => showTip(block.label, event.currentTarget)}
+              onBlur={hideTip}
+              onClick={hideTip}
+              aria-label={block.id === "chat" && chatBubble ? `${block.label}, ${chatBubble} sin leer` : block.label}
               className={cn(
-                "group relative grid h-10 w-10 place-items-center rounded-xl",
+                "relative grid h-10 w-10 place-items-center rounded-xl",
                 active ? "bg-[#3b6cff] text-white" : "text-muted hover:bg-raised",
               )}
             >
               <Icon className="h-5 w-5" />
               {block.id === "chat" && chatBubble ? <UnreadBubble text={chatBubble} /> : null}
-              <span
-                aria-hidden="true"
-                className="pointer-events-none absolute left-full top-1/2 z-50 ml-2 -translate-y-1/2 whitespace-nowrap rounded-md bg-[#1d2433] px-2.5 py-1.5 text-xs font-medium text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100"
-              >
-                {sidebarTooltip(block)}
-              </span>
             </NavRouteLink>
           );
         })}
       </aside>
+
+      <SidebarTooltip tip={tip} />
 
       {mobile && (
         <div className="fixed inset-0 z-40 md:hidden">

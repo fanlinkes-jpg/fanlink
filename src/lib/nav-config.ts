@@ -62,38 +62,20 @@ const FUNCTION_PERMS = ["campanas", "vault"] as const satisfies readonly TeamPer
 
 export const NAV_LINKS: NavLink[] = [
   { id: "dashboard", label: "Dashboard", hint: "Métricas e informes", to: "/", roles: ALL_NAV_ROLES },
-  { id: "operativa", label: "Operativa", hint: "Página real de OnlyFans", to: "/notificaciones", roles: OWNER_ROLES },
+  { id: "operativa", label: "Operaciones", hint: "Página real de OnlyFans", to: "/notificaciones", roles: OWNER_ROLES },
   { id: "chat", label: "Chat", hint: "Conversaciones en curso", to: "/mensajes", roles: ALL_NAV_ROLES, perm: "mensajes" },
   {
     id: "funciones-inteligentes",
-    label: "Funciones inteligentes",
+    label: "Mensajes inteligentes",
     hint: "Masivos, listas, bóveda y guiones",
     to: "/funciones",
     roles: STAFF_ROLES,
     anyPerm: FUNCTION_PERMS,
   },
-  { id: "administrar", label: "Administrar", hint: "Creadoras y chatters", to: "/administrar", roles: AGENCY_ROLES, perm: "equipo" },
-  { id: "proxys", label: "Proxys", hint: "IP de cada cuenta", to: "/proxys", roles: AGENCY_ROLES, perm: "equipo" },
+  { id: "administrar", label: "Personal", hint: "Creadoras y chatters", to: "/administrar", roles: AGENCY_ROLES, perm: "equipo" },
+  { id: "proxys", label: "Proxy", hint: "IP de cada cuenta", to: "/proxys", roles: AGENCY_ROLES, perm: "equipo" },
   { id: "configuracion", label: "Configuración", hint: "Plan, facturación y ajustes", to: "/configuracion", roles: AGENCY_ROLES },
 ];
-
-/**
- * Nombre que sale en el tooltip y en el aria-label de la barra lateral de iconos, en el orden de los iconos.
- * No sustituye a `label` (título de página y menú móvil): solo es el rótulo corto del icono.
- */
-export const SIDEBAR_TOOLTIPS: Record<string, string> = {
-  dashboard: "Dashboard",
-  operativa: "Operaciones",
-  chat: "Chat",
-  "funciones-inteligentes": "Mensajes inteligentes",
-  administrar: "Personal",
-  proxys: "Proxy",
-  configuracion: "Configuración",
-};
-
-export function sidebarTooltip(link: Pick<NavLink, "id" | "label">): string {
-  return SIDEBAR_TOOLTIPS[link.id] ?? link.label;
-}
 
 const LEGACY_GATED_PATHS: PathGate[] = [
   { prefix: "/creadoras", roles: AGENCY_ROLES, perm: "equipo" },

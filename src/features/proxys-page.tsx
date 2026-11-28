@@ -9,7 +9,7 @@ export function ProxysPage() {
   return (
     <div className="space-y-4 p-4 md:p-6">
       <div>
-        <h1 className="font-display text-2xl font-semibold">Proxys</h1>
+        <h1 className="font-display text-2xl font-semibold">Proxy</h1>
         <p className="text-sm text-muted">IP de cada cuenta. Esta pantalla reutiliza el formulario que ya existía en creadoras.</p>
       </div>
       <div className="grid gap-3 md:grid-cols-2">

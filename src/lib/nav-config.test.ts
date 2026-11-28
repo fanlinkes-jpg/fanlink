@@ -3,7 +3,6 @@ import { test } from "node:test";
 import type { TeamAccess } from "./access-policy.ts";
 import {
   NAV_LINKS,
-  sidebarTooltip,
   canAccessPath,
   canOpenMessagePanel,
   canOpenReports,
@@ -38,16 +37,8 @@ test("el menú son siete secciones, sin submenús, en el orden acordado", () => 
   );
   assert.deepEqual(
     NAV_LINKS.map((block) => block.label),
-    ["Dashboard", "Operativa", "Chat", "Funciones inteligentes", "Administrar", "Proxys", "Configuración"],
-  );
-});
-
-test("el tooltip de cada icono sale en el orden pedido", () => {
-  assert.deepEqual(
-    NAV_LINKS.map((block) => sidebarTooltip(block)),
     ["Dashboard", "Operaciones", "Chat", "Mensajes inteligentes", "Personal", "Proxy", "Configuración"],
   );
-  assert.equal(sidebarTooltip({ id: "otro", label: "Otro" }), "Otro");
 });
 
 test("la dueña ve las siete secciones y la operativa", () => {
