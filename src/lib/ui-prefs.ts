@@ -1,11 +1,13 @@
 import { useSyncExternalStore } from "react";
+import { TRANSLATE_LANGUAGES, isTranslateLanguage, type TranslateLanguage } from "./translator.ts";
 
-export const COMPOSER_LANGUAGES = [
-  { id: "es", label: "Español" },
-  { id: "en", label: "Inglés" },
-] as const;
+/** Idioma al que se traduce lo del fan. Por defecto español. */
+export const COMPOSER_LANGUAGES = TRANSLATE_LANGUAGES;
 
-export type ComposerLanguage = (typeof COMPOSER_LANGUAGES)[number]["id"];
+export type ComposerLanguage = TranslateLanguage;
+
+/** Cómo se enseña la traducción automática: bajo el original o en su lugar. */
+export type TranslateMode = "below" | "replace";
 
 type StorageLike = {
   getItem: (key: string) => string | null;
@@ -17,6 +19,8 @@ const listeners = new Set<() => void>();
 let userId = "local";
 let language: ComposerLanguage = "es";
 let sfw = false;
+let autoTranslate = false;
+let translateMode: TranslateMode = "below";
 let hydrated = false;
 
 function languageKey(id: string): string {
@@ -27,9 +31,33 @@ function sfwKey(id: string): string {
   return `fanlink.ui.${id}.sfw`;
 }
 
+function translateAutoKey(id: string): string {
+  return `fanlink.ui.${id}.translate.auto`;
+}
+
+function translateModeKey(id: string): string {
+  return `fanlink.ui.${id}.translate.mode`;
+}
+
 export function readComposerLanguage(storage: StorageLike | null, id: string): ComposerLanguage {
   const raw = storage?.getItem(languageKey(id)) ?? null;
-  return raw === "en" ? "en" : "es";
+  return isTranslateLanguage(raw) ? raw : "es";
+}
+
+export function readTranslateAuto(storage: StorageLike | null, id: string): boolean {
+  return storage?.getItem(translateAutoKey(id)) === "1";
+}
+
+export function readTranslateMode(storage: StorageLike | null, id: string): TranslateMode {
+  return storage?.getItem(translateModeKey(id)) === "replace" ? "replace" : "below";
+}
+
+export function writeTranslateAuto(storage: StorageLike | null, id: string, next: boolean): void {
+  storage?.setItem(translateAutoKey(id), next ? "1" : "0");
+}
+
+export function writeTranslateMode(storage: StorageLike | null, id: string, next: TranslateMode): void {
+  storage?.setItem(translateModeKey(id), next);
 }
 
 export function readSfw(storage: StorageLike | null, id: string): boolean {
@@ -64,6 +92,8 @@ function hydrate(): void {
   const storage = browserStorage();
   language = readComposerLanguage(storage, userId);
   sfw = readSfw(storage, userId);
+  autoTranslate = readTranslateAuto(storage, userId);
+  translateMode = readTranslateMode(storage, userId);
   paintSfw();
 }
 
@@ -92,9 +122,33 @@ export function composerLanguage(): ComposerLanguage {
 
 export function setComposerLanguage(next: ComposerLanguage): void {
   hydrate();
-  if (next !== "es" && next !== "en") return;
+  if (!isTranslateLanguage(next)) return;
   language = next;
   writeComposerLanguage(browserStorage(), userId, next);
+  emit();
+}
+
+export function autoTranslateEnabled(): boolean {
+  hydrate();
+  return autoTranslate;
+}
+
+export function setAutoTranslate(next: boolean): void {
+  hydrate();
+  autoTranslate = next;
+  writeTranslateAuto(browserStorage(), userId, next);
+  emit();
+}
+
+export function currentTranslateMode(): TranslateMode {
+  hydrate();
+  return translateMode;
+}
+
+export function setTranslateMode(next: TranslateMode): void {
+  hydrate();
+  translateMode = next === "replace" ? "replace" : "below";
+  writeTranslateMode(browserStorage(), userId, translateMode);
   emit();
 }
 
@@ -118,6 +172,14 @@ function subscribe(listener: () => void): () => void {
 
 export function useComposerLanguage(): ComposerLanguage {
   return useSyncExternalStore(subscribe, composerLanguage, () => "es" as ComposerLanguage);
+}
+
+export function useAutoTranslate(): boolean {
+  return useSyncExternalStore(subscribe, autoTranslateEnabled, () => false);
+}
+
+export function useTranslateMode(): TranslateMode {
+  return useSyncExternalStore(subscribe, currentTranslateMode, () => "below" as TranslateMode);
 }
 
 export function useSfw(): boolean {
