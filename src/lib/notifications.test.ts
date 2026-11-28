@@ -306,6 +306,8 @@ test("filtra por pestaña, texto y fechas, y cuenta no leídas", () => {
   assert.equal(ofReadType("agency"), null);
   assert.equal(ofReadType("other"), null);
   assert.equal(ofReadType("tip"), "tip");
+  assert.equal(ofReadType("tag"), "tags");
+  assert.deepEqual(visibleMarkScope(["tag"], "member", false), { all: false, types: ["tags"] });
   assert.deepEqual(visibleMarkScope(["agency", "tip"], "member", true), { all: false, types: ["tip"] });
   assert.deepEqual(visibleMarkScope(["agency", "tip"], "owner", true), { all: true, types: ["tip"] });
   const own = parseNotificationPayload({

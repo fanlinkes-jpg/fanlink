@@ -707,3 +707,55 @@ test("solo me gusta, PPV, propinas y suscripciones llevan al chat; el resto solo
   assert.equal(notificationActionText("tip"), "Ha enviado una propina");
   assert.equal(notificationActionText("other"), null);
 });
+
+test("abrir Etiquetas marca el type tags con POST firmado y relee users/me; apagado no llama", async () => {
+  const urls: string[] = [];
+  const methods: string[] = [];
+  const off = await dispatchNotificationMark({
+    flag: undefined,
+    allowlist: "3zk7kbr",
+    account: { creatorId: "3zk7kbr", accountId: "acc", handle: null, userId: null, label: null },
+    state: state(),
+    deps: deps(urls, () => json(200, {}), methods),
+    scope: { all: false, types: ["tags"] },
+  });
+  assert.equal(off.wrote, false);
+  assert.equal(urls.length, 0);
+  const on = await dispatchNotificationMark({
+    flag: "true",
+    allowlist: "3zk7kbr",
+    account: { creatorId: "3zk7kbr", accountId: "acc", handle: null, userId: null, label: null },
+    state: state(),
+    deps: deps(urls, (url) => {
+      const pathName = new URL(url).pathname;
+      if (pathName === "/api2/v2/users/me") return json(200, { notificationsCount: 1, chatMessagesCount: 6, newTagsCount: 0 });
+      if (pathName.endsWith("/notifications/count")) return json(200, { all: 1, tags: 0 });
+      return json(200, { counters: { all: 1 } });
+    }, methods),
+    scope: { all: false, types: ["tags"] },
+  });
+  assert.equal(on.wrote, true);
+  assert.equal(new URL(urls[0] ?? "").pathname, "/api2/v2/users/notifications/read/tags");
+  assert.equal(methods[0], "POST");
+  assert.equal(methods.filter((method) => method === "POST").length, 1);
+  assert.equal(on.counts?.tags, 0);
+});
+
+test("la fila de Etiquetas enseña quién etiquetó y el mensaje o medio, venga como venga", () => {
+  const rows = parseNotificationPayload({
+    list: [
+      { id: 1, createdAt: "2026-11-27T20:15:00.000Z", text: "mentioned you in a message", creator: { id: 777, name: "Lia", username: "lia_oficial" }, message: { text: "mira esto @yo" }, media: [{ type: "photo" }, { type: "video" }, { type: "photo" }] },
+      { id: 2, createdAt: "2026-11-27T20:16:00.000Z", text: "<a href=\"https://onlyfans.com/nora\">Nora</a> mentioned you in a message", replacePairs: { "{MESSAGE_LINK}": "<a href='https://onlyfans.com/my/chats/chat/321'>message</a>" } },
+      { id: 3, createdAt: "2026-11-27T20:17:00.000Z", text: "mentioned you in a message" },
+    ],
+  }, { listType: "tags" });
+  assert.equal(rows[0]?.fanName, "Lia");
+  assert.equal(rows[0]?.fanHandle, "lia_oficial");
+  assert.equal(rows[0]?.fanKey, "777");
+  assert.equal(rows[0]?.postText, "mira esto @yo · Medios: 2 fotos, 1 vídeo");
+  assert.equal(rows[1]?.fanName, "Nora");
+  assert.equal(rows[1]?.fanHandle, "nora");
+  assert.equal(rows[1]?.postLink, "https://onlyfans.com/my/chats/chat/321");
+  assert.equal(rows[2]?.fanName, null);
+  assert.equal(rows[2]?.postText, null);
+});

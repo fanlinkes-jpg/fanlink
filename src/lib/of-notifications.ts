@@ -89,7 +89,7 @@ export const listCreatorNotifications = createServerFn({ method: "GET" })
 
 export const markCreatorNotificationsRead = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { creatorId: string; keys: string[] | null }) => input)
+  .validator((input: { creatorId: string; keys: string[] | null; tab?: "tags" | null }) => input)
   .handler(async ({ context, data }): Promise<NotificationMarkResult> => {
     const { getSql } = await import("@/lib/db");
     const { ensureStaff } = await import("@/lib/workspace-store");
@@ -104,6 +104,8 @@ export const markCreatorNotificationsRead = createServerFn({ method: "POST" })
     const visible = await markableNotifications(sql, access, data.creatorId, data.keys);
     const updated = await markNotificationsSeen(sql, data.creatorId, access.userId, visible.map((row) => row.key));
     const scope = visibleMarkScope(visible.map((row) => row.kind), access.role, data.keys == null);
+    // Abrir Etiquetas marca el type `tags` en OnlyFans aunque las filas ya estén vistas en el CRM.
+    if (data.tab === "tags" && !scope.all && !scope.types.includes("tags")) scope.types.push("tags");
     const sync = await notificationSyncState(sql, data.creatorId);
     const fanlinkUnread = sync.ok ? await countFanlinkUnread(sql, data.creatorId, access.userId, access.role) : null;
     const sessions = await getOfSessionManager();

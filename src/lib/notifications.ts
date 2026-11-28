@@ -447,7 +447,10 @@ const NOTIFICATION_TYPE_KIND = new Map<string, NotificationKind>(NOTIFICATION_TY
 /** El tipo que OnlyFans pone en la URL de cada pestaña. */
 /**
  * Tipo de `POST /users/notifications/read/{type}` según la ruta de la pastilla
- * en el bundle. Agencia, otros y etiquetas no tienen esa ruta.
+ * en el bundle. Agencia y otros no tienen esa ruta.
+ * Etiquetas sí: al abrir la pestaña, el cliente web llama a `readNotificationsByType()`
+ * con el type de la pestaña (`tags`, módulo 463670) y eso hace POST /users/notifications/read/tags
+ * (bundle 202611271546-053fafb120, chunk notifications, `infiniteHandler`). Solo se salta en `all` y `deactivated_media`.
  */
 export function ofReadType(kind: NotificationKind): string | null {
   switch (kind) {
@@ -470,6 +473,7 @@ export function ofReadType(kind: NotificationKind): string | null {
     case "system":
       return "deactivated_media";
     case "tag":
+      return "tags";
     case "agency":
     case "other":
       return null;
@@ -572,7 +576,7 @@ function parseTagMentions(value: unknown, options: ParseNotificationOptions): Pa
     if (!item || typeof item !== "object" || Array.isArray(item)) continue;
     const base = item as Record<string, unknown>;
     const inner = nested(base, ["releaseForm", "form", "mention", "tag"]);
-    const record: Record<string, unknown> = inner ? { ...inner, ...base } : base;
+    const record: Record<string, unknown> = withTagger(inner ? { ...inner, ...base } : base);
     const occurredAt = firstTime(record, ["createdAt", "created_at", "date", "createdDate", "publishedAt", "postedAt"]);
     const fan = fanOf(record);
     const self = options.accountUserId != null && fan.fanKey === options.accountUserId;
@@ -580,6 +584,7 @@ function parseTagMentions(value: unknown, options: ParseNotificationOptions): Pa
     const key = id ? `tag:${id}` : occurredAt ? ["tag", occurredAt, fan.fanKey ?? ""].join("\u001f") : null;
     if (!key) continue;
     const card = fanCard(record);
+    const content = tagContent(record);
     out.push({
       key,
       kind: "tag",
@@ -597,13 +602,97 @@ function parseTagMentions(value: unknown, options: ParseNotificationOptions): Pa
       renewAuto: null,
       fanSeenAt: card.fanSeenAt,
       postRef: card.postRef,
-      postLink: card.postLink,
-      postText: card.postText,
+      postLink: card.postLink ?? content.link,
+      postText: card.postText ?? content.text,
       ofType: "tags",
       messageRef: null,
     });
   }
   return out;
+}
+
+const TAGGER_KEYS = ["creator", "owner", "from", "sender", "mentionedBy", "taggedBy", "tagger", "performer", "partner", "taggedUser", "author"] as const;
+
+/**
+ * Quién etiquetó. Normalmente es `user`, como en cualquier aviso de OnlyFans. Si la fila trae a la persona
+ * bajo otra clave, o solo como enlace dentro del texto, se pone en `user` para que nombre, @usuario,
+ * foto y id salgan igual que en el resto de avisos.
+ */
+function withTagger(record: Record<string, unknown>): Record<string, unknown> {
+  if (noticePeople(record).length > 0) return record;
+  for (const key of TAGGER_KEYS) {
+    const value = record[key];
+    if (value && typeof value === "object" && !Array.isArray(value)) return { ...record, user: value };
+  }
+  for (const value of Object.values(record)) {
+    if (value && typeof value === "object" && !Array.isArray(value) && typeof (value as Record<string, unknown>).username === "string") {
+      return { ...record, user: value };
+    }
+  }
+  const linked = taggerFromLinks(record);
+  return linked ? { ...record, user: linked } : record;
+}
+
+const NOT_A_PROFILE = new Set(["my", "chats", "posts", "api2", "message", "messages", "notifications", "collections", "release-forms"]);
+
+function linkBags(record: Record<string, unknown>): string[] {
+  const chunks: string[] = [];
+  const text = firstString(record, ["text", "message", "body"]);
+  if (text) chunks.push(text);
+  const pairs = record.replacePairs;
+  if (pairs && typeof pairs === "object" && !Array.isArray(pairs)) {
+    for (const value of Object.values(pairs as Record<string, unknown>)) {
+      if (typeof value === "string") chunks.push(value);
+    }
+  }
+  return chunks;
+}
+
+function taggerFromLinks(record: Record<string, unknown>): Record<string, unknown> | null {
+  for (const chunk of linkBags(record)) {
+    const match = /<a[^>]*href=["']?(?:https?:\/\/)?(?:www\.)?onlyfans\.com\/([A-Za-z0-9_.-]+)\/?["']?[^>]*>([^<]*)<\/a>/i.exec(chunk);
+    const segment = match?.[1];
+    if (!segment || NOT_A_PROFILE.has(segment.toLowerCase())) continue;
+    const label = (match?.[2] ?? "").replace(/^@/, "").trim();
+    const numeric = /^\d{4,18}$/.test(segment);
+    return {
+      ...(numeric ? { id: segment } : { username: segment }),
+      name: label && label !== segment ? label : null,
+      ...(numeric && label ? { username: label } : {}),
+    };
+  }
+  return null;
+}
+
+/** El mensaje o medio al que se refiere la etiqueta, si la fila lo trae: texto, tipos de medio y enlace. */
+function tagContent(record: Record<string, unknown>): { text: string | null; link: string | null } {
+  const bag = nested(record, ["message", "post", "entity", "media"]);
+  const own = bag ? firstString(bag, ["text", "rawText", "body"]) : null;
+  const text = own ? own.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() || null : null;
+  const lists = [record.media, record.mediaFiles, bag?.media, bag?.mediaFiles].filter(Array.isArray) as unknown[][];
+  const counts = new Map<string, number>();
+  for (const item of lists[0] ?? []) {
+    if (!item || typeof item !== "object") continue;
+    const type = firstString(item as Record<string, unknown>, ["type", "mediaType"])?.toLowerCase();
+    if (!type) continue;
+    counts.set(type, (counts.get(type) ?? 0) + 1);
+  }
+  const names: Record<string, [string, string]> = { photo: ["foto", "fotos"], video: ["vídeo", "vídeos"], gif: ["gif", "gifs"], audio: ["audio", "audios"] };
+  const media = [...counts].map(([type, count]) => {
+    const pair = names[type];
+    return pair ? `${count} ${count === 1 ? pair[0] : pair[1]}` : `${count} ${type}`;
+  }).join(", ");
+  let link: string | null = null;
+  const pairs = record.replacePairs;
+  if (pairs && typeof pairs === "object" && !Array.isArray(pairs)) {
+    for (const [key, value] of Object.entries(pairs as Record<string, unknown>)) {
+      if (typeof value !== "string" || !/MESSAGE|POST|MEDIA/i.test(key)) continue;
+      const href = /href=["']?(https?:\/\/[^"'\s>]+)/i.exec(value)?.[1] ?? (/^https?:\/\/\S+$/i.test(value.trim()) ? value.trim() : null);
+      if (href) { link = httpsUrl(href); break; }
+    }
+  }
+  const parts = [text, media ? `Medios: ${media}` : null].filter((part): part is string => Boolean(part));
+  return { text: parts.length > 0 ? parts.join(" · ") : null, link };
 }
 
 /**
@@ -1172,7 +1261,7 @@ export function noticePayloadTraces(value: unknown): string[] {
     if (lines.length >= 20) break;
     if (firstNoticeAvatar(noticePeople(row)) || avatarOf(row)) continue;
     const trace = noticeAvatarTrace(row);
-    lines.push(`[fanlink:notif] avatar hash=${trace.hash ?? "ausente"} campos=${trace.campos}`);
+    lines.push(`[fanlink:notif] avatar hash=${trace.hash ?? "ausente"} campos=${trace.campos} claves=${Object.keys(row).slice(0, 30).join("|")}`);
   }
   return lines;
 }
