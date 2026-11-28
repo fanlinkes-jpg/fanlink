@@ -31,7 +31,7 @@ test("el beforeLoad de Analítica, Auditoría y Ajustes redirige al sitio nuevo"
   assert.deepEqual(redirectOf("/ajustes"), { to: "/configuracion", hash: "ajustes", search: undefined });
 });
 
-test("el beforeLoad de Administrar y de Funciones inteligentes redirige", () => {
+test("el beforeLoad de Personal y de Mensajes inteligentes redirige", () => {
   assert.match(routeSource("creadoras.tsx"), /legacyRedirectThrow\("\/creadoras"\)/);
   assert.match(routeSource("equipo.tsx"), /legacyRedirectThrow\("\/equipo"\)/);
   assert.match(routeSource("campanas.tsx"), /legacyRedirectThrow\("\/campanas"\)/);
