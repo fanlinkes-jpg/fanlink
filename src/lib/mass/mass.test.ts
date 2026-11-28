@@ -15,6 +15,7 @@ import {
   canTransitionMass,
   confirmMassLaunch,
   composeMass,
+  resolveSegment,
   dryRunMass,
   formattedText,
   isWhale,
@@ -746,6 +747,24 @@ test("el módulo de masivos no llama a la API ni lee la clave de sesión", async
     for (const token of banned)
       assert.equal(source.includes(token), false, `${file} contiene ${token}`);
   }
+});
+
+test("segmentos del Dashboard en masivos y listas: Whale, Top spender, Spender, Low spender y New", () => {
+  const now = new Date("2026-11-28T10:00:00Z");
+  const fans = [
+    fan("w", { spentCents: 30_000 }),
+    fan("t", { spentCents: 15_000 }),
+    fan("s", { spentCents: 6_000 }),
+    fan("l", { spentCents: 1_000, subscribedAt: "2026-11-20T00:00:00Z" }),
+    fan("x", { spentCents: null }),
+  ];
+  const run = (fanSegments: Array<"whale" | "top" | "spender" | "low" | "new">) =>
+    resolveSegment(snapshotOf(fans), { fanSegments }, { now, vaultIds: [], rotate: false, excludeBought: false });
+  assert.deepEqual(run(["whale"]).matched.map((item) => item.fanKey), ["w"]);
+  assert.deepEqual(run(["top", "spender"]).matched.map((item) => item.fanKey), ["t", "s"]);
+  assert.deepEqual(run(["new"]).matched.map((item) => item.fanKey), ["l"]);
+  // Sin gasto de OnlyFans no se le pone tramo: queda fuera y se avisa.
+  assert.deepEqual(run(["low"]).skippedMissing, [{ fanKey: "x", field: "gasto" }]);
 });
 
 function moneyFan(spentCents: number) {

@@ -89,6 +89,7 @@ function fansFrom(
     spend30Cents: byKey.get(fan.fanKey)?.spend30Cents ?? null,
     lastActiveAt: messages == null ? null : lastFromFan(messages, fan.fanKey),
     lastPurchaseAt: byKey.get(fan.fanKey)?.lastPurchaseAt ?? null,
+    subscribedAt: fan.subscribedAt ?? null,
   }));
 }
 

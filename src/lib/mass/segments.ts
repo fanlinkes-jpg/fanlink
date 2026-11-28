@@ -13,6 +13,7 @@ import type {
   SinDatos,
 } from "./types.ts";
 import { SIN_DATOS } from "./types.ts";
+import { inSegment } from "../fan-segments.ts";
 
 export type SegmentResolution = {
   matched: MassFan[];
@@ -87,6 +88,22 @@ export function resolveSegment(
           field: window === "spend30" ? "gasto30" : "gasto",
         });
       else if (hits.some((hit) => hit === true)) keep.push(fan);
+      else droppedByValue += 1;
+    }
+    pool = keep;
+  }
+
+  if (segment.fanSegments?.length) {
+    const wanted = segment.fanSegments;
+    const keep: MassFan[] = [];
+    for (const fan of pool) {
+      const needsSpend = wanted.some((id) => id !== "new");
+      const needsStart = wanted.includes("new");
+      const spendKnown = fan.spentCents != null;
+      const startKnown = fan.subscribedAt !== undefined;
+      if (wanted.some((id) => inSegment({ spentCents: fan.spentCents, subscribedAt: fan.subscribedAt ?? null }, id, options.now))) keep.push(fan);
+      else if ((needsSpend && !spendKnown && (!needsStart || !startKnown)) || (needsStart && !needsSpend && !startKnown))
+        skipped.push({ fanKey: fan.fanKey, field: needsSpend && !spendKnown ? "gasto" : "suscrito" });
       else droppedByValue += 1;
     }
     pool = keep;

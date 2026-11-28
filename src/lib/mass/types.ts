@@ -1,3 +1,4 @@
+import type { FanSegmentId } from "../fan-segments.ts";
 import type { MassSpendTier, SpendWindow } from "./spend.ts";
 
 export const SIN_DATOS = "Sin datos" as const;
@@ -39,6 +40,8 @@ export type MassSegment = {
   activeWithinDays?: number;
   purchasedWithinDays?: number;
   subscription?: MassSubscription;
+  /** Segmentos del Dashboard (Whale, Top spender, Spender, Low spender, New). Basta con estar en uno. */
+  fanSegments?: FanSegmentId[];
   excludeFanKeys?: string[];
   excludeOfListIds?: string[];
 };
@@ -52,6 +55,8 @@ export type MassFan = {
   spend30Cents: number | null;
   lastActiveAt: string | null;
   lastPurchaseAt: string | null;
+  /** Inicio de la suscripción. Lo usa el segmento New. */
+  subscribedAt?: string | null;
 };
 
 export type MassHistoryMessage = {
