@@ -5,7 +5,7 @@ import { openLiveView } from "@/lib/of-sessions";
 
 type LiveStatus = { type: "status"; role: "control" | "view"; send: boolean };
 
-export function LiveOfViewer({ creatorId, section }: { creatorId: string; section: "notifications" }) {
+export function LiveOfViewer({ creatorId, section, page = null }: { creatorId: string; section: "notifications"; page?: string | null }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
@@ -58,7 +58,7 @@ export function LiveOfViewer({ creatorId, section }: { creatorId: string; sectio
       setReady(false);
       setNotice("");
       setMessage("Preparando el navegador…");
-      const result = await openLiveView({ data: { creatorId, section } }).catch(() => ({
+      const result = await openLiveView({ data: { creatorId, section, page } }).catch(() => ({
         ok: false as const,
         ticket: null,
         reason: "No se ha podido abrir la vista nativa.",
@@ -142,7 +142,7 @@ export function LiveOfViewer({ creatorId, section }: { creatorId: string; sectio
       observer?.disconnect();
       disconnect();
     };
-  }, [creatorId, section]);
+  }, [creatorId, section, page]);
 
   useEffect(() => {
     const onChange = () => setFull(document.fullscreenElement === boxRef.current);
