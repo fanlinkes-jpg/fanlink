@@ -5,6 +5,8 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { Window } from "happy-dom";
 import { FanSpendLabel } from "./fan-spend-label.ts";
+import { shownSpendCents } from "./row-spend.ts";
+import { spendTone } from "./spend-tiers.ts";
 
 const dom = new Window({ url: "https://fanlink.test/mensajes" });
 Object.assign(globalThis, {
@@ -15,6 +17,15 @@ Object.assign(globalThis, {
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 
+test("8477 de neto se ven como $105.96 y un bruto ya contado no se recalcula", () => {
+  assert.equal(shownSpendCents(8477, null), 10596);
+  assert.equal(spendTone(shownSpendCents(8477, null)).label, "$105.96");
+  assert.equal(shownSpendCents(8477, 10596), 10596);
+  assert.equal(shownSpendCents(100, 200), 200);
+  assert.equal(shownSpendCents(0, null), 0);
+  assert.equal(shownSpendCents(null, null), null);
+});
+
 test("la fila real usa hilo, luego ficha, luego lo pedido", async () => {
   const host = document.createElement("div");
   document.body.appendChild(host);
@@ -23,7 +34,7 @@ test("la fila real usa hilo, luego ficha, luego lo pedido", async () => {
     await show(root, 0, 150, null);
     assert.equal(host.textContent, "$0.00");
     await show(root, null, 150, 0);
-    assert.equal(host.textContent, "$1.50");
+    assert.equal(host.textContent, "$1.88");
     await show(root, null, null, 0);
     assert.equal(host.textContent, "$0.00");
     await show(root, null, null, null);

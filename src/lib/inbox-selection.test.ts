@@ -48,7 +48,7 @@ test("la lista queda del más reciente arriba", () => {
   assert.deepEqual(ordered.map((thread) => thread.id), ["nuevo", "medio", "viejo", "vacio"]);
 });
 
-test("Sin leer con 3 no leídos marca uno; Todos y un mensaje nuevo no marcan otro", async () => {
+test("abrir la bandeja no marca el primer hilo y un mensaje nuevo tampoco", async () => {
   mock.timers.enable({ apis: ["setTimeout"] });
   const posts: string[] = [];
   const view = await mount({
@@ -64,7 +64,7 @@ test("Sin leer con 3 no leídos marca uno; Todos y un mensaje nuevo no marcan ot
     await act(async () => {
       mock.timers.tick(MARK_SEEN_MS);
     });
-    assert.deepEqual(posts, ["a"]);
+    assert.deepEqual(posts, []);
     assert.equal(text("selected"), "a");
     await view.show({
       threads: [
@@ -78,7 +78,7 @@ test("Sin leer con 3 no leídos marca uno; Todos y un mensaje nuevo no marcan ot
     await act(async () => {
       mock.timers.tick(MARK_SEEN_MS);
     });
-    assert.deepEqual(posts, ["a"]);
+    assert.deepEqual(posts, []);
     assert.equal(text("selected"), "a");
     assert.equal(text("visible").split(",").includes("a"), true);
 
@@ -95,7 +95,7 @@ test("Sin leer con 3 no leídos marca uno; Todos y un mensaje nuevo no marcan ot
     await act(async () => {
       mock.timers.tick(MARK_SEEN_MS);
     });
-    assert.deepEqual(posts, ["a"]);
+    assert.deepEqual(posts, []);
     assert.equal(text("selected"), "a");
   } finally {
     await view.close();
@@ -126,7 +126,14 @@ test("la marca espera 800 ms a la vista y no ocupa el lector; salir o tapar la p
     await act(async () => {
       mock.timers.tick(1);
     });
-    assert.deepEqual(posts, ["a"]);
+    assert.deepEqual(posts, []);
+    await act(async () => {
+      document.getElementById("down")?.click();
+    });
+    await act(async () => {
+      mock.timers.tick(MARK_SEEN_MS);
+    });
+    assert.deepEqual(posts, ["b"]);
 
     await view.close();
     posts.length = 0;
@@ -174,7 +181,10 @@ test("la marca espera 800 ms a la vista y no ocupa el lector; salir o tapar la p
       await act(async () => {
         mock.timers.tick(1);
       });
-      assert.deepEqual(posts, ["e"]);
+      assert.deepEqual(posts, []);
+      await act(async () => {
+        document.getElementById("down")?.click();
+      });
       await hidden.show({
         threads: [row("e", 9, "2026-11-14T00:00:05.000Z")],
         filter: "todos",
@@ -183,7 +193,7 @@ test("la marca espera 800 ms a la vista y no ocupa el lector; salir o tapar la p
       await act(async () => {
         mock.timers.tick(MARK_SEEN_MS);
       });
-      assert.deepEqual(posts, ["e", "e"]);
+      assert.deepEqual(posts, []);
     } finally {
       await hidden.close();
     }
@@ -216,7 +226,7 @@ test("al cambiar de cuenta se elige el primer hilo de la nueva", async () => {
       mock.timers.tick(MARK_SEEN_MS);
     });
     assert.equal(text("selected"), "c");
-    assert.deepEqual(posts, ["c"]);
+    assert.deepEqual(posts, []);
   } finally {
     await view.close();
     mock.timers.reset();

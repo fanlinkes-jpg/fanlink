@@ -13,6 +13,7 @@ import {
 } from "@/lib/notifications";
 import { listCreatorNotifications, markCreatorNotificationsRead, type NotificationListItem } from "@/lib/of-notifications";
 import { NotificationFanCard } from "@/features/notification-card";
+import { PurchaseMessageDialog } from "@/features/purchase-message-dialog";
 import { SESSION_EXPIRED_LABEL } from "../../server/of-sessions/sync/session-link.ts";
 
 export type NotificationTarget = {
@@ -32,9 +33,11 @@ export type NotificationTarget = {
  */
 export function NotificationBell({
   creatorId,
+  creatorName,
   onOpenThread,
 }: {
   creatorId: string;
+  creatorName?: string | null;
   onOpenThread?: (target: NotificationTarget) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -127,6 +130,7 @@ export function NotificationBell({
       {open ? (
         <NotificationPanel
           creatorId={creatorId}
+          creatorName={creatorName?.trim() || "Cuenta"}
           role={role}
           items={items}
           sessionNotice={sessionNotice}
@@ -147,6 +151,7 @@ export function NotificationBell({
 
 function NotificationPanel({
   creatorId,
+  creatorName,
   role,
   items,
   sessionNotice,
@@ -161,6 +166,7 @@ function NotificationPanel({
   onMark,
 }: {
   creatorId: string;
+  creatorName: string;
   role: "owner" | "member" | null;
   items: NotificationListItem[] | null;
   sessionNotice: string | null;
@@ -174,6 +180,7 @@ function NotificationPanel({
   onMore: () => void;
   onMark: (keys: string[] | null) => void;
 }) {
+  const [purchase, setPurchase] = useState<NotificationListItem | null>(null);
   const [tab, setTab] = useState<NotificationTab>("all");
   const [text, setText] = useState("");
   const [from, setFrom] = useState("");
@@ -245,6 +252,7 @@ function NotificationPanel({
                       lists={item.lists}
                       renew={item.renewAuto}
                       onChat={item.labels.destination === "none" ? undefined : () => onOpenThread?.({ creatorId, fanKey: item.fanKey, threadKey: item.threadKey })}
+                      onMessage={item.kind === "ppv" && item.messageRef ? () => setPurchase(item) : undefined}
                       onMark={fresh(item) ? () => void mark([item.key]) : undefined}
                     />
                   </li>
@@ -276,6 +284,20 @@ function NotificationPanel({
           ) : null}
           {nextCursor ? (
             <Button type="button" variant="soft" className="mt-3" onClick={onMore}>Más</Button>
+          ) : null}
+          {purchase?.messageRef ? (
+            <PurchaseMessageDialog
+              creatorId={creatorId}
+              creatorName={creatorName}
+              fanKey={purchase.fanKey}
+              threadKey={purchase.threadKey}
+              messageRef={purchase.messageRef}
+              onClose={() => setPurchase(null)}
+              onCompose={() => {
+                onOpenThread?.({ creatorId, fanKey: purchase.fanKey, threadKey: purchase.threadKey });
+                setPurchase(null);
+              }}
+            />
           ) : null}
         </div>
       </aside>

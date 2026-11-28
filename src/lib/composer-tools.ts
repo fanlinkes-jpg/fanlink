@@ -13,6 +13,43 @@ export const FULL_EMOJIS = [
   "🍓", "🍒", "💃", "🕺", "💌", "💎", "🌙", "⭐", "🌈", "🍀",
 ];
 
+/** Un PPV de pago con medios y sin vista previa gratis no puede salir. */
+export function ppvPreviewMissing(priceCents: number | null, mediaCount: number, previewCount: number): boolean {
+  return priceCents != null && priceCents > 0 && mediaCount > 0 && previewCount === 0;
+}
+
+type VaultOfferRow = { id: string; free?: boolean };
+
+/**
+ * Al guardar el precio, no marcar todo como de pago: deja una vista previa si hay
+ * varias piezas. `paidAttachmentId` es el id con prefijo vault- cuando viene del par.
+ */
+export function vaultOfferFlagsAfterPrice(
+  vault: readonly VaultOfferRow[],
+  priceCents: number | null,
+  paidAttachmentId: string | null,
+): Map<string, boolean> {
+  const flags = new Map<string, boolean>();
+  for (const item of vault) flags.set(item.id, item.free !== false);
+  if (priceCents == null || priceCents <= 0) {
+    for (const item of vault) flags.set(item.id, true);
+    return flags;
+  }
+  if (paidAttachmentId) {
+    for (const item of vault) {
+      flags.set(item.id, item.id === paidAttachmentId ? false : (flags.get(item.id) ?? true));
+    }
+    return flags;
+  }
+  if (vault.length <= 1) {
+    for (const item of vault) flags.set(item.id, false);
+    return flags;
+  }
+  const previewId = vault.find((item) => item.free !== false)?.id ?? vault[0]!.id;
+  for (const item of vault) flags.set(item.id, item.id === previewId);
+  return flags;
+}
+
 export function emojiRows(emojis: string[], perRow = 12): string[][] {
   const rows: string[][] = [];
   for (let index = 0; index < emojis.length; index += perRow) rows.push(emojis.slice(index, index + perRow));
@@ -64,10 +101,12 @@ export function paymentLabel(message: { fromFan: boolean; priceCents: number | n
   return message.purchased ? `${money} pagado` : `${money} no pagado`;
 }
 
+/** Como Infloww: el nombre en su caja, junto a la hora. No se pasa a mayúsculas. */
 export function authorLabel(name: string | null, automatic: boolean | null): string {
   if (automatic) return "Mensaje automático";
-  if (!name) return "Cuenta";
-  return name.toLocaleUpperCase("es-ES");
+  const clean = name?.replace(/\s+/g, " ").trim() ?? "";
+  if (!clean) return "Cuenta";
+  return clean;
 }
 
 /**
@@ -98,17 +137,26 @@ export function messagePriceCents(raw: string): MessagePrice {
 
 export type PpvPoint = { sentAt: string; priceCents: number };
 
-/** Solo entran PPV de la creadora que constan como comprados. El resto no se dibuja. */
-export function purchasedPpvSeries(messages: Array<{
-  fromFan: boolean;
-  purchased: boolean | null;
-  priceCents: number | null;
-  sentAt: string;
-}>): { maxCents: number | null; avgCents: number | null; points: PpvPoint[] } {
-  const points = messages
+export type PaidSource = { sentAt: string; priceCents: number };
+
+/**
+ * PPV comprados. Un mensaje propio solo entra si consta como pagado.
+ * Avisos de compra y movimientos de mensaje entran aunque `isOpened` sea falso.
+ * El mismo día y el mismo importe no se cuentan dos veces.
+ */
+export function purchasedPpvSeries(
+  messages: Array<{
+    fromFan: boolean;
+    purchased: boolean | null;
+    priceCents: number | null;
+    sentAt: string;
+  }>,
+  sources: readonly (readonly PaidSource[])[] = [],
+): { maxCents: number | null; avgCents: number | null; points: PpvPoint[] } {
+  const fromChat = messages
     .filter((message) => !message.fromFan && message.purchased === true && message.priceCents != null && message.priceCents > 0 && message.sentAt !== "")
-    .map((message) => ({ sentAt: message.sentAt, priceCents: message.priceCents ?? 0 }))
-    .sort((left, right) => left.sentAt.localeCompare(right.sentAt));
+    .map((message) => ({ sentAt: message.sentAt, priceCents: message.priceCents ?? 0 }));
+  const points = mergePaidPoints([fromChat, ...sources.map((rows) => rows.filter((row) => row.priceCents > 0 && row.sentAt !== ""))]);
   if (points.length === 0) return { maxCents: null, avgCents: null, points: [] };
   const total = points.reduce((sum, point) => sum + point.priceCents, 0);
   return {
@@ -116,6 +164,37 @@ export function purchasedPpvSeries(messages: Array<{
     avgCents: Math.round(total / points.length),
     points,
   };
+}
+
+function mergePaidPoints(sources: PaidSource[][]): PpvPoint[] {
+  const groups = sources.map(tallyPaid);
+  const keys = new Set(groups.flatMap((group) => [...group.keys()]));
+  const points: PpvPoint[] = [];
+  for (const key of keys) {
+    let count = 0;
+    let point: PpvPoint | null = null;
+    for (const group of groups) {
+      const row = group.get(key);
+      if (row && row.count > count) {
+        count = row.count;
+        point = row.point;
+      }
+    }
+    if (!point) continue;
+    for (let index = 0; index < count; index += 1) points.push(point);
+  }
+  return points.sort((left, right) => left.sentAt.localeCompare(right.sentAt));
+}
+
+function tallyPaid(rows: PaidSource[]): Map<string, { count: number; point: PpvPoint }> {
+  const grouped = new Map<string, { count: number; point: PpvPoint }>();
+  for (const row of rows) {
+    const key = `${row.sentAt.slice(0, 10)}:${row.priceCents}`;
+    const prev = grouped.get(key);
+    if (!prev) grouped.set(key, { count: 1, point: { sentAt: row.sentAt, priceCents: row.priceCents } });
+    else prev.count += 1;
+  }
+  return grouped;
 }
 
 export function moneyLabel(cents: number | null): string {

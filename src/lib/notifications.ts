@@ -79,12 +79,33 @@ export function ofListType(tab: NotificationTab): OfNotificationListType | null 
   return found?.[0] ?? null;
 }
 
-/** La lista de una pestaña es la respuesta de su type, no una reclasificación. */
-export function noticesForOfTab<T extends { ofType?: string | null }>(rows: readonly T[], tab: NotificationTab): T[] {
-  if (tab === "all") return rows.filter((row) => row.ofType == null);
-  const type = ofListType(tab);
-  if (!type) return [];
-  return rows.filter((row) => row.ofType === type);
+/** Pestaña del aviso: el type de OnlyFans manda. Sin type, vale el kind. */
+export function noticeTab(row: { ofType?: string | null; kind?: NotificationKind | null }): NotificationTab | null {
+  const type = row.ofType ?? null;
+  if (type && Object.prototype.hasOwnProperty.call(OF_LIST_TAB, type)) return OF_LIST_TAB[type as OfNotificationListType];
+  if (row.kind) return tabOf(row.kind);
+  return null;
+}
+
+export function kindsForTab(tab: NotificationTab): NotificationKind[] {
+  return NOTIFICATION_KINDS.filter((kind) => tabOf(kind) === tab);
+}
+
+/**
+ * Todo enseña todos los avisos de la creadora, una vez por clave.
+ * El resto, solo los de su type. Sin type, los de su kind. Ninguno en dos pestañas.
+ */
+export function noticesForOfTab<T extends { ofType?: string | null; kind?: NotificationKind | null; key?: string }>(rows: readonly T[], tab: NotificationTab): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const row of rows) {
+    const id = row.key ?? "";
+    if (id && seen.has(id)) continue;
+    if (id) seen.add(id);
+    if (tab !== "all" && noticeTab(row) !== tab) continue;
+    out.push(row);
+  }
+  return out;
 }
 
 /**
@@ -161,6 +182,8 @@ export type ParsedNotification = {
   postText?: string | null;
   /** Type de la petición que trajo el aviso. Null o ausente si vino en Todo, sin type. */
   ofType?: string | null;
+  /** Hilo y mensaje de OnlyFans, si el aviso de compra trae el enlace. `t:hilo/m:mensaje`. */
+  messageRef?: string | null;
 };
 
 export type NotificationRecord = ParsedNotification & {
@@ -596,6 +619,20 @@ export function canReadCreatorNotifications(
   return access.creatorIds.includes(creatorId);
 }
 
+/** Descarta respuestas de notificaciones que ya no coinciden con la creadora o pestaña actuales. */
+export function notesResponseApplies(input: {
+  requestId: number;
+  creatorId: string;
+  tab: NotificationTab;
+  currentId: number;
+  currentCreatorId: string | null;
+  currentTab: NotificationTab;
+}): boolean {
+  if (input.requestId !== input.currentId) return false;
+  if (!input.creatorId || input.creatorId !== input.currentCreatorId) return false;
+  return input.tab === input.currentTab;
+}
+
 export function visibleNotifications(
   rows: NotificationRecord[],
   access: { role: "owner" | "member"; creatorIds: string[] } | null,
@@ -623,7 +660,7 @@ export function filterNotifications(
   const to = dayOrNull(query.to);
   const ranged = Boolean(from || to);
   const matched = rows
-    .filter((row) => query.tab === "all" || tabOf(row.kind) === query.tab)
+    .filter((row) => query.tab === "all" || noticeTab(row) === query.tab)
     .filter((row) => !needle || haystack(row).includes(needle));
   const dated: NotificationRecord[] = [];
   const undated: NotificationRecord[] = [];
@@ -708,8 +745,10 @@ function notificationFrom(record: Record<string, unknown>, options: ParseNotific
   });
   if (!key) return null;
   const listType = options.listType ?? null;
-  const storedKey = listType ? `${key}\u001f${listType}` : key;
+  // La pestaña no entra en la clave: la misma compra llegaba dos veces, una con of_type y otra sin.
+  const storedKey = stableNoticeKey(key);
   const pending = placed.kind === "tag" && isPending(record, body);
+  if (placed.kind === "ppv" && noticeDebug()) console.info(purchaseFieldTrace(record));
   const card = fanCard(record);
   return {
     key: storedKey,
@@ -731,7 +770,122 @@ function notificationFrom(record: Record<string, unknown>, options: ParseNotific
     postLink: card.postLink,
     postText: card.postText,
     ofType: listType,
+    messageRef: messageRefFromNotice(record),
   };
+}
+
+/** Quita el sufijo de pestaña (`compras` o `purchases`) para que las dos copias sean la misma fila. */
+export function stableNoticeKey(key: string): string {
+  return key.replace(/\u001f(?:purchases|compra|subscribed|tip|tags|commented|mentioned|favorited|promotions|message|onlyfans|deactivated_media)$/u, "");
+}
+
+const SECRET_KEY = /cookie|sign|sess|token|x-?bc|authorization/i;
+
+function noticeDebug(): boolean {
+  try {
+    const raw = process.env.FANLINK_LIVE_VIEW_DEBUG?.trim().toLowerCase();
+    return raw === "true" || raw === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Nombres de claves y la ruta del enlace, con los números en `<n>`. Sin valores ni secretos. */
+export function purchaseFieldTrace(record: Record<string, unknown>): string {
+  const names = Object.keys(record).filter((key) => !SECRET_KEY.test(key)).sort();
+  const pairs = record.replacePairs;
+  if (pairs && typeof pairs === "object" && !Array.isArray(pairs)) {
+    for (const key of Object.keys(pairs).filter((key) => !SECRET_KEY.test(key)).sort()) names.push(`replacePairs.${key}`);
+  }
+  const href = messageHref(record);
+  const path = href ? redactNoticePath(href) : null;
+  return `[fanlink:notif] compra campos=${names.join(",")}${path ? ` href=${path}` : ""}`;
+}
+
+/** Ruta del href. Los números pasan a `<n>`. La query no entra: puede llevar un token. */
+export function redactNoticePath(raw: string): string | null {
+  try {
+    const url = new URL(raw, "https://onlyfans.com");
+    if (url.username || url.password) return null;
+    return url.pathname.replace(/\d+/g, "<n>").slice(0, 180);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Id del mensaje y del hilo, leídos antes de quitar el HTML.
+ * El enlace cuyo texto es «message», replacePairs, o un id suelto del aviso.
+ */
+export function messageRefFromNotice(record: Record<string, unknown>): string | null {
+  const found = readMessageRef(record);
+  if (!found.messageId && !found.threadId) return null;
+  const parts: string[] = [];
+  if (found.threadId) parts.push(`t:${found.threadId}`);
+  if (found.messageId) parts.push(`m:${found.messageId}`);
+  return parts.join("/");
+}
+
+function readMessageRef(record: Record<string, unknown>): { threadId: string | null; messageId: string | null } {
+  let threadId = numericId(firstString(record, ["chatId", "threadId", "threadKey", "relatedChatId"]));
+  let messageId = numericId(firstString(record, ["messageId", "relatedMessageId", "entityId"]));
+  const chunks: string[] = [];
+  const text = firstString(record, ["text", "message", "body", "content"]);
+  if (text) chunks.push(text);
+  const pairs = record.replacePairs;
+  if (pairs && typeof pairs === "object" && !Array.isArray(pairs)) {
+    for (const value of Object.values(pairs as Record<string, unknown>)) {
+      if (typeof value === "string") chunks.push(value);
+    }
+  }
+  for (const chunk of chunks) {
+    const fromAnchor = hrefOfMessageAnchor(chunk);
+    const raw = fromAnchor ?? (chunk.includes("<") ? null : chunk);
+    if (!raw) continue;
+    const parsed = idsInHref(raw);
+    threadId ??= parsed.threadId;
+    messageId ??= parsed.messageId;
+  }
+  return { threadId, messageId };
+}
+
+function hrefOfMessageAnchor(html: string): string | null {
+  const pattern = /<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>\s*message\s*<\/a>/gi;
+  const match = pattern.exec(html);
+  return match?.[1] ?? null;
+}
+
+function messageHref(record: Record<string, unknown>): string | null {
+  const text = firstString(record, ["text", "message", "body", "content"]);
+  const fromText = text ? hrefOfMessageAnchor(text) : null;
+  if (fromText) return fromText;
+  const pairs = record.replacePairs;
+  if (!pairs || typeof pairs !== "object" || Array.isArray(pairs)) return null;
+  for (const value of Object.values(pairs as Record<string, unknown>)) {
+    if (typeof value !== "string") continue;
+    const href = hrefOfMessageAnchor(value);
+    if (href) return href;
+  }
+  return null;
+}
+
+function idsInHref(raw: string): { threadId: string | null; messageId: string | null } {
+  try {
+    const url = new URL(raw, "https://onlyfans.com");
+    const first = url.searchParams.get("firstId");
+    const messageId = numericId(first) ?? pathMessageId(url.pathname);
+    const thread = /\/chats\/chat\/(\d{1,18})/i.exec(url.pathname)?.[1] ?? /\/chats\/(\d{1,18})\/messages/i.exec(url.pathname)?.[1] ?? null;
+    return { threadId: thread, messageId };
+  } catch {
+    return { threadId: null, messageId: null };
+  }
+}
+
+function pathMessageId(pathname: string): string | null {
+  const queue = /\/messages\/queue\/(\d{1,18})/i.exec(pathname)?.[1];
+  if (queue) return queue;
+  const direct = /\/messages\/(\d{1,18})/i.exec(pathname)?.[1];
+  return direct ?? null;
 }
 
 /** Solo un https de onlyfans.com (o www) se puede pintar como enlace. */
@@ -749,6 +903,21 @@ export function onlyfansPostLink(value: string | null): string | null {
 }
 
 /** La frase inglesa de suscripción se enseña en español. El resto se deja como viene. */
+/** Parte el texto para que «message» abra el detalle y no el chat. */
+export function messageLinkSpans(body: string | null, messageRef: string | null): Array<{ text: string; link: boolean }> {
+  if (!body) return [];
+  if (!messageRef) return [{ text: body, link: false }];
+  const match = /\bmessage\b/i.exec(body);
+  if (!match || match.index == null) return [{ text: body, link: false }];
+  const start = match.index;
+  const word = body.slice(start, start + match[0].length);
+  return [
+    { text: body.slice(0, start), link: false },
+    { text: word, link: true },
+    { text: body.slice(start + word.length), link: false },
+  ].filter((part) => part.text.length > 0);
+}
+
 export function spanishNotificationText(body: string | null): string | null {
   if (!body) return null;
   return body.replace(/subscribed to your profile!?/gi, "se ha suscrito a tu perfil");
@@ -1258,9 +1427,16 @@ function collectDirectoryAvatars(value: unknown, fallbackId: string | null, map:
 }
 
 function unreadFlag(record: Record<string, unknown>): boolean | null {
-  if (record.isRead === true) return false;
-  if (record.isRead === false) return true;
+  if (record.isRead === true || record.read === true) return false;
+  if (record.isRead === false || record.read === false) return true;
   return null;
+}
+
+/** Leído en CRM cuando OnlyFans lo marca leído; si no trae el campo, usa el visto local. */
+export function notificationOfRead(input: { ofUnread: boolean | null; seenAt: string | null }): boolean {
+  if (input.ofUnread === false) return true;
+  if (input.ofUnread === true) return false;
+  return Boolean(input.seenAt);
 }
 
 function threadFromLink(record: Record<string, unknown>): string | null {
@@ -1324,6 +1500,7 @@ function fillGaps(previous: ParsedNotification, incoming: ParsedNotification): P
     postLink: incoming.postLink ?? previous.postLink ?? null,
     postText: incoming.postText ?? previous.postText ?? null,
     ofType: incoming.ofType ?? previous.ofType ?? null,
+    messageRef: incoming.messageRef ?? previous.messageRef ?? null,
   };
 }
 

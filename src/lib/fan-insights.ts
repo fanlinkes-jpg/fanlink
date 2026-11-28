@@ -1,3 +1,5 @@
+import { shownSpendCents } from "./row-spend.ts";
+
 export type InsightSource = {
   spentCents: number | null;
   tipsCents: number | null;
@@ -51,7 +53,7 @@ export function fanInsightModel(input: InsightSource): InsightModel {
     return best;
   }, null);
   return {
-    total: moneyOrEmpty(input.spentCents),
+    total: moneyOrEmpty(shownSpendCents(input.spentCents)),
     last: last ? `${moneyOrEmpty(last.grossCents)} · ${last.kind} · ${last.occurredAt.slice(0, 10)}` : "Sin datos",
     ppvTotal: moneyOrEmpty(ppvTotal),
     ppvAvg: moneyOrEmpty(ppvAvg),

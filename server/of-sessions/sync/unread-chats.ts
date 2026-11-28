@@ -7,11 +7,13 @@
 
 export function unreadCountOf(record: Record<string, unknown>): number | null {
   const key = ["unreadMessagesCount", "unread_messages_count", "unread"].find((name) => name in record);
-  if (!key) return null;
-  const value = record[key];
-  const number = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(number) || number < 0) return null;
-  return Math.min(999, Math.trunc(number));
+  if (key) {
+    const value = record[key];
+    const number = typeof value === "number" ? value : Number(value);
+    if (Number.isFinite(number) && number >= 0) return Math.min(999, Math.trunc(number));
+  }
+  if (record.isRead === true) return 0;
+  return null;
 }
 
 export function higherUnread(left: number | null, right: number | null): number | null {

@@ -46,6 +46,7 @@ export function planChatPull(mark: ChatPace | undefined, now: number, part: "all
 }
 
 const tails = new Map<string, Promise<unknown>>();
+const inflight = new Map<string, number>();
 const paces = new Map<string, ChatPace>();
 const lastRequestAt = new Map<string, number>();
 
@@ -72,8 +73,14 @@ export async function awaitAccountGap(accountId: string, now: () => number, slee
 
 export function clearAccountChatPace(): void {
   tails.clear();
+  inflight.clear();
   paces.clear();
   lastRequestAt.clear();
+}
+
+/** La lectura en vivo ya ocupa la cuenta. El histórico no se encola delante. */
+export function accountApiBusy(accountId: string): boolean {
+  return (inflight.get(accountId) ?? 0) > 0;
 }
 
 /** Una llamada firmada a la vez por cuenta. La lista y marcar leído pasan por aquí. */
@@ -84,7 +91,16 @@ export function withAccountApi<T>(accountId: string, run: () => Promise<T>): Pro
 /** Una lectura firmada a la vez por cuenta. La siguiente espera a la anterior. */
 export function withAccountChatReader<T>(accountId: string, run: () => Promise<T>): Promise<T> {
   const prev = tails.get(accountId) ?? Promise.resolve();
-  const next = prev.then(run, run);
+  const next = prev.then(start, start);
   tails.set(accountId, next.then(() => undefined, () => undefined));
   return next;
+
+  function start(): Promise<T> {
+    inflight.set(accountId, (inflight.get(accountId) ?? 0) + 1);
+    return run().finally(() => {
+      const left = (inflight.get(accountId) ?? 1) - 1;
+      if (left <= 0) inflight.delete(accountId);
+      else inflight.set(accountId, left);
+    });
+  }
 }

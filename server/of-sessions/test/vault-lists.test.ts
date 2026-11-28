@@ -1756,7 +1756,9 @@ test("una foto no guarda duración aunque el JSON traiga 0", () => {
   });
   assert.equal(parsed.items.find((item) => item.id === "7")?.kind, "foto");
   assert.equal(parsed.items.find((item) => item.id === "7")?.seconds, null);
+  assert.equal(parsed.items.find((item) => item.id === "7")?.title, null);
   assert.equal(parsed.items.find((item) => item.id === "8")?.seconds, 8);
+  assert.equal(parsed.items.find((item) => item.id === "8")?.title, null);
 });
 
 test("un 429 con Retry-After reanuda el mismo offset y no marca la carpeta vacía", async () => {

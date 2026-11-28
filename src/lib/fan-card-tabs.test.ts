@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdir } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { chromium, type Page } from "playwright";
 import { FAN_CARD_TABS } from "./fan-card-tabs.ts";
+import { assertDevPortFree, forgetPgliteDir, privatePgliteDir, shotFile } from "./dev-test-server.ts";
 
 const root = path.resolve(import.meta.dirname, "../..");
 
@@ -16,7 +16,7 @@ test("las pestañas de la ficha son Insights, Ventas y Notas", () => {
 
 test("la ficha del fan pinta las tres pestañas", async () => {
   const port = await freePort();
-  const server = startDev(port);
+  const server = await startDev(port);
   const browser = await chromium.launch();
   try {
     await waitForServer(`http://127.0.0.1:${port}/mensajes`);
@@ -35,6 +35,7 @@ test("la ficha del fan pinta las tres pestañas", async () => {
     });
     await page.goto(`http://127.0.0.1:${port}/mensajes`, { waitUntil: "domcontentloaded" });
     await page.getByText("Fan sin gasto").first().waitFor();
+    await page.getByLabel("En línea").first().waitFor();
     await page.getByRole("button", { name: "Ficha del fan" }).click();
     const dialog = page.getByRole("dialog", { name: "Ficha del fan" });
     await dialog.waitFor();
@@ -83,7 +84,7 @@ function fanChat() {
       postsCents: 0,
       messagesCents: 0,
       avatarUrl: null,
-      online: null,
+      online: true,
       subPriceCents: 0,
       subExpiresAt: null,
       renewAuto: false,
@@ -94,17 +95,22 @@ function fanChat() {
     pending: [],
     notes: [],
     profiles: [],
-    accounts: [],
+    accounts: [{
+      creatorId: "3zk7kbr",
+      sessionRejected: false,
+      connection: "not_checked",
+      hasStorageState: false,
+      loginInProgress: false,
+      status: "pending_login",
+    }],
     sessionNotices: [],
   };
 }
 
 async function saveShot(page: Page): Promise<string> {
   const name = "ficha-fan.png";
-  const artifacts = "/opt/cursor/artifacts";
+  const shotPath = shotFile(name);
   try {
-    await mkdir(artifacts, { recursive: true });
-    const shotPath = path.join(artifacts, name);
     await page.screenshot({ path: shotPath });
     return shotPath;
   } catch (error) {
@@ -128,14 +134,18 @@ function freePort(): Promise<number> {
   });
 }
 
-function startDev(port: number): ChildProcess {
-  const env: NodeJS.ProcessEnv = { ...process.env, VITE_AUTH_ENABLED: "false" };
+async function startDev(port: number): Promise<ChildProcess> {
+  await assertDevPortFree();
+  const dataDir = await privatePgliteDir();
+  const env: NodeJS.ProcessEnv = { ...process.env, VITE_AUTH_ENABLED: "false", FANLINK_PGLITE_DIR: dataDir, FANLINK_HISTORY_ENABLED: "false" };
   delete env.DATABASE_URL;
-  return spawn(process.execPath, ["node_modules/vite/bin/vite.js", "dev", "--host", "127.0.0.1", "--port", String(port), "--strictPort"], {
+  const child = spawn(process.execPath, ["node_modules/vite/bin/vite.js", "dev", "--host", "127.0.0.1", "--port", String(port), "--strictPort"], {
     cwd: root,
     env,
     stdio: "ignore",
   });
+  forgetPgliteDir(child, dataDir);
+  return child;
 }
 
 async function waitForServer(url: string): Promise<void> {

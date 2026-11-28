@@ -178,6 +178,7 @@ export function DashboardPage() {
           {selected !== "all" ? (
             <NotificationBell
               creatorId={selected}
+              creatorName={visible.find((creator) => creator.id === selected)?.name ?? null}
               onOpenThread={(target) => {
                 setCreator(target.creatorId);
                 rememberOpenThread(target);

@@ -25,7 +25,7 @@ export interface Fixture {
   invalidate(): void;
   pushFanMessage(text: string): void;
   sent: Array<{ fan: string; body: string; price: string }>;
-  composed: Array<{ body: string; price: string; file: string }>;
+  composed: Array<{ body: string; price: string; file: string; previews: string[] }>;
   confirmSends: { on: boolean };
   close(): Promise<void>;
 }
@@ -132,7 +132,8 @@ function ofChatHtml(mode: "live" | "slow" | "late" | "verylate" | "hang" | "post
          const go = async () => {
            const body = box.value;
            const price = document.querySelector("[at-attr='price_input']").dataset.saved || "";
-           await fetch("/fixture/compose", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ body, price, file: "" }) });
+           const previews = [...document.querySelectorAll("[data-fanlink-attachment][data-preview='1']")].map((el) => el.getAttribute("data-fanlink-attachment"));
+           await fetch("/fixture/compose", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ body, price, file: "", previews }) });
            const slow = "${mode}" === "verylate" && waitMs !== 0 ? "&slow=1" : "";
            const hang = "${mode}" === "hang" ? "&hang=1" : "";
            await fetch("/api2/v2/chats/${chatId}/messages?order=desc" + slow + hang);
@@ -189,8 +190,14 @@ function ofChatHtml(mode: "live" | "slow" | "late" | "verylate" | "hang" | "post
        document.querySelectorAll("[data-vault-piece]").forEach((button) => {
          button.addEventListener("click", () => {
            if (button.getAttribute("data-vault-skip") === "1") return;
+           const id = button.getAttribute("data-vault-id") || button.getAttribute("data-media-id") || button.getAttribute("data-vault-title") || "";
            const chip = document.createElement("span");
-           chip.setAttribute("data-fanlink-attachment", button.getAttribute("data-vault-id") || button.getAttribute("data-media-id") || button.getAttribute("data-vault-title") || "");
+           chip.setAttribute("data-fanlink-attachment", id);
+           const preview = document.createElement("button");
+           preview.type = "button";
+           preview.setAttribute("data-fanlink-preview", id);
+           preview.addEventListener("click", () => chip.setAttribute("data-preview", "1"));
+           chip.appendChild(preview);
            document.querySelector("[data-fanlink-attachments]").appendChild(chip);
          });
        });
@@ -246,7 +253,7 @@ export async function startFixture(mode: FixtureMode = "users-me"): Promise<Fixt
   const hits: FixtureHits = { login: 0, session: 0, dashboard: 0 };
   const extraMessages: Array<{ id: number; text: string; at: string }> = [];
   const sent: Array<{ fan: string; body: string; price: string }> = [];
-  const composed: Array<{ body: string; price: string; file: string }> = [];
+  const composed: Array<{ body: string; price: string; file: string; previews: string[] }> = [];
   const confirmSends = { on: true };
   const sockets = new Set<Socket>();
   const server = createServer((req, res) => {
@@ -300,7 +307,7 @@ async function handle(
   mode: FixtureMode,
   extraMessages: Array<{ id: number; text: string; at: string }>,
   sent: Array<{ fan: string; body: string; price: string }>,
-  composed: Array<{ body: string; price: string; file: string }>,
+  composed: Array<{ body: string; price: string; file: string; previews: string[] }>,
   confirmSends: { on: boolean },
 ): Promise<void> {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -689,8 +696,13 @@ async function handle(
   }
   if (req.method === "POST" && url.pathname === "/fixture/compose") {
     const raw = await readBodyText(req);
-    const body = JSON.parse(raw) as { body?: string; price?: string; file?: string };
-    composed.push({ body: body.body ?? "", price: body.price ?? "", file: body.file ?? "" });
+    const body = JSON.parse(raw) as { body?: string; price?: string; file?: string; previews?: string[] };
+    composed.push({
+      body: body.body ?? "",
+      price: body.price ?? "",
+      file: body.file ?? "",
+      previews: Array.isArray(body.previews) ? body.previews.filter((item) => typeof item === "string") : [],
+    });
     res.writeHead(204);
     res.end();
     return;

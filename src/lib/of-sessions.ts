@@ -139,6 +139,7 @@ export type CreatorChatList = {
     messagesCents: number | null;
     avatarUrl: string | null;
     online: boolean | null;
+    lastSeenAt?: string | null;
     subPriceCents: number | null;
     subExpiresAt: string | null;
     renewAuto: boolean | null;
@@ -187,6 +188,7 @@ export type CreatorChatList = {
     stale: boolean;
     errorReason: string | null;
     dedupeKey: string | null;
+    matchedMessageKey?: string | null;
   }>;
   notes: Array<{
     creatorId: string;
@@ -342,6 +344,22 @@ export const markChatOpened = createServerFn({ method: "POST" })
     return markChatOpenedView(context.userId, data);
   });
 
+export const readFanPurchases = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string; threadKey: string }) => input)
+  .handler(async ({ context, data }) => {
+    const { getSql } = await import("@/lib/db");
+    const { ensureStaff } = await import("@/lib/workspace-store");
+    const { DEV_USER_ID, authConfigured } = await import("@/lib/auth/verify.server");
+    const { canReadCreatorNotifications } = await import("@/lib/notifications");
+    const { emptyFanPurchases, fanPurchaseSeries } = await import("../../server/of-sessions/sync/fan-purchases.ts");
+    const sql = await getSql();
+    const devMode = !authConfigured && context.userId === DEV_USER_ID;
+    const access = await ensureStaff(sql, context.userId, devMode);
+    if (!canReadCreatorNotifications(access, data.creatorId)) return emptyFanPurchases();
+    return fanPurchaseSeries(sql, data.creatorId, data.threadKey);
+  });
+
 export const loadOlderMessages = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((input: { creatorId: string; threadKey: string }) => input)
@@ -441,6 +459,7 @@ export const sendChatMessage = createServerFn({ method: "POST" })
     body: string;
     priceCents: number | null;
     vaultItemIds?: string[];
+    previewIds?: string[];
     tagHandle?: string | null;
     clientId?: string;
   }) => input)

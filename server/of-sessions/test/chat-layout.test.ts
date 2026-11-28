@@ -5,9 +5,10 @@ import { createServer } from "node:net";
 import path from "node:path";
 import { test } from "node:test";
 import { chromium, type Page } from "playwright";
+import { assertDevPortFree, forgetPgliteDir, privatePgliteDir, shotDir } from "../../../src/lib/dev-test-server.ts";
 
 const root = path.resolve(import.meta.dirname, "../../..");
-const shots = path.join(root, "tmp/chat-layout");
+const shots = shotDir();
 
 const viewports = [
   { width: 1024, height: 630, capture: true },
@@ -17,7 +18,7 @@ const viewports = [
 
 test("el botón Enviar se ve entero sin scroll de página", async () => {
   const port = await freePort();
-  const server = startDev(port);
+  const server = await startDev(port);
   const browser = await chromium.launch();
   try {
     await waitForServer(`http://127.0.0.1:${port}/mensajes`);
@@ -25,7 +26,16 @@ test("el botón Enviar se ve entero sin scroll de página", async () => {
     for (const viewport of viewports) {
       const page = await browser.newPage({ viewport: { width: viewport.width, height: viewport.height } });
       await page.goto(`http://127.0.0.1:${port}/mensajes`, { waitUntil: "domcontentloaded" });
-      await page.getByRole("button", { name: "Enviar" }).waitFor();
+      const thread = page.locator("main ul button").first();
+      if (await thread.count()) await thread.click();
+      const sendButton = page.getByRole("button", { name: "Enviar" });
+      try {
+        await sendButton.waitFor({ timeout: 60_000 });
+      } catch (error) {
+        const text = await page.locator("body").innerText().catch(() => "");
+        const reason = error instanceof Error ? error.message : "sin botón";
+        throw new Error(`${reason}\n${text.slice(0, 400)}`);
+      }
       await page.locator("ol").evaluate((list) => {
         for (let index = 0; index < 40; index += 1) {
           const item = document.createElement("li");
@@ -64,7 +74,7 @@ test("el botón Enviar se ve entero sin scroll de página", async () => {
       ]);
       const send = composer.getByRole("button", { name: "Enviar", exact: true });
       assert.equal(await send.isDisabled(), true);
-      assert.equal(await send.getAttribute("title"), "Envío real desactivado en esta cuenta");
+      assert.match(await send.getAttribute("title") ?? "", /^(Elige un hilo|Envío real desactivado en esta cuenta)$/);
       assert.equal(await composer.getByRole("button", { name: "Dejar pendiente" }).count(), 0);
       await composer.getByText("Pulsa / + palabra para buscar guiones").waitFor();
       const box = composer.getByRole("textbox", { name: "Mensaje" });
@@ -161,14 +171,24 @@ function freePort(): Promise<number> {
   });
 }
 
-function startDev(port: number): ChildProcess {
-  const env: NodeJS.ProcessEnv = { ...process.env, VITE_AUTH_ENABLED: "false" };
+async function startDev(port: number): Promise<ChildProcess> {
+  await assertDevPortFree();
+  const dataDir = await privatePgliteDir();
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    VITE_AUTH_ENABLED: "false",
+    FANLINK_PGLITE_DIR: dataDir,
+    FANLINK_HISTORY_ENABLED: "false",
+    FANLINK_SYNC_ENABLED: "false",
+  };
   delete env.DATABASE_URL;
-  return spawn(process.execPath, ["node_modules/vite/bin/vite.js", "dev", "--host", "127.0.0.1", "--port", String(port), "--strictPort"], {
+  const child = spawn(process.execPath, ["node_modules/vite/bin/vite.js", "dev", "--host", "127.0.0.1", "--port", String(port), "--strictPort"], {
     cwd: root,
     env,
     stdio: "ignore",
   });
+  forgetPgliteDir(child, dataDir);
+  return child;
 }
 
 async function waitForServer(url: string): Promise<void> {

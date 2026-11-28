@@ -12,16 +12,63 @@ export function olderChatMessagesPath(threadKey: string, oldestMessageId: string
   return `/api2/v2/chats/${encodeURIComponent(threadKey)}/messages?limit=${limit}&order=desc&skip_users=all${id}`;
 }
 
-/** hasMore en false, o una página que no baja del cursor, cierra el histórico. */
+/** hasMore en false con una página corta, o una página que no baja del cursor, cierra el histórico. */
 export function historyAdvance(input: {
   previousCursor: string | null;
   incoming: Array<{ messageKey: string; sentAt: string }>;
   hasMore: boolean;
+  pageSize?: number;
 }): { done: boolean; cursor: string | null } {
+  const pageSize = input.pageSize ?? 10;
   const cursor = oldestCursor(input.incoming) ?? input.previousCursor;
-  if (input.incoming.length === 0 || !input.hasMore) return { done: true, cursor };
+  if (input.incoming.length === 0) return { done: true, cursor };
   if (pageFinished(input.previousCursor, input.incoming)) return { done: true, cursor: input.previousCursor };
+  if (historyPageStalled(input.previousCursor, cursor, input.incoming)) {
+    return { done: true, cursor: input.previousCursor ?? cursor };
+  }
+  if (!input.hasMore && input.incoming.length < pageSize) return { done: true, cursor };
   return { done: false, cursor };
+}
+
+/** La misma página otra vez: el cursor no retrocede y no se cierra el bucle. */
+export function historyPageStalled(
+  previousCursor: string | null,
+  nextCursor: string | null,
+  incoming: Array<{ messageKey: string; sentAt: string }>,
+): boolean {
+  if (incoming.length === 0) return false;
+  if (!previousCursor || !nextCursor) return false;
+  if (nextCursor === previousCursor) return true;
+  if (incoming.every((message) => message.messageKey === previousCursor)) return true;
+  return false;
+}
+
+export type HistoryCandidate = HistoryThread & { stored: number };
+
+/**
+ * Sigue un hilo con el histórico abierto, o uno marcado cerrado que no tiene
+ * ningún mensaje guardado. El cursor de un hilo vacío no se reutiliza.
+ */
+/** Hilos que solo existen por un mensaje (el pop-up de compra) y aún no tienen fila. */
+export function orphanHistoryThreads(messageThreadKeys: readonly string[], knownThreadKeys: readonly string[]): HistoryThread[] {
+  const known = new Set(knownThreadKeys);
+  return [...new Set(messageThreadKeys)].filter((key) => key && !known.has(key)).map((threadKey) => ({
+    threadKey,
+    cursor: null,
+    done: false,
+  }));
+}
+
+export function historyCandidates(rows: HistoryCandidate[]): HistoryThread[] {
+  return rows.flatMap((row) => {
+    if (row.done && row.stored > 0) return [];
+    return [{ threadKey: row.threadKey, cursor: row.stored === 0 ? null : row.cursor, done: false }];
+  });
+}
+
+/** El bucle corre salvo que se apague. Los tests de servidor lo apagan. */
+export function historyLoopEnabled(raw: string | undefined): boolean {
+  return raw?.trim().toLowerCase() !== "false";
 }
 
 /** El cursor es el mensaje más antiguo ya guardado. Sin mensajes no hay cursor. */

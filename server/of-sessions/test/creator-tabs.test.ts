@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, readdir, readFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -8,6 +8,7 @@ import { test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { chromium } from "playwright";
 import { AccountStore } from "../store/account-store.ts";
+import { assertDevPortFree, shotFile } from "../../../src/lib/dev-test-server.ts";
 
 const root = path.resolve(import.meta.dirname, "../../..");
 
@@ -15,7 +16,7 @@ test("las pestañas de creadora caben en 1280 y los badges no se pisan", async (
   const dir = path.join(tmpdir(), `fanlink-tabs-${Date.now()}`);
   await seed(dir);
   const port = await freePort();
-  const server = startDev(dir, port);
+  const server = await startDev(dir, port);
   const browser = await chromium.launch();
   try {
     await waitForServer(`http://127.0.0.1:${port}/mensajes`);
@@ -48,7 +49,7 @@ test("las pestañas de creadora caben en 1280 y los badges no se pisan", async (
     });
     assert.match(await onlyfans.innerText(), /OnlyFans\s+3/);
     assert.match(await page.locator("img[src^='data:image/svg+xml']").nth(1).getAttribute("src") ?? "", /^data:image\/svg\+xml/);
-    await page.screenshot({ path: "/opt/cursor/artifacts/notificaciones-of.png" });
+    await page.screenshot({ path: shotFile("notificaciones-of.png") });
     await page.getByRole("button", { name: "Cerrar notificaciones" }).evaluate((node) => (node as HTMLButtonElement).click());
     await page.getByRole("button", { name: "Cerrar notificaciones" }).waitFor({ state: "hidden" });
     await page.getByRole("switch", { name: "SFW" }).click();
@@ -72,12 +73,12 @@ test("las pestañas de creadora caben en 1280 y los badges no se pisan", async (
         assert.equal(overlap, false, `${left.text} pisa a ${right.text}`);
       }
     }
-    await page.screenshot({ path: "/opt/cursor/artifacts/creator-tabs-1280.png" });
+    await page.screenshot({ path: shotFile("creator-tabs-1280.png") });
     await column.getByRole("button", { name: "Allison Miller" }).click();
     const sections = [
-      { path: "/mensajes", shot: "/opt/cursor/artifacts/creadoras-mensajes-1280.png" },
-      { path: "/notificaciones", shot: "/opt/cursor/artifacts/creadoras-operativa-1280.png", link: "Operativa" },
-      { path: "/funciones", shot: "/opt/cursor/artifacts/creadoras-funciones-1280.png", link: "Funciones inteligentes" },
+      { path: "/mensajes", shot: shotFile("creadoras-mensajes-1280.png") },
+      { path: "/notificaciones", shot: shotFile("creadoras-operativa-1280.png"), link: "Operativa" },
+      { path: "/funciones", shot: shotFile("creadoras-funciones-1280.png"), link: "Funciones inteligentes" },
     ];
     let firstRows: string[] = [];
     for (const section of sections) {
@@ -105,6 +106,7 @@ test("las pestañas de creadora caben en 1280 y los badges no se pisan", async (
   } finally {
     await browser.close().catch(() => undefined);
     server.kill("SIGTERM");
+    await rm(dir, { recursive: true, force: true });
   }
 });
 
@@ -196,7 +198,8 @@ async function seed(dir: string): Promise<void> {
   await store.create("Oculta", "9ikis52");
 }
 
-function startDev(dir: string, port: number): ChildProcess {
+async function startDev(dir: string, port: number): Promise<ChildProcess> {
+  await assertDevPortFree();
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     VITE_AUTH_ENABLED: "false",

@@ -101,12 +101,14 @@ export function visibleCreatorBadges(
   return badges;
 }
 
-/** Chats con no leídos, por creadora. No mezcla cuentas. */
+/** Suma de unreadMessagesCount por creadora, tal como viene de OnlyFans. */
 export function unreadByCreator(threads: readonly { creatorId: string; unread: number | null }[]): Record<string, number> {
   const counts: Record<string, number> = {};
   for (const thread of threads) {
-    if (!thread.creatorId || thread.creatorId === "all" || (thread.unread ?? 0) <= 0) continue;
-    counts[thread.creatorId] = (counts[thread.creatorId] ?? 0) + 1;
+    if (!thread.creatorId || thread.creatorId === "all") continue;
+    const unread = thread.unread ?? 0;
+    if (unread <= 0) continue;
+    counts[thread.creatorId] = (counts[thread.creatorId] ?? 0) + unread;
   }
   return counts;
 }

@@ -103,6 +103,7 @@ export function runnableJobIds(jobs: readonly SendJob[], holds: readonly LaneHol
 export function bubbleCaption(state: SendJobState, reason: string | null): string | null {
   if (state === "queued" || state === "sending") return "Enviando…";
   if (state === "awaiting") return "Pendiente de confirmar";
+  if (state === "error" && reason?.trim() === "Envío en seco") return "Envío en seco";
   if (state === "error") return `No se envió: ${reason?.trim() || "No se envió"}`;
   return null;
 }

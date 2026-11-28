@@ -65,6 +65,7 @@ export function useInboxSelection<T extends InboxThread>(input: {
 } {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const pinned = useRef(false);
+  const explicitId = useRef<string | null>(null);
   const marked = useRef<{ id: string; unread: number | null } | null>(null);
   const onMark = useRef(input.onMark);
   onMark.current = input.onMark;
@@ -104,6 +105,7 @@ export function useInboxSelection<T extends InboxThread>(input: {
   useEffect(() => {
     const current = selectedRef.current;
     if (!current || current.unread === 0) return;
+    if (explicitId.current !== current.id) return;
     const seen = marked.current;
     if (seen && seen.id === current.id && !unreadGrew(seen.unread, current.unread)) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -130,6 +132,7 @@ export function useInboxSelection<T extends InboxThread>(input: {
 
   const choose = useCallback((thread: { id: string }) => {
     pinned.current = true;
+    explicitId.current = thread.id;
     setSelectedId(thread.id);
   }, []);
 
@@ -142,6 +145,7 @@ export function useInboxSelection<T extends InboxThread>(input: {
     if (!next) return;
     event.preventDefault();
     pinned.current = true;
+    explicitId.current = next.id;
     setSelectedId(next.id);
   }, [selectedId]);
 

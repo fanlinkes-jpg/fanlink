@@ -28,6 +28,7 @@ export type NotificationListItem = {
   postLink: string | null;
   postText: string | null;
   ofType: string | null;
+  messageRef: string | null;
   labels: NotificationLabels;
 };
 
@@ -65,7 +66,7 @@ export const ensureNoticeTab = createServerFn({ method: "POST" })
 
 export const listCreatorNotifications = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
-  .validator((input: { creatorId: string; cursor?: string | null }) => input)
+  .validator((input: { creatorId: string; cursor?: string | null; tab?: NotificationTab | null }) => input)
   .handler(async ({ context, data }): Promise<NotificationList> => {
     const { getSql } = await import("@/lib/db");
     const { ensureStaff } = await import("@/lib/workspace-store");
@@ -74,7 +75,7 @@ export const listCreatorNotifications = createServerFn({ method: "GET" })
     const sql = await getSql();
     const devMode = !authConfigured && context.userId === DEV_USER_ID;
     const access = await ensureStaff(sql, context.userId, devMode);
-    const page = await notificationPageFor(sql, access, data.creatorId, data.cursor);
+    const page = await notificationPageFor(sql, access, data.creatorId, data.cursor, data.tab);
     const { getOfSessionManager } = await import("./of-sessions-runtime.server");
     let sessionNotice: string | null = null;
     try {
@@ -151,6 +152,90 @@ export const listCreatorNoticeBadges = createServerFn({ method: "GET" })
       badges.push({ creatorId, unread: ofNoticeTotal(page.counts) });
     }
     return { badges };
+  });
+
+export type PurchaseMessageCard = {
+  messageId: string;
+  threadKey: string;
+  body: string;
+  priceCents: number | null;
+  media: Array<{ kind: "foto" | "video" | "audio" | null; seconds: number | null }>;
+  retryAfterMs: number;
+};
+
+export const readPurchaseMessage = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .validator((input: { creatorId: string; messageRef: string; fanKey: string | null }) => input)
+  .handler(async ({ context, data }): Promise<PurchaseMessageCard | null> => {
+    const { getSql } = await import("@/lib/db");
+    const { ensureStaff } = await import("@/lib/workspace-store");
+    const { DEV_USER_ID, authConfigured } = await import("@/lib/auth/verify.server");
+    const { canReadCreatorNotifications } = await import("@/lib/notifications");
+    const { parseMessageRef, readMirroredPurchase, fetchPurchaseMessage, savePurchasedMessage } = await import("../../server/of-sessions/sync/purchase-message.ts");
+    const sql = await getSql();
+    const devMode = !authConfigured && context.userId === DEV_USER_ID;
+    const access = await ensureStaff(sql, context.userId, devMode);
+    if (!canReadCreatorNotifications(access, data.creatorId)) return null;
+    const ref = parseMessageRef(data.messageRef);
+    if (!ref.messageId) return null;
+    const mirrored = await readMirroredPurchase(sql, data.creatorId, ref.messageId);
+    if (mirrored) {
+      await savePurchasedMessage(sql, data.creatorId, mirrored);
+      return {
+        messageId: mirrored.messageKey,
+        threadKey: mirrored.threadKey,
+        body: mirrored.body,
+        priceCents: mirrored.priceCents,
+        media: (mirrored.media ?? []).map((item) => ({ kind: item.kind, seconds: item.seconds })),
+        retryAfterMs: 0,
+      };
+    }
+    const fanId = ref.threadId ?? data.fanKey;
+    if (!fanId || !/^\d{1,18}$/.test(fanId)) return null;
+    const { getOfSessionManager } = await import("@/lib/of-sessions-runtime.server");
+    const { sessionForApi, signedHeaders } = await import("../../server/of-sessions/sync/of-chat-api.ts");
+    const { loadSignRules } = await import("../../server/of-sessions/sync/of-sign.ts");
+    const { awaitAccountGap, withAccountApi } = await import("../../server/of-sessions/sync/api-list-pace.ts");
+    const sessions = await getOfSessionManager();
+    const account = (await sessions.listAccounts()).find((item) => item.creatorId === data.creatorId);
+    if (!account) return null;
+    let state;
+    try {
+      state = await sessions.readStorageState(account.id);
+    } catch {
+      return null;
+    }
+    const auth = sessionForApi(state, Date.now());
+    if ("reason" in auth) return null;
+    const rules = await loadSignRules(fetch, Date.now());
+    const loaded = await fetchPurchaseMessage({
+      fanId,
+      messageId: ref.messageId,
+      threadKey: ref.threadId ?? fanId,
+      accountUserId: account.identityUserId,
+      request: (path) => withAccountApi(account.id, async () => {
+        await awaitAccountGap(account.id, () => Date.now(), (ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+        const response = await fetch(`https://onlyfans.com${path}`, {
+          headers: signedHeaders(rules, path, auth, Date.now()),
+        });
+        if (response.status === 429) {
+          const retry = Number(response.headers.get("retry-after"));
+          return { status: 429, body: null, retryAfterMs: Number.isFinite(retry) && retry > 0 ? retry * 1000 : 1_500 };
+        }
+        const body = response.ok ? await response.json().catch(() => null) : null;
+        return { status: response.status, body, retryAfterMs: 0 };
+      }),
+    });
+    if (!loaded.message) return { messageId: ref.messageId, threadKey: ref.threadId ?? fanId, body: "", priceCents: null, media: [], retryAfterMs: loaded.retryAfterMs };
+    await savePurchasedMessage(sql, data.creatorId, loaded.message);
+    return {
+      messageId: loaded.message.messageKey,
+      threadKey: loaded.message.threadKey,
+      body: loaded.message.body,
+      priceCents: loaded.message.priceCents,
+      media: (loaded.message.media ?? []).map((item) => ({ kind: item.kind, seconds: item.seconds })),
+      retryAfterMs: loaded.retryAfterMs,
+    };
   });
 
 async function markReadEnabled(creatorId: string): Promise<boolean> {

@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdir } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -8,6 +7,7 @@ import test from "node:test";
 import { chromium, type Page } from "playwright";
 import { VAULT_CARD_FRAME, VAULT_CARD_IMAGE } from "../../../src/lib/vault-card-frame.ts";
 import { vaultGridColumns } from "../../../src/lib/vault-grid.ts";
+import { assertDevPortFree, forgetPgliteDir, privatePgliteDir, shotFile } from "../../../src/lib/dev-test-server.ts";
 
 const root = path.resolve(import.meta.dirname, "../../..");
 
@@ -40,7 +40,7 @@ test("la cuadrícula de la bóveda no aplasta una tira a unos píxeles", async (
 
 test("el panel real del chat monta VaultBrowser con tarjetas cuadradas", async () => {
   const port = await freePort();
-  const server = startDev(port);
+  const server = await startDev(port);
   const browser = await chromium.launch();
   const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
   let releaseVideo: () => void = () => undefined;
@@ -211,7 +211,7 @@ test("el panel real del chat monta VaultBrowser con tarjetas cuadradas", async (
 
 test("pulsar una carpeta durante la carga no vuelve a Todos", async () => {
   const port = await freePort();
-  const server = startDev(port);
+  const server = await startDev(port);
   const browser = await chromium.launch();
   let releaseAll: () => void = () => undefined;
   const holdAll = new Promise<void>((resolve) => {
@@ -369,10 +369,8 @@ function serverExport(url: string): string {
 
 async function savePanelShot(page: Page): Promise<string> {
   const name = "boveda-panel-1440.png";
-  const artifacts = "/opt/cursor/artifacts";
+  const shotPath = shotFile(name);
   try {
-    await mkdir(artifacts, { recursive: true });
-    const shotPath = path.join(artifacts, name);
     await page.screenshot({ path: shotPath });
     return shotPath;
   } catch (error) {
@@ -452,14 +450,18 @@ function freePort(): Promise<number> {
   });
 }
 
-function startDev(port: number): ChildProcess {
-  const env: NodeJS.ProcessEnv = { ...process.env, VITE_AUTH_ENABLED: "false" };
+async function startDev(port: number): Promise<ChildProcess> {
+  await assertDevPortFree();
+  const dataDir = await privatePgliteDir();
+  const env: NodeJS.ProcessEnv = { ...process.env, VITE_AUTH_ENABLED: "false", FANLINK_PGLITE_DIR: dataDir, FANLINK_HISTORY_ENABLED: "false" };
   delete env.DATABASE_URL;
-  return spawn(process.execPath, ["node_modules/vite/bin/vite.js", "dev", "--host", "127.0.0.1", "--port", String(port), "--strictPort"], {
+  const child = spawn(process.execPath, ["node_modules/vite/bin/vite.js", "dev", "--host", "127.0.0.1", "--port", String(port), "--strictPort"], {
     cwd: root,
     env,
     stdio: "ignore",
   });
+  forgetPgliteDir(child, dataDir);
+  return child;
 }
 
 async function waitForServer(url: string): Promise<void> {

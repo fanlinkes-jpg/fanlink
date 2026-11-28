@@ -45,6 +45,8 @@ import {
   tabOf,
   unreadCount,
   canReadCreatorNotifications,
+  notesResponseApplies,
+  notificationOfRead,
   visibleNotifications,
   SIN_DATOS,
   type NotificationRecord,
@@ -140,6 +142,43 @@ test("el chatter solo ve las notificaciones de sus cuentas y la dueña ve todas"
   assert.equal(canReadCreatorNotifications(owner, "c-alba"), true);
   assert.deepEqual(visibleNotifications(rows, owner, "c-nora").map((row) => row.key), ["ajena"]);
   assert.deepEqual(visibleNotifications(rows, owner, "c-alba").map((row) => row.key), ["propia"]);
+});
+
+test("el leído del CRM sigue a isRead de OnlyFans", () => {
+  const read = parseNotificationPayload([{ id: "1", type: "purchases", isRead: true, createdAt: "2026-11-01T00:00:00.000Z", text: "compra" }], {})[0];
+  assert.equal(read?.ofUnread, false);
+  const unread = parseNotificationPayload([{ id: "2", type: "purchases", read: false, createdAt: "2026-11-01T00:00:00.000Z", text: "compra" }], {})[0];
+  assert.equal(unread?.ofUnread, true);
+  assert.equal(notificationOfRead({ ofUnread: false, seenAt: null }), true);
+  assert.equal(notificationOfRead({ ofUnread: true, seenAt: "2026-11-02T00:00:00.000Z" }), false);
+  assert.equal(notificationOfRead({ ofUnread: null, seenAt: "2026-11-02T00:00:00.000Z" }), true);
+});
+
+test("descarta respuestas de notificaciones de otra creadora o pestaña", () => {
+  assert.equal(notesResponseApplies({
+    requestId: 3,
+    creatorId: "jose",
+    tab: "all",
+    currentId: 3,
+    currentCreatorId: "jose",
+    currentTab: "all",
+  }), true);
+  assert.equal(notesResponseApplies({
+    requestId: 2,
+    creatorId: "jose",
+    tab: "all",
+    currentId: 3,
+    currentCreatorId: "jose",
+    currentTab: "all",
+  }), false);
+  assert.equal(notesResponseApplies({
+    requestId: 3,
+    creatorId: "jose",
+    tab: "purchases",
+    currentId: 3,
+    currentCreatorId: "jose",
+    currentTab: "all",
+  }), false);
 });
 
 test("filtra por pestaña, texto y fechas, y cuenta no leídas", () => {
@@ -468,7 +507,15 @@ test("cada pestaña usa el type de OnlyFans y no mezcla compras con propinas", (
   assert.deepEqual(noticesForOfTab(rows, "purchases").map((row) => row.key), ["compra"]);
   assert.deepEqual(noticesForOfTab(rows, "tips").map((row) => row.key), ["propina"]);
   assert.deepEqual(noticesForOfTab(rows, "promotions").map((row) => row.key), ["directo"]);
-  assert.deepEqual(noticesForOfTab(rows, "all").map((row) => row.key), ["todo"]);
+  assert.deepEqual(noticesForOfTab(rows, "all").map((row) => row.key), ["todo", "compra", "propina", "directo"]);
+  assert.deepEqual(noticesForOfTab([
+    { ofType: null, kind: "tip" as const, key: "suelta" },
+    { ofType: "purchases", kind: "ppv" as const, key: "compra" },
+  ], "tips").map((row) => row.key), ["suelta"]);
+  assert.deepEqual(noticesForOfTab([
+    { ofType: null, kind: "tip" as const, key: "suelta" },
+    { ofType: "purchases", kind: "ppv" as const, key: "compra" },
+  ], "all").map((row) => row.key), ["suelta", "compra"]);
   assert.deepEqual(noticesForOfTab(rows, "tags"), []);
   assert.match(ofTabListNote({ tab: "tags", unread: 2, listed: 0 }) ?? "", /2 no leídas/);
   assert.match(ofTabListNote({ tab: "promotions", unread: 3, listed: 1 }) ?? "", /3 no leídas/);

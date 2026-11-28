@@ -8,7 +8,10 @@ import {
   discardOutboundError,
   expireStuckPending,
   insertOutboundOnce,
+  rememberDedupeKey,
+  sentMessageForDedupe,
   markOutboundAwaiting,
+  markOutboundDryRun,
   markOutboundError,
   markOutboundSent,
   pulseOutboundLease,
@@ -70,7 +73,7 @@ export function parseClientId(value: unknown): string | null {
 export function sealedOutbound(row: Pick<OutboundClaimRow, "status" | "errorReason" | "ofMessageKey" | "matchedMessageKey">): boolean {
   if (row.status === "sent" || row.status === "discarded") return true;
   if (row.ofMessageKey || row.matchedMessageKey) return true;
-  if (row.errorReason === "Pendiente de confirmar") return true;
+  if (row.errorReason === "Pendiente de confirmar" || row.errorReason === "Envío en seco") return true;
   return false;
 }
 
@@ -87,6 +90,7 @@ export type SendChatHooks = {
   } | null;
   env: NodeJS.ProcessEnv;
   open: () => Promise<{ messageId: string | null; reason: string | null; awaitingId?: boolean; attachedIds?: string[] }>;
+  postPpv?: (input: { fanId: string; text: string; priceCents: number | null; mediaIds: string[]; previewIds: string[] }) => Promise<{ messageId: string | null; reason: string | null; dryRun: boolean }>;
   /** Lo rellena el envío real, solo con ids ya comprobados, justo antes de abrir OnlyFans. */
   vaultPieces?: VaultSendPiece[];
 };
@@ -98,6 +102,7 @@ type SendInput = {
   body: string;
   priceCents: number | null;
   vaultItemIds?: string[];
+  previewIds?: string[];
   tagHandle?: string | null;
   clientId?: string | null;
 };
@@ -149,7 +154,8 @@ export async function sendChatMessageView(
   const vaultItemIds = replay
     ? await listOutboundMediaIds(sql, replay.id)
     : (input.vaultItemIds ?? []).map((item) => item.trim()).filter(Boolean);
-  const planned = await prepareVaultSend(sql, creatorId, vaultItemIds);
+  const previewIds = (input.previewIds ?? []).map((item) => item.trim()).filter((item) => vaultItemIds.includes(item));
+  const planned = await prepareVaultSend(sql, creatorId, vaultItemIds, previewIds);
   if (!planned.ok) return { sent: false, reason: planned.reason, messageId: null };
   const id = clientId ?? crypto.randomUUID();
   const claimKey = sendClaimKey({
@@ -193,6 +199,13 @@ export async function sendChatMessageView(
       }
       if (vaultItemIds.length > 0) await recordOutboundMedia(sql, id, creatorId, vaultItemIds);
     }
+    await rememberDedupeKey(sql, id, claimKey);
+    const already = await sentMessageForDedupe(sql, creatorId, claimKey);
+    if (already && already !== id) {
+      await markOutboundSent(sql, id, already);
+      await releaseSendClaim(sql, claimKey, id);
+      return { sent: true, reason: null, messageId: already };
+    }
     stopLease = startLease(sql, id, claimKey);
     const result = await deliverChatSend({
       flag: prepared.env.FANLINK_ENABLE_SEND,
@@ -204,11 +217,32 @@ export async function sendChatMessageView(
       sales: planned.sales,
       outboundMedia: vaultItemIds.length > 0 ? { sql, outboundId: id } : null,
       open: async () => {
+        if (planned.pieces.length > 0 && prepared.postPpv) {
+          const posted = await prepared.postPpv({
+            fanId: fanKey ?? threadKey,
+            text: body,
+            priceCents,
+            mediaIds: planned.pieces.map((piece) => piece.id),
+            previewIds: planned.pieces.filter((piece) => piece.free === true).map((piece) => piece.id),
+          });
+          if (posted.dryRun) return { messageId: null, reason: posted.reason ?? "Envío en seco" };
+          return {
+            messageId: posted.messageId,
+            reason: posted.reason,
+            awaitingId: posted.reason === "Pendiente de confirmar",
+            attachedIds: posted.messageId ? planned.pieces.map((piece) => piece.id) : [],
+          };
+        }
         browserOpened = true;
         return prepared.open();
       },
     });
     if (result.opened) browserOpened = true;
+    if (result.reason === "Envío en seco") {
+      await markOutboundDryRun(sql, id);
+      await releaseSendClaim(sql, claimKey, id);
+      return { sent: false, reason: "Envío en seco", messageId: null };
+    }
     if (result.sent && result.messageId) {
       await markOutboundSent(sql, id, result.messageId);
       confirmedId = result.messageId;

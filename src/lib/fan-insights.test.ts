@@ -35,7 +35,18 @@ test("la ficha no inventa gasto, propinas ni suscripción", () => {
     ],
     ppvPrices: [500, 300],
   });
-  assert.equal(filled.total, "$15.00");
+  assert.equal(filled.total, "$18.75");
+  assert.equal(fanInsightModel({
+    spentCents: 8477,
+    tipsCents: null,
+    status: null,
+    expiresAt: null,
+    renewAuto: null,
+    subPriceCents: null,
+    notes: "",
+    transactions: [],
+    ppvPrices: [],
+  }).total, "$105.96");
   assert.match(filled.last, /\$8.00 · message · 2026-11-05/);
   assert.equal(filled.ppvTotal, "$8.00");
   assert.equal(filled.ppvAvg, "$4.00");
