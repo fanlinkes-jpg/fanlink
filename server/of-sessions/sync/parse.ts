@@ -9,7 +9,7 @@
  * error. No se copian otros campos.
  */
 
-export type EarningKind = "total" | "subscription" | "tip" | "message" | "post";
+export type EarningKind = "total" | "subscription" | "tip" | "message" | "post" | "stream" | "referral";
 
 export type EarningRow = {
   day: string;
@@ -106,6 +106,7 @@ const EMPTY_LIST_KEYS = [
   "history",
   "operations",
   "earnings",
+  "chartAmount",
 ];
 
 /** Lista presente y sin filas. Un objeto sin esas claves no cuenta como vacío. */
@@ -122,6 +123,16 @@ export function outcomeFromParsed(rowCount: number, payload: unknown): SectionOu
   if (rowCount > 0) return "ok";
   if (isRecognizedEmpty(payload)) return "empty";
   return "changed";
+}
+
+/**
+ * Resultado de una respuesta de ingresos. Una lista de movimientos vacía no prueba que no haya ingresos:
+ * solo el gráfico (`/chart`) vacío es un cero real. Sin gráfico visto sigue «sin datos todavía», no un $0.
+ */
+export function earningsOutcomeFor(path: string | null, rowCount: number, payload: unknown): SectionOutcome {
+  const base = outcomeFromParsed(rowCount, payload);
+  if (base === "empty" && !/\/chart/i.test(path ?? "")) return "pending";
+  return base;
 }
 
 export function sectionFailure(label: string, outcome: SectionOutcome): string | null {
@@ -192,15 +203,34 @@ const TX_KINDS: Record<string, TxKind> = {
   ref: "referral",
 };
 
+/**
+ * Tipo del movimiento: el campo `type`/`kind`/`source` si es de los conocidos; si no, el texto de `type` o
+ * `description` («Payment for message from …», «Tip from …», «Subscription …»). Sin pista clara no se adivina.
+ */
+function txKindOf(record: Record<string, unknown>): TxKind | null {
+  const raw = String(record.type ?? record.kind ?? record.source ?? "").toLowerCase().trim();
+  const exact = TX_KINDS[raw] ?? TX_KINDS[raw.replace(/[\s-]+/g, "_")];
+  if (exact) return exact;
+  const text = `${raw} ${typeof record.description === "string" ? record.description.toLowerCase() : ""}`;
+  if (/renew|recurr/.test(text)) return "renewal";
+  if (/subscri/.test(text)) return "subscription";
+  if (/\btips?\b|tipped/.test(text)) return "tip";
+  if (/message|chat|ppv/.test(text)) return "message";
+  if (/\bposts?\b|media/.test(text)) return "post";
+  if (/stream|live/.test(text)) return "stream";
+  if (/referr/.test(text)) return "referral";
+  return null;
+}
+
 export function parseTransactions(value: unknown, now = new Date()): TransactionRow[] {
   const rows: TransactionRow[] = [];
   walkTransactions(value, rows, 0, now);
   return dedupeTransactions(rows);
 }
 
-export function parseEarningsJson(value: unknown, now = new Date()): EarningRow[] {
+export function parseEarningsJson(value: unknown, now = new Date(), hint: EarningsHint = {}): EarningRow[] {
   const rows: EarningRow[] = [];
-  walkEarnings(value, "USD", rows, 0);
+  walkEarnings(value, "USD", rows, 0, chartKindOf(hint.by));
   return dedupeEarnings(rows.filter((row) => dayOk(row.day, now)));
 }
 
@@ -302,30 +332,92 @@ export function chartEarnings(rows: EarningRow[]): Array<{ day: string; amountCe
     .map(([day, slot]) => ({ day, amountCents: slot.parts > 0 ? slot.parts : slot.total }));
 }
 
-function walkEarnings(value: unknown, currency: string, rows: EarningRow[], depth: number): void {
-  if (!value || typeof value !== "object" || depth > 6 || rows.length > 500) return;
+/**
+ * Gráfico de ingresos de OnlyFans (`GET /api2/v2/earnings/chart?by=…`, forma publicada):
+ * `{ chartAmount: [{ date, count }], chartCount: [{ date, count }], total, gross, delta }`.
+ * `chartAmount[].count` son dólares del día; `chartCount` es un número de operaciones y no se suma como dinero.
+ * La variante agregada trae un bloque así por tipo: `{ total: {…}, subscribes: {…}, tips: {…}, chat_messages: {…}, post: {…}, stream: {…} }`.
+ * El tipo sale del parámetro `by` de la petición o de la clave que envuelve el bloque.
+ */
+export type EarningsHint = { by?: string | null };
+
+const CHART_TYPES: Record<string, EarningKind> = {
+  total: "total",
+  subscribes: "subscription",
+  subscriptions: "subscription",
+  subscription: "subscription",
+  tips: "tip",
+  tip: "tip",
+  tips_post: "tip",
+  tips_profile: "tip",
+  tips_chat: "tip",
+  chat_messages: "message",
+  messages: "message",
+  message: "message",
+  post: "post",
+  posts: "post",
+  stream: "stream",
+  streams: "stream",
+  ref: "referral",
+  referral: "referral",
+  referrals: "referral",
+};
+
+export function chartKindOf(by: string | null | undefined): EarningKind | null {
+  if (!by) return null;
+  return CHART_TYPES[by.trim().toLowerCase()] ?? null;
+}
+
+function chartRows(record: Record<string, unknown>, kind: EarningKind, currency: string, rows: EarningRow[]): boolean {
+  const chart = record.chartAmount;
+  if (!Array.isArray(chart)) return false;
+  const points: Array<{ day: string; cents: number }> = [];
+  for (const item of chart.slice(0, 400)) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const point = item as Record<string, unknown>;
+    const day = DATE_KEYS.map((key) => dayOf(point[key])).find((value) => value != null) ?? null;
+    const amount = cents(point.count ?? point.amount ?? point.value);
+    if (day && amount != null) points.push({ day, cents: amount });
+  }
+  // OnlyFans manda `total` (neto) y `gross` del periodo. Si la suma del gráfico es el neto, se lleva a bruto con esa razón;
+  // si ya es el bruto, la razón es 1. Sin `gross` se guarda tal cual.
+  const sum = points.reduce((total, point) => total + point.cents, 0);
+  const gross = cents(record.gross);
+  const factor = gross != null && gross > 0 && sum > 0 ? gross / sum : 1;
+  for (const point of points) rows.push({ day: point.day, kind, amountCents: Math.round(point.cents * factor), currency });
+  return true;
+}
+
+function walkEarnings(value: unknown, currency: string, rows: EarningRow[], depth: number, kind: EarningKind | null = null): void {
+  if (!value || typeof value !== "object" || depth > 6 || rows.length > 2000) return;
   if (Array.isArray(value)) {
     if (value.length === 2 && dayOf(value[0]) && cents(value[1]) != null) {
-      walkEarnings({ date: value[0], total: value[1] }, currency, rows, depth + 1);
+      walkEarnings({ date: value[0], total: value[1] }, currency, rows, depth + 1, kind);
       return;
     }
-    for (const item of value.slice(0, 120)) walkEarnings(item, currency, rows, depth + 1);
+    for (const item of value.slice(0, 120)) walkEarnings(item, currency, rows, depth + 1, kind);
     return;
   }
   const record = value as Record<string, unknown>;
   const nextCurrency = clean(record.currency, 8)?.toUpperCase() ?? currency;
+  if (chartRows(record, kind ?? "total", nextCurrency, rows)) return;
   pushEarningPoint(record, nextCurrency, rows);
   for (const [key, child] of Object.entries(record)) {
     if (SECRET.test(key)) continue;
+    const typed = CHART_TYPES[key.toLowerCase()];
+    if (typed && child && typeof child === "object") {
+      walkEarnings(child, nextCurrency, rows, depth + 1, typed);
+      continue;
+    }
     if (LIST_KEYS.includes(key)) {
-      walkEarnings(child, nextCurrency, rows, depth + 1);
+      walkEarnings(child, nextCurrency, rows, depth + 1, kind);
       continue;
     }
     if (/^\d{4}-\d{2}-\d{2}$/.test(key)) {
       if (child && typeof child === "object" && !Array.isArray(child)) {
-        walkEarnings({ date: key, ...(child as Record<string, unknown>) }, nextCurrency, rows, depth + 1);
+        walkEarnings({ date: key, ...(child as Record<string, unknown>) }, nextCurrency, rows, depth + 1, kind);
       } else if (typeof child === "number" || typeof child === "string") {
-        walkEarnings({ date: key, total: child }, nextCurrency, rows, depth + 1);
+        walkEarnings({ date: key, total: child }, nextCurrency, rows, depth + 1, kind);
       }
     }
   }
@@ -432,7 +524,7 @@ function walkTransactions(value: unknown, rows: TransactionRow[], depth: number,
 
 function transactionFrom(record: Record<string, unknown>, now: Date): TransactionRow | null {
   const txKey = numericId(record.id) ?? clean(record.id, 80);
-  const kind = TX_KINDS[String(record.type ?? record.kind ?? record.source ?? "").toLowerCase()];
+  const kind = txKindOf(record);
   const gross = cents(record.amount ?? record.gross ?? record.total ?? record.value);
   const occurredAt = isoStamp(record.createdAt ?? record.created_at ?? record.date ?? record.time);
   if (!txKey || !kind || gross == null || !occurredAt || !dayOk(occurredAt.slice(0, 10), now)) return null;

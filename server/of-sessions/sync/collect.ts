@@ -5,6 +5,7 @@ import type { SiteAdapter } from "../sessions/site.ts";
 import {
   classifyJsonPath,
   outcomeFromParsed,
+  earningsOutcomeFor,
   parseEarningsDom,
   parseEarningsJson,
   parseFansDom,
@@ -53,6 +54,7 @@ export async function collectCreatorRead(
   const now = options.now ?? new Date();
   const notes = {
     paths: [] as string[],
+    apiSeen: [] as string[],
     earnings: [] as EarningRow[],
     fans: [] as FanRow[],
     transactions: [] as TransactionRow[],
@@ -122,6 +124,10 @@ export async function collectCreatorRead(
         });
     logUnparsed("lectura", "ingresos", notes.earningsOutcome, notes.earningsShape);
     logUnparsed("lectura", "fans", notes.fansOutcome, notes.fansShape);
+    const unreadable = (outcome: SectionOutcome) => outcome === "pending" || outcome === "changed";
+    if (unreadable(notes.fansOutcome) || (options.includeEarnings && unreadable(notes.earningsOutcome))) {
+      console.info(`[fanlink:lectura] rutas api2 vistas (${notes.apiSeen.length}): ${notes.apiSeen.join(" ") || "ninguna"}`);
+    }
     if (reason) {
       console.info(`[fanlink:lectura] ${reason}${notes.paths.length ? ` | json: ${notes.paths.join(", ")}` : ""}`);
     }
@@ -202,6 +208,8 @@ function pageLoginReason(earnings: boolean, fans: boolean): string {
 
 type ReadNotes = {
   paths: string[];
+  /** Rutas api2 vistas, sin query y con los ids numéricos como :n. Solo sirve para el log de diagnóstico. */
+  apiSeen: string[];
   earnings: EarningRow[];
   fans: FanRow[];
   transactions: TransactionRow[];
@@ -328,6 +336,7 @@ async function observe(
   try {
     url = response.url();
     logApiResponse("lectura", url, response.status());
+    noteApiPath(notes, url);
     if (isLoginChallengeUrl(url)) notes.loginRequired = true;
     const kind = classifyJsonPath(url);
     const type = (response.headers()["content-type"] ?? "").toLowerCase();
@@ -363,12 +372,12 @@ async function observe(
     }
     const parsed = JSON.parse(raw) as unknown;
     if (kind === "earnings") {
-      const rows = parseEarningsJson(parsed, now);
+      const rows = parseEarningsJson(parsed, now, { by: earningsByParam(url) });
       const txs = parseTransactions(parsed, now);
       if (rows.length && notes.earningsSeenAt == null) notes.earningsSeenAt = Date.now();
       notes.earnings = mergeEarnings([...notes.earnings, ...rows]);
       notes.transactions = mergeTransactions([...notes.transactions, ...txs]);
-      rememberSection(notes, kind, safe, outcomeFromParsed(rows.length + txs.length, parsed), parsed);
+      rememberSection(notes, kind, safe, earningsOutcomeFor(safe, rows.length + txs.length, parsed), parsed);
       return;
     }
     const fans = parseFansJson(parsed, now);
@@ -379,6 +388,27 @@ async function observe(
     const kind = classifyJsonPath(url);
     if (kind === "other") return;
     rememberSection(notes, kind, jsonUrlWithoutSecrets(url), "changed", null);
+  }
+}
+
+/** El parámetro `by` de la petición del gráfico (total, subscribes, tips…). Es el tipo del gráfico, no un dato sensible. */
+function noteApiPath(notes: ReadNotes, url: string): void {
+  try {
+    const path = new URL(url).pathname.toLowerCase();
+    if (!path.includes("/api2/")) return;
+    const norm = path.replace(/\d{3,}/g, ":n");
+    if (!notes.apiSeen.includes(norm) && notes.apiSeen.length < 40) notes.apiSeen.push(norm);
+  } catch {
+    // sin URL válida no hay nada que anotar
+  }
+}
+
+function earningsByParam(url: string): string | null {
+  try {
+    const value = new URL(url).searchParams.get("by");
+    return value && /^[a-z_]{1,24}$/i.test(value) ? value : null;
+  } catch {
+    return null;
   }
 }
 
