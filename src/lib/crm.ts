@@ -31,6 +31,9 @@ export type Creator = {
   nick?: string;
   tag?: string;
   staff?: string[];
+  gender?: string;
+  notes?: string;
+  photoUrl?: string;
 };
 
 export type Fan = {
@@ -249,6 +252,7 @@ type CrmState = DataSlice & {
   /** Mete en la consola de turnos a las personas reales del servidor que aún no están. */
   ensureEmployees: (people: Array<{ id: string; name: string; role: Role }>) => void;
   addCreator: (input: { name: string; nick: string; handle: string; platform: Platform; city: string; tag: string }) => void;
+  updateCreator: (id: string, patch: Partial<Pick<Creator, "name" | "nick" | "handle" | "platform" | "city" | "tag" | "status" | "gender" | "notes" | "photoUrl">>) => void;
   addStopWord: (word: string) => void;
   removeStopWord: (word: string) => void;
   setCopilot: (on: boolean) => void;
@@ -376,6 +380,23 @@ export function suggestReplies(fan: Fan | undefined, copilot: boolean) {
     "Tengo un set que encaja con lo que ya te gustó. ¿Te lo dejo?",
     "Puedo ajustarte el precio del set corto si quieres probar esta línea.",
   ];
+}
+
+
+function cleanCreatorPatch(patch: Partial<Pick<Creator, "name" | "nick" | "handle" | "platform" | "city" | "tag" | "status" | "gender" | "notes" | "photoUrl">>): typeof patch {
+  const next = { ...patch };
+  if (typeof next.name === "string") next.name = next.name.trim() || "Creadora";
+  if (typeof next.nick === "string") next.nick = next.nick.trim();
+  if (typeof next.handle === "string") {
+    const handle = next.handle.trim();
+    next.handle = handle ? (handle.startsWith("@") ? handle : `@${handle}`) : handle;
+  }
+  if (typeof next.city === "string") next.city = next.city.trim();
+  if (typeof next.tag === "string") next.tag = next.tag.trim();
+  if (typeof next.gender === "string") next.gender = next.gender.trim();
+  if (typeof next.notes === "string") next.notes = next.notes.trim();
+  if (typeof next.photoUrl === "string") next.photoUrl = next.photoUrl.trim();
+  return next;
 }
 
 export const useCrm = create<CrmState>()((set, get) => ({
@@ -636,6 +657,10 @@ export const useCrm = create<CrmState>()((set, get) => ({
               staff: [],
             },
           ],
+        })),
+      updateCreator: (id, patch) =>
+        set((s) => ({
+          creators: s.creators.map((item) => (item.id === id ? { ...item, ...cleanCreatorPatch(patch) } : item)),
         })),
       addStopWord: (word) =>
         set((s) => {
