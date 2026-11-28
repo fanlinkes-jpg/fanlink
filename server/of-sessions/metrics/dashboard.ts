@@ -24,7 +24,7 @@ export type DashboardCreatorRead = {
 
 /** La vista que arma listDashboardView. Una cuenta fuera de las asignadas no entra. */
 export function dashboardViewFor(input: {
-  access: { role: "owner" | "member"; creatorIds: string[] };
+  access: { role: "owner" | "member"; creatorIds: string[]; perms?: readonly string[] };
   accounts: Array<{ id: string; creatorId: string | null; label: string; status: string; connection: string }>;
   reads: DashboardCreatorRead[];
   pauses: Array<{ accountId: string; reason: string }>;
