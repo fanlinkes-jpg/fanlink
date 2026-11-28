@@ -7,7 +7,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { DIGEST_BODY_CHARS, OPEN_THREAD_MESSAGES, listChats } from "../sync/chat-store.ts";
 import type { ReadSql } from "../sync/store.ts";
 
-const SCHEMA = ["0007_of_reads.sql", "0008_sync_schedule.sql", "0009_of_chats.sql", "0013_chat_price.sql", "0018_chat_preview.sql", "0019_chat_author.sql", "0063_staff_employees.sql", "0064_outbound_author_name.sql", "0020_chat_card.sql", "0021_fan_profile.sql", "0022_message_media.sql", "0024_outbound_schedule.sql", "0025_outbound_send.sql", "0026_chat_history.sql", "0045_chat_unread_null.sql"];
+const SCHEMA = ["0007_of_reads.sql", "0008_sync_schedule.sql", "0009_of_chats.sql", "0013_chat_price.sql", "0018_chat_preview.sql", "0019_chat_author.sql", "0063_staff_employees.sql", "0065_staff_roles.sql", "0064_outbound_author_name.sql", "0020_chat_card.sql", "0021_fan_profile.sql", "0022_message_media.sql", "0024_outbound_schedule.sql", "0025_outbound_send.sql", "0026_chat_history.sql", "0045_chat_unread_null.sql"];
 const THREADS = 200;
 const PER_THREAD = 120;
 

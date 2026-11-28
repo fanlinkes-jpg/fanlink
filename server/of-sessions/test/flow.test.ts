@@ -45,7 +45,7 @@ test("flujo completo contra el simulador: conectar, comprobar, sincronizar, chat
       "0017_tx_cursor_key.sql",
       "0013_chat_price.sql",
       "0018_chat_preview.sql",
-      "0019_chat_author.sql", "0063_staff_employees.sql", "0064_outbound_author_name.sql",
+      "0019_chat_author.sql", "0063_staff_employees.sql", "0065_staff_roles.sql", "0064_outbound_author_name.sql",
       "0020_chat_card.sql",
       "0021_fan_profile.sql",
       "0022_message_media.sql",
