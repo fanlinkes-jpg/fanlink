@@ -1,12 +1,14 @@
 import { useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { CreatorsPage, TeamPage } from "@/features/control-pages";
+import { EmployeesPage } from "@/features/employees-page";
 import { adminTab, type AdminTab } from "@/lib/nav-config";
 
 export type { AdminTab };
 
 const TABS = [
   ["creadoras", "Creadoras"],
+  ["empleados", "Empleados"],
   ["chatters", "Chatters"],
 ] as const;
 
@@ -24,7 +26,7 @@ export function AdminPage({ initialTab }: { initialTab?: AdminTab }) {
       <div className="flex flex-wrap items-end justify-between gap-3 px-4 pt-4 md:px-6 md:pt-6">
         <div>
           <h1 className="font-display text-2xl font-semibold">Personal</h1>
-          <p className="text-sm text-muted">Creadoras y chatters del equipo.</p>
+          <p className="text-sm text-muted">Creadoras, empleados y chatters del equipo.</p>
         </div>
         <div className="flex gap-1 rounded-md border border-line p-1">
           {TABS.map(([id, label]) => (
@@ -48,6 +50,8 @@ function AdminBody({ tab }: { tab: AdminTab }) {
   switch (tab) {
     case "creadoras":
       return <CreatorsPage />;
+    case "empleados":
+      return <EmployeesPage />;
     case "chatters":
       return <TeamPage />;
     default: {
@@ -58,6 +62,6 @@ function AdminBody({ tab }: { tab: AdminTab }) {
 }
 
 export function readAdminTab(value: unknown): AdminTab | undefined {
-  if (value === "creadoras" || value === "creadores" || value === "chatters" || value === "equipos") return adminTab(value);
+  if (value === "creadoras" || value === "creadores" || value === "empleados" || value === "chatters" || value === "equipos") return adminTab(value);
   return undefined;
 }
