@@ -12,7 +12,7 @@ import { unreadChatRow } from "../../server/of-sessions/sync/unread-chats.ts";
 import { inboxPillCounts, matchesInboxPill, tipThreads, type InboxPill } from "../../server/of-sessions/sync/chat-pills.ts";
 import { accountFigure, everyAccountBlocked, SESSION_EXPIRED_LABEL } from "../../server/of-sessions/sync/session-link.ts";
 import { ensureNoticeTab, listCreatorNotifications, markCreatorNotificationsRead, type NotificationListItem } from "@/lib/of-notifications";
-import { NOTIFICATION_TABS, TAB_LABEL, isOwnerOnlyKind, notesForCreator, notesResponseApplies, noticeFace, notificationReplyLine, noticesForOfTab, ofTabListNote, tabOf, type NotificationCounts, type NotificationTab } from "@/lib/notifications";
+import { NOTIFICATION_TABS, TAB_LABEL, isOwnerOnlyKind, notesForCreator, notesResponseApplies, noticeFace, notificationReplyLine, noticesForOfTab, notificationOpensChat, ofTabListNote, tabOf, type NotificationCounts, type NotificationTab } from "@/lib/notifications";
 import { NotificationFanCard } from "@/features/notification-card";
 import { PurchaseMessageDialog } from "@/features/purchase-message-dialog";
 import { purchaseComposeDraft } from "@/lib/purchase-detail";
@@ -550,8 +550,21 @@ export function RealChatsPage() {
       list.push(item.key);
       groups.set(item.creatorId, list);
     }
-    for (const [id, keys] of groups) void markCreatorNotificationsRead({ data: { creatorId: id, keys } }).catch(() => undefined);
+    for (const [id, keys] of groups) {
+      void markCreatorNotificationsRead({ data: { creatorId: id, keys } }).then((result) => {
+        if (result.counts && id === inboxCreator) setNoteCounts(result.counts);
+      }).catch(() => undefined);
+    }
   }
+
+  // Verla es leerla: con el panel abierto, lo que sigue a la vista 2 s se marca leído.
+  useEffect(() => {
+    if (!notesOpen || !notes) return;
+    const unread = panelNotes(notes, inboxCreator, noteFilter).filter((item) => !item.seen);
+    if (unread.length === 0) return;
+    const timer = window.setTimeout(() => markNotes(unread), 2_000);
+    return () => window.clearTimeout(timer);
+  }, [notesOpen, notes, noteFilter, inboxCreator]);
 
   function placeNotes() {
     const rect = notesButton.current?.getBoundingClientRect();
@@ -662,6 +675,7 @@ export function RealChatsPage() {
     status: viewBlocked ? "error" : error ? "error" : data ? "ready" : "loading",
     threads: viewBlocked ? [] : countedThreads,
     messages: viewBlocked ? null : data ? accountMessages : null,
+    ofUnread: viewBlocked || !inboxCreator ? null : data?.ofChatUnread?.find((row) => row.creatorId === inboxCreator)?.count ?? null,
   });
   const tipped = tipThreads(accountMessages, threads);
   const inbox = useInboxSelection({
@@ -1448,7 +1462,8 @@ export function RealChatsPage() {
                             avatarUrl={face.avatarUrl}
                             renew={face.renewAuto}
                             reply={reply}
-                            onChat={thread ? () => openNote(item) : undefined}
+                            onChat={thread && notificationOpensChat(item.kind) ? () => openNote(item) : undefined}
+                            onSeen={item.seen ? undefined : () => markNotes([item])}
                             onMessage={item.kind === "ppv" && item.messageRef ? () => setPurchaseNote(item) : undefined}
                           />
                         </li>

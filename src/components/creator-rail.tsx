@@ -17,13 +17,18 @@ export function CreatorRail() {
   const creatorKey = ids.filter((id) => id && id !== "all").join("\0");
   const noticeBadges = useCreatorNoticeBadges(ids);
   const [threads, setThreads] = useState<Array<{ creatorId: string; unread: number | null }>>([]);
+  const [ofChats, setOfChats] = useState<Array<{ creatorId: string; count: number }>>([]);
   useEffect(() => {
     let stop = false;
     const pull = () => {
       void listCreatorChats().then((list) => {
-        if (!stop) setThreads(list.threads.map((thread) => ({ creatorId: thread.creatorId, unread: thread.unread })));
+        if (stop) return;
+        setThreads(list.threads.map((thread) => ({ creatorId: thread.creatorId, unread: thread.unread })));
+        setOfChats(list.ofChatUnread ?? []);
       }).catch(() => {
-        if (!stop) setThreads([]);
+        if (stop) return;
+        setThreads([]);
+        setOfChats([]);
       });
     };
     pull();
@@ -39,6 +44,7 @@ export function CreatorRail() {
     threads,
     notices: Object.entries(noticeBadges).map(([id, unread]) => ({ creatorId: id, unread })),
     visibleIds: ids,
+    ofChats,
   });
   return (
     <CreatorColumn
