@@ -2,8 +2,8 @@ import { ClientOnly, Link, useRouterState } from "@tanstack/react-router";
 import { readInboxCreator, resolveInboxCreator, showsCreatorRail, writeInboxCreator } from "@/lib/inbox-scope";
 import { CreatorRail } from "@/components/creator-rail";
 import { bindUiUser, setSfwEnabled, useSfw } from "@/lib/ui-prefs";
-import { AutoTranslateSwitch, TranslateMenu, TranslateMenuButton } from "@/features/translate-ui";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { TranslateControl } from "@/features/translate-ui";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   Home,
   LayoutDashboard,
@@ -139,31 +139,10 @@ function ShellInner({ children, bleed }: { children: ReactNode; bleed?: boolean 
 
 function HeaderTools({ devMode, displayName }: { devMode: boolean; displayName: string }) {
   const sfw = useSfw();
-  const [open, setOpen] = useState(false);
-  const menu = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const away = (event: PointerEvent) => {
-      if (menu.current && !menu.current.contains(event.target as Node)) setOpen(false);
-    };
-    const key = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("pointerdown", away);
-    document.addEventListener("keydown", key);
-    return () => {
-      document.removeEventListener("pointerdown", away);
-      document.removeEventListener("keydown", key);
-    };
-  }, [open]);
   const localHint = "Modo local de un solo operador. Solo vale en localhost y no aísla a un equipo.";
   return (
     <div className="flex shrink-0 items-center gap-2">
-      <div className="relative" ref={menu}>
-        <TranslateMenuButton open={open} onToggle={() => setOpen((value) => !value)} />
-        {open ? <TranslateMenu /> : null}
-      </div>
-      <AutoTranslateSwitch />
+      <TranslateControl />
       <button
         type="button"
         role="switch"

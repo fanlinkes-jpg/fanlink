@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronDown, Languages, Loader2 } from "lucide-react";
 import {
   setAutoTranslate,
@@ -32,27 +32,12 @@ export function TranslateSpinner({ progress }: { progress: number | null }) {
 
 /** Aviso de un fallo de traducción. */
 export function TranslateNotice({ code, source, target }: { code: TranslateErrorCode; source: string | null; target: string | null }) {
+  const text = translateNotice(code, source, target);
+  if (!text) return null;
   return (
     <span role="status" className="inline-flex flex-wrap items-center gap-2 text-[11px] text-[#8a5a12]">
-      {translateNotice(code, source, target)}
+      {text}
     </span>
-  );
-}
-
-/** Botón de la barra superior: icono de traducir y una flecha. */
-export function TranslateMenuButton({ open, onToggle }: { open: boolean; onToggle: () => void }) {
-  return (
-    <button
-      type="button"
-      aria-label="Traducción"
-      aria-haspopup="dialog"
-      aria-expanded={open}
-      onClick={onToggle}
-      className={`flex h-8 items-center gap-0.5 rounded-lg px-2 ${open ? "bg-[#ff7a2f]" : "bg-white/10"}`}
-    >
-      <Languages className="h-4 w-4" aria-hidden />
-      <ChevronDown className={`h-3.5 w-3.5 transition-transform ${open ? "rotate-180" : ""}`} aria-hidden />
-    </button>
   );
 }
 
@@ -92,22 +77,56 @@ export function TranslateMenu() {
   );
 }
 
-/** Interruptor de la traducción automática de los mensajes del fan. */
-export function AutoTranslateSwitch() {
+/**
+ * Un solo control en la barra superior, como en Infloww: botón partido. El icono de traducir activa o
+ * desactiva la traducción automática (fondo blanco si está activa) y la flecha abre el popover.
+ */
+export function TranslateControl() {
   const auto = useAutoTranslate();
-  const supported = useTranslatorSupport();
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (event: PointerEvent) => {
+      if (box.current && !box.current.contains(event.target as Node)) setOpen(false);
+    };
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", away);
+    document.addEventListener("keydown", key);
+    return () => {
+      document.removeEventListener("pointerdown", away);
+      document.removeEventListener("keydown", key);
+    };
+  }, [open]);
   return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={auto}
-      aria-label="Traducción automática"
-      title={supported ? "Traducir automáticamente los mensajes del fan" : translateNotice("unsupported")}
-      onClick={() => setAutoTranslate(!auto)}
-      className={`h-8 rounded-lg px-2 text-xs font-semibold ${auto ? "bg-[#1f9d55] text-white" : "bg-white/10"}`}
-    >
-      Auto
-    </button>
+    <div className="relative" ref={box}>
+      <div className="flex h-8 overflow-hidden rounded-lg">
+        <button
+          type="button"
+          role="switch"
+          aria-checked={auto}
+          aria-label="Traducción automática"
+          title="Traducción automática"
+          onClick={() => setAutoTranslate(!auto)}
+          className={`grid w-8 place-items-center ${auto ? "bg-white text-[#1c2333]" : "bg-white/10"}`}
+        >
+          <Languages className="h-4 w-4" aria-hidden />
+        </button>
+        <button
+          type="button"
+          aria-label="Ajustes de traducción"
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          onClick={() => setOpen((value) => !value)}
+          className={`grid w-6 place-items-center border-l border-white/10 ${open ? "bg-white/25" : "bg-white/10"}`}
+        >
+          <ChevronDown className={`h-3.5 w-3.5 transition-transform ${open ? "rotate-180" : ""}`} aria-hidden />
+        </button>
+      </div>
+      {open ? <TranslateMenu /> : null}
+    </div>
   );
 }
 

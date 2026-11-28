@@ -2,9 +2,11 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import {
   TranslateError,
   browserHost,
+  downloadWaiting,
   fanLanguageOf,
   translateMany,
   translatorSupported,
+  warmUpInGesture,
   type TranslateErrorCode,
 } from "./translator.ts";
 
@@ -34,23 +36,25 @@ export function useTranslatorSupport(): boolean {
   return useSyncExternalStore(subscribe, () => translatorSupported(browserHost()), () => false);
 }
 
-let waitingForClick = false;
+let waitingForGesture = false;
 
 /**
- * Chrome solo deja descargar el modelo durante un gesto del usuario. Si una traducción automática
- * lo necesita sin gesto, el siguiente clic o tecla relanza la traducción, y esa vez sí descarga.
+ * Chrome solo deja bajar el modelo dentro de un gesto del usuario. Lo que una traducción automática no
+ * pudo bajar espera al primer pointerdown o keydown de la página: ahí se crea en el acto, en silencio, y
+ * luego se relanza la traducción. Una sola vez por espera.
  */
 function retryOnNextGesture(): void {
-  if (waitingForClick || typeof window === "undefined") return;
-  waitingForClick = true;
+  if (waitingForGesture || typeof document === "undefined" || !downloadWaiting()) return;
+  waitingForGesture = true;
   const run = () => {
-    window.removeEventListener("pointerdown", run, true);
-    window.removeEventListener("keydown", run, true);
-    waitingForClick = false;
+    document.removeEventListener("pointerdown", run, true);
+    document.removeEventListener("keydown", run, true);
+    waitingForGesture = false;
+    warmUpInGesture(browserHost());
     emit();
   };
-  window.addEventListener("pointerdown", run, true);
-  window.addEventListener("keydown", run, true);
+  document.addEventListener("pointerdown", run, true);
+  document.addEventListener("keydown", run, true);
 }
 
 export type TranslatedState =
@@ -118,6 +122,7 @@ export function useFanLanguage(fanTexts: readonly string[], active: boolean): st
     }
     let stop = false;
     void fanLanguageOf(browserHost(), fanTexts).then((found) => {
+      retryOnNextGesture();
       if (!stop) setLanguage(found);
     });
     return () => {
