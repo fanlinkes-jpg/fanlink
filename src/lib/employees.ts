@@ -18,7 +18,7 @@ export const listEmployees = createServerFn({ method: "GET" })
 
 export const inviteEmployee = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { name: string; email: string; level: string; creatorIds: string[] }) => input)
+  .validator((input: { name: string; email: string; level: string; creatorIds: string[]; perms?: string[] }) => input)
   .handler(async ({ context, data }): Promise<InviteDelivery> => {
     const { staffContext, deliverInvite } = await import("@/lib/employees-runtime.server");
     const { createInvite, normalizeEmail } = await import("@/lib/staff-invite");
@@ -46,7 +46,7 @@ export const resendEmployeeInvite = createServerFn({ method: "POST" })
 
 export const editEmployee = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { id: string; kind: "member" | "invite"; name: string; level: string; creatorIds: string[] }) => input)
+  .validator((input: { id: string; kind: "member" | "invite"; name: string; level: string; creatorIds: string[]; perms: string[] }) => input)
   .handler(async ({ context, data }) => {
     const { staffContext } = await import("@/lib/employees-runtime.server");
     const { editEmployee: edit } = await import("@/lib/staff-invite");

@@ -36,6 +36,12 @@ export type EmployeeRow = {
   level: StaffLevel;
   status: EmployeeStatus;
   creatorIds: string[];
+  /** Casillas de permisos. En una invitación, los que tendrá al aceptar. */
+  perms: string[];
+  /** Avisos por teléfono. Solo fichas; una invitación aún no tiene. */
+  phone: string | null;
+  alertsEnabled: boolean;
+  quietMinutes: number;
   /** Solo invitaciones: ISO de caducidad. */
   expiresAt: string | null;
   expired: boolean;

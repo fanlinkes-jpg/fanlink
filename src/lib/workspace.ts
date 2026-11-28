@@ -120,27 +120,6 @@ export const saveStaffDisplayName = createServerFn({ method: "POST" })
     return { displayName, access: await ensureStaff(sql, context.userId, devMode) };
   });
 
-export const updateStaffAccess = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
-  .validator((input: { userId: string; perms: string[]; creatorIds: string[] }) => input)
-  .handler(async ({ context, data }) => {
-    const { getSql } = await import("@/lib/db");
-    const { ensureStaff, setCreatorGrant, setStaffPerms, readAccess } = await import("@/lib/workspace-store");
-    const { DEV_USER_ID, authConfigured } = await import("@/lib/auth/verify.server");
-    const sql = await getSql();
-    const devMode = !authConfigured && context.userId === DEV_USER_ID;
-    const actor = await ensureStaff(sql, context.userId, devMode);
-    await setStaffPerms(sql, actor, data.userId, data.perms);
-    const current = await readAccess(sql, data.userId, false);
-    for (const creatorId of current.creatorIds) {
-      if (!data.creatorIds.includes(creatorId)) await setCreatorGrant(sql, actor, data.userId, creatorId, false);
-    }
-    for (const creatorId of data.creatorIds) {
-      if (!current.creatorIds.includes(creatorId)) await setCreatorGrant(sql, actor, data.userId, creatorId, true);
-    }
-    return ensureStaff(sql, context.userId, devMode);
-  });
-
 export const updateStaffAlert = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((input: { userId: string; phone: string; enabled: boolean; quietMinutes: number }) => input)
@@ -153,17 +132,4 @@ export const updateStaffAlert = createServerFn({ method: "POST" })
     const actor = await ensureStaff(sql, context.userId, devMode);
     await setStaffAlert(sql, actor, data.userId, data);
     return { ok: true as const };
-  });
-
-export const listTeam = createServerFn({ method: "GET" })
-  .middleware([authMiddleware])
-  .handler(async ({ context }) => {
-    const { getSql } = await import("@/lib/db");
-    const { ensureStaff, listStaff } = await import("@/lib/workspace-store");
-    const { DEV_USER_ID, authConfigured } = await import("@/lib/auth/verify.server");
-    const sql = await getSql();
-    const devMode = !authConfigured && context.userId === DEV_USER_ID;
-    const access = await ensureStaff(sql, context.userId, devMode);
-    if (access.role !== "owner") return { access, staff: [] as Awaited<ReturnType<typeof listStaff>> };
-    return { access, staff: await listStaff(sql) };
   });
