@@ -423,8 +423,9 @@ async function fanlinkBubble(
   sync: NotificationSyncState,
   unread: number,
 ): Promise<number | null> {
-  if (sync.ok) return ofNoticeTotal(sync.counts);
-  if (sync.counts) return ofNoticeTotal(sync.counts);
+  const fromOf = ofNoticeTotal(sync.counts);
+  if (sync.ok) return fromOf ?? unread;
+  if (fromOf != null) return fromOf;
   if (sync.status !== 429) return null;
   const stored = await sql.query<{ n: number }>(
     "select 1 as n from of_notification where creator_id = $1 limit 1",

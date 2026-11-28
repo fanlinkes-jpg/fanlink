@@ -107,7 +107,7 @@ test("un PPV propio pagado se lee por isOpened y el modal da el máximo y la med
 
 test("el detalle del mensaje no envía y marca el precio como pagado", () => {
   const model = purchaseDetailModel({ creatorName: "Jose", priceCents: 1999 });
-  assert.equal(model.title, "PPV");
+  assert.equal(model.title, "Mensaje de pago · $19.99");
   assert.equal(model.price, "$19.99");
   assert.equal(model.tags, "Tags • Jose");
   assert.equal(model.sends, false);

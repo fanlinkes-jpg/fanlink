@@ -150,7 +150,7 @@ test("el total de Fanlink no es la página y una lista caída no es 0", async ()
       status: 200,
       motivo: "ok",
       reason: null,
-      counts: null,
+      counts: { all: 3, subscriptions: 0, purchases: 0, tips: 0, tags: 0, comments: 0, mentions: 0, likes: 3, promotions: 0, onlyfans: 0 },
       items: [1, 2, 3].map((n) => ({
         key: `n${n}`,
         kind: "like" as const,
