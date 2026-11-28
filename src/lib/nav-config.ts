@@ -72,7 +72,7 @@ export const NAV_LINKS: NavLink[] = [
     roles: STAFF_ROLES,
     anyPerm: FUNCTION_PERMS,
   },
-  { id: "administrar", label: "Personal", hint: "Creadoras y empleados", to: "/administrar", roles: AGENCY_ROLES, perm: "equipo" },
+  { id: "administrar", label: "Personal", hint: "Creadoras y empleados", to: "/administrar", roles: STAFF_ROLES, perm: "equipo" },
   { id: "proxys", label: "Proxy", hint: "IP de cada cuenta", to: "/proxys", roles: AGENCY_ROLES, perm: "equipo" },
   { id: "configuracion", label: "Configuración", hint: "Plan, facturación y ajustes", to: "/configuracion", roles: AGENCY_ROLES },
 ];

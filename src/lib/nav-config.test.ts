@@ -20,10 +20,16 @@ const ownerAccess: TeamAccess = { userId: "owner", role: "owner", perms: [], cre
 const chatterAccess: TeamAccess = {
   userId: "chatter",
   role: "member",
-  perms: ["mensajes", "precios", "vault", "campanas", "analitica", "equipo", "ajustes"],
+  perms: ["mensajes", "precios", "vault", "campanas", "analitica", "ajustes"],
   creatorIds: ["c-alba"],
 };
 const chatterLimited: TeamAccess = { userId: "chatter", role: "member", perms: ["mensajes"], creatorIds: ["c-alba"] };
+const teamManagerAccess: TeamAccess = {
+  userId: "tm",
+  role: "member",
+  perms: ["mensajes", "precios", "vault", "campanas", "analitica", "equipo"],
+  creatorIds: ["c-alba"],
+};
 const chatterVault: TeamAccess = { userId: "chatter", role: "member", perms: ["vault"], creatorIds: ["c-alba"] };
 
 function ids(role: "owner" | "manager" | "chatter" | "model", access: TeamAccess | null) {
@@ -94,6 +100,14 @@ test("el chatter no ve totales de agencia en el menú, ni banco, ni estados, ni 
   assert.equal(canAccessPath("/mensajes", "chatter", chatterAccess), true);
   assert.equal(canAccessPath("/creadoras", "chatter", chatterAccess), false);
   assert.equal(canAccessPath("/equipo", "chatter", chatterAccess), false);
+});
+
+test("quien tiene permiso de equipo entra en Personal, aunque el menú lo trate como chatter", () => {
+  const seen = ids("chatter", teamManagerAccess);
+  assert.equal(seen.includes("administrar"), true);
+  assert.equal(canAccessPath("/administrar", "chatter", teamManagerAccess), true);
+  assert.equal(ids("chatter", chatterLimited).includes("administrar"), false);
+  assert.equal(canAccessPath("/administrar", "chatter", chatterLimited), false);
 });
 
 test("el chatter sigue sujeto a los permisos existentes", () => {

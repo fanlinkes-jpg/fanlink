@@ -39,3 +39,12 @@ Con `VITE_AUTH_ENABLED=false` quien abre sin cookie sigue siendo el usuario loca
 - **Atribución de ventas** (`of_sale_attribution`, migración 0066): un PPV o venta es de quien envió el mensaje; un masivo, de quien lo lanzó; propinas y suscripciones, del último chatter que habló con el fan; sin chatter, la venta queda sin nombre. Se guarda una vez y no se reasigna.
 - **Restablecer contraseña**: la dueña genera un enlace de un solo uso (24 h, `/restablecer/<token>`), por correo si hay `RESEND_API_KEY` o copiándolo a mano. Al usarlo se cierran las sesiones anteriores.
 - **Última conexión** en la tabla: se guarda al entrar, como mucho una vez por minuto.
+- **Chatter + otro rol**: los permisos se suman, pero el chatter no recibe Banco, Estados, Estadísticas ni «todas» salvo que el otro rol los conceda (Admin, Supervisor, Analyst…). En el pop-up esas casillas quedan desmarcadas y bloqueadas, en línea con lo que aplica el servidor.
+
+## Horarios de Turnos
+
+Clic en una celda (empleado y día) abre el editor de hora de entrada y de salida (por ejemplo 08:00 a 16:00). Admite turnos que pasan de medianoche (22:00 a 06:00) y la opción Libre. Se puede copiar el horario a toda la semana o a los días laborables. Todo se guarda en `staff_shift` con zona Europe/Madrid (migración 0067).
+
+Solo quien tiene el permiso de gestionar el equipo (`equipo`) edita los horarios. El chatter solo ve el suyo (en el dashboard, «Mi horario»).
+
+Si un empleado no se conecta en los 10 minutos siguientes al inicio de su turno, sale un aviso a la dueña, al Admin y al Supervisor: en el CRM (lista y badge en Turnos) y, si tiene avisos por teléfono configurados, por el mismo canal de WhatsApp. En la celda, el indicador es «En turno» (conectado), «Retraso» o «Ausente».

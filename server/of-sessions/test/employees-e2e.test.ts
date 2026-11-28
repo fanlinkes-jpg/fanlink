@@ -177,6 +177,30 @@ test("la dueña invita, el empleado acepta, entra con correo y contraseña y sol
     await turnos.getByText("Antiguo").waitFor();
     await owner.getByTestId("métricas-card").getByText("Marta Ruiz").waitFor();
     assert.equal(await turnos.locator("thead").getAttribute("class"), await owner.getByTestId("employees-table").locator("thead").getAttribute("class"));
+
+    // Horarios: clic en la celda abre el editor (entrada, salida, Libre, copiar). Se guarda en la base.
+    const martaShifts = turnos.locator("tr", { hasText: "Marta Ruiz" });
+    await martaShifts.getByRole("button").first().click();
+    const editor = owner.getByRole("dialog", { name: "Editar horario" });
+    await editor.waitFor();
+    await editor.getByRole("radio", { name: "Con horario" }).check();
+    await editor.getByLabel("Hora de entrada", { exact: true }).fill("08:00");
+    await editor.getByLabel("Hora de salida", { exact: true }).fill("16:00");
+    await editor.getByLabel("Copiar horario").selectOption("weekdays");
+    await owner.screenshot({ path: shotFile("turno-editor.png") });
+    await editor.getByRole("button", { name: "Guardar" }).click();
+    await editor.waitFor({ state: "detached" });
+    await martaShifts.getByRole("button", { name: /08:00 – 16:00/ }).first().waitFor();
+    await martaShifts.getByRole("button").nth(5).click();
+    const night = owner.getByRole("dialog", { name: "Editar horario" });
+    await night.getByRole("radio", { name: "Con horario" }).check();
+    await night.getByLabel("Hora de entrada", { exact: true }).fill("22:00");
+    await night.getByLabel("Hora de salida", { exact: true }).fill("06:00");
+    await night.getByText(/pasa de medianoche/).waitFor();
+    await night.getByRole("button", { name: "Guardar" }).click();
+    await night.waitFor({ state: "detached" });
+    await martaShifts.getByRole("button", { name: /22:00 – 06:00/ }).waitFor();
+    assert.match(await martaShifts.getByRole("button").nth(6).innerText(), /Libre/);
     await owner.screenshot({ path: shotFile("personal-turnos.png"), fullPage: true });
 
     // 4b. Editar: campos obligatorios, roles en chips, creadoras en chips, permisos en pop-up y avisos por teléfono.
@@ -197,13 +221,13 @@ test("la dueña invita, el empleado acepta, entra con correo y contraseña y sol
     for (const perm of ["mensajes", "precios", "vault", "campanas", "equipo", "analitica"]) assert.equal(await popup.locator(`input[data-perm="${perm}"]`).isChecked(), true, perm);
     for (const perm of ["banco", "estados", "estadisticas", "todas", "ajustes"]) assert.equal(await popup.locator(`input[data-perm="${perm}"]`).isChecked(), false, perm);
     assert.match(await popup.getByTestId("perms-summary-text").innerText(), /No podrá:.*abrir el Banco/);
-    await popup.locator('input[data-perm="banco"]').check();
-    assert.doesNotMatch(await popup.getByTestId("perms-summary-text").innerText(), /No podrá:[^.]*abrir el Banco/);
-    assert.match(await popup.getByTestId("perms-summary-text").innerText(), /Podrá:.*abrir el Banco/);
+    assert.match(await popup.getByTestId("perms-summary-text").innerText(), /totales ni dinero de la agencia|dinero de la agencia/);
+    assert.equal(await popup.locator('input[data-perm="banco"]').isDisabled(), true);
+    assert.equal(await popup.locator('input[data-perm="banco"]').isChecked(), false);
     await owner.screenshot({ path: shotFile("permisos-popup.png") });
     await popup.getByRole("button", { name: "Aplicar permisos" }).click();
     await edit.getByTestId("role-chips").getByText("Team Manager").waitFor();
-    assert.match(await edit.getByTestId("perms-summary").innerText(), /^7 permisos activos/);
+    assert.match(await edit.getByTestId("perms-summary").innerText(), /^6 permisos activos/);
     await edit.getByLabel("Asignar creador(es)").selectOption("c-tercera");
     await edit.getByLabel("WhatsApp").fill("600");
     await edit.getByRole("button", { name: "Guardar", exact: true }).click();
@@ -218,11 +242,13 @@ test("la dueña invita, el empleado acepta, entra con correo y contraseña y sol
     await activeRow.getByRole("button", { name: "Editar Marta Ruiz" }).click();
     const again2 = owner.getByRole("dialog", { name: "Editar empleado" });
     await again2.getByRole("heading", { name: "Permisos" }).waitFor();
-    assert.match(await again2.getByTestId("perms-summary").innerText(), /^7 permisos activos/);
+    assert.match(await again2.getByTestId("perms-summary").innerText(), /^6 permisos activos/);
     await again2.getByRole("button", { name: "Ver y editar permisos" }).click();
     const saved = owner.getByRole("dialog", { name: "Permisos del rol" });
-    assert.equal(await saved.locator('input[data-perm="banco"]').isChecked(), true);
+    assert.equal(await saved.locator('input[data-perm="banco"]').isChecked(), false);
+    assert.equal(await saved.locator('input[data-perm="banco"]').isDisabled(), true);
     assert.equal(await saved.locator('input[data-perm="estados"]').isChecked(), false);
+    assert.match(await saved.getByTestId("perms-summary-text").innerText(), /No podrá:.*abrir el Banco/);
     await saved.getByRole("button", { name: "Cancelar" }).click();
     assert.equal(await again2.getByTestId("creator-chips").getByText("Tercera - tercera").count(), 0);
     assert.equal(await again2.getByLabel("WhatsApp").inputValue(), "+34600111222");
