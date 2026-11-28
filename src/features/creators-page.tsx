@@ -10,11 +10,12 @@ import { ProxyForm } from "@/components/proxy-form";
 import { useCrm, type Creator, type Platform } from "@/lib/crm";
 import { PLATFORMS } from "@/features/growth-pages";
 import { listCreatorAssignments, setCreatorAssignees, type AssignedEmployee, type CreatorAssignment } from "@/lib/creators";
-import { connectivityOf, formatSyncAge, moneyUsd, todaySalesCents } from "@/lib/creator-board";
+import { connectivityOf, moneyUsd, todaySalesCents } from "@/lib/creator-board";
 import { staffNamesFor as namesFromAssignments } from "@/lib/creator-assignments";
 import { setCreatorProxy } from "@/lib/of-sessions";
 import { useCreatorSessions, sessionErrorText } from "@/lib/use-creator-sessions";
 import { useOfReads } from "@/lib/use-of-reads";
+import { sourceLabel, syncStatusOf } from "@/lib/sync-status";
 import { creatorAvatarOf } from "@/lib/creator-avatar";
 import { hasPerm } from "@/lib/access-policy";
 
@@ -262,8 +263,17 @@ export function CreatorsPage() {
               const handle = handleOf(live?.identityHandle) || handleOf(creator.handle) || "—";
               const nick = (creator.nick ?? live?.identityName ?? "").trim() || "—";
               const avatar = creator.photoUrl || creatorAvatarOf(live) || live?.avatarUrl || null;
-              const sales = todaySalesCents(read);
-              const syncAt = read?.earningsSyncedAt ?? read?.fansSyncedAt ?? read?.lastAttemptAt ?? null;
+              const status = syncStatusOf({
+                earningsSyncedAt: read?.earningsSyncedAt ?? null,
+                fansSyncedAt: read?.fansSyncedAt ?? null,
+                chatSyncedAt: read?.chatSyncedAt ?? null,
+                chatStatus: read?.chatStatus ?? null,
+                chatReason: read?.chatReason ?? null,
+                lastStatus: read?.lastStatus ?? null,
+                lastReason: read?.lastReason ?? null,
+              });
+              // Ventas de hoy solo si los ingresos se leyeron de verdad. Sin lectura: Sin datos y el motivo, nunca $0.
+              const sales = status.earnings.state === "ok" ? todaySalesCents(read) : null;
               const reason = read?.lastReason ?? live?.lastError ?? null;
               const expired = conn.kind === "expired";
               return (
@@ -332,9 +342,15 @@ export function CreatorsPage() {
                     )}
                   </td>
                   <td className={TD_CLASS}>
-                    <span title={reason ?? syncAt ?? undefined}>{formatSyncAge(syncAt)}</span>
+                    <div className="space-y-0.5 text-xs" data-testid="creator-sync" title={reason ?? undefined}>
+                      <p data-testid="sync-chats">Chats sincronizados: {sourceLabel(status.chats)}</p>
+                      <p data-testid="sync-earnings">Ingresos sincronizados: {sourceLabel(status.earnings)}</p>
+                    </div>
                   </td>
-                  <td className={`${TD_CLASS} tabular-nums`}>{sales == null ? "Sin datos" : moneyUsd(sales)}</td>
+                  <td className={`${TD_CLASS} tabular-nums`}>
+                    {sales == null ? "Sin datos" : moneyUsd(sales)}
+                    {sales == null && status.earnings.state !== "ok" ? <p className="text-[11px] font-normal text-muted">Ingresos sin leer</p> : null}
+                  </td>
                   <td className={`${TD_CLASS} ${STICKY}`}>
                     <div className="relative flex items-center gap-1">
                       <button type="button" className="rounded p-1 text-muted hover:bg-raised" aria-label={`Editar ${creator.name}`} onClick={() => setEditing(creator)}>

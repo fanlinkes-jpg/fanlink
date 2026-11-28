@@ -7,6 +7,7 @@ import { SIN_DATOS, widgetsFor, type DashboardAudience, type DashboardConfig } f
 import { CHANNEL_LABELS, CHANNELS, CREATOR_COLUMNS, DEFAULT_CREATOR_COLUMNS, dayKey, shiftDay, type Basis, type Channel, type CreatorColumnId, type Granularity, type Kpi } from "@/lib/dashboard-insights";
 import { changeText, columnKind, columnLabel, csvMoney, formatValue, greeting, moveColumn, readColumns, toCsv, WEEKDAY_SHORT, type ValueKind } from "@/lib/dashboard-format";
 import { cutLabel } from "@/lib/dashboard-cuts";
+import { sourceLabel } from "@/lib/sync-status";
 import { formatCents } from "@/lib/format";
 import { FAN_SEGMENT_IDS, segmentDetail, segmentLabel, type FanSegmentId } from "@/lib/fan-segments";
 import { rememberOpenThread } from "@/lib/open-thread";
@@ -23,6 +24,7 @@ const CHANNEL_COLORS: Record<Channel, string> = {
   posts: "#16a34a",
   referrals: "#0891b2",
   streams: "#d45656",
+  other: "#8b93a1",
 };
 const SERIES_COLORS = ["#3b6cff", "#7c4dff", "#c4841d", "#16a34a", "#0891b2", "#d45656", "#db2777", "#475569"];
 const tooltipStyle = { background: "var(--color-surface)", border: "1px solid var(--color-line)", color: "var(--color-fg)", borderRadius: 8, fontSize: 12 };
@@ -111,7 +113,7 @@ export function InsightsHeader({
   const today = dayKey(new Date());
   const updated = view?.updated;
   const updatedText = updated?.cutsEnabled
-    ? `Actualizado: ${updated.cutAt ? cutLabel(updated.cutAt) : SIN_DATOS}`
+    ? updated.cutAt ? `Actualizado: ${cutLabel(updated.cutAt)}` : "Sin corte guardado todavía"
     : `Actualizado: ${updated?.lastReadAt ? cutLabel(updated.lastReadAt) : SIN_DATOS}`;
   return (
     <div className="space-y-3 border-b border-line bg-surface px-4 py-3" data-testid="insights-header">
@@ -127,6 +129,7 @@ export function InsightsHeader({
           </p>
         </div>
       </div>
+      <SourcesNotice view={view} />
       <div className="flex flex-wrap items-center gap-2" data-testid="insights-filters">
         <Select
           aria-label="Rango rápido"
@@ -160,6 +163,41 @@ export function InsightsHeader({
         </Select>
         <Button type="button" variant="ghost" onClick={() => onChange({ ...defaultFilters(), basis: filters.basis })}>Restablecer</Button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Qué fuentes faltan, por creadora y por separado: chats, ingresos y fans. Que los chats vayan bien no
+ * significa que haya ingresos. Sin avisos cuando todo está leído directamente de OnlyFans.
+ */
+function SourcesNotice({ view }: { view: DashboardInsightsView | null }) {
+  if (!view) return null;
+  const rows = view.sources.filter((row) => !(row.earnings.state === "ok" && !row.earnings.fallback && row.fans.state === "ok" && !row.fans.fallback && row.chats.state === "ok"));
+  const noCut = view.updated.cutsEnabled && !view.updated.cutAt;
+  if (rows.length === 0 && !noCut) return null;
+  return (
+    <div className="rounded-md border border-[#e5c97a] bg-[#fff8e6] px-3 py-2 text-xs text-[#6b4a07]" data-testid="sources-status" role="status">
+      {noCut ? (
+        <p data-testid="no-cut-notice">
+          Todavía no hay ningún corte guardado: las cifras salen de lo último que se haya leído de cada creadora. El primer corte se hace solo al arrancar el servidor, si la cuenta está autorizada para lectura.
+        </p>
+      ) : null}
+      {rows.length > 0 ? (
+        <ul className="mt-1 space-y-1">
+          {rows.map((row) => (
+            <li key={row.creatorId} data-testid="source-row" data-creator={row.name}>
+              <span className="font-medium">{row.name}</span>
+              {": "}
+              <span>Chats sincronizados: {sourceLabel(row.chats)}</span>
+              {" · "}
+              <span>Ingresos sincronizados: {sourceLabel(row.earnings)}</span>
+              {" · "}
+              <span>Fans: {sourceLabel(row.fans)}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </div>
   );
 }
@@ -720,7 +758,7 @@ export function RendimientoScreen({ view, filters }: { view: DashboardInsightsVi
           <>
             <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
               <KpiCard label="Total" kpi={summary.kpis.total} kind="money" />
-              {(["subs", "messages", "tips"] as Channel[]).map((channel) => (
+              {(["subs", "messages", "tips"] as const).map((channel) => (
                 <KpiCard key={channel} label={CHANNEL_LABELS[channel]} kpi={summary.kpis[channel]} kind="money" />
               ))}
             </div>
@@ -740,7 +778,7 @@ export function RendimientoScreen({ view, filters }: { view: DashboardInsightsVi
               <Panel title="Reparto">
                 <Donut center={formatValue("money", summary.kpis.total.value)} rows={summary.breakdown.map((row) => ({ label: CHANNEL_LABELS[row.channel], value: row.cents, color: CHANNEL_COLORS[row.channel], text: formatCents(row.cents) }))} />
                 <div className="mt-3 grid grid-cols-3 gap-2">
-                  {(["subs", "messages", "tips"] as Channel[]).map((channel) => (
+                  {(["subs", "messages", "tips"] as const).map((channel) => (
                     <div key={channel}>
                       <p className="text-[11px] text-muted">{CHANNEL_LABELS[channel]}</p>
                       <Spark values={summary.kpis[channel].spark} color={CHANNEL_COLORS[channel]} />

@@ -115,3 +115,19 @@ test("sin fans sincronizados: Sin datos, nunca ceros inventados", () => {
   assert.equal(newSubsOf(data, QUERY, CUT, NOW).count, null);
   assert.equal(segmentsOf(data, NOW).counts, null);
 });
+
+test("un día que solo tiene el total de OnlyFans entra como «Sin desglosar»; con desglose manda el desglose", () => {
+  const base = { ...fixture(), transactions: [] };
+  const only = salesOf({ transactions: [], earnings: [{ creatorId: "c1", day: "2026-11-25", kind: "total", amountCents: 10_000 }] }, CUT);
+  assert.deepEqual(only.map((sale) => [sale.channel, sale.gross]), [["other", 10_000]]);
+  const typed = salesOf({
+    transactions: [],
+    earnings: [
+      { creatorId: "c1", day: "2026-11-25", kind: "total", amountCents: 10_000 },
+      { creatorId: "c1", day: "2026-11-25", kind: "subscription", amountCents: 6_000 },
+      { creatorId: "c1", day: "2026-11-25", kind: "tip", amountCents: 4_000 },
+    ],
+  }, CUT);
+  assert.deepEqual(typed.map((sale) => sale.channel).sort(), ["subs", "tips"]);
+  assert.ok(base.creators.length > 0);
+});

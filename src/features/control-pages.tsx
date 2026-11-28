@@ -16,6 +16,7 @@ import { fanProfiles, rankFans } from "@/lib/fan-metrics";
 import { listCreatorChats, listTeamMetrics, setCreatorProxy, type TeamMetricView } from "@/lib/of-sessions";
 import { PLATFORMS } from "@/features/growth-pages";
 import { Badge, Button, Field, Panel, Select } from "@/components/ui";
+import { sourceLabel, syncStatusOf } from "@/lib/sync-status";
 
 export function AnalyticsPage({
   initialView,
@@ -120,15 +121,25 @@ export function AnalyticsPage({
                 {scopedCreators.map((c) => {
                   const read = reads.byCreator.get(c.id);
                   const moneyRows = read?.earnings ?? [];
+                  const status = syncStatusOf({
+                    earningsSyncedAt: read?.earningsSyncedAt ?? null,
+                    fansSyncedAt: read?.fansSyncedAt ?? null,
+                    chatSyncedAt: read?.chatSyncedAt ?? null,
+                    chatStatus: read?.chatStatus ?? null,
+                    chatReason: read?.chatReason ?? null,
+                    lastStatus: read?.lastStatus ?? null,
+                    lastReason: read?.lastReason ?? null,
+                  });
                   return (
                     <tr key={c.id} className="border-t border-line">
                       <td className="px-3 py-3">{c.name}</td>
-                      <td className="px-3 py-3 tabular-nums">{read?.fansSyncedAt ? read.fans.length : "Sin sincronizar"}</td>
-                      <td className="px-3 py-3 tabular-nums">{read?.earningsSyncedAt ? centsLabel(sumCents(moneyRows), moneyRows[0]?.currency ?? "USD") : "Sin sincronizar"}</td>
+                      <td className="px-3 py-3 tabular-nums">{read?.fansSyncedAt ? read.fans.length : sourceLabel(status.fans)}</td>
+                      <td className="px-3 py-3 tabular-nums">{read?.earningsSyncedAt ? centsLabel(sumCents(moneyRows), moneyRows[0]?.currency ?? "USD") : sourceLabel(status.earnings)}</td>
                       <td className="px-3 py-3 text-xs">{read?.earningsSyncedAt ? kindSummary(moneyRows) : "—"}</td>
                       <td className="px-3 py-3 text-xs">
-                        <div>{syncAge(lastSyncAt(read))}</div>
-                        <div className="text-[#8a5a12]">{syncStateLabel(reads.runningCreatorIds.includes(c.id) || reads.pendingId === c.id, read?.lastStatus, read?.lastReason)}</div>
+                        <div data-testid="informe-chats">Chats sincronizados: {sourceLabel(status.chats)}</div>
+                        <div data-testid="informe-earnings">Ingresos sincronizados: {sourceLabel(status.earnings)}</div>
+                        {reads.runningCreatorIds.includes(c.id) || reads.pendingId === c.id ? <div className="text-[#8a5a12]">En curso</div> : null}
                       </td>
                       <td className="px-3 py-3">
                         <SyncControl
@@ -272,14 +283,11 @@ function kindSummary(rows: CreatorEarningView[]): string {
     tip: "propinas",
     message: "mensajes",
     post: "posts",
+    stream: "directos",
+    referral: "referidos",
   };
   const seen = [...new Set(rows.map((row) => labels[row.kind]))];
   return seen.length ? seen.join(", ") : "—";
-}
-
-function lastSyncAt(read: { earningsSyncedAt: string | null; fansSyncedAt: string | null } | undefined): string | null {
-  const times = [read?.earningsSyncedAt, read?.fansSyncedAt].filter((value): value is string => Boolean(value));
-  return times.sort().at(-1) ?? null;
 }
 
 const KIND_LABEL: Record<string, string> = {
@@ -428,27 +436,6 @@ function TransactionList({
       ))}
     </ul>
   );
-}
-
-function syncAge(iso: string | null): string {
-  if (!iso) return "Última sincronización: aún no";
-  const mins = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 60_000));
-  if (mins < 1) return "Última sincronización: hace menos de 1 min";
-  return `Última sincronización: hace ${mins} min`;
-}
-
-function syncStateLabel(running: boolean, status: "idle" | "ok" | "error" | undefined, reason: string | null | undefined): string {
-  if (running) return "En curso";
-  if (status === "error") return reason ? `Error · ${shortReason(reason)}` : "Error";
-  if (status === "ok") return "OK";
-  return "Sin sincronizar";
-}
-
-function shortReason(reason: string): string {
-  const cut = reason.split(". json:")[0] ?? reason;
-  const text = cut.replace(/https?:\/\/\S+/g, "").replace(/\s+/g, " ").trim();
-  if (/redirigido a login/i.test(text)) return "OnlyFans pide iniciar sesión: pulsa Reconectar";
-  return text;
 }
 
 function SyncInterval({
