@@ -43,6 +43,10 @@ test("Personal › Creadoras: tabla estilo Infloww, empleados de creator_grant y
     assert.doesNotMatch(franciaText, /página cambiada/);
     assert.doesNotMatch(franciaText, /sin datos todavía/);
     assert.match(franciaText, /Sin datos/);
+    // Chats e ingresos se cuentan por separado y una fuente sin lectura no enseña un $0.
+    assert.match(franciaText, /Chats sincronizados: /);
+    assert.match(franciaText, /Ingresos sincronizados: Sin sincronizar/);
+    assert.doesNotMatch(franciaText, /\$0\.00/);
     assert.equal(await francia.getByRole("button", { name: "Reconectar" }).count(), 0);
     assert.equal(await francia.getByRole("button", { name: "Comprobar" }).count(), 0);
 

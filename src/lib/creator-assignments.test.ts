@@ -165,3 +165,25 @@ test("edad de sync y estado de conectividad", () => {
   assert.deepEqual(connectivityOf({ status: "expired" }), { kind: "expired", label: "Sesión caducada" });
   assert.deepEqual(connectivityOf(undefined), { kind: "offline", label: "Sin sesión" });
 });
+
+test("ventas de hoy: una lectura de ayer no sabe nada de hoy, y sin fila total se suman los tipos", () => {
+  const noon = new Date("2026-11-28T12:00:00+01:00");
+  assert.equal(
+    todaySalesCents({ earningsSyncedAt: "2026-11-27T21:00:00.000Z", earnings: [], transactions: [] }, noon),
+    null,
+  );
+  assert.equal(
+    todaySalesCents(
+      {
+        earningsSyncedAt: "2026-11-28T11:00:00.000Z",
+        earnings: [
+          { day: "2026-11-28", kind: "subscription", amountCents: 600 },
+          { day: "2026-11-28", kind: "tip", amountCents: 400 },
+        ],
+        transactions: null,
+      },
+      noon,
+    ),
+    1000,
+  );
+});

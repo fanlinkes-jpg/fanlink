@@ -23,7 +23,7 @@ test("Dashboard: Admin ve todo con el dinero de la agencia; el Chatter solo lo s
   const shots: string[] = [];
   const browser = await chromium.launch();
   try {
-    for (const role of ["admin", "chatter"] as const) {
+    for (const role of ["admin", "chatter", "gap"] as const) {
       const dir = path.join(tmpdir(), `fanlink-dash-${role}-${Date.now()}`);
       const agencyTotal = await seed(dir, role);
       const port = await freePort();
@@ -43,11 +43,24 @@ test("Dashboard: Admin ve todo con el dinero de la agencia; el Chatter solo lo s
         await page.goto(`${base}/`, { waitUntil: "domcontentloaded" });
         await page.getByTestId("insights-header").waitFor({ timeout: 90_000 });
         await page.getByTestId("updated-at").waitFor();
-        assert.match(await page.getByTestId("updated-at").innerText(), /Actualizado/);
+        if (role === "gap") await page.getByTestId("updated-at").filter({ hasText: "Sin corte guardado todavía" }).waitFor({ timeout: 60_000 });
+        else assert.match(await page.getByTestId("updated-at").innerText(), /Actualizado/);
         await basisReady(page);
         const basis = page.getByTestId("basis-select");
         assert.equal(await basis.inputValue(), "net");
-        if (role === "admin") {
+        if (role === "gap") {
+          // Una creadora sin ingresos ni fans leídos, y ningún corte guardado: el panel lo dice, no enseña un $0 como dato.
+          await page.getByTestId("sources-status").waitFor({ timeout: 60_000 });
+          await page.getByTestId("no-cut-notice").waitFor();
+          const row = page.locator('[data-testid="source-row"][data-creator="Lucía"]');
+          const line = await row.innerText();
+          assert.match(line, /Chats sincronizados: /);
+          assert.match(line, /Ingresos sincronizados: Error · página cambiada \(ingresos\)/);
+          assert.match(line, /Fans: Error · sin datos todavía \(fans\)/);
+          assert.equal(await page.locator('[data-testid="source-row"][data-creator="Alba"]').count(), 0);
+          await settle(page);
+          shots.push(await shoot(page, "dashboard-admin-sin-lectura.png"));
+        } else if (role === "admin") {
           await page.getByTestId("resumen-agency").waitFor({ timeout: 60_000 }).catch(async (err) => {
             await shoot(page, "dashboard-debug.png");
             console.log((await page.locator("body").innerText()).slice(0, 1500));
@@ -124,7 +137,7 @@ function rng(seedValue: number): () => number {
   };
 }
 
-async function seed(dir: string, role: "admin" | "chatter"): Promise<number> {
+async function seed(dir: string, role: "admin" | "chatter" | "gap"): Promise<number> {
   const pgDir = path.join(dir, "pglite");
   await mkdir(pgDir, { recursive: true });
   const pg = new PGlite(pgDir);
@@ -145,7 +158,7 @@ async function seed(dir: string, role: "admin" | "chatter"): Promise<number> {
   })]);
   await pg.exec(`insert into staff_profile (user_id, display_name, role, perms) values ('dueña', 'Dueña', 'owner', '[]'::jsonb)`);
   await pg.exec(`insert into workspace_member (user_id) values ('dev-user'), ('u-marta') on conflict do nothing`);
-  if (role === "admin") {
+  if (role !== "chatter") {
     await pg.query(
       "insert into staff_profile (user_id, display_name, role, perms, level, roles) values ('dev-user', 'Ana (Admin)', 'member', $1::jsonb, 'admin', '[\"admin\"]'::jsonb)",
       [JSON.stringify(presetPerms(["admin"]))],
@@ -239,12 +252,20 @@ async function seed(dir: string, role: "admin" | "chatter"): Promise<number> {
       [creatorId],
     );
     await pg.query(
-      `insert into of_sync_state (creator_id, earnings_synced_at, fans_synced_at, last_attempt_at, last_status) values ($1, $2, $2, $2, 'ok')`,
+      `insert into of_sync_state (creator_id, earnings_synced_at, fans_synced_at, last_attempt_at, last_status, chat_synced_at, chat_status) values ($1, $2, $2, $2, 'ok', $2, 'ok')`,
       [creatorId, cut.toISOString()],
     );
     await pg.query("insert into of_dashboard_snapshot (creator_id, metric, taken_at, value) values ($1, 'online', $2, $3)", [creatorId, new Date(cut.getTime() + 90_000).toISOString(), Math.round(3 + random() * 20)]);
   }
-  await pg.query("insert into of_dashboard_cut (cut_at, started_at, finished_at, accounts_read) values ($1, $1, $2, 3)", [cut.toISOString(), new Date(cut.getTime() + 5 * 60_000).toISOString()]);
+  if (role === "gap") {
+    // Lucía: los chats se sincronizan pero ingresos y fans fallan, y no hay ningún corte guardado.
+    for (const table of ["of_transaction", "of_fan_read", "of_earning"]) await pg.query(`delete from ${table} where creator_id = 'c-lucia'`);
+    await pg.query(
+      `update of_sync_state set earnings_synced_at = null, fans_synced_at = null, last_status = 'error', last_reason = 'página cambiada (ingresos). sin datos todavía (fans)' where creator_id = 'c-lucia'`,
+    );
+  } else {
+    await pg.query("insert into of_dashboard_cut (cut_at, started_at, finished_at, accounts_read) values ($1, $1, $2, 3)", [cut.toISOString(), new Date(cut.getTime() + 5 * 60_000).toISOString()]);
+  }
   await pg.close();
   const store = new AccountStore(path.join(dir, "accounts.json"));
   await store.init();
