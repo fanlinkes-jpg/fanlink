@@ -238,7 +238,9 @@ function ThreadMessage({ message, find, watermark, fanLanguage = null }: { water
     ? highlightParts(value, find.query).map((part, index) => part.hit ? <mark key={index} className="rounded bg-[#ffe58f] px-0.5">{part.text}</mark> : <span key={index}>{part.text}</span>)
     : value;
   const hasBubble = slides.length > 0 || message.body || pill != null;
-  const footer = pill != null || who || when || read != null;
+  // Con autor, la hora, el doble check y el nombre van debajo de la burbuja, como en Infloww.
+  const caption = !message.fromFan && Boolean(message.authorName?.trim());
+  const footer = pill != null || (!caption && Boolean(who || when || read != null));
   const auto = useAutoTranslate();
   const mode = useTranslateMode();
   const target = useComposerLanguage();
@@ -304,15 +306,24 @@ function ThreadMessage({ message, find, watermark, fanLanguage = null }: { water
                 {pill.money}{" "}<span className="font-medium opacity-80">· {pill.label}</span>
               </span>
             ) : <span />}
-            <span className="ml-auto inline-flex items-center gap-1.5">
-              {who ? <span>{who}</span> : null}
-              {who && when ? <span aria-hidden>·</span> : null}
-              {when ? <span>{when}</span> : null}
-              {read === "leido" ? <CheckCheck className="h-3.5 w-3.5 text-[#3b6cff]" aria-label="Leído" /> : read === "enviado" ? <Check className="h-3.5 w-3.5" aria-label="Enviado" /> : null}
-            </span>
+            {caption ? null : (
+              <span className="ml-auto inline-flex items-center gap-1.5">
+                {who ? <span>{who}</span> : null}
+                {who && when ? <span aria-hidden>·</span> : null}
+                {when ? <span>{when}</span> : null}
+                {read === "leido" ? <CheckCheck className="h-3.5 w-3.5 text-[#3b6cff]" aria-label="Leído" /> : read === "enviado" ? <Check className="h-3.5 w-3.5" aria-label="Enviado" /> : null}
+              </span>
+            )}
           </div>
         ) : null}
       </div>
+      ) : null}
+      {caption ? (
+        <div data-testid="message-caption" className="ml-auto mt-1 flex max-w-[70%] items-center justify-end gap-1.5 px-1 text-[11px] leading-none text-[#7a8496]">
+          {when ? <span className="shrink-0">{when}</span> : null}
+          <CheckCheck className={`h-3.5 w-3.5 shrink-0 ${read === "leido" ? "text-[#3b6cff]" : "text-[#9aa3b2]"}`} aria-label={read === "leido" ? "Leído" : "Enviado"} />
+          <span data-testid="message-author" title={who} className="min-w-0 max-w-[12rem] truncate font-medium text-[#1d9bf0]">{who}</span>
+        </div>
       ) : null}
     </li>
   );
