@@ -7,7 +7,8 @@ import { isLast24h, money, timeAgo } from "@/lib/format";
 import { messageValue, useCrm, type Platform, type Role } from "@/lib/crm";
 import { CONNECTION_LABEL, IDENTITY_STATE_LABEL, SESSION_STATUS_LABEL, sessionActionLabel, type SessionStatus } from "@/lib/of-sessions";
 import { SESSION_EXPIRED_LABEL, signedReadsBlocked } from "../../server/of-sessions/sync/session-link.ts";
-import { hasPerm } from "@/lib/access-policy";
+import { canSeeAgencyEarnings, hasPerm } from "@/lib/access-policy";
+import { StaffCard, TABLE_CLASS, TD_CLASS, THEAD_CLASS, TH_CLASS, TR_CLASS } from "@/components/staff-card";
 import { saveStaffDisplayName } from "@/lib/workspace";
 import { useCreatorSessions } from "@/lib/use-creator-sessions";
 import { useOfReads } from "@/lib/use-of-reads";
@@ -61,7 +62,7 @@ export function AnalyticsPage({
   const creatorId = useCrm((s) => s.creatorId);
   const teamAccess = useCrm((s) => s.teamAccess);
   const reads = useOfReads();
-  const owner = reads.role === "owner" || teamAccess?.role === "owner";
+  const owner = reads.role === "owner" || canSeeAgencyEarnings(teamAccess);
   const scopedCreators = creators.filter((c) => creatorId === "all" || c.id === creatorId);
   const report = owner ? scopedReport(scopedCreators.map((c) => c.id), reads.byCreator, period) : null;
   const chart = report?.series.map((point) => ({ day: point.label, amountCents: point.grossCents, currency: "USD" })) ?? [];
@@ -265,9 +266,14 @@ const SHIFT_STYLE = {
 } as const;
 
 /** Lo que queda de la antigua pestaña Chatters: sesión, métricas y turnos. Los permisos, las creadoras y los avisos están en Editar de cada empleado. */
-export function TeamExtras() {
+export function TeamExtras({ people }: { people?: Array<{ id: string; roleLabel: string }> } = {}) {
   const creators = useCrm((s) => s.creators);
-  const employees = useCrm((s) => s.employees);
+  const allEmployees = useCrm((s) => s.employees);
+  // Las personas reales del servidor entran en Turnos y Métricas con su rol de verdad.
+  const employees = allEmployees.map((e) => ({
+    ...e,
+    role: (people?.find((person) => person.id === e.id)?.roleLabel ?? e.role) as typeof e.role,
+  }));
   const cycleShift = useCrm((s) => s.cycleShift);
   const addEmployee = useCrm((s) => s.addEmployee);
   const [name, setName] = useState("");
@@ -280,68 +286,11 @@ export function TeamExtras() {
 
   return (
     <div className="space-y-4">
-      <p className="text-sm text-muted">Los turnos de abajo son de la consola. El acceso real está en el servidor y no cambia al elegir a otra persona.</p>
-      <SessionPanel />
-
-      <div className="overflow-x-auto rounded-xl border border-line bg-white">
-        <p className="border-b border-line px-4 py-3 text-sm font-semibold">Métricas</p>
-        <table className="w-full min-w-[860px] text-left text-sm">
-          <thead className="text-xs text-muted">
+      <StaffCard title="Turnos" testId="turnos-card">
+        <table className={TABLE_CLASS}>
+          <thead className={THEAD_CLASS}>
             <tr>
-              {["Persona", "Rol", "Horas sem.", "Mensajes 24 h", "Ventas 24 h", "PPV", "Propinas", "Respuesta", "Turno hoy"].map((h) => (
-                <th key={h} className="px-3 py-2 font-medium">{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {employees.map((e) => {
-              const synced = teamRows.find((row) => row.userId === e.id) ?? null;
-              const [gross, ppv, reply, threads] = employeeMetricCells(synced);
-              return (
-                <tr key={e.id} className="border-t border-line">
-                  <td className="px-3 py-3 font-medium">
-                    {e.name}
-                    <span className={`ml-2 inline-block h-2 w-2 rounded-full ${e.online ? "bg-emerald-500" : "bg-[#d0d4dc]"}`} />
-                  </td>
-                  <td className="px-3 py-3">{e.role}</td>
-                  <td className="px-3 py-3 tabular-nums">{e.shifts.reduce((n, shift) => n + (shift === "libre" ? 0 : 8), 0)} h</td>
-                  <td className="px-3 py-3 tabular-nums">{threads}</td>
-                  <td className="px-3 py-3 tabular-nums">{gross}</td>
-                  <td className="px-3 py-3 tabular-nums">{ppv}</td>
-                  <td className="px-3 py-3 tabular-nums">Sin datos</td>
-                  <td className="px-3 py-3">{reply}</td>
-                  <td className="px-3 py-3">
-                    <span className={`rounded-lg px-2 py-1 text-xs capitalize ${SHIFT_STYLE[e.shifts[today]]}`}>{e.shifts[today]}</span>
-                  </td>
-                </tr>
-              );
-            })}
-            {teamRows.filter((row) => !employees.some((employee) => employee.id === row.userId)).map((row) => {
-              const [gross, ppv, reply, threads] = employeeMetricCells(row);
-              return (
-                <tr key={row.userId} className="border-t border-line">
-                  <td className="px-3 py-3 font-medium">{row.name}</td>
-                  <td className="px-3 py-3">Servidor</td>
-                  <td className="px-3 py-3">Sin datos</td>
-                  <td className="px-3 py-3 tabular-nums">{threads}</td>
-                  <td className="px-3 py-3 tabular-nums">{gross}</td>
-                  <td className="px-3 py-3 tabular-nums">{ppv}</td>
-                  <td className="px-3 py-3 tabular-nums">Sin datos</td>
-                  <td className="px-3 py-3">{reply}</td>
-                  <td className="px-3 py-3">Sin datos</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="overflow-x-auto rounded-xl border border-line bg-white">
-        <p className="border-b border-line px-4 py-3 text-sm font-semibold">Turnos</p>
-        <table className="w-full min-w-[760px] text-left text-sm">
-          <thead className="text-xs text-muted">
-            <tr>
-              <th className="px-3 py-2 font-medium">Persona</th>
+              <th className={TH_CLASS}>Persona</th>
               {DAYS.map((d, i) => (
                 <th key={d} className={`px-2 py-2 font-medium ${i === today ? "text-[#2456c7]" : ""}`}>{d}</th>
               ))}
@@ -349,8 +298,8 @@ export function TeamExtras() {
           </thead>
           <tbody>
             {employees.map((e) => (
-              <tr key={e.id} className="border-t border-line">
-                <td className="px-3 py-3">
+              <tr key={e.id} className={TR_CLASS}>
+                <td className={TD_CLASS}>
                   <p className="font-medium">{e.name}</p>
                   <p className="text-xs text-muted">{e.role}</p>
                 </td>
@@ -368,7 +317,59 @@ export function TeamExtras() {
             ))}
           </tbody>
         </table>
-      </div>
+      </StaffCard>
+
+      <StaffCard title="Métricas" testId="métricas-card">
+        <table className={TABLE_CLASS}>
+          <thead className={THEAD_CLASS}>
+            <tr>
+              {["Persona", "Rol", "Horas sem.", "Mensajes 24 h", "Ventas 24 h", "PPV", "Propinas", "Respuesta", "Turno hoy"].map((h) => (
+                <th key={h} className={TH_CLASS}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {employees.map((e) => {
+              const synced = teamRows.find((row) => row.userId === e.id) ?? null;
+              const [gross, ppv, reply, threads] = employeeMetricCells(synced);
+              return (
+                <tr key={e.id} className={TR_CLASS}>
+                  <td className={`${TD_CLASS} font-medium`}>
+                    {e.name}
+                    <span className={`ml-2 inline-block h-2 w-2 rounded-full ${e.online ? "bg-emerald-500" : "bg-[#d0d4dc]"}`} />
+                  </td>
+                  <td className={TD_CLASS}>{e.role}</td>
+                  <td className={`${TD_CLASS} tabular-nums`}>{e.shifts.reduce((n, shift) => n + (shift === "libre" ? 0 : 8), 0)} h</td>
+                  <td className={`${TD_CLASS} tabular-nums`}>{threads}</td>
+                  <td className={`${TD_CLASS} tabular-nums`}>{gross}</td>
+                  <td className={`${TD_CLASS} tabular-nums`}>{ppv}</td>
+                  <td className={`${TD_CLASS} tabular-nums`}>Sin datos</td>
+                  <td className={TD_CLASS}>{reply}</td>
+                  <td className={TD_CLASS}>
+                    <span className={`rounded-lg px-2 py-1 text-xs capitalize ${SHIFT_STYLE[e.shifts[today]]}`}>{e.shifts[today]}</span>
+                  </td>
+                </tr>
+              );
+            })}
+            {teamRows.filter((row) => !employees.some((employee) => employee.id === row.userId)).map((row) => {
+              const [gross, ppv, reply, threads] = employeeMetricCells(row);
+              return (
+                <tr key={row.userId} className={TR_CLASS}>
+                  <td className={`${TD_CLASS} font-medium`}>{row.name}</td>
+                  <td className={TD_CLASS}>Servidor</td>
+                  <td className={TD_CLASS}>Sin datos</td>
+                  <td className={`${TD_CLASS} tabular-nums`}>{threads}</td>
+                  <td className={`${TD_CLASS} tabular-nums`}>{gross}</td>
+                  <td className={`${TD_CLASS} tabular-nums`}>{ppv}</td>
+                  <td className={`${TD_CLASS} tabular-nums`}>Sin datos</td>
+                  <td className={TD_CLASS}>{reply}</td>
+                  <td className={TD_CLASS}>Sin datos</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </StaffCard>
 
       <Panel title="Incorporar">
         <form className="flex flex-col gap-2 sm:flex-row" onSubmit={(e) => { e.preventDefault(); addEmployee(name, role); setName(""); toast.success("Persona añadida"); }}>
@@ -379,6 +380,9 @@ export function TeamExtras() {
           <Button type="submit">Añadir</Button>
         </form>
       </Panel>
+
+      <p className="text-sm text-muted">Los turnos y las métricas de arriba son de la consola. El acceso real está en el servidor y no cambia al elegir a otra persona.</p>
+      <SessionPanel />
     </div>
   );
 }

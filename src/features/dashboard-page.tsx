@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { canSeeAgencyEarnings } from "@/lib/access-policy";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { NotificationBell } from "@/features/notification-bell";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -103,7 +104,7 @@ export function DashboardPage() {
   const selected = selectionValue(visible.map((creator) => creator.id), creatorId);
   const scoped = scopedCreators(teamAccess, creators, creatorId);
   const figures = buildSummary({
-    role: teamAccess.role,
+    role: canSeeAgencyEarnings(teamAccess) ? "owner" : teamAccess.role,
     period,
     now: new Date(),
     alerts,
