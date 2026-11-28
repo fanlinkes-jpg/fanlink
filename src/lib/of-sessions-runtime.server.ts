@@ -1529,7 +1529,7 @@ export async function openLiveViewTicket(
   }
   const page = input.page == null ? null : parseDeskPage(input.page);
   if (input.page != null && (!page || section !== "notifications")) {
-    return { ok: false, ticket: null, reason: "Esa sección no está disponible en Operativa." };
+    return { ok: false, ticket: null, reason: "Esa sección no está disponible en Operaciones." };
   }
   const threadKey = (input.threadKey ?? "").trim() || (section === "notifications" ? "notifications" : "inbox");
   const sessions = await getOfSessionManager();

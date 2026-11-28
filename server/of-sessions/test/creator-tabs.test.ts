@@ -28,7 +28,7 @@ test("las pestañas de creadora caben en 1280 y los badges no se pisan", async (
     await column.getByRole("button", { name: /Jose/ }).getByText("3", { exact: true }).waitFor();
     await column.getByRole("button", { name: "Allison Miller" }).getByText("256", { exact: true }).waitFor();
     assert.equal(await column.getByRole("button", { name: "9ikis52" }).count(), 0);
-    assert.equal(await page.getByRole("link", { name: "Mensajes" }).count(), 0);
+    assert.equal(await page.getByRole("link", { name: "Mensajes", exact: true }).count(), 0);
     assert.equal(await page.getByRole("combobox", { name: "Bandeja" }).count(), 0);
     assert.equal(await page.getByRole("textbox", { name: "Buscar fan" }).count(), 0);
     assert.equal(await page.getByText("Operador local").count(), 0);
@@ -78,8 +78,8 @@ test("las pestañas de creadora caben en 1280 y los badges no se pisan", async (
     await column.getByRole("button", { name: "Allison Miller" }).click();
     const sections = [
       { path: "/mensajes", shot: shotFile("creadoras-mensajes-1280.png") },
-      { path: "/notificaciones", shot: shotFile("creadoras-operativa-1280.png"), link: "Operativa" },
-      { path: "/funciones", shot: shotFile("creadoras-funciones-1280.png"), link: "Funciones inteligentes" },
+      { path: "/notificaciones", shot: shotFile("creadoras-operativa-1280.png"), link: "Operaciones" },
+      { path: "/funciones", shot: shotFile("creadoras-funciones-1280.png"), link: "Mensajes inteligentes" },
     ];
     let firstRows: string[] = [];
     for (const section of sections) {
@@ -96,7 +96,7 @@ test("las pestañas de creadora caben en 1280 y los badges no se pisan", async (
       assert.equal(await header.getByRole("button", { name: "Ajustes de traducción" }).count(), 1);
       assert.equal(await header.getByRole("switch", { name: "SFW" }).count(), 1);
       assert.equal(await header.locator("[data-creator-row]").count(), 0);
-      assert.equal(await page.getByRole("link", { name: "Mensajes" }).count(), 0);
+      assert.equal(await page.getByRole("link", { name: "Mensajes", exact: true }).count(), 0);
       const rows = await rail.locator("[data-creator-row]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-creator-row") ?? ""));
       if (firstRows.length === 0) firstRows = rows;
       assert.deepEqual(rows, firstRows);

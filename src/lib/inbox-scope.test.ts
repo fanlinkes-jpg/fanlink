@@ -91,7 +91,7 @@ test("sin creadoras en el workspace la lista usa la primera cuenta y no mezcla",
   assert.deepEqual(inboxCreators([{ id: "jose" }], [{ creatorId: "cpreview" }]).map((creator) => creator.id), ["jose"]);
 });
 
-test("la misma creadora sigue en Operativa, Mensajes y Funciones", () => {
+test("la misma creadora sigue en Operaciones, Mensajes y Mensajes inteligentes", () => {
   const sections = ["/notificaciones", "/mensajes", "/funciones"];
   for (const path of sections) assert.equal(showsCreatorRail(path), true);
   assert.equal(showsCreatorRail("/"), false);

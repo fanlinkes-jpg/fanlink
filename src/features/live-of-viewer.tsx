@@ -177,7 +177,7 @@ export function LiveOfViewer({ creatorId, section, page = null }: { creatorId: s
   };
 
   if (!ready && message && !openingMessage(message)) {
-    return <ComingSoonPage title="Operativa" hint={message} />;
+    return <ComingSoonPage title="Operaciones" hint={message} />;
   }
 
   return (
