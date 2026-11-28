@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mergePpvSources, ppvTimeline } from "./ppv-timeline.ts";
+import { PPV_MEDIA_MAX, clipLabel, mediaItems, mergePpvSources, ppvDateLabel, ppvTimeline } from "./ppv-timeline.ts";
 
 test("el buy rate y la línea de PPV solo usan precios y compras reales", () => {
   const empty = ppvTimeline([
@@ -66,4 +66,39 @@ test("mergePpvSources no repite mensajes y prefiere el cargado", () => {
   const merged = mergePpvSources(loaded, stored);
   assert.deepEqual(merged.map((row) => row.messageKey), ["a", "b"]);
   assert.equal(merged[0]?.body, "nuevo");
+});
+
+test("Maik: 23 PPV y una compra dan 1/23 (4%) y la fecha de la compra", () => {
+  const own = Array.from({ length: 22 }, (_, i) => (
+    { messageKey: `m${i}`, body: "x", sentAt: `2026-10-${String(i + 1).padStart(2, "0")}T10:00:00.000Z`, fromFan: false, priceCents: 1299 + i, purchased: null as boolean | null }
+  ));
+  const bought = { messageKey: "pagado", body: "x", sentAt: "2026-10-14T10:00:00.000Z", fromFan: false, priceCents: 2499, purchased: true as boolean | null };
+  const timeline = ppvTimeline([...own, bought], [{ sentAt: "2026-10-16T14:00:00.000Z", priceCents: 2499 }]);
+  assert.equal(timeline.rows.length, 23);
+  assert.equal(timeline.rate, "1/23 (4%)");
+});
+
+test("los medios del PPV salen todos, en orden, con duración y candado, y la fecha como Infloww", () => {
+  const timeline = ppvTimeline([{
+    messageKey: "a",
+    body: "texto",
+    sentAt: "2026-10-16T14:00:00.000Z",
+    fromFan: false,
+    priceCents: 1999,
+    purchased: false,
+    media: [
+      { kind: "video", seconds: 12, preview: "https://cdn.example/1.jpg", locked: true },
+      { kind: "foto", seconds: null, preview: "https://cdn.example/2.jpg", locked: true },
+      { kind: "video", seconds: 3725, preview: null, locked: false },
+    ],
+  }]);
+  const items = timeline.rows[0]?.items ?? [];
+  assert.equal(items.length, 3);
+  assert.deepEqual(items.map((item) => clipLabel(item.seconds)), ["0:12", null, "1:02:05"]);
+  assert.deepEqual(items.map((item) => item.locked), [true, true, false]);
+  assert.equal(ppvDateLabel("2026-10-16T14:00:00.000Z"), "Oct 16, 2026");
+  const many = mediaItems({ media: Array.from({ length: 40 }, () => ({ kind: "foto" as const, preview: "u" })) });
+  assert.equal(many.length, PPV_MEDIA_MAX);
+  assert.deepEqual(mediaItems({ mediaPreview: "https://x/p.jpg", mediaSeconds: 9 }), [{ kind: null, seconds: 9, preview: "https://x/p.jpg", locked: null }]);
+  assert.deepEqual(mediaItems({}), []);
 });
