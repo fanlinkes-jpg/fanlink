@@ -2012,6 +2012,8 @@ function InsightPane({
     messagesCents?: number | null;
     subPriceCents: number | null;
     subExpiresAt: string | null;
+    subStartedAt?: string | null;
+    subMonths?: number | null;
     renewAuto: boolean | null;
     lists?: string[] | null;
   };
@@ -2053,7 +2055,10 @@ function InsightPane({
       tipsCents={thread.tipsCents ?? tipSum}
       status={card?.status ?? null}
       expiresAt={thread.subExpiresAt ?? card?.expiresAt ?? null}
-      subscribedAt={card?.subscribedAt ?? null}
+      subscribedAt={card?.subscribedAt ?? thread.subStartedAt ?? null}
+      subMonths={thread.subMonths ?? null}
+      rank={stored?.rank ?? null}
+      chargebacks={stored?.chargebacks ?? null}
       renewAuto={thread.renewAuto ?? card?.renewAuto ?? null}
       subPriceCents={thread.subPriceCents}
       messagesCents={thread.messagesCents ?? null}

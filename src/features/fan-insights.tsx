@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { FAN_CARD_TABS } from "@/lib/fan-card-tabs";
 import { fanInsightModel } from "@/lib/fan-insights";
-import { ppvTimeline, type PpvSource } from "@/lib/ppv-timeline";
+import { clipLabel, ppvDateLabel, ppvTimeline, type PpvRow, type PpvSource } from "@/lib/ppv-timeline";
 
 export type FanProfileFields = {
   creatorId: string;
@@ -34,6 +34,9 @@ export type FanInsightProps = {
   messagesCents?: number | null;
   subscribesCents?: number | null;
   postsCents?: number | null;
+  rank?: { fans: number; above: number; mineCents: number } | null;
+  chargebacks?: number | null;
+  subMonths?: number | null;
   lists?: string[] | null;
   profile?: FanProfileFields | null;
   onProfile?: (profile: FanProfileFields) => void;
@@ -60,6 +63,9 @@ export function FanInsights(props: FanInsightProps) {
     messagesCents: props.messagesCents ?? null,
     subscribesCents: props.subscribesCents ?? null,
     postsCents: props.postsCents ?? null,
+    rank: props.rank ?? null,
+    chargebacks: props.chargebacks ?? null,
+    subMonths: props.subMonths ?? null,
   });
   return (
     <aside className="flex min-h-0 flex-1 flex-col bg-[#f7f8fb]">
@@ -79,7 +85,6 @@ export function FanInsights(props: FanInsightProps) {
                 <Pair label="Gasto total" value={model.total} />
                 <Pair label="Último gasto" value={model.lastAgo === "Sin datos" ? "Sin datos" : `${model.lastAgo} · ${model.last}`} />
               </div>
-              <Pair label="Tipo del último" value={model.last} />
               <Pair label="PPV total" value={model.ppvTotal} />
               <Pair label="PPV medio" value={model.ppvAvg} />
               <Pair label="Propinas" value={model.tipTotal} />
@@ -168,22 +173,45 @@ function SalesPane({ messages, purchases, onCopy }: { messages: PpvSource[]; pur
         <Pair label="Precio más bajo" value={timeline.rows.length === 0 ? "$0.00" : timeline.low} />
       </Card>
       {timeline.rows.length === 0 ? <p className="text-sm text-[#6d7585]">Sin datos</p> : timeline.rows.map((row) => (
-        <article key={row.messageKey} className="rounded-xl border border-[#e6e8ee] bg-white p-3">
-          <div className="flex items-center justify-between gap-2 text-sm">
-            <span className="font-medium">{row.price}</span>
-            <span className={row.state === "comprado" ? "text-[#137333]" : row.state === "no comprado" ? "text-[#b4234a]" : "text-[#6d7585]"}>
-              {row.state === "comprado" ? "$ comprado" : row.state === "no comprado" ? "candado · no comprado" : "Sin datos"}
-            </span>
-          </div>
-          <p className="mt-1 text-xs text-[#6d7585]">{row.sentAt.slice(0, 16).replace("T", " ")}</p>
-          <p className="mt-2 text-sm">{row.body}</p>
-          {row.preview ? <img src={row.preview} alt="" className="mt-2 h-16 w-16 rounded object-cover" /> : <p className="mt-2 text-xs text-[#6d7585]">{row.media}</p>}
-          {onCopy ? (
-            <button type="button" className="mt-2 rounded border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => onCopy(row.body, row.priceCents)}>Copiar como borrador</button>
-          ) : null}
-        </article>
+        <PpvCard key={row.messageKey} row={row} onCopy={onCopy} />
       ))}
     </div>
+  );
+}
+
+/** Un PPV como en Infloww: medios en una fila con duración y candado, precio rosa con fecha y texto plegable. */
+function PpvCard({ row, onCopy }: { row: PpvRow; onCopy?: (body: string, priceCents: number) => void }) {
+  const [open, setOpen] = useState(false);
+  const long = row.body.length > 140 || row.body.split("\n").length > 2;
+  return (
+    <article className="rounded-xl border border-[#e6e8ee] bg-white p-3">
+      <div className="flex items-center justify-between gap-2 text-sm">
+        <span className="rounded-full bg-[#ff5a7a] px-2 py-0.5 text-xs font-semibold text-white">{row.price} · {ppvDateLabel(row.sentAt)}</span>
+        <span className={row.state === "comprado" ? "text-[#137333]" : row.state === "no comprado" ? "text-[#b4234a]" : "text-[#6d7585]"}>
+          {row.state === "comprado" ? "$ comprado" : row.state === "no comprado" ? "candado · no comprado" : "Sin datos"}
+        </span>
+      </div>
+      {row.items.length > 0 ? (
+        <div className="mt-2 flex gap-1.5 overflow-x-auto pb-1">
+          {row.items.map((item, index) => (
+            <figure key={index} className="relative h-20 w-16 shrink-0 overflow-hidden rounded-lg bg-[#d7dee8]">
+              {item.preview ? <img src={item.preview} alt="" className="h-full w-full object-cover" loading="lazy" /> : null}
+              {item.locked ? <span className="absolute left-1 top-1 rounded bg-black/70 px-1 text-[10px] text-white" aria-label="Con candado">🔒</span> : null}
+              {clipLabel(item.seconds) ? <span className="absolute bottom-1 right-1 rounded bg-black/70 px-1 text-[10px] text-white">{clipLabel(item.seconds)}</span> : null}
+            </figure>
+          ))}
+        </div>
+      ) : <p className="mt-2 text-xs text-[#6d7585]">{row.media}</p>}
+      {row.body ? (
+        <>
+          <p className={`mt-2 whitespace-pre-wrap break-words text-sm ${open ? "" : "line-clamp-2"}`}>{row.body}</p>
+          {long ? <button type="button" className="mt-1 text-xs text-[#2456c7]" onClick={() => setOpen(!open)}>{open ? "Ver menos" : "Ver más"}</button> : null}
+        </>
+      ) : null}
+      {onCopy ? (
+        <button type="button" className="mt-2 rounded border border-[#e6e8ee] px-2 py-1 text-xs" onClick={() => onCopy(row.body, row.priceCents)}>Copiar como borrador</button>
+      ) : null}
+    </article>
   );
 }
 

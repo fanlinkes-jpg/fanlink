@@ -142,6 +142,8 @@ export type CreatorChatList = {
     lastSeenAt?: string | null;
     subPriceCents: number | null;
     subExpiresAt: string | null;
+    subStartedAt?: string | null;
+    subMonths?: number | null;
     renewAuto: boolean | null;
     lists: string[] | null;
   }>;
