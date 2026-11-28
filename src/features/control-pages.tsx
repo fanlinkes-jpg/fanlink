@@ -17,6 +17,8 @@ import { changeRatio, creatorReport, type MetricPeriod } from "@/lib/creator-met
 import { fanProfiles, rankFans } from "@/lib/fan-metrics";
 import { employeeMetricCells } from "@/lib/employee-metrics";
 import { listCreatorChats, listTeamMetrics, setCreatorProxy, type TeamMetricView } from "@/lib/of-sessions";
+import { listShiftBoard, type ShiftBoardView } from "@/lib/employees";
+import { ShiftBoard } from "@/features/shift-board";
 import { PLATFORMS } from "@/features/growth-pages";
 import { Badge, Button, Field, Panel, Select } from "@/components/ui";
 
@@ -258,7 +260,6 @@ export function AuditPage() {
   );
 }
 
-const DAYS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
 const SHIFT_STYLE = {
   mañana: "bg-[#e7f0ff] text-[#2456c7]",
   noche: "bg-[#efe8ff] text-[#5b3cc4]",
@@ -266,6 +267,13 @@ const SHIFT_STYLE = {
 } as const;
 
 /** Lo que queda de la antigua pestaña Chatters: sesión, métricas y turnos. Los permisos, las creadoras y los avisos están en Editar de cada empleado. */
+
+function boardHours(board: ShiftBoardView | null, userId: string, shifts: Array<"mañana" | "noche" | "libre">): number {
+  const hours = board?.people.find((person) => person.id === userId)?.weeklyHours;
+  if (hours != null) return hours;
+  return shifts.reduce((n, shift) => n + (shift === "libre" ? 0 : 8), 0);
+}
+
 export function TeamExtras({ people }: { people?: Array<{ id: string; roleLabel: string }> } = {}) {
   const creators = useCrm((s) => s.creators);
   const allEmployees = useCrm((s) => s.employees);
@@ -274,50 +282,20 @@ export function TeamExtras({ people }: { people?: Array<{ id: string; roleLabel:
     ...e,
     role: (people?.find((person) => person.id === e.id)?.roleLabel ?? e.role) as typeof e.role,
   }));
-  const cycleShift = useCrm((s) => s.cycleShift);
   const addEmployee = useCrm((s) => s.addEmployee);
   const [name, setName] = useState("");
   const [role, setRole] = useState<Role>("Chatter");
   const [teamRows, setTeamRows] = useState<TeamMetricView[]>([]);
-  const today = (new Date().getDay() + 6) % 7;
+  const [board, setBoard] = useState<ShiftBoardView | null>(null);
+  const today = board?.today ?? (new Date().getDay() + 6) % 7;
   useEffect(() => {
     void listTeamMetrics().then(setTeamRows).catch(() => setTeamRows([]));
+    void listShiftBoard().then(setBoard).catch(() => setBoard(null));
   }, []);
 
   return (
     <div className="space-y-4">
-      <StaffCard title="Turnos" testId="turnos-card">
-        <table className={TABLE_CLASS}>
-          <thead className={THEAD_CLASS}>
-            <tr>
-              <th className={TH_CLASS}>Persona</th>
-              {DAYS.map((d, i) => (
-                <th key={d} className={`px-2 py-2 font-medium ${i === today ? "text-[#2456c7]" : ""}`}>{d}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {employees.map((e) => (
-              <tr key={e.id} className={TR_CLASS}>
-                <td className={TD_CLASS}>
-                  <p className="font-medium">{e.name}</p>
-                  <p className="text-xs text-muted">{e.role}</p>
-                </td>
-                {e.shifts.map((shift, i) => (
-                  <td key={`${e.id}-${DAYS[i]}`} className="px-2 py-2">
-                    <button
-                      onClick={() => cycleShift(e.id, i)}
-                      className={`w-full rounded-lg px-1 py-2 text-xs capitalize ${SHIFT_STYLE[shift]} ${i === today ? "ring-2 ring-[#2456c7]" : ""}`}
-                    >
-                      {shift}
-                    </button>
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </StaffCard>
+      <ShiftBoard />
 
       <StaffCard title="Métricas" testId="métricas-card">
         <table className={TABLE_CLASS}>
@@ -339,14 +317,19 @@ export function TeamExtras({ people }: { people?: Array<{ id: string; roleLabel:
                     <span className={`ml-2 inline-block h-2 w-2 rounded-full ${e.online ? "bg-emerald-500" : "bg-[#d0d4dc]"}`} />
                   </td>
                   <td className={TD_CLASS}>{e.role}</td>
-                  <td className={`${TD_CLASS} tabular-nums`}>{e.shifts.reduce((n, shift) => n + (shift === "libre" ? 0 : 8), 0)} h</td>
+                  <td className={`${TD_CLASS} tabular-nums`}>{boardHours(board, e.id, e.shifts)} h</td>
                   <td className={`${TD_CLASS} tabular-nums`}>{threads}</td>
                   <td className={`${TD_CLASS} tabular-nums`}>{gross}</td>
                   <td className={`${TD_CLASS} tabular-nums`}>{ppv}</td>
                   <td className={`${TD_CLASS} tabular-nums`}>Sin datos</td>
                   <td className={TD_CLASS}>{reply}</td>
                   <td className={TD_CLASS}>
-                    <span className={`rounded-lg px-2 py-1 text-xs capitalize ${SHIFT_STYLE[e.shifts[today]]}`}>{e.shifts[today]}</span>
+                    {(() => {
+                      const label = board?.people.find((person) => person.id === e.id)?.days[today]?.label;
+                      if (label) return <span className="rounded-lg bg-raised px-2 py-1 text-xs">{label}</span>;
+                      const shift = e.shifts[today];
+                      return <span className={`rounded-lg px-2 py-1 text-xs capitalize ${SHIFT_STYLE[shift]}`}>{shift}</span>;
+                    })()}
                   </td>
                 </tr>
               );
@@ -381,7 +364,7 @@ export function TeamExtras({ people }: { people?: Array<{ id: string; roleLabel:
         </form>
       </Panel>
 
-      <p className="text-sm text-muted">Los turnos y las métricas de arriba son de la consola. El acceso real está en el servidor y no cambia al elegir a otra persona.</p>
+      <p className="text-sm text-muted">Los horarios se guardan en el servidor (zona Europe/Madrid). Las métricas de ventas salen de la atribución real; el acceso no cambia al elegir a otra persona en la consola.</p>
       <SessionPanel />
     </div>
   );

@@ -17,7 +17,7 @@ import {
   type InviteDelivery,
 } from "@/lib/employees";
 import { INVITABLE_LEVELS, LEVEL_LABELS, lastSeenLabel, type EmployeeStatus, type StaffLevel } from "@/lib/staff-levels";
-import { PERM_GROUPS, PERM_LABELS, describePerms, isPermLocked, presetPerms } from "@/lib/staff-roles";
+import { PERM_GROUPS, PERM_LABELS, describePerms, effectivePerms, isPermLocked, presetPerms } from "@/lib/staff-roles";
 import { initialOf } from "@/lib/initial";
 import { updateStaffAlert } from "@/lib/workspace";
 import { TeamExtras } from "@/features/control-pages";
@@ -537,9 +537,13 @@ export function PermsDialog({
   onCancel: () => void;
 }) {
   const preset = useMemo(() => presetPerms(roles), [roles]);
-  const [checked, setChecked] = useState<string[]>(initial);
-  const toggle = (perm: string) => setChecked((list) => (list.includes(perm) ? list.filter((item) => item !== perm) : [...list, perm]));
-  const summary = describePerms(checked.filter((perm) => !isPermLocked(roles, perm as never)));
+  const [checked, setChecked] = useState<string[]>(() => effectivePerms(roles, initial));
+  const visible = useMemo(() => effectivePerms(roles, checked), [roles, checked]);
+  const toggle = (perm: string) => {
+    if (isPermLocked(roles, perm as never)) return;
+    setChecked((list) => (list.includes(perm) ? list.filter((item) => item !== perm) : [...list, perm]));
+  };
+  const summary = describePerms(visible);
   return (
     <Shell title="Permisos del rol" onClose={onCancel} wide label="Permisos del rol">
       <p className="mb-3 text-sm text-muted" data-testid="perms-roles">
@@ -561,7 +565,7 @@ export function PermsDialog({
                     <input
                       type="checkbox"
                       className="mt-0.5 h-4 w-4 accent-primary"
-                      checked={checked.includes(perm) && !locked}
+                      checked={visible.includes(perm)}
                       disabled={locked}
                       onChange={() => toggle(perm)}
                       data-perm={perm}
@@ -581,7 +585,7 @@ export function PermsDialog({
         <Button type="button" variant="ghost" onClick={() => setChecked([...preset])}>Volver al rol</Button>
         <div className="flex gap-2">
           <Button type="button" variant="ghost" onClick={onCancel}>Cancelar</Button>
-          <Button type="button" className={BLUE_BUTTON} onClick={() => onApply(checked.filter((perm) => !isPermLocked(roles, perm as never)))}>{applyLabel}</Button>
+          <Button type="button" className={BLUE_BUTTON} onClick={() => onApply(effectivePerms(roles, checked))}>{applyLabel}</Button>
         </div>
       </div>
     </Shell>

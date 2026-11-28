@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { canSeeAgencyEarnings } from "@/lib/access-policy";
+import { canSeeAgencyEarnings, hasPerm } from "@/lib/access-policy";
+import { ShiftBoard } from "@/features/shift-board";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { NotificationBell } from "@/features/notification-bell";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -192,6 +193,7 @@ export function DashboardPage() {
           {teamAccess.role !== "owner" && visible.length === 0 ? (
             <p className="text-sm text-muted">No tienes cuentas asignadas. La dueña las asigna en Personal.</p>
           ) : null}
+          {teamAccess && !hasPerm(teamAccess, "equipo") ? <ShiftBoard compact /> : null}
           {reads.error ? <p className="text-sm text-[#8a5a12]">{reads.error}</p> : null}
           {showingReports ? (
             <ReportsPanel
