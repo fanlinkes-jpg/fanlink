@@ -1,3 +1,5 @@
+import { initialOf } from "@/lib/initial";
+import { copyText, fanChatUrl, fanProfileUrl } from "@/lib/fan-links";
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AtSign, Bell, Check, CheckCheck, ChevronLeft, ChevronRight, Clock, DollarSign, FolderOpen, ImagePlus, Languages, Lock, RefreshCw, ScrollText, Send, Type, BellOff, EllipsisVertical, Images, Pin, Search, Star, StickyNote, Pencil } from "lucide-react";
@@ -60,16 +62,6 @@ import { withDateSeparators } from "@/lib/chat-dates";
 import { mergeHistoryMessages, rememberThreadMessages } from "@/lib/chat-history";
 import { VAULT_THUMB_MISSING, vaultMediaSrc } from "@/lib/chat-media";
 import { VaultBrowser } from "@/features/vault-browser";
-
-function profileHref(handle: string | null): string | null {
-  const name = handle?.replace(/^@/, "").trim();
-  return name ? `https://onlyfans.com/${name}` : null;
-}
-
-function chatHref(fanKey: string | null): string | null {
-  const id = fanKey?.trim();
-  return id ? `https://onlyfans.com/my/chats/chat/${id}` : null;
-}
 
 function madridClock(value: string): string {
   const date = new Date(value);
@@ -141,6 +133,23 @@ function NoteTabRow({
           </button>
         </>
       ) : null}
+    </div>
+  );
+}
+
+/** Confirmación antes de tocar algo en OnlyFans. `danger` pinta el botón en rojo (bloquear, restringir, denunciar). */
+function ConfirmModal({ title, text, confirm, danger, busy, error, onCancel, onConfirm }: { title: string; text: string; confirm: string; danger?: boolean; busy: boolean; error: string | null; onCancel: () => void; onConfirm: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4" role="dialog" aria-modal="true" aria-label={title}>
+      <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-xl">
+        <h3 className="text-sm font-semibold text-[#1d2433]">{title}</h3>
+        <p className="mt-2 text-sm text-[#6d7585]">{text}</p>
+        {error ? <p className="mt-2 text-xs text-[#b42318]">{error}</p> : null}
+        <div className="mt-4 flex justify-end gap-2">
+          <button type="button" disabled={busy} className="rounded-lg px-3 py-1.5 text-sm text-[#6d7585] hover:bg-[#f1f4fa] disabled:opacity-50" onClick={onCancel}>Cancelar</button>
+          <button type="button" disabled={busy} className={`rounded-lg px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50 ${danger ? "bg-[#d92d20] hover:bg-[#b42318]" : "bg-[#3b6cff] hover:bg-[#2456c7]"}`} onClick={onConfirm}>{busy ? "Enviando…" : confirm}</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -407,10 +416,12 @@ export function RealChatsPage() {
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
-  const [fanAction, setFanAction] = useState<null | "lists" | "discount" | "restrict" | "block" | "report">(null);
+  const [fanAction, setFanAction] = useState<null | "lists">(null);
+  const [listConfirm, setListConfirm] = useState<{ id: string; name: string; add: boolean } | null>(null);
+  const [listOn, setListOn] = useState<Record<string, boolean>>({});
   const [fanBusy, setFanBusy] = useState(false);
   const [fanActionError, setFanActionError] = useState<string | null>(null);
-  const [fanLists, setFanLists] = useState<Array<{ name: string; on: boolean }>>([]);
+  const [fanLists, setFanLists] = useState<Array<{ id: string; name: string }>>([]);
   const [notesOpen, setNotesOpen] = useState(false);
   const [noteFilter, setNoteFilter] = useState<NotificationTab>("all");
   const [noteCursor, setNoteCursor] = useState<string | null>(null);
@@ -425,8 +436,6 @@ export function RealChatsPage() {
   // Una sola marca de Etiquetas por apertura de la pestaña y cuenta.
   const tagsMarkedFor = useRef<string | null>(null);
   const [notesPos, setNotesPos] = useState({ top: 0, left: 0 });
-  const [discountPercent, setDiscountPercent] = useState("10");
-  const [reportText, setReportText] = useState("");
   const [draft, setDraft] = useState("");
   const [draftPrice, setDraftPrice] = useState<number | null>(null);
   const [priceLabel, setPriceLabel] = useState<string | null>(null);
@@ -1452,22 +1461,37 @@ export function RealChatsPage() {
     setFanMenu(false);
   }
 
-  function runMenu(request: { action: "lists" } | { action: "list"; name: string } | { action: "discount"; percent: number } | { action: "restrict" } | { action: "block" } | { action: "report"; reason: string }) {
+  /** Las listas y el cambio de lista son lo único del menú que sale a OnlyFans. */
+  function runMenu(request: { action: "lists" } | { action: "list"; listId: string; add: boolean; name: string }) {
     if (!selected?.fanKey) return;
+    const { creatorId, fanKey } = selected;
     setFanBusy(true);
     setFanActionError(null);
-    void runFanChatMenu({ data: { creatorId: selected.creatorId, fanKey: selected.fanKey, request } }).then((result) => {
-      const answer = result as { ok: boolean; reason: string | null; lists: Array<{ name: string; on: boolean }> };
-      setFanLists(answer.lists ?? []);
+    const { name: listName, ...wire } = request as { action: string; name?: string };
+    void runFanChatMenu({ data: { creatorId, fanKey, request: wire } }).then((answer) => {
       if (!answer.ok) {
         setFanActionError(answer.reason ?? "No se ha podido hacer en OnlyFans.");
         return;
       }
-      if (request.action !== "lists" && request.action !== "list") {
-        setFanAction(null);
-        setFanMenu(false);
+      if (request.action === "lists") setFanLists(answer.lists);
+      else {
+        setListOn((current) => ({ ...current, [`${creatorId}:${fanKey}:${listName}`]: request.add }));
+        setListConfirm(null);
+        void refresh();
       }
     }).catch((err: unknown) => setFanActionError(sessionErrorText(err))).finally(() => setFanBusy(false));
+  }
+
+  function copyFanLink(kind: "perfil" | "chat", href: string) {
+    void copyText(href).then((ok) => {
+      if (!ok) {
+        setFanActionError("No se pudo copiar el enlace.");
+        return;
+      }
+      setFanActionError(null);
+      setCopiedLink(kind);
+      setTimeout(() => setCopiedLink((current) => (current === kind ? null : current)), 2000);
+    });
   }
 
   return (
@@ -1670,7 +1694,7 @@ export function RealChatsPage() {
                 {selected ? <FanFace name={fanTitle(selected)} url={selected.avatarUrl} online={headerOnline} /> : null}
                 <div className="min-w-0">
                 <div className="flex min-w-0 items-center gap-1">
-                <button type="button" className="block max-w-full truncate text-left text-lg font-semibold tracking-[-0.01em]" onClick={() => { setFanMenu((open) => !open); setRenaming(false); }} aria-expanded={fanMenu} aria-label="Opciones del fan">
+                <button type="button" className="block max-w-full truncate text-left text-lg font-semibold tracking-[-0.01em]" onClick={() => { setFanMenu((open) => !open); setRenaming(false); setFanAction(null); setListConfirm(null); setFanActionError(null); }} aria-expanded={fanMenu} aria-label="Opciones del fan">
                   {selected ? fanTitle(selected) : syncPhaseLabel(syncPhase)}
                 </button>
                 {selected?.fanKey ? <button type="button" aria-label="Renombrar fan" title="Renombrar (solo en el CRM)" className="shrink-0 rounded p-1 text-[#8a93a3] transition-colors hover:text-[#1d2433]" onClick={startRename}><Pencil className="h-3.5 w-3.5" /></button> : null}
@@ -1704,7 +1728,7 @@ export function RealChatsPage() {
                     <button type="button" aria-label="Cerrar opciones del fan" className="fixed inset-0 z-20 cursor-default" onClick={() => { setFanMenu(false); setRenaming(false); }} />
                     <div className="absolute right-4 top-full z-30 mt-1 w-72 rounded-xl border border-[#e6e8ee] bg-white py-1 text-sm shadow-lg">
                       <div className="flex items-center gap-2 border-b border-[#e6e8ee] px-4 py-3">
-                        <span className="grid h-8 w-8 place-items-center rounded-full bg-[#eef2ff] text-xs font-medium">{fanTitle(selected).slice(0, 1)}</span>
+                        <FanFace name={fanTitle(selected)} url={selected.avatarUrl} online={null} size="sm" />
                         <span className="min-w-0 truncate text-[#6d7585]">{selected.fanHandle ? `@${selected.fanHandle.replace(/^@/, "")}` : "Sin usuario"}</span>
                       </div>
                       {renaming ? (
@@ -1717,66 +1741,59 @@ export function RealChatsPage() {
                         </form>
                       ) : (
                         <>
-                          <FanLink item="Copiar enlace del perfil" href={profileHref(selected.fanHandle)} copied={copiedLink === "perfil"} onCopy={(href) => { void navigator.clipboard.writeText(href); setCopiedLink("perfil"); }} />
-                          <FanLink item="Copiar enlace del chat" href={chatHref(selected.fanKey)} copied={copiedLink === "chat"} onCopy={(href) => { void navigator.clipboard.writeText(href); setCopiedLink("chat"); }} />
+                          <FanLink item="Copiar enlace del perfil" href={fanProfileUrl(selected.fanHandle, selected.fanKey)} copied={copiedLink === "perfil"} onCopy={(href) => copyFanLink("perfil", href)} />
+                          <FanLink item="Copiar enlace del chat" href={fanChatUrl(selected.fanKey)} copied={copiedLink === "chat"} onCopy={(href) => copyFanLink("chat", href)} />
                           <button type="button" className="block w-full px-4 py-3 text-left hover:bg-[#f4f7ff] disabled:text-[#b0b6c0]" disabled={!selected.fanKey} onClick={() => { setRenameValue(fanNickname(selected.creatorId, selected.fanKey) ?? selected.fanName ?? ""); setRenaming(true); }}>Renombrar</button>
                           <div className="my-1 border-t border-[#e6e8ee]" />
                           <button type="button" className="block w-full px-4 py-3 text-left hover:bg-[#f4f7ff]" onClick={() => toggleMark("hidden")}>{marks.hidden.includes(threadMark(selected.creatorId, selected.threadKey)) ? "Mostrar chat" : "Ocultar chat"}</button>
                           <button type="button" className="block w-full px-4 py-3 text-left text-[#2456c7] hover:bg-[#f4f7ff]" onClick={() => { toggleMuted(); setFanMenu(false); }}>{isMuted(selected) ? "Activar avisos" : "Silenciar avisos"}</button>
                           <div className="my-1 border-t border-[#e6e8ee]" />
-                          {fanAction ? (
+                          {fanAction === "lists" ? (
                             <div className="px-4 py-3">
                               <button type="button" className="text-xs text-[#6d7585]" onClick={() => { setFanAction(null); setFanActionError(null); }}>Volver</button>
-                              {fanAction === "lists" ? (
-                                <div className="mt-2 space-y-1">
-                                  {fanBusy && fanLists.length === 0 ? <p className="text-xs text-[#6d7585]">Leyendo las listas de OnlyFans…</p> : null}
-                                  {fanLists.map((item) => (
-                                    <button key={item.name} type="button" disabled={fanBusy} className="block w-full rounded px-2 py-2 text-left text-sm hover:bg-[#f4f7ff] disabled:opacity-50" onClick={() => runMenu({ action: "list", name: item.name })}>
-                                      {item.on ? "Quitar de" : "Añadir a"} {item.name}
+                              <div className="mt-2 space-y-1">
+                                {fanBusy && fanLists.length === 0 ? <p className="text-xs text-[#6d7585]">Leyendo las listas de OnlyFans…</p> : null}
+                                {fanLists.map((item) => {
+                                  const on = listOn[`${selected.creatorId}:${selected.fanKey}:${item.name}`] ?? (selected.lists ?? []).includes(item.name);
+                                  return (
+                                    <button key={item.id} type="button" disabled={fanBusy || !realSend} title={realSend ? undefined : "Envío real desactivado para esta cuenta"} className="block w-full rounded px-2 py-2 text-left text-sm hover:bg-[#f4f7ff] disabled:opacity-50" onClick={() => setListConfirm({ id: item.id, name: item.name, add: !on })}>
+                                      {on ? "Quitar de" : "Añadir a"} {item.name}
                                     </button>
-                                  ))}
-                                </div>
-                              ) : null}
-                              {fanAction === "discount" ? (
-                                <form className="mt-2 space-y-2" onSubmit={(event) => { event.preventDefault(); const percent = Number(discountPercent); if (Number.isInteger(percent) && percent >= 1 && percent <= 100) runMenu({ action: "discount", percent }); }}>
-                                  <p className="text-xs text-[#6d7585]">Porcentaje en OnlyFans, del 1 al 100.</p>
-                                  <input aria-label="Porcentaje de descuento" value={discountPercent} onChange={(event) => setDiscountPercent(event.target.value)} inputMode="numeric" className="h-9 w-full rounded-lg border border-[#e6e8ee] px-2 text-sm" />
-                                  <button type="submit" disabled={fanBusy} className="text-sm font-medium text-[#2456c7] disabled:opacity-50">Aplicar</button>
-                                </form>
-                              ) : null}
-                              {fanAction === "restrict" || fanAction === "block" ? (
-                                <div className="mt-2 space-y-2">
-                                  <p className="text-xs text-[#6d7585]">Esto se hace en la cuenta de OnlyFans.</p>
-                                  <button type="button" disabled={fanBusy} className="text-sm font-medium text-[#2456c7] disabled:opacity-50" onClick={() => runMenu({ action: fanAction })}>{fanAction === "block" ? "Bloquear" : "Restringir"}</button>
-                                </div>
-                              ) : null}
-                              {fanAction === "report" ? (
-                                <form className="mt-2 space-y-2" onSubmit={(event) => { event.preventDefault(); if (reportText.trim()) runMenu({ action: "report", reason: reportText.trim() }); }}>
-                                  <textarea aria-label="Motivo de la denuncia" value={reportText} onChange={(event) => setReportText(event.target.value)} className="h-20 w-full rounded-lg border border-[#e6e8ee] px-2 py-1 text-sm" />
-                                  <button type="submit" disabled={fanBusy || !reportText.trim()} className="text-sm font-medium text-[#2456c7] disabled:opacity-50">Denunciar</button>
-                                </form>
-                              ) : null}
+                                  );
+                                })}
+                              </div>
                               {fanActionError ? <p className="mt-2 text-xs text-[#8a5a12]">{fanActionError}</p> : null}
                             </div>
                           ) : (
                             <>
                               <button type="button" disabled={!selected.fanKey || fanBusy} className="block w-full px-4 py-3 text-left hover:bg-[#f4f7ff] disabled:text-[#b0b6c0]" onClick={() => { setFanAction("lists"); setFanLists([]); setFanActionError(null); runMenu({ action: "lists" }); }}>Añadir o quitar de listas</button>
-                              <button type="button" disabled={!selected.fanKey || fanBusy} className="block w-full px-4 py-3 text-left hover:bg-[#f4f7ff] disabled:text-[#b0b6c0]" onClick={() => { setFanAction("discount"); setFanActionError(null); }}>Dar un descuento</button>
-                              <button type="button" disabled={!selected.fanKey || fanBusy} className="block w-full px-4 py-3 text-left hover:bg-[#f4f7ff] disabled:text-[#b0b6c0]" onClick={() => { setFanAction("restrict"); setFanActionError(null); }}>Restringir</button>
-                              <button type="button" disabled={!selected.fanKey || fanBusy} className="block w-full px-4 py-3 text-left hover:bg-[#f4f7ff] disabled:text-[#b0b6c0]" onClick={() => { setFanAction("block"); setFanActionError(null); }}>Bloquear</button>
-                              <button type="button" disabled={!selected.fanKey || fanBusy} className="block w-full px-4 py-3 text-left hover:bg-[#f4f7ff] disabled:text-[#b0b6c0]" onClick={() => { setFanAction("report"); setFanActionError(null); }}>Denunciar</button>
+                              {["Dar un descuento", "Restringir", "Bloquear", "Denunciar"].map((label) => (
+                                <button key={label} type="button" disabled title="Próximamente" className="block w-full px-4 py-3 text-left text-[#b0b6c0]">{label}</button>
+                              ))}
+                              {fanActionError ? <p className="px-4 pb-2 text-xs text-[#8a5a12]">{fanActionError}</p> : null}
                             </>
                           )}
                         </>
                       )}
                     </div>
+                    {listConfirm ? (
+                      <ConfirmModal
+                        title={`${listConfirm.add ? "Añadir a" : "Quitar de"} la lista «${listConfirm.name}»`}
+                        text={`Se hará ahora mismo en la cuenta de OnlyFans con ${fanTitle(selected)}.`}
+                        confirm={listConfirm.add ? "Añadir" : "Quitar"}
+                        busy={fanBusy}
+                        error={fanActionError}
+                        onCancel={() => { setListConfirm(null); setFanActionError(null); }}
+                        onConfirm={() => runMenu({ action: "list", listId: listConfirm.id, add: listConfirm.add, name: listConfirm.name })}
+                      />
+                    ) : null}
                   </>
                 ) : null}
               </div>
               <div className="flex shrink-0 items-center gap-1">
                 {selected ? <button type="button" className="rounded-lg px-2.5 py-1 text-xs font-medium text-[#6d7585] hover:bg-[#f1f4fa] hover:text-[#1d2433]" onClick={() => { setInsightsTab("Insights"); setInsightsOpen(true); }}>Ficha del fan</button> : null}
                 <button type="button" aria-label="Recargar" title="Recargar" className="rounded-full p-2 text-[#6d7585] hover:bg-[#f1f4fa] hover:text-[#1d2433]" onClick={() => { setRefreshSpin(true); void Promise.resolve(refresh()).finally(() => setTimeout(() => setRefreshSpin(false), 400)); }}><RefreshCw className={`h-4 w-4 ${refreshSpin ? "animate-spin" : ""}`} aria-hidden /></button>
-                <button type="button" aria-label="Menú" title="Menú" className="rounded-full p-2 text-[#6d7585] hover:bg-[#f1f4fa] hover:text-[#1d2433]" onClick={() => { setFanMenu((open) => !open); setRenaming(false); }} aria-expanded={fanMenu}><EllipsisVertical className="h-4 w-4" aria-hidden /></button>
+                <button type="button" aria-label="Menú" title="Menú" className="rounded-full p-2 text-[#6d7585] hover:bg-[#f1f4fa] hover:text-[#1d2433]" onClick={() => { setFanMenu((open) => !open); setRenaming(false); setFanAction(null); setListConfirm(null); setFanActionError(null); }} aria-expanded={fanMenu}><EllipsisVertical className="h-4 w-4" aria-hidden /></button>
               </div>
             </header>
             {findOpen && selected ? (
@@ -2524,7 +2541,7 @@ function ComposerPanelBody({
                 {visible.map((creator) => (
                   <li key={creator.id}>
                     <button type="button" className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-[#f4f7fb]" onClick={() => onTag(creator.handle)}>
-                      <span className="grid h-10 w-10 place-items-center rounded-full bg-[#eef2ff] text-sm">{creator.name.slice(0, 1)}</span>
+                      <span className="grid h-10 w-10 place-items-center rounded-full bg-[#eef2ff] text-sm">{initialOf(creator.name)}</span>
                       <span>
                         <span className="block text-sm font-medium">{creator.name}</span>
                         <span className="text-xs text-[#8a96a3]">@{creator.handle.replace(/^@/, "")}</span>
@@ -2602,13 +2619,14 @@ function ToolButton({ label, title, onClick, children, active = false }: { label
   );
 }
 
-function FanFace({ name, url, online }: { name: string; url: string | null; online: boolean | null }) {
+function FanFace({ name, url, online, size = "md" }: { name: string; url: string | null; online: boolean | null; size?: "sm" | "md" }) {
+  const box = size === "sm" ? "h-8 w-8" : "h-10 w-10";
   return (
-    <span className="relative inline-block h-10 w-10 shrink-0">
+    <span className={`relative inline-block shrink-0 ${box}`}>
       {url ? (
-        <SfwMedia><img src={url} alt="" className="h-10 w-10 rounded-full object-cover" /></SfwMedia>
+        <SfwMedia><img src={url} alt="" className={`${box} rounded-full object-cover`} /></SfwMedia>
       ) : (
-        <span className="grid h-10 w-10 place-items-center rounded-full bg-[#eef2ff] text-sm">{name.slice(0, 1)}</span>
+        <span className={`grid ${box} place-items-center rounded-full bg-[#eef2ff] ${size === "sm" ? "text-xs font-medium" : "text-sm"}`}>{initialOf(name)}</span>
       )}
       {showOnlineDot(online) ? <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white bg-[#00c853]" aria-label="En línea" /> : null}
     </span>
