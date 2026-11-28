@@ -68,7 +68,7 @@ import { listFanProfiles, saveFanProfile } from "../../server/of-sessions/sync/f
 import { listFanFlags, saveFanFlag, type FanFlagPatch } from "../../server/of-sessions/sync/fan-flags.ts";
 import { listFanNotes, saveFanNote } from "../../server/of-sessions/sync/fan-note.ts";
 import { intervalMinFromEnv, startSyncLoop, type ScheduleAccount } from "../../server/of-sessions/sync/schedule.ts";
-import { saveNotificationRead } from "../../server/of-sessions/sync/notification-store.ts";
+import { notificationSyncState, saveNotificationRead } from "../../server/of-sessions/sync/notification-store.ts";
 import {
   listCreatorReads,
   listSyncMeta,
@@ -760,6 +760,7 @@ export async function listCreatorChatViews(userId: string, open: { creatorId: st
     pending: await pendingWithMatches(sql, creatorIds),
     profiles: await listFanProfiles(sql, creatorIds),
     flags: await listFanFlags(sql, creatorIds),
+    ofChatUnread: await ofChatUnreadFor(sql, creatorIds),
     notes: await listFanNotes(sql, creatorIds),
     accounts: accounts.flatMap((account) => account.creatorId && creatorIds.includes(account.creatorId) ? [{
       creatorId: account.creatorId,
@@ -1355,6 +1356,16 @@ export async function runFanChatMenuView(userId: string, input: { creatorId: str
 }
 
 const noticeTabAt = new Map<string, number>();
+
+/** `chatMessagesCount` guardado de la última lectura buena de /users/me de cada cuenta. */
+async function ofChatUnreadFor(sql: Awaited<ReturnType<typeof getSql>>, creatorIds: string[]): Promise<Array<{ creatorId: string; count: number }>> {
+  const out: Array<{ creatorId: string; count: number }> = [];
+  for (const creatorId of creatorIds) {
+    const state = await notificationSyncState(sql, creatorId).catch(() => null);
+    if (state?.chatUnread != null) out.push({ creatorId, count: state.chatUnread });
+  }
+  return out;
+}
 
 export async function ensureNotificationTabView(userId: string, input: { creatorId: string; tab: NotificationTab }): Promise<{ ok: boolean; fresh: boolean }> {
   const access = await accessFor(userId);

@@ -118,7 +118,7 @@ export const markCreatorNotificationsRead = createServerFn({ method: "POST" })
     }
     const cleared = marked.counts?.all === 0;
     if (marked.counts) {
-      await saveNotificationRead(sql, data.creatorId, { items: [], reason: null, captured: true, counts: marked.counts, status: 200, motivo: "ok" });
+      await saveNotificationRead(sql, data.creatorId, { items: [], reason: null, captured: true, counts: marked.counts, chatUnread: marked.chatUnread ?? null, status: 200, motivo: "ok" });
     }
     return {
       updated,

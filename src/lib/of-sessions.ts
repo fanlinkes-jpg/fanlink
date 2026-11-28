@@ -122,6 +122,8 @@ export type CreatorReadList = {
 
 export type CreatorChatList = {
   runningCreatorIds: string[];
+  /** `chatMessagesCount` de OnlyFans por cuenta: la cifra de Mensajes / Sin leer. Sin fila, OnlyFans no la mandó. */
+  ofChatUnread?: Array<{ creatorId: string; count: number }>;
   threads: Array<{
     creatorId: string;
     threadKey: string;

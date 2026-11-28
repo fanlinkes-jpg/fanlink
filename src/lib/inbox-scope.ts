@@ -68,9 +68,12 @@ export function creatorChipBadges(input: {
   threads: readonly { creatorId: string; unread: number | null }[];
   notices: readonly { creatorId: string; unread: number | null }[];
   visibleIds: readonly string[];
+  /** `chatMessagesCount` de OnlyFans por cuenta. Si la cuenta trae cifra, manda sobre el recuento de hilos. */
+  ofChats?: readonly { creatorId: string; count: number }[];
 }): Record<string, CreatorChipBadge> {
   const visible = new Set(input.visibleIds.filter((id) => id && id !== "all"));
-  const messages = unreadByCreator(input.threads);
+  const messages = { ...unreadByCreator(input.threads) };
+  for (const row of input.ofChats ?? []) messages[row.creatorId] = row.count;
   const notices = new Map<string, number>();
   for (const row of input.notices) {
     if (!visible.has(row.creatorId) || notices.has(row.creatorId)) continue;
