@@ -74,7 +74,7 @@ test("el botón Enviar se ve entero sin scroll de página", async () => {
       ]);
       const send = composer.getByRole("button", { name: "Enviar", exact: true });
       assert.equal(await send.isDisabled(), true);
-      assert.match(await send.getAttribute("title"), /^(Elige un hilo|Envío real desactivado en esta cuenta)$/);
+      assert.match(await send.getAttribute("title") ?? "", /^(Elige un hilo|Envío real desactivado en esta cuenta)$/);
       assert.equal(await composer.getByRole("button", { name: "Dejar pendiente" }).count(), 0);
       await composer.getByText("Pulsa / + palabra para buscar guiones").waitFor();
       const box = composer.getByRole("textbox", { name: "Mensaje" });
