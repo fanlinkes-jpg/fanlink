@@ -63,7 +63,7 @@ import type { SendChatHooks } from "../../server/of-sessions/send/chat-message.t
 import { composeChat } from "../../server/of-sessions/send/compose.ts";
 import { liveViewGate } from "../../server/of-sessions/live/desk.ts";
 import { issueLiveTicket } from "../../server/of-sessions/live/tickets.ts";
-import { liveViewSectionAccess } from "../../server/of-sessions/live/sections.ts";
+import { liveViewSectionAccess, parseDeskPage } from "../../server/of-sessions/live/sections.ts";
 import { listFanProfiles, saveFanProfile } from "../../server/of-sessions/sync/fan-profile.ts";
 import { listFanFlags, saveFanFlag, type FanFlagPatch } from "../../server/of-sessions/sync/fan-flags.ts";
 import { listFanNotes, saveFanNote } from "../../server/of-sessions/sync/fan-note.ts";
@@ -1518,7 +1518,7 @@ export async function loadMoreChatsView(userId: string, input: { creatorId: stri
 
 export async function openLiveViewTicket(
   userId: string,
-  input: { creatorId: string; section?: string; threadKey?: string; fanKey?: string | null },
+  input: { creatorId: string; section?: string; page?: string | null; threadKey?: string; fanKey?: string | null },
 ): Promise<{ ok: boolean; ticket: string | null; reason: string | null }> {
   const access = await accessFor(userId);
   const accessSection = liveViewSectionAccess(input.section ?? "chat", access.role);
@@ -1526,6 +1526,10 @@ export async function openLiveViewTicket(
   const section = accessSection.section;
   if (access.role !== "owner") {
     return { ok: false, ticket: null, reason: "Solo la dueña puede abrir la vista nativa." };
+  }
+  const page = input.page == null ? null : parseDeskPage(input.page);
+  if (input.page != null && (!page || section !== "notifications")) {
+    return { ok: false, ticket: null, reason: "Esa sección no está disponible en Operativa." };
   }
   const threadKey = (input.threadKey ?? "").trim() || (section === "notifications" ? "notifications" : "inbox");
   const sessions = await getOfSessionManager();
@@ -1541,6 +1545,7 @@ export async function openLiveViewTicket(
     fanKey: input.fanKey ?? null,
     accountUserId: account.identityUserId,
     section,
+    page: page?.id ?? null,
   });
   return { ok: true, ticket, reason: null };
 }

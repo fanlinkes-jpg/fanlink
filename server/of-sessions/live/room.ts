@@ -206,14 +206,18 @@ async function ensureRoom(ticket: LiveTicket, onPhase?: (name: string) => void):
   const pending = opening.get(key);
   if (pending) {
     const room = await pending;
+    const previous = room.ticket;
     room.ticket = ticket;
+    await followDeskPage(room, previous, ticket);
     onPhase?.("carga");
     console.info(`[fanlink:navegador] vista=live reutilizo sala perfil=${ticket.accountId}`);
     return room;
   }
   const existing = rooms.get(key);
   if (existing) {
+    const previous = existing.ticket;
     existing.ticket = ticket;
+    await followDeskPage(existing, previous, ticket);
     onPhase?.("carga");
     console.info(`[fanlink:navegador] vista=live reutilizo sala perfil=${ticket.accountId}`);
     return existing;
@@ -225,6 +229,12 @@ async function ensureRoom(ticket: LiveTicket, onPhase?: (name: string) => void):
   } finally {
     if (opening.get(key) === job) opening.delete(key);
   }
+}
+
+/** Misma sala, otra entrada del menú de Operativa: la página del navegador pasa a esa ruta. Una sola creadora por sala. */
+async function followDeskPage(room: Room, previous: LiveTicket, next: LiveTicket): Promise<void> {
+  if (previous.page === next.page || next.section !== "notifications") return;
+  await room.cast?.goto?.(next.page).catch(() => undefined);
 }
 
 async function openFreshRoom(ticket: LiveTicket, key: string, onPhase?: (name: string) => void): Promise<Room> {
@@ -277,6 +287,7 @@ async function openCast(room: Room, ticket: LiveTicket, context: BrowserContext)
     fanKey: ticket.fanKey,
     accountUserId: ticket.accountUserId,
     section: ticket.section,
+    page: room.ticket.page,
     onFrame: (frame) => {
       for (const viewer of room.viewers) {
         const socket = viewer.socket;

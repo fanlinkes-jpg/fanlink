@@ -458,9 +458,10 @@ export const queryVaultMirror = createServerFn({ method: "POST" })
 
 export const openLiveView = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { creatorId: string; section?: string; threadKey?: string; fanKey?: string | null }) => ({
+  .validator((input: { creatorId: string; section?: string; page?: string | null; threadKey?: string; fanKey?: string | null }) => ({
     creatorId: input.creatorId,
     section: input.section,
+    page: input.page ?? null,
     threadKey: input.threadKey,
     fanKey: input.fanKey ?? null,
   }))

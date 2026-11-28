@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { liveDeskBrowse, liveFrameAllowed, liveOpenPageAllowed, liveRequestAllowed } from "../live/desk.ts";
+import { liveDeskBrowse, liveDeskPageOpen, liveFrameAllowed, liveOpenPageAllowed, liveRequestAllowed } from "../live/desk.ts";
 import {
+  DESK_PAGES,
+  deskPageOpenPrefix,
+  deskPagePathMatches,
+  deskPageUrl,
   liveSectionAllowedForRole,
   liveSectionPageUrl,
   liveViewSectionAccess,
+  parseDeskPage,
   parseLiveSection,
 } from "../live/sections.ts";
 
@@ -70,4 +75,64 @@ test("solo la dueña abre la sección de notificaciones", () => {
   const denied = liveViewSectionAccess("notifications", "member");
   assert.equal(denied.ok, false);
   if (!denied.ok) assert.match(denied.reason, /dueña/);
+});
+
+test("el menú de Operativa tiene las 13 secciones y rutas fijas de OnlyFans", () => {
+  assert.deepEqual(DESK_PAGES.map((page) => page.label), [
+    "Inicio", "Nuevo post", "Notificaciones", "Mensajes", "Bóveda", "Archivo", "Colecciones",
+    "Estados de cuenta", "Estadísticas", "Banco", "Mi perfil", "Ajustes de OF", "Release forms",
+  ]);
+  assert.equal(deskPageUrl(parseDeskPage("notifications")!), "https://onlyfans.com/my/notifications");
+  assert.equal(deskPageUrl(parseDeskPage("home")!), "https://onlyfans.com/");
+  assert.equal(deskPageUrl(parseDeskPage("banking")!), "https://onlyfans.com/my/banking");
+  for (const page of DESK_PAGES) assert.match(page.path, /^\/(?:[a-z0-9_-]+(?:\/[a-z0-9_-]+)*)?$/);
+});
+
+test("el cliente solo elige por clave: una URL o una clave rara no vale", () => {
+  assert.equal(parseDeskPage("https://onlyfans.com/my/banking"), null);
+  assert.equal(parseDeskPage("/my/banking"), null);
+  assert.equal(parseDeskPage("payouts"), null);
+  assert.equal(parseDeskPage(""), null);
+  assert.equal(parseDeskPage(undefined), null);
+  assert.equal(parseDeskPage("banking")?.id, "banking");
+});
+
+test("una zona cerrada solo se abre con la ruta de la entrada elegida", () => {
+  const banking = parseDeskPage("banking")!;
+  const settings = parseDeskPage("settings")!;
+  const vault = parseDeskPage("vault")!;
+  assert.equal(liveFrameAllowed("https://onlyfans.com/my/banking", "notifications"), false);
+  assert.equal(liveFrameAllowed("https://onlyfans.com/my/banking", "notifications", banking), true);
+  assert.equal(liveFrameAllowed("https://onlyfans.com/my/banking/secondary", "notifications", banking), true);
+  assert.equal(liveFrameAllowed("https://onlyfans.com/my/statements", "notifications", banking), false);
+  assert.equal(liveFrameAllowed("https://onlyfans.com/my/settings/security", "notifications", banking), false);
+  assert.equal(liveFrameAllowed("https://onlyfans.com/my/settings/security", "notifications", settings), true);
+  assert.equal(liveDeskPageOpen("https://onlyfans.com/my/bankingx", banking), false);
+  assert.equal(liveFrameAllowed("https://evil.example/my/banking", "notifications", banking), false);
+  assert.equal(liveFrameAllowed("https://onlyfans.com/my/banking", "notifications", vault), false);
+  assert.equal(liveFrameAllowed("https://onlyfans.com/my/banking", "chat", banking), false);
+  assert.equal(liveDeskPageOpen("https://onlyfans.com/my/vault", vault), false);
+  assert.equal(deskPageOpenPrefix(banking), "/my/banking");
+  assert.equal(deskPageOpenPrefix(vault), "");
+  assert.equal(deskPageOpenPrefix(null), "");
+});
+
+test("Inicio solo es la raíz y las entradas abiertas siguen abiertas", () => {
+  const home = parseDeskPage("home")!;
+  assert.equal(deskPagePathMatches(home, "/"), true);
+  assert.equal(deskPagePathMatches(home, "/my/banking"), false);
+  assert.equal(deskPagePathMatches(parseDeskPage("vault")!, "/my/vault/media/1"), true);
+  assert.equal(deskPagePathMatches(parseDeskPage("vault")!, "/my/vault/../banking"), false);
+  for (const page of DESK_PAGES) {
+    if (page.restricted) continue;
+    assert.equal(liveFrameAllowed(`https://onlyfans.com${page.path}`, "notifications", page), true, page.id);
+  }
+});
+
+test("el ticket de Operativa lleva la entrada y el resto de secciones no", async () => {
+  const { issueLiveTicket, takeLiveTicket } = await import("../live/tickets.ts");
+  const base = { userId: "u", accountId: "a", creatorId: "c", threadKey: "notifications", fanKey: null, accountUserId: null };
+  assert.equal(takeLiveTicket(issueLiveTicket({ ...base, section: "notifications", page: "vault" }))?.page, "vault");
+  assert.equal(takeLiveTicket(issueLiveTicket({ ...base, section: "notifications" }))?.page, null);
+  assert.equal(takeLiveTicket(issueLiveTicket(base))?.page, null);
 });
