@@ -1,12 +1,11 @@
 import { ClientOnly, Link, useRouterState } from "@tanstack/react-router";
-import { readInboxCreator, resolveInboxCreator, showsCreatorRail, writeInboxCreator } from "@/lib/inbox-scope";
+import { unreadBubbleText, readInboxCreator, resolveInboxCreator, showsCreatorRail, writeInboxCreator } from "@/lib/inbox-scope";
 import { CreatorRail } from "@/components/creator-rail";
 import { bindUiUser, setSfwEnabled, useSfw } from "@/lib/ui-prefs";
 import { TranslateControl } from "@/features/translate-ui";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type ComponentType, type ReactNode } from "react";
 import {
   Home,
-  LayoutDashboard,
   LayoutGrid,
   Menu,
   MessagesSquare,
@@ -15,8 +14,8 @@ import {
   Sparkles,
   Users,
   X,
-  type LucideIcon,
 } from "lucide-react";
+import { DashboardMoneyIcon } from "@/components/icons/dashboard-money-icon";
 import { Toaster } from "sonner";
 import { FanlinkLogo } from "@/components/brand/FanlinkLogo";
 import { cn } from "@/lib/cn";
@@ -28,14 +27,15 @@ import {
   visibleNavBlocks,
   type NavLink,
 } from "@/lib/nav-config";
+import { useChatUnreadTotal } from "@/lib/use-chat-unread-total";
 import { SessionSync } from "@/components/session-sync";
 import { UserButton } from "@/lib/auth/gates";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { installChatSendTransport } from "@/lib/chat-send-bind";
 import { chatSendSession } from "@/lib/chat-send-session";
 
-const BLOCK_ICONS: Record<string, LucideIcon> = {
-  dashboard: LayoutDashboard,
+const BLOCK_ICONS: Record<string, ComponentType<{ className?: string }>> = {
+  dashboard: DashboardMoneyIcon,
   operativa: LayoutGrid,
   chat: MessagesSquare,
   "funciones-inteligentes": Sparkles,
@@ -160,6 +160,21 @@ function HeaderTools({ devMode, displayName }: { devMode: boolean; displayName: 
   );
 }
 
+/** Burbuja roja con los chats sin leer. Sin número no se pinta. */
+function UnreadBubble({ text, inline }: { text: string; inline?: boolean }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        "grid h-[18px] min-w-[18px] place-items-center rounded-full bg-[#e5322d] px-1 text-[10px] font-bold leading-none text-white ring-2 ring-surface",
+        inline ? "shrink-0" : "absolute -right-0.5 -top-0.5",
+      )}
+    >
+      {text}
+    </span>
+  );
+}
+
 function ShellFrame({
   children,
   bleed,
@@ -183,6 +198,10 @@ function ShellFrame({
   blocks: NavLink[];
   currentOk: boolean;
 }) {
+  const creators = useCrm((s) => s.creators);
+  const hasChat = blocks.some((block) => block.id === "chat");
+  const chatUnread = useChatUnreadTotal(creators.map((creator) => creator.id), hasChat);
+  const chatBubble = unreadBubbleText(chatUnread);
 
   return (
     <div className="flex h-dvh max-h-dvh min-h-0 overflow-hidden bg-bg text-fg">
@@ -195,13 +214,14 @@ function ShellFrame({
             <NavRouteLink
               key={block.id}
               item={block}
-              aria-label={block.label}
+              aria-label={block.id === "chat" && chatBubble ? `${block.label}, ${chatBubble} sin leer` : block.label}
               className={cn(
-                "grid h-10 w-10 place-items-center rounded-xl",
+                "relative grid h-10 w-10 place-items-center rounded-xl",
                 active ? "bg-[#3b6cff] text-white" : "text-muted hover:bg-raised",
               )}
             >
               <Icon className="h-5 w-5" />
+              {block.id === "chat" && chatBubble ? <UnreadBubble text={chatBubble} /> : null}
             </NavRouteLink>
           );
         })}
@@ -227,10 +247,11 @@ function ShellFrame({
                   <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[#eef2ff] text-[#3b6cff]">
                     <Icon className="h-4 w-4" />
                   </span>
-                  <span className="min-w-0">
+                  <span className="min-w-0 flex-1">
                     <span className="block text-sm font-semibold leading-tight text-[#1c2333]">{block.label}</span>
                     <span className="block text-xs text-[#6d7585]">{block.hint}</span>
                   </span>
+                  {block.id === "chat" && chatBubble ? <UnreadBubble text={chatBubble} inline /> : null}
                 </NavRouteLink>
               );
             })}
