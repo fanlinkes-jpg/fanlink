@@ -13,7 +13,7 @@ import type { ReadSql } from "../sync/store.ts";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const FILES = [
   "0007_of_reads.sql", "0008_sync_schedule.sql", "0009_of_chats.sql", "0013_chat_price.sql",
-  "0019_chat_author.sql", "0024_outbound_schedule.sql", "0025_outbound_send.sql",
+  "0019_chat_author.sql", "0063_staff_employees.sql", "0064_outbound_author_name.sql", "0024_outbound_schedule.sql", "0025_outbound_send.sql",
   "0037_vault_mirror.sql", "0038_vault_fan_filter.sql", "0039_outbound_media.sql",
   "0040_vault_full_tags.sql", "0041_send_claim.sql", "0042_vault_paid_with.sql", "0043_outbound_lease.sql",
   "0049_online_broadcast_dedupe.sql",
