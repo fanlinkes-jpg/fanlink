@@ -77,7 +77,7 @@ export function NotificationFanCard({
         {text ? <p className="mt-1 whitespace-pre-wrap break-words text-[#1c2333]">{messageParts(text, item.messageRef ?? null, onMessage)}</p> : action ? <p className="mt-1 text-[#1c2333]">{action}</p> : null}
         {postText || item.postLink ? (
           <div className="mt-1.5 rounded-lg border border-[#e6e8ee] bg-[#f8f9fb] px-2.5 py-1.5 text-xs text-[#3c4456]">
-            <p className="text-[10px] font-medium uppercase tracking-wide text-[#8b909a]">Publicación</p>
+            <p className="text-[10px] font-medium uppercase tracking-wide text-[#8b909a]">{item.kind === "tag" ? "Mensaje o medio" : "Publicación"}</p>
             {postText ? <p className="whitespace-pre-wrap break-words">{postText}</p> : null}
             {item.postLink ? <a href={item.postLink} target="_blank" rel="noreferrer" className="text-[#2456c7] underline" onClick={(event) => event.stopPropagation()}>Ver en OnlyFans</a> : null}
           </div>

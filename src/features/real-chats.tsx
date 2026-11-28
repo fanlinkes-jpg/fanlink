@@ -420,6 +420,10 @@ export function RealChatsPage() {
   const [purchaseNote, setPurchaseNote] = useState<NoteRow | null>(null);
   const notesButton = useRef<HTMLButtonElement>(null);
   const notesLive = useRef<{ seq: number; creatorId: string | null; tab: NotificationTab }>({ seq: 0, creatorId: null, tab: "all" });
+  const notesOpenRef = useRef(false);
+  notesOpenRef.current = notesOpen;
+  // Una sola marca de Etiquetas por apertura de la pestaña y cuenta.
+  const tagsMarkedFor = useRef<string | null>(null);
   const [notesPos, setNotesPos] = useState({ top: 0, left: 0 });
   const [discountPercent, setDiscountPercent] = useState("10");
   const [reportText, setReportText] = useState("");
@@ -551,7 +555,29 @@ export function RealChatsPage() {
     const incoming = pages.flatMap((entry) => entry.page?.items.map((item) => ({ ...item, creatorId: entry.id })) ?? [])
       .sort((left, right) => (right.occurredAt ?? "").localeCompare(left.occurredAt ?? ""));
     setNotes((current) => cursor ? [...(current ?? []), ...incoming] : incoming);
+    if (tab === "tags" && !cursor && notesOpenRef.current && tagsMarkedFor.current !== creator) {
+      const unreadOf = pages[0]?.page?.counts?.tags ?? 0;
+      if (unreadOf > 0 || incoming.some((item) => !item.seen)) {
+        tagsMarkedFor.current = creator;
+        markTagsTab(creator, incoming);
+      }
+    }
   }
+
+  /** Abrir Etiquetas es verlas: el cliente web de OnlyFans marca el type `tags` al cargar la pestaña. */
+  function markTagsTab(creator: string, rows: NoteRow[]) {
+    const keys = rows.filter((item) => item.kind === "tag" && item.creatorId === creator).map((item) => item.key);
+    setNotes((current) => current?.map((item) => (item.creatorId === creator && item.kind === "tag" ? { ...item, seen: true } : item)) ?? current);
+    void markCreatorNotificationsRead({ data: { creatorId: creator, keys, tab: "tags" } }).then((result) => {
+      if (creator !== notesLive.current.creatorId) return;
+      if (result.counts) setNoteCounts(result.counts);
+      else if (!result.markOnOnlyfans) setNoteCounts((current) => (current ? { ...current, tags: 0 } : current));
+    }).catch(() => undefined);
+  }
+
+  useEffect(() => {
+    if (!notesOpen || noteFilter !== "tags") tagsMarkedFor.current = null;
+  }, [notesOpen, noteFilter]);
 
   useEffect(() => {
     notesLive.current.seq += 1;
