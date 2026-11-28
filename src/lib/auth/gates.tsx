@@ -1,3 +1,4 @@
+import { initialOf } from "@/lib/initial";
 import { useState, useSyncExternalStore, type ReactNode } from "react";
 import { Navigate } from "@tanstack/react-router";
 import { GROK_PROVIDERS, authEnabled, signIn, signOut } from "./client";
@@ -109,7 +110,7 @@ export function UserButton() {
         />
       ) : (
         <span className="grid h-8 w-8 place-items-center rounded-full bg-black/10 text-sm font-medium dark:bg-white/20">
-          {label.charAt(0).toUpperCase()}
+          {initialOf(label)}
         </span>
       )}
       <span className="text-sm font-medium">{label}</span>

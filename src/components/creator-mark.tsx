@@ -1,3 +1,4 @@
+import { initialOf } from "@/lib/initial";
 import { useState } from "react";
 
 /** Foto de OnlyFans o, si falta o no carga, la inicial de siempre. */
@@ -27,7 +28,7 @@ export function CreatorMark({
   }
   return (
     <span className={`grid ${box} shrink-0 place-items-center rounded-full font-semibold text-white`} style={{ background: `hsl(${hue} 55% 42%)` }}>
-      {name.slice(0, 1)}
+      {initialOf(name)}
     </span>
   );
 }
