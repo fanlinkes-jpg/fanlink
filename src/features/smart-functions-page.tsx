@@ -13,7 +13,7 @@ export function SmartFunctionsPage({ tab }: { tab: FunctionTabId }) {
   if (!current) {
     return (
       <div className="p-6">
-        <h1 className="font-display text-2xl font-semibold">Funciones inteligentes</h1>
+        <h1 className="font-display text-2xl font-semibold">Mensajes inteligentes</h1>
         <p className="mt-2 text-sm text-muted">No tienes acceso a estas funciones.</p>
       </div>
     );
@@ -23,7 +23,7 @@ export function SmartFunctionsPage({ tab }: { tab: FunctionTabId }) {
     <div>
       <div className="flex flex-wrap items-end justify-between gap-3 px-4 pt-4 md:px-6 md:pt-6">
         <div>
-          <h1 className="font-display text-2xl font-semibold">Funciones inteligentes</h1>
+          <h1 className="font-display text-2xl font-semibold">Mensajes inteligentes</h1>
           <p className="text-sm text-muted">Masivos, listas, bóveda, guiones y enlaces en una sola sección.</p>
         </div>
         <div className="flex max-w-full gap-1 overflow-auto rounded-md border border-line p-1">

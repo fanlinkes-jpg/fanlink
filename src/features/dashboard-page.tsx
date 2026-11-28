@@ -189,7 +189,7 @@ export function DashboardPage() {
         </header>
         <div className="space-y-4 p-4 md:p-6">
           {teamAccess.role !== "owner" && visible.length === 0 ? (
-            <p className="text-sm text-muted">No tienes cuentas asignadas. La dueña las asigna en Administrar.</p>
+            <p className="text-sm text-muted">No tienes cuentas asignadas. La dueña las asigna en Personal.</p>
           ) : null}
           {reads.error ? <p className="text-sm text-[#8a5a12]">{reads.error}</p> : null}
           {showingReports ? (

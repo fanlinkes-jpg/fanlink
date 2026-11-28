@@ -31,7 +31,7 @@ export function NotificationsLivePage() {
   if (teamAccess?.role !== "owner") {
     return (
       <ComingSoonPage
-        title="Operativa"
+        title="Operaciones"
         hint="Solo la dueña puede abrir la página real de OnlyFans."
       />
     );
@@ -60,7 +60,7 @@ export function NotificationsLivePage() {
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {!creatorId || creatorId === "all" || !creator ? (
           <ComingSoonPage
-            title="Operativa"
+            title="Operaciones"
             hint="Elige una creadora a la izquierda y una sección del menú. Se abre esa pantalla de OnlyFans, de una sola creadora a la vez."
           />
         ) : (

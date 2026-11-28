@@ -23,7 +23,7 @@ export function AdminPage({ initialTab }: { initialTab?: AdminTab }) {
     <div>
       <div className="flex flex-wrap items-end justify-between gap-3 px-4 pt-4 md:px-6 md:pt-6">
         <div>
-          <h1 className="font-display text-2xl font-semibold">Administrar</h1>
+          <h1 className="font-display text-2xl font-semibold">Personal</h1>
           <p className="text-sm text-muted">Creadoras y chatters del equipo.</p>
         </div>
         <div className="flex gap-1 rounded-md border border-line p-1">
