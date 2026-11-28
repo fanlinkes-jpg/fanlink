@@ -24,3 +24,40 @@ test("un masivo de otra creadora usa el mismo carrusel y el mismo precio", () =>
   assert.equal(mass.blocks.indexOf("text"), mass.blocks.indexOf("price") + 1);
   assert.equal(bubblePriceLabel({ priceCents: 1500, purchased: false }), "$15.00 no pagado");
 });
+
+import { bubbleText, mediaTags, pricePill, readState, tagLine } from "./chat-bubble.ts";
+
+test("la pastilla del pie dice precio y estado, y no existe sin precio", () => {
+  assert.deepEqual(pricePill({ priceCents: 1999, purchased: false }), { money: "$19.99", state: "no pagado", label: "No pagado" });
+  assert.equal(pricePill({ priceCents: 1999, purchased: true })?.label, "Pagado");
+  assert.equal(pricePill({ priceCents: 1999, purchased: null })?.state, "sin datos");
+  assert.equal(pricePill({ priceCents: 0, purchased: null }), null);
+  assert.equal(pricePill({ priceCents: null, purchased: false }), null);
+});
+
+test("las etiquetas se juntan sin repetir y se escriben con el nombre o @usuario", () => {
+  const tags = mediaTags([
+    { tags: [{ name: "Jason", username: "jason" }, { name: null, username: "pr" }] },
+    { tags: [{ name: "Jason", username: "jason" }] },
+    {},
+  ]);
+  assert.equal(tags.length, 2);
+  assert.equal(tagLine(tags), "Jason · @pr");
+  assert.equal(tagLine([]), null);
+  assert.deepEqual(mediaTags(null), []);
+});
+
+test("el título solo sale en mensajes con medio o precio y si hay más texto", () => {
+  assert.deepEqual(bubbleText("Sesión\nMira esto\nOtro", true), { title: "Sesión", paragraphs: ["Mira esto", "Otro"] });
+  assert.deepEqual(bubbleText("Hola\nque tal", false), { title: null, paragraphs: ["Hola", "que tal"] });
+  assert.deepEqual(bubbleText("Solo una línea", true), { title: null, paragraphs: ["Solo una línea"] });
+  assert.equal(bubbleText("x".repeat(100) + "\nresto", true).title, null);
+  assert.deepEqual(bubbleText("", true), { title: null, paragraphs: [] });
+});
+
+test("los checks solo salen en mensajes propios", () => {
+  assert.equal(readState({ fromFan: false, seen: true }), "leido");
+  assert.equal(readState({ fromFan: false, seen: false }), "enviado");
+  assert.equal(readState({ fromFan: false, seen: null }), null);
+  assert.equal(readState({ fromFan: true, seen: true }), null);
+});
