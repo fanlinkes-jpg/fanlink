@@ -3,8 +3,13 @@ import { getSql } from "@/lib/db";
 import {
   activateInvitedStaff,
   claimInvite,
+  claimPasswordReset,
   inspectInvite,
+  inspectPasswordReset,
   releaseInvite,
+  releasePasswordReset,
+  revokeSessionsBefore,
+  type ResetState,
   validatePassword,
   type InviteState,
 } from "@/lib/staff-invite";
@@ -120,4 +125,42 @@ export async function staffLogin(request: Request, email: unknown, password: unk
 export async function staffLogout(request: Request): Promise<Response> {
   const response = await auth.api.signOut({ headers: request.headers, asResponse: true });
   return json({ ok: true }, 200, withSessionCookies(response));
+}
+
+export const RESET_STATE_MESSAGES: Record<Exclude<ResetState, "ok">, string> = {
+  invalid: "Este enlace no es válido.",
+  expired: "Este enlace ha caducado. Pide a la dueña que te envíe otro.",
+  used: "Este enlace ya se usó. Entra con tu correo y tu contraseña nueva.",
+  revoked: "Este enlace se canceló. Pide a la dueña uno nuevo.",
+};
+
+export async function previewPasswordReset(token: string): Promise<Response> {
+  const result = await inspectPasswordReset(await getSql(), token);
+  if (result.state !== "ok") return json({ state: result.state, message: RESET_STATE_MESSAGES[result.state] }, 200);
+  return json({ state: "ok", name: result.name ?? "" });
+}
+
+/** Cambia la contraseña con un enlace de reseteo. Cierra las sesiones abiertas de esa persona. */
+export async function acceptPasswordReset(token: string, password: unknown): Promise<Response> {
+  let clean: string;
+  try {
+    clean = validatePassword(password);
+  } catch (error) {
+    return json({ error: error instanceof WorkspaceAccessError ? error.message : "Contraseña no válida." }, 400);
+  }
+  const sql = await getSql();
+  const claimed = await claimPasswordReset(sql, token);
+  if (!claimed.ok) return json({ state: claimed.state, error: RESET_STATE_MESSAGES[claimed.state] }, 410);
+  try {
+    const ctx = await auth.$context;
+    const hash = await ctx.password.hash(clean);
+    await ctx.internalAdapter.updatePassword(claimed.userId, hash);
+    await sql.query(`delete from "session" where "userId" = $1`, [claimed.userId]);
+    await revokeSessionsBefore(sql, claimed.userId);
+  } catch (error) {
+    await releasePasswordReset(sql, claimed.id);
+    console.error("[password-reset] no se pudo cambiar la contraseña", error instanceof Error ? error.name : "error");
+    return json({ error: "No se ha podido cambiar la contraseña. Inténtalo otra vez." }, 500);
+  }
+  return json({ ok: true }, 200);
 }

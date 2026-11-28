@@ -71,7 +71,7 @@ export async function getSessionUser(
   const session = await auth.api.getSession({ headers });
   if (!session?.user) return null;
   // Desactivar corta la sesión aunque la cookie en caché siga viva unos minutos.
-  if (await isStaffDisabled(await getSql(), session.user.id)) return null;
+  if (await isStaffDisabled(await getSql(), session.user.id, session.session?.createdAt)) return null;
   return { id: session.user.id, email: session.user.email ?? null };
 }
 
@@ -86,7 +86,7 @@ async function localEmployeeId(): Promise<string | null> {
   if (!(request.headers.get("cookie") ?? "").includes(SESSION_TOKEN_COOKIE)) return null;
   const session = await auth.api.getSession({ headers: request.headers });
   if (!session?.user) return null;
-  if (await isStaffDisabled(await getSql(), session.user.id)) throw new UnauthorizedError();
+  if (await isStaffDisabled(await getSql(), session.user.id, session.session?.createdAt)) throw new UnauthorizedError();
   return session.user.id;
 }
 

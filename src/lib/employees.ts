@@ -18,7 +18,7 @@ export const listEmployees = createServerFn({ method: "GET" })
 
 export const inviteEmployee = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { name: string; email: string; level: string; creatorIds: string[]; perms?: string[] }) => input)
+  .validator((input: { name: string; email: string; level?: string; roles?: string[]; creatorIds: string[]; perms?: string[] }) => input)
   .handler(async ({ context, data }): Promise<InviteDelivery> => {
     const { staffContext, deliverInvite } = await import("@/lib/employees-runtime.server");
     const { createInvite, normalizeEmail } = await import("@/lib/staff-invite");
@@ -46,7 +46,7 @@ export const resendEmployeeInvite = createServerFn({ method: "POST" })
 
 export const editEmployee = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { id: string; kind: "member" | "invite"; name: string; level: string; creatorIds: string[]; perms: string[] }) => input)
+  .validator((input: { id: string; kind: "member" | "invite"; name: string; level?: string; roles?: string[]; creatorIds: string[]; perms?: string[] }) => input)
   .handler(async ({ context, data }) => {
     const { staffContext } = await import("@/lib/employees-runtime.server");
     const { editEmployee: edit } = await import("@/lib/staff-invite");
@@ -64,6 +64,30 @@ export const setEmployeeActive = createServerFn({ method: "POST" })
     const { sql, actor } = await staffContext(context.userId);
     await setActive(sql, actor, data.id, data.active);
     return { ok: true as const };
+  });
+
+/** Roles en grupo: cada empleado recibe estos roles y el preset de permisos de ellos. */
+export const setEmployeeRoles = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { targets: Array<{ id: string; kind: "member" | "invite" }>; roles: string[] }) => input)
+  .handler(async ({ context, data }) => {
+    const { staffContext } = await import("@/lib/employees-runtime.server");
+    const { setEmployeeRoles: apply } = await import("@/lib/staff-invite");
+    const { sql, actor } = await staffContext(context.userId);
+    await apply(sql, actor, data.targets, data.roles);
+    return { ok: true as const };
+  });
+
+/** Restablecer contraseña: genera un enlace de un solo uso (24 h) y lo envía por correo si hay proveedor. */
+export const resetEmployeePassword = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { id: string }) => input)
+  .handler(async ({ context, data }): Promise<InviteDelivery> => {
+    const { staffContext, deliverReset } = await import("@/lib/employees-runtime.server");
+    const { createPasswordReset } = await import("@/lib/staff-invite");
+    const { sql, actor } = await staffContext(context.userId);
+    const created = await createPasswordReset(sql, actor, data.id);
+    return deliverReset({ ...created, agency: await readAgency(sql) });
   });
 
 export const deleteEmployee = createServerFn({ method: "POST" })
