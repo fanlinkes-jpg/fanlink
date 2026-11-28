@@ -14,7 +14,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 async function database() {
   const dir = await mkdtemp(path.join(tmpdir(), "fanlink-workspace-"));
   const pg = new PGlite(dir);
-  for (const name of ["0002_workspace.sql", "0003_of_sessions.sql", "0004_staff_and_connection.sql"]) {
+  for (const name of ["0002_workspace.sql", "0003_of_sessions.sql", "0004_staff_and_connection.sql", "0063_staff_employees.sql"]) {
     await pg.exec(await readFile(path.join(root, "migrations", name), "utf8"));
   }
   const sql = {

@@ -265,6 +265,8 @@ type CrmState = DataSlice & {
     creatorIds: string[];
     displayName: string;
     devMode: boolean;
+    level?: string;
+    status?: "active" | "disabled";
   } | null;
 };
 

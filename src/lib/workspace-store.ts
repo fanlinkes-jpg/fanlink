@@ -10,6 +10,7 @@ import {
   type WorkspaceSlice,
   WorkspaceAccessError,
 } from "./access-policy.ts";
+import { readStaffLevel, type StaffLevel } from "./staff-levels.ts";
 
 export interface SqlQuery {
   query<T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<T[]>;
@@ -25,6 +26,16 @@ type ProfileRow = {
   display_name: string;
   role: string;
   perms: unknown;
+  level?: string | null;
+  status?: string | null;
+};
+
+export type StaffAccess = TeamAccess & {
+  displayName: string;
+  devMode: boolean;
+  level: StaffLevel;
+  /** disabled: la ficha existe pero no ve nada. */
+  status: "active" | "disabled";
 };
 
 type GrantRow = { creator_id: string };
@@ -38,27 +49,31 @@ export function cleanDisplayName(value: string): string | null {
   return name;
 }
 
-export async function ensureStaff(sql: SqlQuery, userId: string, devMode: boolean): Promise<TeamAccess & { displayName: string; devMode: boolean }> {
+export async function ensureStaff(sql: SqlQuery, userId: string, devMode: boolean): Promise<StaffAccess> {
   await sql.query("insert into workspace_member (user_id) values ($1) on conflict (user_id) do nothing", [userId]);
-  const existing = await sql.query<ProfileRow>("select user_id, display_name, role, perms from staff_profile where user_id = $1", [userId]);
+  const existing = await sql.query<ProfileRow>("select user_id from staff_profile where user_id = $1", [userId]);
   if (!existing[0]) {
     const owners = await sql.query("select user_id from staff_profile where role = 'owner' limit 1");
     const role: TeamRole = owners.length === 0 ? "owner" : "member";
     const perms = role === "owner" ? [...TEAM_PERMS] : [];
     const displayName = "Miembro";
     await sql.query(
-      "insert into staff_profile (user_id, display_name, role, perms) values ($1, $2, $3, $4::jsonb)",
-      [userId, displayName, role, JSON.stringify(perms)],
+      "insert into staff_profile (user_id, display_name, role, perms, level) values ($1, $2, $3, $4::jsonb, $5)",
+      [userId, displayName, role, JSON.stringify(perms), role === "owner" ? "owner" : "chatter"],
     );
   }
   return readAccess(sql, userId, devMode);
 }
 
-export async function readAccess(sql: SqlQuery, userId: string, devMode: boolean): Promise<TeamAccess & { displayName: string; devMode: boolean }> {
-  const profiles = await sql.query<ProfileRow>("select user_id, display_name, role, perms from staff_profile where user_id = $1", [userId]);
+export async function readAccess(sql: SqlQuery, userId: string, devMode: boolean): Promise<StaffAccess> {
+  const profiles = await sql.query<ProfileRow>("select user_id, display_name, role, perms, level, status from staff_profile where user_id = $1", [userId]);
   const profile = profiles[0];
   if (!profile) {
-    return { userId, role: "member", perms: [], creatorIds: [], displayName: "Miembro", devMode };
+    return { userId, role: "member", perms: [], creatorIds: [], displayName: "Miembro", devMode, level: "chatter", status: "active" };
+  }
+  const level = profile.role === "owner" ? "owner" : readStaffLevel(profile.level);
+  if (profile.status === "disabled" && profile.role !== "owner") {
+    return { userId, role: "member", perms: [], creatorIds: [], displayName: profile.display_name, devMode, level, status: "disabled" };
   }
   const grants = await sql.query<GrantRow>("select creator_id from creator_grant where user_id = $1 order by creator_id", [userId]);
   return {
@@ -68,6 +83,8 @@ export async function readAccess(sql: SqlQuery, userId: string, devMode: boolean
     creatorIds: grants.map((row) => row.creator_id),
     displayName: profile.display_name,
     devMode,
+    level,
+    status: "active",
   };
 }
 
