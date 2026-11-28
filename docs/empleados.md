@@ -30,3 +30,12 @@ Variables de entorno. Añade este bloque al script con el que arrancas, sin valo
 ## En local
 
 Con `VITE_AUTH_ENABLED=false` quien abre sin cookie sigue siendo el usuario local (la dueña). Un empleado que acepta una invitación recibe una cookie de sesión y el servidor lo reconoce a él. El enlace de invitación lleva el origen con el que abriste la consola (`http://127.0.0.1:8080/...`), así que solo funciona en ese Mac. Prueba con Chrome: Safari no guarda cookies `Secure` en `http://`.
+
+## Roles, permisos y atribución de ventas
+
+- **Roles**: Chatter, Account Manager, Team Manager, Supervisor, Analyst y Admin. Un empleado puede tener varios y los permisos se suman. Los presets están en `src/lib/staff-roles.ts`.
+- **Admin** tiene acceso total: todas las creadoras, todos los chats, todas las cifras y el dinero (Banco y Estados de cuenta). **Supervisor** también ve todo, incluido el dinero, pero no cambia los ajustes. El **chatter** nunca ve totales de agencia, Banco, Estadísticas ni Estados de cuenta: el servidor quita esos permisos aunque se marquen a mano.
+- **Pop-up de permisos** (Workspace, Team Mgmt, Analytics, Chat, Account Settings, Statements): sale al dar de alta y al cambiar el rol, premarcado según el rol, con un resumen de lo que podrá y no podrá hacer. Lo marcado de más se guarda por empleado (`staff_profile.perms`). Se aplica en el servidor: `readAccess` lee esos permisos y filtra creadoras y dinero.
+- **Atribución de ventas** (`of_sale_attribution`, migración 0066): un PPV o venta es de quien envió el mensaje; un masivo, de quien lo lanzó; propinas y suscripciones, del último chatter que habló con el fan; sin chatter, la venta queda sin nombre. Se guarda una vez y no se reasigna.
+- **Restablecer contraseña**: la dueña genera un enlace de un solo uso (24 h, `/restablecer/<token>`), por correo si hay `RESEND_API_KEY` o copiándolo a mano. Al usarlo se cierran las sesiones anteriores.
+- **Última conexión** en la tabla: se guarda al entrar, como mucho una vez por minuto.
