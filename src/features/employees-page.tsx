@@ -20,7 +20,7 @@ import { INVITABLE_LEVELS, LEVEL_LABELS, lastSeenLabel, type EmployeeStatus, typ
 import { PERM_GROUPS, PERM_LABELS, describePerms, effectivePerms, isPermLocked, presetPerms } from "@/lib/staff-roles";
 import { initialOf } from "@/lib/initial";
 import { updateStaffAlert } from "@/lib/workspace";
-import { TeamExtras } from "@/features/control-pages";
+import { ShiftBoard } from "@/features/shift-board";
 
 const STATUS_LABEL: Record<EmployeeStatus, string> = {
   active: "Activado",
@@ -73,7 +73,6 @@ export function EmployeesPage() {
   const [picked, setPicked] = useState<string[]>([]);
   const [bulkRoles, setBulkRoles] = useState(false);
   const barRef = useRef<HTMLDivElement | null>(null);
-  const ensureEmployees = useCrm((state) => state.ensureEmployees);
 
   const reload = useCallback(async () => {
     try {
@@ -91,16 +90,6 @@ export function EmployeesPage() {
   useEffect(() => {
     void reload();
   }, [reload]);
-
-  // Turnos y Métricas salen de las personas reales de esta tabla.
-  const people = useMemo(
-    () => rows.filter((row) => row.kind === "member").map((row) => ({ id: row.id, name: row.name, roleLabel: rolesText(row), owner: row.level === "owner", onlyChatter: row.roles.every((role) => role === "chatter") })),
-    [rows],
-  );
-  useEffect(() => {
-    if (people.length === 0) return;
-    ensureEmployees(people.map((person) => ({ id: person.id, name: person.name, role: person.owner ? "Dueña" : person.onlyChatter ? "Chatter" : "Manager" })));
-  }, [people, ensureEmployees]);
 
   useEffect(() => {
     if (!menu && !groupMenu) return;
@@ -203,7 +192,7 @@ export function EmployeesPage() {
     return (
       <div className="space-y-4 p-4 md:p-6">
         <p className="rounded-lg border border-line bg-surface p-4 text-sm text-muted">Solo la dueña gestiona a los empleados.</p>
-        <TeamExtras />
+        <ShiftBoard />
       </div>
     );
   }
@@ -424,7 +413,7 @@ export function EmployeesPage() {
           }}
         />
       )}
-      <TeamExtras people={people.map((person) => ({ id: person.id, roleLabel: person.roleLabel }))} />
+      <ShiftBoard />
     </div>
   );
 }

@@ -4,21 +4,16 @@ import { useNavigate, Link } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { isLast24h, money, timeAgo } from "@/lib/format";
-import { messageValue, useCrm, type Platform, type Role } from "@/lib/crm";
+import { messageValue, useCrm, type Platform } from "@/lib/crm";
 import { CONNECTION_LABEL, IDENTITY_STATE_LABEL, SESSION_STATUS_LABEL, sessionActionLabel, type SessionStatus } from "@/lib/of-sessions";
 import { SESSION_EXPIRED_LABEL, signedReadsBlocked } from "../../server/of-sessions/sync/session-link.ts";
 import { canSeeAgencyEarnings, hasPerm } from "@/lib/access-policy";
-import { StaffCard, TABLE_CLASS, TD_CLASS, THEAD_CLASS, TH_CLASS, TR_CLASS } from "@/components/staff-card";
-import { saveStaffDisplayName } from "@/lib/workspace";
 import { useCreatorSessions } from "@/lib/use-creator-sessions";
 import { useOfReads } from "@/lib/use-of-reads";
 import type { CreatorEarningView, CreatorReadView } from "@/lib/of-sessions";
 import { changeRatio, creatorReport, type MetricPeriod } from "@/lib/creator-metrics";
 import { fanProfiles, rankFans } from "@/lib/fan-metrics";
-import { employeeMetricCells } from "@/lib/employee-metrics";
 import { listCreatorChats, listTeamMetrics, setCreatorProxy, type TeamMetricView } from "@/lib/of-sessions";
-import { listShiftBoard, type ShiftBoardView } from "@/lib/employees";
-import { ShiftBoard } from "@/features/shift-board";
 import { PLATFORMS } from "@/features/growth-pages";
 import { Badge, Button, Field, Panel, Select } from "@/components/ui";
 
@@ -256,116 +251,6 @@ export function AuditPage() {
           </tbody>
         </table>
       </div>
-    </div>
-  );
-}
-
-const SHIFT_STYLE = {
-  mañana: "bg-[#e7f0ff] text-[#2456c7]",
-  noche: "bg-[#efe8ff] text-[#5b3cc4]",
-  libre: "bg-[#f3f4f6] text-[#8b93a3]",
-} as const;
-
-/** Lo que queda de la antigua pestaña Chatters: sesión, métricas y turnos. Los permisos, las creadoras y los avisos están en Editar de cada empleado. */
-
-function boardHours(board: ShiftBoardView | null, userId: string, shifts: Array<"mañana" | "noche" | "libre">): number {
-  const hours = board?.people.find((person) => person.id === userId)?.weeklyHours;
-  if (hours != null) return hours;
-  return shifts.reduce((n, shift) => n + (shift === "libre" ? 0 : 8), 0);
-}
-
-export function TeamExtras({ people }: { people?: Array<{ id: string; roleLabel: string }> } = {}) {
-  const creators = useCrm((s) => s.creators);
-  const allEmployees = useCrm((s) => s.employees);
-  // Las personas reales del servidor entran en Turnos y Métricas con su rol de verdad.
-  const employees = allEmployees.map((e) => ({
-    ...e,
-    role: (people?.find((person) => person.id === e.id)?.roleLabel ?? e.role) as typeof e.role,
-  }));
-  const addEmployee = useCrm((s) => s.addEmployee);
-  const [name, setName] = useState("");
-  const [role, setRole] = useState<Role>("Chatter");
-  const [teamRows, setTeamRows] = useState<TeamMetricView[]>([]);
-  const [board, setBoard] = useState<ShiftBoardView | null>(null);
-  const today = board?.today ?? (new Date().getDay() + 6) % 7;
-  useEffect(() => {
-    void listTeamMetrics().then(setTeamRows).catch(() => setTeamRows([]));
-    void listShiftBoard().then(setBoard).catch(() => setBoard(null));
-  }, []);
-
-  return (
-    <div className="space-y-4">
-      <ShiftBoard />
-
-      <StaffCard title="Métricas" testId="métricas-card">
-        <table className={TABLE_CLASS}>
-          <thead className={THEAD_CLASS}>
-            <tr>
-              {["Persona", "Rol", "Horas sem.", "Mensajes 24 h", "Ventas 24 h", "PPV", "Propinas", "Respuesta", "Turno hoy"].map((h) => (
-                <th key={h} className={TH_CLASS}>{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {employees.map((e) => {
-              const synced = teamRows.find((row) => row.userId === e.id) ?? null;
-              const [gross, ppv, reply, threads] = employeeMetricCells(synced);
-              return (
-                <tr key={e.id} className={TR_CLASS}>
-                  <td className={`${TD_CLASS} font-medium`}>
-                    {e.name}
-                    <span className={`ml-2 inline-block h-2 w-2 rounded-full ${e.online ? "bg-emerald-500" : "bg-[#d0d4dc]"}`} />
-                  </td>
-                  <td className={TD_CLASS}>{e.role}</td>
-                  <td className={`${TD_CLASS} tabular-nums`}>{boardHours(board, e.id, e.shifts)} h</td>
-                  <td className={`${TD_CLASS} tabular-nums`}>{threads}</td>
-                  <td className={`${TD_CLASS} tabular-nums`}>{gross}</td>
-                  <td className={`${TD_CLASS} tabular-nums`}>{ppv}</td>
-                  <td className={`${TD_CLASS} tabular-nums`}>Sin datos</td>
-                  <td className={TD_CLASS}>{reply}</td>
-                  <td className={TD_CLASS}>
-                    {(() => {
-                      const label = board?.people.find((person) => person.id === e.id)?.days[today]?.label;
-                      if (label) return <span className="rounded-lg bg-raised px-2 py-1 text-xs">{label}</span>;
-                      const shift = e.shifts[today];
-                      return <span className={`rounded-lg px-2 py-1 text-xs capitalize ${SHIFT_STYLE[shift]}`}>{shift}</span>;
-                    })()}
-                  </td>
-                </tr>
-              );
-            })}
-            {teamRows.filter((row) => !employees.some((employee) => employee.id === row.userId)).map((row) => {
-              const [gross, ppv, reply, threads] = employeeMetricCells(row);
-              return (
-                <tr key={row.userId} className={TR_CLASS}>
-                  <td className={`${TD_CLASS} font-medium`}>{row.name}</td>
-                  <td className={TD_CLASS}>Servidor</td>
-                  <td className={TD_CLASS}>Sin datos</td>
-                  <td className={`${TD_CLASS} tabular-nums`}>{threads}</td>
-                  <td className={`${TD_CLASS} tabular-nums`}>{gross}</td>
-                  <td className={`${TD_CLASS} tabular-nums`}>{ppv}</td>
-                  <td className={`${TD_CLASS} tabular-nums`}>Sin datos</td>
-                  <td className={TD_CLASS}>{reply}</td>
-                  <td className={TD_CLASS}>Sin datos</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </StaffCard>
-
-      <Panel title="Incorporar">
-        <form className="flex flex-col gap-2 sm:flex-row" onSubmit={(e) => { e.preventDefault(); addEmployee(name, role); setName(""); toast.success("Persona añadida"); }}>
-          <Field value={name} onChange={(e) => setName(e.target.value)} placeholder="Nombre" required />
-          <Select value={role} onChange={(e) => setRole(e.target.value as Role)} aria-label="Rol">
-            {(["Manager", "Chatter", "VA"] as Role[]).map((r) => <option key={r}>{r}</option>)}
-          </Select>
-          <Button type="submit">Añadir</Button>
-        </form>
-      </Panel>
-
-      <p className="text-sm text-muted">Los horarios se guardan en el servidor (zona Europe/Madrid). Las métricas de ventas salen de la atribución real; el acceso no cambia al elegir a otra persona en la consola.</p>
-      <SessionPanel />
     </div>
   );
 }
@@ -951,49 +836,5 @@ export function SettingsPage({ embedded = false }: { embedded?: boolean } = {}) 
         </ul>
       </Panel>
     </div>
-  );
-}
-
-function OwnName({ name }: { name: string }) {
-  const [value, setValue] = useState(name);
-  const [busy, setBusy] = useState(false);
-  useEffect(() => setValue(name), [name]);
-  return (
-    <form
-      className="mt-3 flex flex-wrap items-end gap-2"
-      onSubmit={(event) => {
-        event.preventDefault();
-        const next = value.trim();
-        if (!next || next === name) return;
-        setBusy(true);
-        void saveStaffDisplayName({ data: { displayName: next } }).then((result) => {
-          const access = useCrm.getState().teamAccess;
-          if (access) useCrm.setState({ teamAccess: { ...access, displayName: result.displayName } });
-        }).catch(() => undefined).finally(() => setBusy(false));
-      }}
-    >
-      <label className="text-xs text-muted">
-        Nombre en el chat
-        <input aria-label="Nombre en el chat" value={value} onChange={(event) => setValue(event.target.value)} maxLength={80} className="mt-1 block h-8 w-48 rounded-md border border-line px-2 text-sm text-[#1c2333]" />
-      </label>
-      <button type="submit" disabled={busy || !value.trim()} className="rounded-md border border-line px-2 py-1 text-xs">Guardar nombre</button>
-    </form>
-  );
-}
-
-function SessionPanel() {
-  const access = useCrm((s) => s.teamAccess);
-  if (!access) return null;
-  return (
-    <Panel title="Tu sesión">
-      <p className="text-sm">Sesión autenticada: {access.displayName}. {access.role === "owner" ? "Dueña" : "Miembro"}.</p>
-      <OwnName name={access.displayName} />
-      {access.devMode && (
-        <p className="mt-2 text-sm text-[#8a5a12]">Modo local de un solo operador, solo en localhost. No separa a varias personas.</p>
-      )}
-      {access.role !== "owner" && (
-        <p className="mt-2 text-sm text-muted">Los permisos y las creadoras los asigna la dueña. No se eligen en un desplegable.</p>
-      )}
-    </Panel>
   );
 }

@@ -172,10 +172,14 @@ test("la dueña invita, el empleado acepta, entra con correo y contraseña y sol
     assert.equal(Math.round(shifts.x), Math.round(table.x));
     assert.equal(Math.round(shifts.width), Math.round(table.width));
     assert.ok(shifts.y > table.y + table.height, "Turnos va debajo de la tabla de empleados");
-    // Las personas reales de la tabla salen en Turnos con su rol y en Métricas.
+    // Las personas reales de la tabla salen en Turnos. Métricas, Incorporar y Tu sesión ya no están en esta página.
     await turnos.getByText("Marta Ruiz").waitFor();
     await turnos.getByText("Antiguo").waitFor();
-    await owner.getByTestId("métricas-card").getByText("Marta Ruiz").waitFor();
+    assert.equal(await owner.getByTestId("métricas-card").count(), 0);
+    assert.equal(await owner.getByRole("heading", { name: "Métricas" }).count(), 0);
+    assert.equal(await owner.getByRole("heading", { name: "Incorporar" }).count(), 0);
+    assert.equal(await owner.getByRole("heading", { name: "Tu sesión" }).count(), 0);
+    assert.equal(await owner.getByText(/Modo local de un solo operador/).count(), 0);
     assert.equal(await turnos.locator("thead").getAttribute("class"), await owner.getByTestId("employees-table").locator("thead").getAttribute("class"));
 
     // Horarios: clic en la celda abre el editor (entrada, salida, Libre, copiar). Se guarda en la base.
