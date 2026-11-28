@@ -24,6 +24,7 @@ import {
   canAccessPath,
   navRoleFromAccess,
   pathMatchesNavLink,
+  sidebarTooltip,
   visibleNavBlocks,
   type NavLink,
 } from "@/lib/nav-config";
@@ -214,14 +215,20 @@ function ShellFrame({
             <NavRouteLink
               key={block.id}
               item={block}
-              aria-label={block.id === "chat" && chatBubble ? `${block.label}, ${chatBubble} sin leer` : block.label}
+              aria-label={block.id === "chat" && chatBubble ? `${sidebarTooltip(block)}, ${chatBubble} sin leer` : sidebarTooltip(block)}
               className={cn(
-                "relative grid h-10 w-10 place-items-center rounded-xl",
+                "group relative grid h-10 w-10 place-items-center rounded-xl",
                 active ? "bg-[#3b6cff] text-white" : "text-muted hover:bg-raised",
               )}
             >
               <Icon className="h-5 w-5" />
               {block.id === "chat" && chatBubble ? <UnreadBubble text={chatBubble} /> : null}
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute left-full top-1/2 z-50 ml-2 -translate-y-1/2 whitespace-nowrap rounded-md bg-[#1d2433] px-2.5 py-1.5 text-xs font-medium text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100"
+              >
+                {sidebarTooltip(block)}
+              </span>
             </NavRouteLink>
           );
         })}

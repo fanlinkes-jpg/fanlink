@@ -77,6 +77,24 @@ export const NAV_LINKS: NavLink[] = [
   { id: "configuracion", label: "Configuración", hint: "Plan, facturación y ajustes", to: "/configuracion", roles: AGENCY_ROLES },
 ];
 
+/**
+ * Nombre que sale en el tooltip y en el aria-label de la barra lateral de iconos, en el orden de los iconos.
+ * No sustituye a `label` (título de página y menú móvil): solo es el rótulo corto del icono.
+ */
+export const SIDEBAR_TOOLTIPS: Record<string, string> = {
+  dashboard: "Dashboard",
+  operativa: "Operaciones",
+  chat: "Chat",
+  "funciones-inteligentes": "Mensajes inteligentes",
+  administrar: "Personal",
+  proxys: "Proxy",
+  configuracion: "Configuración",
+};
+
+export function sidebarTooltip(link: Pick<NavLink, "id" | "label">): string {
+  return SIDEBAR_TOOLTIPS[link.id] ?? link.label;
+}
+
 const LEGACY_GATED_PATHS: PathGate[] = [
   { prefix: "/creadoras", roles: AGENCY_ROLES, perm: "equipo" },
   { prefix: "/equipo", roles: AGENCY_ROLES, perm: "equipo" },
