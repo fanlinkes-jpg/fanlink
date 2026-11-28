@@ -29,6 +29,19 @@ test("la dueña invita, el empleado acepta, entra con correo y contraseña y sol
     // 1. La dueña abre Personal > Empleados y añade a Marta con dos de tres creadoras.
     await owner.goto(`${base}/administrar?tab=empleados`, { waitUntil: "domcontentloaded" });
     await owner.getByTestId("employees-table").waitFor();
+    // Solo hay dos pestañas. La antigua Chatters ya no existe y su URL abre Empleados.
+    assert.equal(await owner.getByRole("button", { name: "Chatters" }).count(), 0);
+    assert.equal(await owner.getByRole("button", { name: "Creadoras", exact: true }).count(), 1);
+    // Los miembros antiguos sin invitación salen en la tabla.
+    const oldRow = owner.getByTestId("employee-row").filter({ hasText: "Antiguo" });
+    await oldRow.waitFor();
+    assert.match(await oldRow.innerText(), /Nora/);
+    assert.match(await oldRow.innerText(), /Activado/);
+    await owner.goto(`${base}/administrar?tab=chatters`, { waitUntil: "domcontentloaded" });
+    await owner.getByTestId("employees-table").waitFor();
+    await owner.goto(`${base}/equipo`, { waitUntil: "domcontentloaded" });
+    await owner.getByTestId("employees-table").waitFor();
+    assert.match(owner.url(), /tab=empleados/);
     await owner.getByRole("button", { name: "Añadir empleado" }).click();
     const dialog = owner.getByRole("dialog", { name: "Añadir empleado" });
     await dialog.getByLabel("Nombre").fill("Marta Ruiz");
@@ -115,6 +128,45 @@ test("la dueña invita, el empleado acepta, entra con correo y contraseña y sol
     await owner.getByLabel("Filtrar por creadora").selectOption("todas");
     await owner.getByLabel("Filtrar por estado").selectOption("todos");
     await owner.screenshot({ path: shotFile("personal-empleados.png") });
+
+    // 4b. Editar reúne permisos, creadoras y avisos por teléfono en secciones.
+    await activeRow.getByRole("button", { name: "Editar Marta Ruiz" }).click();
+    const edit = owner.getByRole("dialog", { name: "Editar empleado" });
+    for (const section of ["Permisos", "Creadoras asignadas", "Avisos por teléfono"]) await edit.getByRole("heading", { name: section }).waitFor();
+    await owner.screenshot({ path: shotFile("empleado-editar.png") });
+    assert.equal(await edit.getByLabel("Alba").isChecked(), true);
+    assert.equal(await edit.getByLabel("Tercera").isChecked(), false);
+    assert.equal(await edit.getByLabel("Mensajes").isChecked(), true);
+    assert.equal(await edit.getByLabel("Precios").isChecked(), false);
+    await edit.getByLabel("Precios").check();
+    await edit.getByLabel("Tercera").check();
+    await edit.getByLabel("WhatsApp").fill("600");
+    await edit.getByRole("button", { name: "Guardar", exact: true }).click();
+    await edit.getByRole("alert").getByText(/formato internacional/).waitFor();
+    await edit.getByLabel("WhatsApp").fill("+34600111222");
+    await edit.getByRole("checkbox", { name: "Avisos", exact: true }).check();
+    await edit.getByLabel("Minutos entre avisos del mismo fan").fill("20");
+    await edit.getByLabel("Tercera").uncheck();
+    await edit.getByRole("button", { name: "Guardar", exact: true }).click();
+    await edit.waitFor({ state: "detached" });
+    await activeRow.getByRole("button", { name: "Editar Marta Ruiz" }).click();
+    const again2 = owner.getByRole("dialog", { name: "Editar empleado" });
+    await again2.getByRole("heading", { name: "Permisos" }).waitFor();
+    assert.equal(await again2.getByLabel("Precios").isChecked(), true);
+    assert.equal(await again2.getByLabel("Tercera").isChecked(), false);
+    assert.equal(await again2.getByLabel("WhatsApp").inputValue(), "+34600111222");
+    assert.equal(await again2.getByRole("checkbox", { name: "Avisos", exact: true }).isChecked(), true);
+    assert.equal(await again2.getByLabel("Minutos entre avisos del mismo fan").inputValue(), "20");
+    await again2.getByRole("button", { name: "Cancelar" }).click();
+    // Un miembro antiguo conserva lo que ya tenía y lo ve en Editar.
+    await oldRow.getByRole("button", { name: "Editar Antiguo" }).click();
+    const oldEdit = owner.getByRole("dialog", { name: "Editar empleado" });
+    await oldEdit.getByRole("heading", { name: "Avisos por teléfono" }).waitFor();
+    assert.equal(await oldEdit.getByLabel("Vault").isChecked(), true);
+    assert.equal(await oldEdit.getByLabel("Nora").isChecked(), true);
+    assert.equal(await oldEdit.getByLabel("WhatsApp").inputValue(), "+34600000000");
+    assert.equal(await oldEdit.getByLabel("Minutos entre avisos del mismo fan").inputValue(), "30");
+    await oldEdit.getByRole("button", { name: "Cancelar" }).click();
 
     // 5. Login con correo y contraseña desde cero; con la contraseña mala no entra.
     const login = await (await browser.newContext()).newPage();
@@ -205,6 +257,11 @@ async function seed(dir: string): Promise<void> {
   // Quien abre sin cookie es el usuario local de siempre: la dueña.
   await pg.exec(`insert into workspace_member (user_id) values ('dev-user') on conflict do nothing`);
   await pg.exec(`insert into staff_profile (user_id, display_name, role, perms, level) values ('dev-user', 'Dueña', 'owner', '["mensajes","precios","vault","campanas","analitica","equipo","ajustes"]'::jsonb, 'owner')`);
+  // Un miembro de antes de las invitaciones: sin correo, con permisos, una creadora y avisos.
+  await pg.exec(`insert into workspace_member (user_id) values ('viejo') on conflict do nothing`);
+  await pg.exec(`insert into staff_profile (user_id, display_name, role, perms) values ('viejo', 'Antiguo', 'member', '["mensajes","vault"]'::jsonb)`);
+  await pg.exec(`insert into creator_grant (user_id, creator_id) values ('viejo', 'c-nora')`);
+  await pg.exec(`insert into staff_alert (user_id, phone, alerts_enabled, quiet_minutes) values ('viejo', '+34600000000', true, 30)`);
   for (const [creatorId, unread] of [["c-alba", 3], ["c-nora", 2], ["c-tercera", 40]] as const) {
     await pg.query(
       `insert into of_chat_thread (creator_id, thread_key, fan_key, fan_name, last_message_at, excerpt, unread, synced_at, origin)

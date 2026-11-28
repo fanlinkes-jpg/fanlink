@@ -12,6 +12,8 @@ Personal › Empleados. Solo la dueña ve la pestaña. Todo se decide en el serv
 6. **Eliminar** borra su ficha, sus permisos y su cuenta. Sus envíos se quedan: `of_chat_outbound.author_id` pasa a null (FK `ON DELETE SET NULL`) y el nombre se conserva en `author_name`, igual que en `of_chat_message`.
 7. **Reenviar invitación** anula el enlace anterior y manda uno nuevo con 7 días.
 
+Personal tiene solo dos pestañas: Creadoras y Empleados. La antigua pestaña Chatters desapareció y sus URLs (`/equipo`, `?tab=chatters`) abren Empleados. La tabla incluye también a los miembros anteriores a las invitaciones (sin correo). **Editar** tiene secciones: datos y rol, Permisos (las casillas), Creadoras asignadas y Avisos por teléfono (WhatsApp, interruptor y minutos entre avisos). Debajo de la tabla siguen Tu sesión (nombre en el chat), Métricas, Turnos e Incorporar (cuadrante de la consola). La tabla de permisos de demostración de la antigua pestaña se quitó: sus casillas eran locales y las reales están en Editar.
+
 Los roles (Chatter, Account Manager, Team Manager, Supervisor, Analyst) solo marcan nivel. Todos entran con el permiso `mensajes` hasta que exista la matriz de permisos por rol. Owner no se puede asignar.
 
 ## Correo (Resend)
