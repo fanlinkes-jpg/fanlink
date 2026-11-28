@@ -346,3 +346,21 @@ test("precio de suscripción: el primer importe positivo, no un price a 0", asyn
   assert.equal(subscriptionPriceCents({ price: 0, regularPrice: 0 }), 0);
   assert.equal(subscriptionPriceCents({}), null);
 });
+
+test("suscripción: precio positivo, inicio, meses y caducidad desde subscribedOnData y su lista subscribes", async () => {
+  const { readSubscription } = await import("../sync/chats.ts");
+  const direct = readSubscription({ price: 0, subscribePrice: 9.99, subscribeAt: "2026-10-14T10:00:00.000Z", duration: "1", expiredAt: "2026-12-14T10:00:00.000Z" });
+  assert.deepEqual(direct, { priceCents: 999, startedAt: "2026-10-14T10:00:00.000Z", months: 1, expiresAt: "2026-12-14T10:00:00.000Z" });
+  const listed = readSubscription({
+    price: 0,
+    subscribes: [
+      { startDate: "2026-08-01T00:00:00.000Z", expireDate: "2026-09-01T00:00:00.000Z", price: 4.99, duration: 1 },
+      { startDate: "2026-10-14T00:00:00.000Z", expireDate: "2026-11-14T00:00:00.000Z", price: 9.99, duration: 1, isCurrent: true },
+    ],
+  });
+  assert.equal(listed.priceCents, 999);
+  assert.equal(listed.startedAt, "2026-10-14T00:00:00.000Z");
+  assert.equal(listed.expiresAt, "2026-11-14T00:00:00.000Z");
+  assert.equal(listed.months, 1);
+  assert.deepEqual(readSubscription({}), { priceCents: null, startedAt: null, months: null, expiresAt: null });
+});

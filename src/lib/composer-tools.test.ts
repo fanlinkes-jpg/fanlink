@@ -105,3 +105,16 @@ test("Alz2000 cuenta las cuatro compras aunque los PPV del hilo no estén abiert
   assert.equal(moneyLabel(series.maxCents), "$39.00");
   assert.equal(moneyLabel(series.avgCents), "$25.49");
 });
+
+test("el mensaje pagado y el aviso de la misma compra son una sola compra, con la fecha de la compra", () => {
+  const series = purchasedPpvSeries(
+    [{ fromFan: false, purchased: true, priceCents: 2499, sentAt: "2026-10-14T10:00:00.000Z" }],
+    [[{ sentAt: "2026-10-16T14:00:00.000Z", priceCents: 2499 }]],
+  );
+  assert.deepEqual(series.points, [{ sentAt: "2026-10-16T14:00:00.000Z", priceCents: 2499 }]);
+  const far = purchasedPpvSeries(
+    [{ fromFan: false, purchased: true, priceCents: 2499, sentAt: "2026-05-01T10:00:00.000Z" }],
+    [[{ sentAt: "2026-10-16T14:00:00.000Z", priceCents: 2499 }]],
+  );
+  assert.equal(far.points.length, 2);
+});

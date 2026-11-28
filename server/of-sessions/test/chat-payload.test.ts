@@ -68,3 +68,44 @@ test("la lista de chats queda acotada con 200 hilos y 120 mensajes por hilo", { 
     await db.close();
   }
 });
+
+test("la ficha guarda inicio y meses de la suscripción, sustituye un precio 0 viejo y lee puesto y medios", { timeout: 60_000 }, async () => {
+  const { fanPurchaseSeries } = await import("../sync/fan-purchases.ts");
+  const { saveChatRead } = await import("../sync/chat-store.ts");
+  const pg = new PGlite();
+  const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../migrations");
+  for (const name of [...SCHEMA, "0012_extended_read.sql", "0034_notifications.sql", "0055_notification_of_type.sql", "0057_notification_message_ref.sql", "0061_chat_sub_start.sql"]) await pg.exec(await readFile(path.join(dir, name), "utf8"));
+  const sql: ReadSql = { async query<T>(text: string, params?: unknown[]): Promise<T[]> { return (await pg.query<T>(text, params)).rows; } };
+  try {
+    const thread = (key: string, spent: number | null, price: number | null) => ({
+      threadKey: key, fanKey: key, fanHandle: key, fanName: key, lastMessageAt: "2026-11-01T10:00:00.000Z", excerpt: "hola", unread: 0,
+      lastFromUserId: null, lastFromFan: true, spentCents: spent, subscribesCents: null, tipsCents: null, postsCents: null, messagesCents: null,
+      avatarUrl: null, online: null, subPriceCents: price, subExpiresAt: null, renewAuto: null,
+      subStartedAt: key === "maik" ? "2026-10-14T10:00:00.000Z" : null, subMonths: key === "maik" ? 1 : null,
+    });
+    // Un 0 viejo guardado antes del arreglo.
+    await saveChatRead(sql, "u1fpdnp", { threads: [thread("maik", 3198, 0)], messages: [], reason: null, jsonPaths: [] });
+    await saveChatRead(sql, "u1fpdnp", {
+      threads: [thread("maik", 3198, 999), ...Array.from({ length: 19 }, (_, i) => thread(`f${i}`, i * 1000, null))],
+      messages: [], reason: null, jsonPaths: [],
+    });
+    const listed = await listChats(sql, ["u1fpdnp"], { messages: "none" });
+    const maik = listed.threads.find((row) => row.threadKey === "maik");
+    assert.equal(maik?.subPriceCents, 999);
+    assert.equal(maik?.subStartedAt, "2026-10-14T10:00:00.000Z");
+    assert.equal(maik?.subMonths, 1);
+    await pg.exec(`insert into of_chat_message (creator_id, message_key, thread_key, fan_key, from_fan, body, sent_at, price_cents, synced_at, media_count, media_json)
+      values ('u1fpdnp', 'p1', 'maik', 'maik', false, 'ppv', '2026-10-14T10:00:00Z', 2499, now(), 2,
+      '[{"kind":"video","seconds":12,"preview":"https://c/1.jpg","full":"https://c/f1.mp4","locked":true},{"kind":"foto","seconds":null,"preview":"https://c/2.jpg","full":null,"locked":true}]')`);
+    const series = await fanPurchaseSeries(sql, "u1fpdnp", "maik");
+    assert.deepEqual(series.ppvs?.[0]?.media, [
+      { kind: "video", seconds: 12, preview: "https://c/1.jpg", locked: true },
+      { kind: "foto", seconds: null, preview: "https://c/2.jpg", locked: true },
+    ]);
+    // Los demás gastan 0..18000; Maik 3198: solo 15 gastan más.
+    assert.deepEqual(series.rank, { fans: 20, above: 15, mineCents: 3198 });
+    assert.equal(series.chargebacks, 0);
+  } finally {
+    await pg.close();
+  }
+});
