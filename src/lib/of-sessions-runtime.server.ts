@@ -1,5 +1,5 @@
 import path from "node:path";
-import { assertOwnerForce, canOperateCreator, creatorIdsForChats, WorkspaceAccessError } from "@/lib/access-policy";
+import { assertCreatorAccess, assertOwnerForce, canOperateCreator, canSeeAgencyEarnings, creatorIdsForChats, WorkspaceAccessError } from "@/lib/access-policy";
 import { DEV_USER_ID, authConfigured } from "@/lib/auth/verify.server";
 import { getSql } from "@/lib/db";
 import { ensureStaff } from "@/lib/workspace-store";
@@ -862,16 +862,16 @@ export async function syncCreatorReadView(userId: string, creatorId: string): Pr
       lastAttemptAt: null,
       consecutiveFailures: 0,
       lastStatus: read.alreadyRunning ? "idle" : "error",
-      earnings: access.role === "owner" ? [] : null,
+      earnings: canSeeAgencyEarnings(access) ? [] : null,
       fans: [],
-      transactions: access.role === "owner" ? [] : null,
+      transactions: canSeeAgencyEarnings(access) ? [] : null,
     };
   }
   return presentRead(access.role, stored);
 }
 
 function presentRead(role: "owner" | "member", row: Awaited<ReturnType<typeof listCreatorReads>>[number]): CreatorReadView {
-  const owner = role === "owner";
+  const owner = canSeeAgencyEarnings({ role });
   return {
     creatorId: row.creatorId,
     earningsSyncedAt: owner ? row.earningsSyncedAt : null,
@@ -972,7 +972,8 @@ export async function listTeamMetricViews(userId: string): Promise<Array<{
   const names = await sql.query<{ user_id: string; display_name: string }>("select user_id, display_name from staff_profile");
   const nameOf = new Map(names.map((row) => [row.user_id, row.display_name]));
   const asIso = (value: Date | string) => (value instanceof Date ? value.toISOString() : String(value));
-  const chatRows = messages.map((row) => ({
+  const inScope = (creatorId: string) => canSeeAgencyEarnings(access) || access.creatorIds.includes(creatorId);
+  const chatRows = messages.filter((row) => inScope(row.creator_id)).map((row) => ({
     creatorId: row.creator_id,
     threadKey: row.thread_key,
     fanKey: row.fan_key,
@@ -989,7 +990,7 @@ export async function listTeamMetricViews(userId: string): Promise<Array<{
     access,
     chatRows,
     [
-      ...sales.map((row) => ({
+      ...sales.filter((row) => inScope(row.creator_id)).map((row) => ({
         creatorId: row.creator_id,
         fanKey: row.fan_key,
         at: asIso(row.occurred_at),
@@ -1010,6 +1011,7 @@ export async function saveFanNoteView(
   if (access.role !== "owner" && !access.perms.includes("mensajes")) {
     throw new WorkspaceAccessError("No tienes permiso para escribir.");
   }
+  assertCreatorAccess(access, input.creatorId);
   if (!input.fanKey.trim()) throw new WorkspaceAccessError("Sin datos del fan.");
   await saveFanNote(await getSql(), { ...input, updatedBy: access.userId });
   return { ok: true };
@@ -1032,6 +1034,7 @@ export async function saveFanProfileView(
   if (access.role !== "owner" && !access.perms.includes("mensajes")) {
     throw new WorkspaceAccessError("No tienes permiso para escribir.");
   }
+  assertCreatorAccess(access, input.creatorId);
   if (!input.fanKey.trim()) throw new WorkspaceAccessError("Sin datos del fan.");
   await saveFanProfile(await getSql(), { ...input, updatedBy: access.userId });
   return { ok: true };
@@ -1065,6 +1068,7 @@ export async function recordChatOutboundView(
   if (access.role !== "owner" && !access.perms.includes("mensajes")) {
     throw new WorkspaceAccessError("No tienes permiso para escribir.");
   }
+  assertCreatorAccess(access, input.creatorId);
   const body = input.body.replace(/\s+/g, " ").trim();
   if (!body) throw new WorkspaceAccessError("Escribe un mensaje.");
   await recordOutbound(await getSql(), {
@@ -1136,10 +1140,10 @@ export async function chatSendAccessView(userId: string): Promise<{ creatorIds: 
   const sessions = await getOfSessionManager();
   const accounts = await sessions.listAccounts();
   return {
-    creatorIds: accounts.flatMap((account) => {
+    creatorIds: creatorIdsForChats(access, accounts.flatMap((account) => {
       const allowed = chatSendGate(process.env.FANLINK_ENABLE_SEND, process.env.FANLINK_SEND_ALLOW_ACCOUNTS, sendAccount(account)).allowed;
       return allowed && account.creatorId ? [account.creatorId] : [];
-    }),
+    })),
   };
 }
 
@@ -1155,7 +1159,7 @@ export async function resolveChatSendHooks(
   const vaultPieces: SendChatHooks["vaultPieces"] = [];
   return {
     sql: await getSql(),
-    access: { userId: access.userId, role: access.role, perms: access.perms, creatorIds: known },
+    access: { userId: access.userId, role: access.role, perms: access.perms, creatorIds: creatorIdsForChats(access, known) },
     account: account ? {
       id: account.id,
       creatorId: account.creatorId,
@@ -1219,10 +1223,14 @@ export async function readChatVaultView(
   input: { creatorId: string; threadKey: string; listId?: string; offset?: number },
   deps?: Partial<VaultReadDeps>,
 ): Promise<VaultPageResult> {
-  const access = deps?.access ?? await accessFor(userId);
+  const own = deps?.access ? null : await accessFor(userId);
+  const access = deps?.access ?? own;
+  if (!access) throw new WorkspaceAccessError("No tienes permiso para escribir.");
   if (access.role !== "owner" && !access.perms.includes("mensajes")) {
     throw new WorkspaceAccessError("No tienes permiso para escribir.");
   }
+  // En producción `own` trae las cuentas asignadas. Los tests enchufan su propio acceso.
+  if (own) assertCreatorAccess(own, input.creatorId);
   return readVaultPage(input, {
     fetch: deps?.fetch ?? fetch,
     now: deps?.now ?? (() => Date.now()),
@@ -1344,6 +1352,7 @@ export async function runFanChatMenuView(userId: string, input: { creatorId: str
   if (access.role !== "owner" && !access.perms.includes("mensajes")) {
     throw new WorkspaceAccessError("No tienes permiso para escribir.");
   }
+  assertCreatorAccess(access, input.creatorId);
   const request = normalizeFanListsRequest(input.request);
   if (!request) return { ok: false, reason: "Próximamente", lists: [] };
   const fanId = input.fanKey.trim();
@@ -1395,6 +1404,7 @@ export async function ensureNotificationTabView(userId: string, input: { creator
   if (access.role !== "owner" && !access.perms.includes("mensajes")) {
     throw new WorkspaceAccessError("No tienes permiso para escribir.");
   }
+  assertCreatorAccess(access, input.creatorId);
   const listType = ofListType(input.tab);
   const key = `${input.creatorId}:${listType ?? "all"}`;
   if (noticeTabFresh(noticeTabAt.get(key) ?? null, Date.now())) return { ok: true, fresh: true };
@@ -1469,6 +1479,7 @@ export async function loadOlderMessagesView(userId: string, input: { creatorId: 
   if (access.role !== "owner" && !access.perms.includes("mensajes")) {
     throw new WorkspaceAccessError("No tienes permiso para escribir.");
   }
+  assertCreatorAccess(access, input.creatorId);
   const sessions = await getOfSessionManager();
   const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
   if (!account) return { ok: false, hasMore: false, retryAfterMs: 0 };
@@ -1493,6 +1504,7 @@ export async function loadMoreChatsView(userId: string, input: { creatorId: stri
   if (access.role !== "owner" && !access.perms.includes("mensajes")) {
     throw new WorkspaceAccessError("No tienes permiso para escribir.");
   }
+  assertCreatorAccess(access, input.creatorId);
   const sessions = await getOfSessionManager();
   const account = (await sessions.listAccounts()).find((item) => item.creatorId === input.creatorId);
   if (!account) return { ok: false };

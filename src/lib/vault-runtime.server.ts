@@ -6,6 +6,6 @@ import { queryVaultForActor, type VaultMirrorResult } from "../../server/of-sess
 export async function queryVaultMirrorView(userId: string, body: unknown): Promise<VaultMirrorResult> {
   const sql = await getSql();
   const access = await ensureStaff(sql, userId, !authConfigured && userId === DEV_USER_ID);
-  const result = await queryVaultForActor(sql, { userId: access.userId, role: access.role, perms: access.perms }, body);
+  const result = await queryVaultForActor(sql, { userId: access.userId, role: access.role, perms: access.perms, creatorIds: access.creatorIds }, body);
   return result.payload;
 }

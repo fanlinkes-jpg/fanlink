@@ -121,6 +121,10 @@ export async function sendChatMessageView(
   const typedBody = input.body.replace(/\s+/g, " ").trim();
   if (!typedBody) throw new WorkspaceAccessError("Escribe un mensaje.");
   if (!input.threadKey) return { sent: false, reason: "Sin hilo", messageId: null };
+  // Antes de tocar la base: una cuenta no asignada no se escribe ni se reintenta.
+  if (!creatorIdsForChats(access, [input.creatorId]).includes(input.creatorId)) {
+    return { sent: false, reason: "Sin datos", messageId: null };
+  }
   const sql = prepared.sql;
   await expireStuckPending(sql);
   const replay = await replayOf(sql, clientId, access.userId, input.creatorId, input.threadKey);
@@ -135,7 +139,7 @@ export async function sendChatMessageView(
   }
   if (clientVaultTitle(input)) return { sent: false, reason: "NO VENDER", messageId: null };
   if (!prepared.account) return { sent: false, reason: "Envío real desactivado", messageId: null };
-  if (!creatorIdsForChats(access, [...access.creatorIds]).includes(creatorId)) {
+  if (!creatorIdsForChats(access, [creatorId]).includes(creatorId)) {
     return { sent: false, reason: "Sin datos", messageId: null };
   }
   if (prepared.account.identityState === "mismatch") {

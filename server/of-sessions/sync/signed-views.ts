@@ -1,4 +1,4 @@
-import { WorkspaceAccessError } from "../../../src/lib/access-policy.ts";
+import { assertCreatorAccess, WorkspaceAccessError } from "../../../src/lib/access-policy.ts";
 import { ONLINE_FAN_CAP } from "../../../src/lib/online-fan-row.ts";
 import { noteStaleOnlineSends } from "../send/online-claim.ts";
 import { type SendAccount } from "../send/gate.ts";
@@ -111,6 +111,7 @@ export async function readVisibleFanSpendView(userId: string, input: { creatorId
     throw new WorkspaceAccessError("No tienes permiso para leer los chats.");
   }
   const creatorId = parseCreatorId(input.creatorId);
+  assertCreatorAccess(access, creatorId);
   const fanIds = [...new Set(input.fanIds.filter((id) => /^\d{1,20}$/.test(id)))].slice(0, 10);
   const sessions = await kit.sessions();
   const account = (await sessions.listAccounts()).find((item) => item.creatorId === creatorId);
@@ -155,6 +156,7 @@ export async function markChatOpenedView(userId: string, input: { creatorId: str
     throw new WorkspaceAccessError("No tienes permiso para escribir.");
   }
   const creatorId = parseCreatorId(input.creatorId);
+  assertCreatorAccess(access, creatorId);
   const sessions = await kit.sessions();
   const account = (await sessions.listAccounts()).find((item) => item.creatorId === creatorId);
   if (!account) return { marked: false };
