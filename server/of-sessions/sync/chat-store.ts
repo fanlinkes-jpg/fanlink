@@ -355,7 +355,7 @@ export async function listChats(
          select m.creator_id, m.message_key, m.thread_key, m.fan_key, m.from_fan,
                 case when is_open then m.body else left(m.body, ${DIGEST_BODY_CHARS}) end as body,
                 m.sent_at, m.price_cents, m.purchased, m.synced_at,
-                m.author_id, p.display_name as author_name, m.seen, m.automatic, m.media_count, m.media_seconds, m.media_preview,
+                m.author_id, coalesce(p.display_name, m.author_name) as author_name, m.seen, m.automatic, m.media_count, m.media_seconds, m.media_preview,
                 case when is_open then m.media_json else null end as media_json,
                 m.liked, m.reply_body, m.event_kind, m.event_cents,
                 recent_rank, own_rank, event_rank, is_open
@@ -383,7 +383,7 @@ export async function listChats(
             media_json, liked, reply_body, event_kind, event_cents
      from (
        select m.creator_id, m.message_key, m.thread_key, m.fan_key, m.from_fan, m.body, m.sent_at, m.price_cents, m.purchased, m.synced_at,
-              m.author_id, p.display_name as author_name, m.seen, m.automatic, m.media_count, m.media_seconds, m.media_preview,
+              m.author_id, coalesce(p.display_name, m.author_name) as author_name, m.seen, m.automatic, m.media_count, m.media_seconds, m.media_preview,
               m.media_json, m.liked, m.reply_body, m.event_kind, m.event_cents,
               row_number() over (partition by m.creator_id, m.thread_key order by m.sent_at desc) as recent_rank
        from of_chat_message m
@@ -680,7 +680,7 @@ export function outboundStillMissing(
 async function attachOutboundAuthors(sql: ReadSql, creatorId: string, messages: ChatMessage[], hasSendState: boolean): Promise<void> {
   const drafts = await sql.query<{
     id: string;
-    author_id: string;
+    author_id: string | null;
     body: string;
     price_cents: number | string | null;
     created_at: Date | string;
@@ -694,7 +694,8 @@ async function attachOutboundAuthors(sql: ReadSql, creatorId: string, messages: 
   );
   const pending: OutboundDraft[] = drafts.map((row) => ({
     id: row.id,
-    authorId: row.author_id,
+    // Sin autor (la persona se borró): el mensaje conserva el nombre guardado en author_name.
+    authorId: row.author_id ?? "",
     body: row.body,
     priceCents: row.price_cents == null ? null : Number(row.price_cents),
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
@@ -732,9 +733,11 @@ async function attachOutboundAuthors(sql: ReadSql, creatorId: string, messages: 
       const claimedOk = await claimOutboundMatch(sql, creatorId, draft.id, decision.messageKey);
       if (!claimedOk) continue;
       await sql.query(
-        `update of_chat_message set author_id = $1
+        `update of_chat_message
+         set author_id = nullif($1, ''),
+             author_name = coalesce(author_name, (select author_name from of_chat_outbound where id = $4))
          where creator_id = $2 and message_key = $3 and author_id is null`,
-        [draft.authorId, creatorId, decision.messageKey],
+        [draft.authorId, creatorId, decision.messageKey, draft.id],
       );
       if (hasSendState) {
         await sql.query("update of_chat_outbound set status = 'sent', error_reason = null where id = $1", [draft.id]);
@@ -928,7 +931,7 @@ export async function listPendingOutbounds(
     dedupe_key: string | null;
     stale: boolean | string | null;
   }>(
-    `select o.id, o.creator_id, o.thread_key, o.body, o.scheduled_at, p.display_name as author_name,
+    `select o.id, o.creator_id, o.thread_key, o.body, o.scheduled_at, coalesce(p.display_name, o.author_name) as author_name,
             o.author_id, o.price_cents, o.status, o.error_reason, o.dedupe_key,
             (o.status = 'sending' and o.dedupe_key is not null and (
               o.error_reason = ${reasonSlot}
@@ -1100,7 +1103,7 @@ export async function listThreadHistory(sql: ReadSql, creatorId: string, threadK
   const done = flag[0]?.history_done === true || flag[0]?.history_done === "t" || flag[0]?.history_done === "true";
   const rows = await sql.query<MessageRow>(
     `select m.creator_id, m.message_key, m.thread_key, m.fan_key, m.from_fan, m.body, m.sent_at, m.price_cents, m.purchased, m.synced_at,
-            m.author_id, p.display_name as author_name, m.seen, m.automatic, m.media_count, m.media_seconds, m.media_preview,
+            m.author_id, coalesce(p.display_name, m.author_name) as author_name, m.seen, m.automatic, m.media_count, m.media_seconds, m.media_preview,
             m.media_json, m.liked, m.reply_body, m.event_kind, m.event_cents
      from of_chat_message m
      left join staff_profile p on p.user_id = m.author_id
