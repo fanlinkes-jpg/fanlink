@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { CreatorsPage } from "@/features/control-pages";
+import { CreatorsPage } from "@/features/creators-page";
 import { EmployeesPage } from "@/features/employees-page";
 import { adminTab, type AdminTab } from "@/lib/nav-config";
 
